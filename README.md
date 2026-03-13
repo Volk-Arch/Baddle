@@ -13,7 +13,7 @@
 ## Установка
 
 ```bash
-git clone https://github.com/yourname/baddle
+git clone https://github.com/Volk-Arch/Baddle
 cd baddle
 
 # Положи GGUF-модель в папку models/
