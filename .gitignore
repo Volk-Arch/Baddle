@@ -2,3 +2,4 @@
 .venv/
 .claude/
 models/
+__pycache__/
