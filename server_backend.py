@@ -57,6 +57,15 @@ def is_native_server(base_url: str, timeout: float = 3.0) -> bool:
         return False
 
 
+def has_native_server() -> bool:
+    """Check if a native llama-server binary is available (project dir or PATH)."""
+    project_dir = Path(__file__).resolve().parent / "llama-server"
+    for name in ("llama-server", "llama-server.exe"):
+        if (project_dir / name).is_file():
+            return True
+    return shutil.which("llama-server") is not None
+
+
 def _build_server_cmd(model_path: str, port: int, n_ctx: int, gpu_layers: int) -> list:
     """Build the command to launch a llama server.
 
@@ -184,13 +193,16 @@ def _stream_completions(
     On error puts an Exception object.
     """
     url = base_url.rstrip("/") + "/v1/completions"
-    body = json.dumps({
+    payload = {
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": cfg.temp,
         "top_k": cfg.top_k,
         "stream": True,
-    }).encode()
+    }
+    if cfg.seed >= 0:
+        payload["seed"] = cfg.seed
+    body = json.dumps(payload).encode()
 
     req = urllib.request.Request(
         url, data=body,

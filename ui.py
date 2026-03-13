@@ -16,11 +16,13 @@ except ImportError:
     sys.exit("[error] flask not found.  pip install flask")
 
 sys.path.insert(0, str(Path(__file__).parent))
-from main import (
-    pick_model, load_model, StreamCfg,
-    _batch_generate_iter, _interleaved_generate_iter,
-    _sample, _get_logits,
-)
+from main import pick_model, StreamCfg
+
+# These need llama-cpp-python — may be None in server-only mode
+try:
+    from main import load_model, _batch_generate_iter, _interleaved_generate_iter, _sample, _get_logits
+except ImportError:
+    load_model = _batch_generate_iter = _interleaved_generate_iter = _sample = _get_logits = None
 
 app = Flask(__name__)
 llm        = None
@@ -346,6 +348,10 @@ HTML = """<!DOCTYPE html>
           max tokens
           <input id="n-p" type="number" value="50" min="1" max="500" style="width:70px">
         </label>
+        <label class="text-slate-400 text-sm flex items-center gap-2">
+          seed
+          <input id="seed-p" type="number" value="-1" min="-1" style="width:80px">
+        </label>
       </div>
     </div>
   </div>
@@ -381,10 +387,16 @@ HTML = """<!DOCTYPE html>
           </label>
         </div>
       </div>
-      <label class="text-slate-400 text-sm flex items-center gap-2">
-        max tokens
-        <input id="n-c" type="number" value="60" min="1" max="500" style="width:70px">
-      </label>
+      <div class="flex gap-6 items-center">
+        <label class="text-slate-400 text-sm flex items-center gap-2">
+          max tokens
+          <input id="n-c" type="number" value="60" min="1" max="500" style="width:70px">
+        </label>
+        <label class="text-slate-400 text-sm flex items-center gap-2">
+          seed
+          <input id="seed-c" type="number" value="-1" min="-1" style="width:80px">
+        </label>
+      </div>
     </div>
   </div>
 
@@ -586,6 +598,7 @@ HTML = """<!DOCTYPE html>
       params.set('n',  document.getElementById('n-p').value);
       params.set('temp_a', ta); params.set('temp_b', tb);
       params.set('top_k_a', 40); params.set('top_k_b', 40);
+      params.set('seed', document.getElementById('seed-p').value);
       document.getElementById('title-a').textContent = 'Stream A';
       document.getElementById('title-b').textContent = 'Stream B';
     } else {
@@ -598,6 +611,7 @@ HTML = """<!DOCTYPE html>
       params.set('n',  document.getElementById('n-c').value);
       params.set('temp_a', ta); params.set('temp_b', tb);
       params.set('top_k_a', ka); params.set('top_k_b', kb);
+      params.set('seed', document.getElementById('seed-c').value);
       document.getElementById('title-a').textContent = `temp=${ta}  top_k=${ka}`;
       document.getElementById('title-b').textContent = `temp=${tb}  top_k=${kb}`;
     }
@@ -664,9 +678,13 @@ def stream():
     temp_b  = float(request.args.get("temp_b",  0.7))
     top_k_a = int(request.args.get("top_k_a", 40))
     top_k_b = int(request.args.get("top_k_b", 40))
+    seed    = int(request.args.get("seed",    -1))
 
-    cfg_a = StreamCfg(label="A", temp=temp_a, top_k=top_k_a, color="cyan")
-    cfg_b = StreamCfg(label="B", temp=temp_b, top_k=top_k_b, color="magenta")
+    cfg_a = StreamCfg(label="A", temp=temp_a, top_k=top_k_a, color="cyan", seed=seed)
+    cfg_b = StreamCfg(label="B", temp=temp_b, top_k=top_k_b, color="magenta", seed=seed)
+
+    if seed >= 0:
+        np.random.seed(seed)
 
     def generate():
         def _iter():
@@ -728,7 +746,6 @@ def main():
 
     if args.server is not None:
         if args.server == "auto" or not args.server.startswith("http"):
-            # Auto-launch llama-server
             model_path = pick_model(args.model)
             gpu_layers = 0 if args.no_gpu else args.gpu_layers
             from server_backend import launch_server
@@ -738,18 +755,19 @@ def main():
             )
             model_name = f"server: {server_url}"
             print(f"  Server ready: {server_url}")
-            print("  Step mode disabled (no in-process model)")
         else:
             from server_backend import server_available
             if server_available(args.server):
                 server_url = args.server.rstrip("/")
                 model_name = f"server: {server_url}"
                 print(f"  Server mode: {server_url}")
-                print("  Step mode disabled (no in-process model)")
             else:
                 print(f"  Server at {args.server} not reachable, loading model locally...")
 
     if server_url is None:
+        if load_model is None:
+            sys.exit("[error] llama-cpp-python not found and no llama-server available.\n"
+                     "Run: python setup.py")
         model_path = pick_model(args.model)
         model_name = model_path.name
         gpu_layers = 0 if args.no_gpu else args.gpu_layers

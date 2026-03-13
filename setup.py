@@ -214,6 +214,13 @@ def main():
         "numpy", "rich", "prompt_toolkit", "questionary",
         "--upgrade", "--quiet")
 
+    # Create models/ folder if missing
+    models_dir = Path(__file__).resolve().parent / "models"
+    if not models_dir.exists():
+        models_dir.mkdir()
+        print(f"\n✓ Created {models_dir}")
+        print("  Put a GGUF model there, e.g.: models/Qwen3-8B-Q4_K_M.gguf")
+
     # llama-server binary (for parallel/compare with true parallelism)
     srv_ok = download_server(cuda)
 

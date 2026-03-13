@@ -8,6 +8,11 @@
 вбрасывать свои токены в середину генерации, сравнивать как один и тот же промпт
 ведёт себя при разных настройках — и всё это в терминале или в браузере.
 
+С флагом `--server` baddle использует нативный `llama-server` из llama.cpp,
+который умеет обрабатывать **два промпта одновременно** на GPU — оба генерируются
+параллельно и занимают примерно столько же времени, сколько один.
+Без `--server` промпты обрабатываются по очереди, то есть в два раза дольше.
+
 ---
 
 ## Установка
@@ -15,12 +20,14 @@
 ```bash
 git clone https://github.com/Volk-Arch/Baddle
 cd baddle
-
-# Положи GGUF-модель в папку models/
-# например: models/Qwen3-8B-Q4_K_M.gguf
-
 python setup.py        # определит CUDA, установит llama-cpp-python + скачает llama-server
 pip install flask      # только для веб-UI
+```
+
+После установки положи GGUF-модель в папку `models/` (создаётся автоматически):
+
+```
+models/Qwen3-8B-Q4_K_M.gguf
 ```
 
 `setup.py` автоматически:
@@ -51,7 +58,49 @@ python main.py -m Qwen3-8B-Q4_K_M.gguf   # выбрать модель явно
 python main.py --ctx 8192                 # увеличить контекст
 python main.py --no-gpu                   # только CPU
 python ui.py --port 8080
+python main.py --server --seed 42         # фиксированный seed для воспроизводимости
 ```
+
+---
+
+## Server mode
+
+`--server` включает настоящий параллелизм — два промпта обрабатываются одновременно.
+
+```bash
+# Автозапуск (сервер запустится и остановится сам):
+python ui.py --server
+python main.py --server
+
+# Подключение к уже запущенному серверу:
+python ui.py --server http://localhost:8080
+```
+
+`--server` без URL найдёт `llama-server` в папке `llama-server/`, запустит его
+и остановит при выходе.
+
+| | In-process (по умолчанию) | Server mode (`--server`) |
+|---|---|---|
+| **Как работает** | Один запрос, потом второй (последовательно) | Оба запроса на GPU параллельно |
+| **Скорость** | ~2x от одного запроса | ~1x от одного запроса |
+| **Step mode** | Есть (доступ к logits) | Нет |
+
+**Для step mode нужен in-process** (прямой доступ к logits).
+**Для быстрого parallel/compare — `--server`.**
+
+#### Откуда берётся llama-server
+
+`python setup.py` скачивает бинарник автоматически с
+[llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases).
+
+Если setup не скачал (не Windows, нет интернета) — вручную:
+
+1. Зайди на https://github.com/ggml-org/llama.cpp/releases
+2. Скачай `llama-bXXXX-bin-win-cuda-XX.X-x64.zip` (версия CUDA как у тебя)
+3. Скачай `cudart-llama-bin-win-cuda-XX.X-x64.zip` (CUDA runtime DLL)
+4. Распакуй оба в `llama-server/` внутри проекта
+
+> Узнать свою версию CUDA: `nvidia-smi` → строка `CUDA Version: XX.X`
 
 ---
 
@@ -112,65 +161,6 @@ python ui.py --port 8080
 
 ---
 
-## Как работает параллелизм
-
-Нейросеть (transformer) обрабатывает токены матричными умножениями на GPU.
-GPU может обрабатывать **несколько последовательностей в одном batch** за один проход —
-это не стоит почти ничего дополнительно, потому что GPU всё равно параллелен по своей природе.
-Два запроса в одном batch ≈ по времени как один.
-
-В baddle есть два backend'а для parallel/compare:
-
-| | In-process (по умолчанию) | Server mode (`--server`) |
-|---|---|---|
-| **Как работает** | Один запрос, потом второй (последовательно) | Оба запроса в одном GPU batch (параллельно) |
-| **Скорость** | ~2x от одного запроса | ~1x от одного запроса |
-| **Step mode** | Есть (доступ к logits) | Нет |
-| **Тег в UI** | `interleaved` | `llama-server (parallel)` |
-
-In-process backend использует библиотеку `llama-cpp-python` напрямую, но из-за
-ограничений её KV cache не может обрабатывать два потока одновременно — делает
-их по очереди.
-
-Server mode запускает нативный C++ сервер `llama-server` из llama.cpp — он умеет
-раскладывать несколько запросов в один GPU batch через свой встроенный scheduler.
-
-**Для step mode нужен in-process** (прямой доступ к logits).
-**Для быстрого parallel/compare — `--server`.**
-
----
-
-## Server mode
-
-```bash
-# Автозапуск (сервер запустится и остановится сам):
-python ui.py --server
-python ui.py -m Qwen3-8B-Q4_K_M.gguf --server
-python main.py --server
-
-# Подключение к уже запущенному серверу:
-python ui.py --server http://localhost:8080
-```
-
-`--server` без URL найдёт `llama-server` в папке `llama-server/`, запустит его
-и остановит при выходе.
-
-#### Откуда берётся llama-server
-
-`python setup.py` скачивает бинарник автоматически с
-[llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases).
-
-Если setup не скачал (не Windows, нет интернета) — вручную:
-
-1. Зайди на https://github.com/ggml-org/llama.cpp/releases
-2. Скачай `llama-bXXXX-bin-win-cuda-XX.X-x64.zip` (версия CUDA как у тебя)
-3. Скачай `cudart-llama-bin-win-cuda-XX.X-x64.zip` (CUDA runtime DLL)
-4. Распакуй оба в `llama-server/` внутри проекта
-
-> Узнать свою версию CUDA: `nvidia-smi` → строка `CUDA Version: XX.X`
-
----
-
 ## Что можно попробовать
 
 **Step mode** — это главный исследовательский режим. Команда `top 10` показывает
@@ -196,6 +186,11 @@ python ui.py --server http://localhost:8080
 расхождения — это токен, где распределение было достаточно широким чтобы разные
 настройки дали разный выбор. На академическом тексте расхождение наступает поздно,
 на художественном — сразу.
+
+**Seed** — в parallel и compare режимах можно задать seed (`--seed 42` или через UI).
+С одинаковым seed и параметрами модель даёт идентичный результат — удобно для
+сравнения: меняешь один параметр и видишь именно его эффект, а не случайный шум.
+Seed `-1` (по умолчанию) — случайный каждый раз.
 
 ---
 

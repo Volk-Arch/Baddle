@@ -29,8 +29,10 @@ except ImportError as e:
 
 try:
     from llama_cpp import Llama
+    _HAS_LLAMA_CPP = True
 except ImportError:
-    sys.exit("[error] llama-cpp-python not found. Run: python setup.py")
+    Llama = None  # type: ignore
+    _HAS_LLAMA_CPP = False
 
 console = Console()
 MODELS_DIR = Path(__file__).parent / "models"
@@ -44,6 +46,7 @@ class StreamCfg:
     temp:  float = 0.7
     top_k: int   = 40
     color: str   = "cyan"
+    seed:  int   = -1     # -1 = random
 
 
 # ── model helpers ─────────────────────────────────────────────────────────────
@@ -498,11 +501,14 @@ def _make_layout(
 
 
 def _run_dual_streams(
-    llm: Optional[Llama], pa: str, pb: str, max_tokens: int,
+    llm, pa: str, pb: str, max_tokens: int,
     cfg_a: StreamCfg, cfg_b: StreamCfg, track_diverge: bool = False,
     server_url: Optional[str] = None,
 ):
     """Shared runner for parallel and compare modes. Tries server, batch, interleaved."""
+    # Seed RNG for reproducibility
+    if cfg_a.seed >= 0:
+        np.random.seed(cfg_a.seed)
 
     def _gen():
         if server_url:
@@ -686,32 +692,39 @@ def step_mode(llm: Llama, prompt: str, temp: float, model_name: str = ""):
 
 # ── PARALLEL mode ─────────────────────────────────────────────────────────────
 
-def parallel_mode(llm: Optional[Llama], pa: str, pb: str, max_tokens: int, temp: float,
-                   server_url: Optional[str] = None):
+def parallel_mode(llm, pa: str, pb: str, max_tokens: int, temp: float,
+                   seed: int = -1, server_url: Optional[str] = None):
     console.rule("[bold magenta]PARALLEL MODE[/bold magenta]")
-    console.print(f"  [cyan]A:[/cyan] {repr(pa)}\n  [magenta]B:[/magenta] {repr(pb)}\n")
-    cfg_a = StreamCfg(label="Stream A", temp=temp, color="cyan")
-    cfg_b = StreamCfg(label="Stream B", temp=temp, color="magenta")
+    console.print(f"  [cyan]A:[/cyan] {repr(pa)}\n  [magenta]B:[/magenta] {repr(pb)}")
+    if seed >= 0:
+        console.print(f"  [dim]seed={seed}[/dim]")
+    console.print()
+    cfg_a = StreamCfg(label="Stream A", temp=temp, color="cyan", seed=seed)
+    cfg_b = StreamCfg(label="Stream B", temp=temp, color="magenta", seed=seed)
     _run_dual_streams(llm, pa, pb, max_tokens, cfg_a, cfg_b, server_url=server_url)
 
 
 # ── COMPARE mode ──────────────────────────────────────────────────────────────
 
 def compare_mode(
-    llm: Optional[Llama], prompt: str,
+    llm, prompt: str,
     temp_a: float, top_k_a: int,
     temp_b: float, top_k_b: int,
     max_tokens: int,
+    seed: int = -1,
     server_url: Optional[str] = None,
 ):
     console.rule("[bold yellow]COMPARE MODE[/bold yellow]")
     console.print(
         f"  Prompt: {repr(prompt)}\n"
         f"  [cyan]A:[/cyan] temp={temp_a}  top_k={top_k_a}\n"
-        f"  [magenta]B:[/magenta] temp={temp_b}  top_k={top_k_b}\n"
+        f"  [magenta]B:[/magenta] temp={temp_b}  top_k={top_k_b}"
     )
-    cfg_a = StreamCfg(label=f"temp={temp_a}  top_k={top_k_a}", temp=temp_a, top_k=top_k_a, color="cyan")
-    cfg_b = StreamCfg(label=f"temp={temp_b}  top_k={top_k_b}", temp=temp_b, top_k=top_k_b, color="magenta")
+    if seed >= 0:
+        console.print(f"  [dim]seed={seed}[/dim]")
+    console.print()
+    cfg_a = StreamCfg(label=f"temp={temp_a}  top_k={top_k_a}", temp=temp_a, top_k=top_k_a, color="cyan", seed=seed)
+    cfg_b = StreamCfg(label=f"temp={temp_b}  top_k={top_k_b}", temp=temp_b, top_k=top_k_b, color="magenta", seed=seed)
     _run_dual_streams(llm, prompt, prompt, max_tokens, cfg_a, cfg_b,
                       track_diverge=True, server_url=server_url)
 
@@ -762,7 +775,7 @@ def main():
     console.print("\n[bold]baddle[/bold] -- neural token experiment\n", justify="center")
 
     server_url: Optional[str] = None
-    llm: Optional[Llama] = None
+    llm = None
 
     if args.server is not None:
         if args.server == "auto" or not args.server.startswith("http"):
@@ -784,6 +797,9 @@ def main():
                 console.print(f"[yellow]Server at {args.server} not reachable, loading model locally...[/yellow]\n")
 
     if server_url is None:
+        if not _HAS_LLAMA_CPP:
+            sys.exit("[error] llama-cpp-python not found and no llama-server available.\n"
+                     "Run: python setup.py")
         model_path = pick_model(args.model)
         gpu_layers = 0 if args.no_gpu else args.gpu_layers
         llm        = load_model(model_path, gpu_layers, args.ctx)
@@ -818,11 +834,12 @@ def main():
                 pa   = _q_text("Prompt A:")
                 pb   = _q_text("Prompt B:")
                 n    = int(_q_text("Max tokens:", default="50") or "50")
+                seed = int(_q_text("Seed (-1 = random):", default="-1") or "-1")
                 if not pa or not pb:
                     console.print("[yellow]both prompts required, skipping[/yellow]")
                     continue
                 console.print()
-                parallel_mode(llm, pa, pb, n, temp, server_url=server_url)
+                parallel_mode(llm, pa, pb, n, temp, seed=seed, server_url=server_url)
 
             elif mode.startswith("compare"):
                 prompt = _q_text("Prompt (shared):")
@@ -834,8 +851,9 @@ def main():
                 temp_b  = float(_q_text("Config B -- temperature:", default="1.0") or "1.0")
                 top_k_b = int(_q_text("Config B -- top_k:", default="40") or "40")
                 n       = int(_q_text("Max tokens:", default="60") or "60")
+                seed    = int(_q_text("Seed (-1 = random):", default="-1") or "-1")
                 console.print()
-                compare_mode(llm, prompt, temp_a, top_k_a, temp_b, top_k_b, n, server_url=server_url)
+                compare_mode(llm, prompt, temp_a, top_k_a, temp_b, top_k_b, n, seed=seed, server_url=server_url)
 
         except KeyboardInterrupt:
             console.print("\n[dim]interrupted[/dim]")
