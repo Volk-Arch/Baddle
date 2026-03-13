@@ -1,0 +1,13 @@
+# Core — install via setup.py (detects CUDA and builds GPU version)
+# llama-cpp-python
+
+# Numerics
+numpy
+
+# CLI UI
+rich
+prompt_toolkit
+questionary
+
+# Web UI (python ui.py)
+flask
