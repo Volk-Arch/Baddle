@@ -2,4 +2,5 @@
 .venv/
 .claude/
 models/
+llama-server/
 __pycache__/

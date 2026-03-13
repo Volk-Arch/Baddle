@@ -25,6 +25,7 @@ from main import (
 app = Flask(__name__)
 llm        = None
 model_name = ""
+server_url = None
 
 # ── Step mode server state ─────────────────────────────────────────────────────
 
@@ -68,6 +69,8 @@ def _step_reset_to_prompt():
 
 @app.route("/step/init", methods=["POST"])
 def step_init():
+    if llm is None:
+        return jsonify({"error": "Step mode requires in-process model (no --server)"})
     data   = request.get_json(force=True)
     prompt = data.get("prompt", "").strip()
     temp   = float(data.get("temp", 0.0))
@@ -667,7 +670,14 @@ def stream():
 
     def generate():
         def _iter():
-            """Try batch, fall back to interleaved on any error."""
+            """Try server, then batch, then interleaved."""
+            if server_url:
+                from server_backend import _server_generate_iter, is_native_server
+                native = is_native_server(server_url)
+                yield "tag", "llama-server (parallel)" if native else "llama-server (sequential)"
+                for item in _server_generate_iter(server_url, pa, pb, n, cfg_a, cfg_b):
+                    yield "data", item
+                return
             try:
                 yield "tag", "kv-shared (2 decodes/step)"
                 for item in _batch_generate_iter(llm, pa, pb, n, cfg_a, cfg_b):
@@ -710,13 +720,40 @@ def main():
     parser.add_argument("--gpu-layers",     type=int, default=-1)
     parser.add_argument("--ctx",            type=int, default=4096)
     parser.add_argument("--port",           type=int, default=7860)
+    parser.add_argument("--server",         type=str, default=None, nargs="?", const="auto",
+                        help="llama-server URL or just --server to auto-launch")
     args = parser.parse_args()
 
-    global llm, model_name
-    model_path = pick_model(args.model)
-    model_name = model_path.name
-    gpu_layers = 0 if args.no_gpu else args.gpu_layers
-    llm        = load_model(model_path, gpu_layers, args.ctx)
+    global llm, model_name, server_url
+
+    if args.server is not None:
+        if args.server == "auto" or not args.server.startswith("http"):
+            # Auto-launch llama-server
+            model_path = pick_model(args.model)
+            gpu_layers = 0 if args.no_gpu else args.gpu_layers
+            from server_backend import launch_server
+            print("  Starting llama-server...")
+            server_url = launch_server(
+                str(model_path), n_ctx=args.ctx, gpu_layers=gpu_layers,
+            )
+            model_name = f"server: {server_url}"
+            print(f"  Server ready: {server_url}")
+            print("  Step mode disabled (no in-process model)")
+        else:
+            from server_backend import server_available
+            if server_available(args.server):
+                server_url = args.server.rstrip("/")
+                model_name = f"server: {server_url}"
+                print(f"  Server mode: {server_url}")
+                print("  Step mode disabled (no in-process model)")
+            else:
+                print(f"  Server at {args.server} not reachable, loading model locally...")
+
+    if server_url is None:
+        model_path = pick_model(args.model)
+        model_name = model_path.name
+        gpu_layers = 0 if args.no_gpu else args.gpu_layers
+        llm        = load_model(model_path, gpu_layers, args.ctx)
 
     url = f"http://localhost:{args.port}"
     print(f"\n  Open: {url}\n")

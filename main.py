@@ -498,12 +498,18 @@ def _make_layout(
 
 
 def _run_dual_streams(
-    llm: Llama, pa: str, pb: str, max_tokens: int,
+    llm: Optional[Llama], pa: str, pb: str, max_tokens: int,
     cfg_a: StreamCfg, cfg_b: StreamCfg, track_diverge: bool = False,
+    server_url: Optional[str] = None,
 ):
-    """Shared runner for parallel and compare modes. Tries batch, falls back to interleaved."""
+    """Shared runner for parallel and compare modes. Tries server, batch, interleaved."""
 
     def _gen():
+        if server_url:
+            from server_backend import _server_generate_iter
+            console.print("[green]Using llama-server (parallel HTTP)[/green]")
+            yield from _server_generate_iter(server_url, pa, pb, max_tokens, cfg_a, cfg_b)
+            return
         try:
             yield from _batch_generate_iter(llm, pa, pb, max_tokens, cfg_a, cfg_b)
         except Exception as e:
@@ -680,21 +686,23 @@ def step_mode(llm: Llama, prompt: str, temp: float, model_name: str = ""):
 
 # ── PARALLEL mode ─────────────────────────────────────────────────────────────
 
-def parallel_mode(llm: Llama, pa: str, pb: str, max_tokens: int, temp: float):
+def parallel_mode(llm: Optional[Llama], pa: str, pb: str, max_tokens: int, temp: float,
+                   server_url: Optional[str] = None):
     console.rule("[bold magenta]PARALLEL MODE[/bold magenta]")
     console.print(f"  [cyan]A:[/cyan] {repr(pa)}\n  [magenta]B:[/magenta] {repr(pb)}\n")
     cfg_a = StreamCfg(label="Stream A", temp=temp, color="cyan")
     cfg_b = StreamCfg(label="Stream B", temp=temp, color="magenta")
-    _run_dual_streams(llm, pa, pb, max_tokens, cfg_a, cfg_b)
+    _run_dual_streams(llm, pa, pb, max_tokens, cfg_a, cfg_b, server_url=server_url)
 
 
 # ── COMPARE mode ──────────────────────────────────────────────────────────────
 
 def compare_mode(
-    llm: Llama, prompt: str,
+    llm: Optional[Llama], prompt: str,
     temp_a: float, top_k_a: int,
     temp_b: float, top_k_b: int,
     max_tokens: int,
+    server_url: Optional[str] = None,
 ):
     console.rule("[bold yellow]COMPARE MODE[/bold yellow]")
     console.print(
@@ -704,7 +712,8 @@ def compare_mode(
     )
     cfg_a = StreamCfg(label=f"temp={temp_a}  top_k={top_k_a}", temp=temp_a, top_k=top_k_a, color="cyan")
     cfg_b = StreamCfg(label=f"temp={temp_b}  top_k={top_k_b}", temp=temp_b, top_k=top_k_b, color="magenta")
-    _run_dual_streams(llm, prompt, prompt, max_tokens, cfg_a, cfg_b, track_diverge=True)
+    _run_dual_streams(llm, prompt, prompt, max_tokens, cfg_a, cfg_b,
+                      track_diverge=True, server_url=server_url)
 
 
 # ── MAIN MENU ─────────────────────────────────────────────────────────────────
@@ -745,53 +754,94 @@ def main():
     parser.add_argument("--no-gpu",         action="store_true")
     parser.add_argument("--gpu-layers",     type=int, default=-1)
     parser.add_argument("--ctx",            type=int, default=4096,
-                        help="context size — 4096+ recommended for parallel/compare")
+                        help="context size -- 4096+ recommended for parallel/compare")
+    parser.add_argument("--server",         type=str, default=None, nargs="?", const="auto",
+                        help="llama-server URL or 'auto' to launch automatically")
     args = parser.parse_args()
 
-    console.print("\n[bold]baddle[/bold] — neural token experiment\n", justify="center")
+    console.print("\n[bold]baddle[/bold] -- neural token experiment\n", justify="center")
 
-    model_path = pick_model(args.model)
-    gpu_layers = 0 if args.no_gpu else args.gpu_layers
-    llm        = load_model(model_path, gpu_layers, args.ctx)
+    server_url: Optional[str] = None
+    llm: Optional[Llama] = None
 
-    mode = _q_select(
-        "Mode:",
-        choices=[
+    if args.server is not None:
+        if args.server == "auto" or not args.server.startswith("http"):
+            # Auto-launch llama-server
+            model_path = pick_model(args.model)
+            gpu_layers = 0 if args.no_gpu else args.gpu_layers
+            from server_backend import launch_server
+            console.print("[dim]Starting llama-server...[/dim]")
+            server_url = launch_server(
+                str(model_path), n_ctx=args.ctx, gpu_layers=gpu_layers,
+            )
+            console.print(f"[green]Server ready:[/green] {server_url}\n")
+        else:
+            from server_backend import server_available
+            if server_available(args.server):
+                server_url = args.server.rstrip("/")
+                console.print(f"[green]Server mode:[/green] {server_url}\n")
+            else:
+                console.print(f"[yellow]Server at {args.server} not reachable, loading model locally...[/yellow]\n")
+
+    if server_url is None:
+        model_path = pick_model(args.model)
+        gpu_layers = 0 if args.no_gpu else args.gpu_layers
+        llm        = load_model(model_path, gpu_layers, args.ctx)
+
+    while True:
+        mode_choices = [
             "step     — interactive token-by-token",
             "parallel — two different prompts, one forward pass",
             "compare  — one prompt, two sampling configs side-by-side",
-        ],
-    )
+            "quit",
+        ]
+        if llm is None:
+            # server mode: step unavailable
+            mode_choices = [c for c in mode_choices if not c.startswith("step")]
 
-    if mode.startswith("step"):
-        temp   = float(_q_text("Temperature (0 = greedy):", default="0.0") or "0.0")
-        prompt = _q_text("Prompt:")
-        if not prompt:
-            sys.exit("empty prompt")
-        console.print()
-        step_mode(llm, prompt, temp, model_name=model_path.name)
+        mode = _q_select("Mode:", choices=mode_choices)
+        if mode is None or mode == "quit":
+            break
 
-    elif mode.startswith("parallel"):
-        temp = float(_q_text("Temperature:", default="0.7") or "0.7")
-        pa   = _q_text("Prompt A:")
-        pb   = _q_text("Prompt B:")
-        n    = int(_q_text("Max tokens:", default="50") or "50")
-        if not pa or not pb:
-            sys.exit("both prompts required")
-        console.print()
-        parallel_mode(llm, pa, pb, n, temp)
+        try:
+            if mode.startswith("step"):
+                temp   = float(_q_text("Temperature (0 = greedy):", default="0.0") or "0.0")
+                prompt = _q_text("Prompt:")
+                if not prompt:
+                    console.print("[yellow]empty prompt, skipping[/yellow]")
+                    continue
+                console.print()
+                step_mode(llm, prompt, temp, model_name=model_path.name)
 
-    else:  # compare
-        prompt = _q_text("Prompt (shared):")
-        if not prompt:
-            sys.exit("empty prompt")
-        temp_a  = float(_q_text("Config A — temperature:", default="0.0") or "0.0")
-        top_k_a = int(_q_text("Config A — top_k:", default="1") or "1")
-        temp_b  = float(_q_text("Config B — temperature:", default="1.0") or "1.0")
-        top_k_b = int(_q_text("Config B — top_k:", default="40") or "40")
-        n       = int(_q_text("Max tokens:", default="60") or "60")
+            elif mode.startswith("parallel"):
+                temp = float(_q_text("Temperature:", default="0.7") or "0.7")
+                pa   = _q_text("Prompt A:")
+                pb   = _q_text("Prompt B:")
+                n    = int(_q_text("Max tokens:", default="50") or "50")
+                if not pa or not pb:
+                    console.print("[yellow]both prompts required, skipping[/yellow]")
+                    continue
+                console.print()
+                parallel_mode(llm, pa, pb, n, temp, server_url=server_url)
+
+            elif mode.startswith("compare"):
+                prompt = _q_text("Prompt (shared):")
+                if not prompt:
+                    console.print("[yellow]empty prompt, skipping[/yellow]")
+                    continue
+                temp_a  = float(_q_text("Config A -- temperature:", default="0.0") or "0.0")
+                top_k_a = int(_q_text("Config A -- top_k:", default="1") or "1")
+                temp_b  = float(_q_text("Config B -- temperature:", default="1.0") or "1.0")
+                top_k_b = int(_q_text("Config B -- top_k:", default="40") or "40")
+                n       = int(_q_text("Max tokens:", default="60") or "60")
+                console.print()
+                compare_mode(llm, prompt, temp_a, top_k_a, temp_b, top_k_b, n, server_url=server_url)
+
+        except KeyboardInterrupt:
+            console.print("\n[dim]interrupted[/dim]")
+            continue
+
         console.print()
-        compare_mode(llm, prompt, temp_a, top_k_a, temp_b, top_k_b, n)
 
 
 if __name__ == "__main__":
