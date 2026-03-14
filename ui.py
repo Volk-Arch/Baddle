@@ -3,7 +3,6 @@
 
 import sys
 import json
-import itertools
 import argparse
 import threading
 import webbrowser
@@ -154,28 +153,6 @@ def step_auto():
     )
 
 
-@app.route("/step/inject", methods=["POST"])
-def step_inject():
-    if not _step["ready"]:
-        return jsonify({"error": "not initialized"})
-    data = request.get_json(force=True)
-    text = data.get("text", "")
-    if not text:
-        return jsonify({"error": "empty text"})
-    try:
-        toks = llm.tokenize(text.encode(), add_bos=False)
-        for t in toks:
-            llm.eval([t])
-            _step["tokens"].append(t)
-        return jsonify({
-            "full_text":      _step_full_text(),
-            "top_tokens":     _step_top_tokens(10),
-            "injected_tokens": len(toks),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
 @app.route("/step/reset", methods=["POST"])
 def step_reset():
     if not _step["prompt_tokens"]:
@@ -186,6 +163,67 @@ def step_reset():
         return jsonify({
             "full_text":  _step_full_text(),
             "top_tokens": _step_top_tokens(10),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/step/edit", methods=["POST"])
+def step_edit():
+    """Sync model state with edited text from contenteditable output."""
+    if llm is None:
+        return jsonify({"error": "Step mode requires in-process model"})
+    data = request.get_json(force=True)
+    new_text = data.get("text", "")
+    if not new_text:
+        return jsonify({"error": "empty text"})
+    try:
+        cur_text = _step_full_text()
+
+        if new_text == cur_text:
+            # No change
+            return jsonify({"full_text": cur_text, "top_tokens": _step_top_tokens(10), "action": "none"})
+
+        if cur_text.startswith(new_text):
+            # Text was trimmed — cut
+            new_tokens = llm.tokenize(new_text.encode())
+            _step["tokens"] = list(new_tokens)
+            llm.reset()
+            llm.eval(new_tokens)
+            _step["ready"] = True
+            return jsonify({
+                "full_text": _step_full_text(),
+                "top_tokens": _step_top_tokens(10),
+                "action": "cut",
+                "token_count": len(new_tokens),
+            })
+
+        if new_text.startswith(cur_text):
+            # Text was appended — inject the tail
+            tail = new_text[len(cur_text):]
+            toks = llm.tokenize(tail.encode(), add_bos=False)
+            for t in toks:
+                llm.eval([t])
+                _step["tokens"].append(t)
+            _step["ready"] = True
+            return jsonify({
+                "full_text": _step_full_text(),
+                "top_tokens": _step_top_tokens(10),
+                "action": "inject",
+                "injected_tokens": len(toks),
+            })
+
+        # Text was changed in the middle — full re-eval
+        new_tokens = llm.tokenize(new_text.encode())
+        _step["tokens"] = list(new_tokens)
+        llm.reset()
+        llm.eval(new_tokens)
+        _step["ready"] = True
+        return jsonify({
+            "full_text": _step_full_text(),
+            "top_tokens": _step_top_tokens(10),
+            "action": "re-eval",
+            "token_count": len(new_tokens),
         })
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -223,6 +261,13 @@ HTML = """<!DOCTYPE html>
                   color: #fff; transition: background 0.15s; }
     .btn-action:disabled { opacity: 0.35; cursor: not-allowed; }
     .prob-bar { display: inline-block; background: #065f46; height: 10px; border-radius: 2px; }
+    #step-output[contenteditable="true"] { outline: 2px solid #0ea5e9; cursor: text; }
+    #step-output[contenteditable="true"]::after {
+      content: '  Ctrl+Enter to sync';
+      color: #475569; font-size: 0.7rem;
+    }
+    .editing-badge { background: #0ea5e9; color: #0f172a; font-size: 0.65rem;
+                     padding: 1px 8px; border-radius: 4px; font-weight: bold; }
   </style>
 </head>
 <body class="text-slate-200 min-h-screen p-6">
@@ -269,7 +314,8 @@ HTML = """<!DOCTYPE html>
           <span id="step-status" class="ml-auto text-slate-500 text-xs"></span>
         </div>
         <div class="bg-slate-800 scroll-panel">
-          <div id="step-output" class="stream-content p-4 text-sm text-slate-200"></div>
+          <div id="step-output" class="stream-content p-4 text-sm text-slate-200"
+               contenteditable="false" spellcheck="false"></div>
         </div>
       </div>
       <!-- Top tokens -->
@@ -301,14 +347,17 @@ HTML = """<!DOCTYPE html>
         <span class="text-slate-500 text-xs">tokens</span>
       </div>
 
-      <div class="flex items-center gap-2">
-        <button id="step-btn-inject" onclick="stepInject()" disabled
-          class="btn-action" style="background:#92400e"
-          onmouseover="this.style.background='#b45309'" onmouseout="this.style.background='#92400e'">
-          Inject
-        </button>
-        <input id="step-inject-text" type="text" placeholder="text to inject…" style="width:220px">
-      </div>
+      <button id="step-btn-edit" onclick="stepToggleEdit()" disabled
+        class="btn-action" style="background:#0c4a6e"
+        onmouseover="this.style.background='#075985'" onmouseout="this.style.background='#0c4a6e'">
+        Edit
+      </button>
+
+      <button id="step-btn-sync" onclick="stepSync()" style="display:none"
+        class="btn-action" style="background:#0369a1"
+        onmouseover="this.style.background='#0284c7'" onmouseout="this.style.background='#0369a1'">
+        Sync (Ctrl+Enter)
+      </button>
 
       <button id="step-btn-reset" onclick="stepReset()" disabled
         class="btn-action" style="background:#7f1d1d"
@@ -454,6 +503,14 @@ HTML = """<!DOCTYPE html>
     const isDual = m === 'parallel' || m === 'compare';
     document.getElementById('dual-controls').classList.toggle('hidden', !isDual);
     document.getElementById('dual-panels').classList.toggle('hidden', !isDual);
+    // Clear dual panels and stop stream on tab switch
+    if (dualEs) { dualEs.close(); dualEs = null; }
+    ['output-a','output-b'].forEach(id => document.getElementById(id).textContent = '');
+    ['step-a','step-b'].forEach(id => document.getElementById(id).textContent = '');
+    document.getElementById('diverge-badge').classList.add('hidden');
+    document.getElementById('status').textContent = '';
+    document.getElementById('btn-gen').style.display = '';
+    document.getElementById('btn-stop').style.display = 'none';
   }
 
   // ── Step mode ──────────────────────────────────────────────────────────────
@@ -475,10 +532,59 @@ HTML = """<!DOCTYPE html>
     }).join('');
   }
 
+  let stepEditing = false;
+
   function setStepButtons(enabled) {
-    ['step-btn-next','step-btn-auto','step-btn-inject','step-btn-reset'].forEach(id => {
+    ['step-btn-next','step-btn-auto','step-btn-reset','step-btn-edit'].forEach(id => {
       document.getElementById(id).disabled = !enabled;
     });
+  }
+
+  function stepToggleEdit() {
+    const el = document.getElementById('step-output');
+    stepEditing = !stepEditing;
+    el.contentEditable = stepEditing ? 'true' : 'false';
+    document.getElementById('step-btn-sync').style.display = stepEditing ? '' : 'none';
+    document.getElementById('step-btn-edit').textContent = stepEditing ? 'Cancel Edit' : 'Edit';
+    // Disable other buttons while editing
+    ['step-btn-next','step-btn-auto','step-btn-reset'].forEach(id => {
+      document.getElementById(id).disabled = stepEditing;
+    });
+    if (stepEditing) {
+      el.focus();
+      // Place cursor at end
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  async function stepSync() {
+    const el = document.getElementById('step-output');
+    const newText = el.textContent;
+    document.getElementById('step-status').textContent = 'Syncing…';
+    const r = await fetch('/step/edit', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: newText})
+    });
+    const d = await r.json();
+    if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
+    el.textContent = d.full_text;
+    renderTop(d.top_tokens);
+    // Exit edit mode
+    stepEditing = false;
+    el.contentEditable = 'false';
+    document.getElementById('step-btn-sync').style.display = 'none';
+    document.getElementById('step-btn-edit').textContent = 'Edit';
+    setStepButtons(true);
+    const info = d.action === 'cut' ? `Cut to ${d.token_count} tokens`
+               : d.action === 'inject' ? `Injected ${d.injected_tokens} tokens`
+               : d.action === 're-eval' ? `Re-eval ${d.token_count} tokens`
+               : 'No change';
+    document.getElementById('step-status').textContent = info;
   }
 
   async function stepInit() {
@@ -536,21 +642,6 @@ HTML = """<!DOCTYPE html>
     if (restoreButtons !== false) setStepButtons(true);
   }
 
-  async function stepInject() {
-    const text = document.getElementById('step-inject-text').value;
-    if (!text) return;
-    const r = await fetch('/step/inject', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text})
-    });
-    const d = await r.json();
-    if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text;
-    renderTop(d.top_tokens);
-    document.getElementById('step-inject-text').value = '';
-    document.getElementById('step-status').textContent = 'Injected ' + d.injected_tokens + ' tokens';
-  }
-
   async function stepReset() {
     const r = await fetch('/step/reset', {method: 'POST'});
     const d = await r.json();
@@ -561,10 +652,12 @@ HTML = """<!DOCTYPE html>
     setStepButtons(true);
   }
 
-  // Ctrl+Enter → Next Token in step mode
+  // Ctrl+Enter → Sync if editing, Next Token otherwise
   document.addEventListener('keydown', e => {
     if (e.ctrlKey && e.key === 'Enter') {
-      if (mode === 'step') stepNext();
+      e.preventDefault();
+      if (mode === 'step' && stepEditing) stepSync();
+      else if (mode === 'step') stepNext();
       else generate();
     }
   });

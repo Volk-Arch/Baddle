@@ -16,7 +16,7 @@
 git clone https://github.com/Volk-Arch/Baddle
 cd baddle
 python setup.py        # определит CUDA, установит llama-cpp-python + скачает llama-server
-pip install flask      # только для веб-UI
+pip install flask      # для веб-UI
 ```
 
 После установки положи GGUF-модель в папку `models/` (создаётся автоматически):
@@ -32,16 +32,13 @@ models/Qwen3-8B-Q4_K_M.gguf
 
 > **Установка занимает 5–15 минут** — это нормально.
 > `llama-cpp-python` компилируется из C++ исходников.
-> При наличии CUDA дополнительно собираются GPU-ядра, это занимает ещё больше.
-> Просто подожди пока не появится `Successfully installed llama-cpp-python`.
+> При наличии CUDA дополнительно собираются GPU-ядра.
 
 ---
 
 ## Запуск
 
 ```bash
-python main.py           # CLI-интерфейс с меню
-python main.py --server  # CLI + параллельный сервер
 python ui.py             # веб-интерфейс на localhost:7860
 python ui.py --server    # веб-интерфейс + параллельный сервер (рекомендуется)
 ```
@@ -49,11 +46,10 @@ python ui.py --server    # веб-интерфейс + параллельный 
 Если в `models/` одна модель — загрузится автоматически. Если несколько — появится выбор.
 
 ```bash
-python main.py -m Qwen3-8B-Q4_K_M.gguf   # выбрать модель явно
-python main.py --ctx 8192                 # увеличить контекст
-python main.py --no-gpu                   # только CPU
-python ui.py --port 8080
-python main.py --server --seed 42         # фиксированный seed для воспроизводимости
+python ui.py -m Qwen3-8B-Q4_K_M.gguf   # выбрать модель явно
+python ui.py --ctx 8192                 # увеличить контекст
+python ui.py --no-gpu                   # только CPU
+python ui.py --port 8080                # другой порт
 ```
 
 ---
@@ -65,7 +61,6 @@ python main.py --server --seed 42         # фиксированный seed дл
 ```bash
 # Автозапуск (сервер запустится и остановится сам):
 python ui.py --server
-python main.py --server
 
 # Подключение к уже запущенному серверу:
 python ui.py --server http://localhost:8080
@@ -99,22 +94,18 @@ python ui.py --server http://localhost:8080
 
 ---
 
-## Команды step mode
+## Step mode — кнопки
 
-| Команда | Действие |
+| Кнопка | Действие |
 |---|---|
-| `[Enter]` | следующий токен |
-| `top N` | N самых вероятных следующих токенов с вероятностями и гистограммой |
-| `inject <текст>` | вбросить текст вместо следующего токена |
-| `auto N` | автоматически N токенов без остановки |
-| `temp 0.8` | изменить температуру прямо в процессе |
-| `show` | вывести весь накопленный текст |
-| `save session.json` | сохранить сессию в файл |
-| `load session.json` | воспроизвести сохранённую сессию |
-| `reset` | откатиться к исходному промпту |
-| `q` | выйти |
+| **Init** | загрузить промпт в модель |
+| **Next Token** | сгенерировать один токен |
+| **Auto** + N | автоматически N токенов без остановки |
+| **Edit** | включить редактирование текста (inject, обрезка, правки) |
+| **Sync** (Ctrl+Enter) | применить изменения — модель подхватит отредактированный текст |
+| **Reset** | откатиться к исходному промпту |
 
-`↑↓` — история команд,  `Tab` — автодополнение
+Панель **Next token probs** показывает top-10 вероятных следующих токенов с гистограммой.
 
 ---
 
@@ -122,8 +113,8 @@ python ui.py --server http://localhost:8080
 
 ```
 baddle/
-├── main.py            # CLI: step, parallel, compare
-├── ui.py              # веб-сервер (Flask + SSE)
+├── main.py            # движок: модель, сэмплинг, batch-генерация
+├── ui.py              # веб-интерфейс (Flask + SSE), точка входа
 ├── server_backend.py  # HTTP-клиент для llama-server
 ├── setup.py           # установщик: llama-cpp-python + llama-server
 ├── models/            # GGUF-модели
