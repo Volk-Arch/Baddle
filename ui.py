@@ -19,9 +19,9 @@ from main import pick_model, StreamCfg
 
 # These need llama-cpp-python — may be None in server-only mode
 try:
-    from main import load_model, _batch_generate_iter, _interleaved_generate_iter, _sample, _get_logits, format_chat
+    from main import load_model, _batch_generate_iter, _interleaved_generate_iter, _sample, _get_logits, _entropy, format_chat
 except ImportError:
-    load_model = _batch_generate_iter = _interleaved_generate_iter = _sample = _get_logits = format_chat = None
+    load_model = _batch_generate_iter = _interleaved_generate_iter = _sample = _get_logits = _entropy = format_chat = None
 
 app = Flask(__name__)
 llm        = None
@@ -46,7 +46,11 @@ _step = {
     "temp":          0.0,
     "top_k":         40,
     "ready":         False,
+    "ents":          [],   # entropy per generated token
+    "tok_texts":     [],   # text of each generated token
 }
+
+_dual_result = {"text_a": "", "text_b": ""}
 
 
 def _step_top_tokens(n: int = 10):
@@ -75,6 +79,8 @@ def _step_reset_to_prompt():
     llm.reset()
     llm.eval(_step["prompt_tokens"])
     _step["tokens"] = list(_step["prompt_tokens"])
+    _step["ents"] = []
+    _step["tok_texts"] = []
 
 
 # ── Step endpoints ─────────────────────────────────────────────────────────────
@@ -98,6 +104,8 @@ def step_init():
         _step["temp"]          = temp
         _step["top_k"]         = top_k
         _step["ready"]         = True
+        _step["ents"]          = []
+        _step["tok_texts"]     = []
         return jsonify({
             "text":        prompt,
             "token_count": len(tokens),
@@ -112,19 +120,26 @@ def step_next():
     if not _step["ready"]:
         return jsonify({"error": "not initialized"})
     try:
+        logits = _get_logits(llm)
+        ent = float(_entropy(logits))
         tok    = _sample(llm, _step["temp"], _step["top_k"])
+        piece  = llm.detokenize([tok]).decode("utf-8", errors="replace")
         llm.eval([tok])
         _step["tokens"].append(tok)
+        _step["ents"].append(ent)
+        _step["tok_texts"].append(piece)
         is_eos = tok == llm.token_eos()
         if is_eos:
             _step["ready"] = False
         return jsonify({
-            "token_text": llm.detokenize([tok]).decode("utf-8", errors="replace"),
+            "token_text": piece,
             "full_text":  _step_full_text(),
             "top_tokens": _step_top_tokens(10),
             "step":         len(_step["tokens"]) - len(_step["prompt_tokens"]),
             "total_tokens": len(_step["tokens"]),
             "is_eos":       is_eos,
+            "ents":       [round(e, 3) for e in _step["ents"]],
+            "tok_texts":  _step["tok_texts"],
         })
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -139,9 +154,14 @@ def step_auto():
     def generate():
         try:
             for i in range(n):
+                logits = _get_logits(llm)
+                ent = float(_entropy(logits))
                 tok = _sample(llm, _step["temp"], _step["top_k"])
+                piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
                 llm.eval([tok])
                 _step["tokens"].append(tok)
+                _step["ents"].append(ent)
+                _step["tok_texts"].append(piece)
                 is_eos = tok == llm.token_eos()
                 payload = {
                     "full_text":    _step_full_text(),
@@ -149,6 +169,8 @@ def step_auto():
                     "total_tokens": len(_step["tokens"]),
                     "top_tokens":   _step_top_tokens(5),
                     "eos":          is_eos,
+                    "ents":       [round(e, 3) for e in _step["ents"]],
+                    "tok_texts":  _step["tok_texts"],
                 }
                 yield f"data: {json.dumps(payload)}\n\n"
                 if is_eos:
@@ -193,6 +215,8 @@ def step_edit():
     if not new_text:
         return jsonify({"error": "empty text"})
     try:
+        _step["ents"] = []
+        _step["tok_texts"] = []
         cur_text = _step_full_text()
 
         if new_text == cur_text:
@@ -323,6 +347,8 @@ def chat_stream():
     def generate():
         response_text = ""
         eos = llm.token_eos()
+        tok_texts = []
+        ents = []
         # Detect im_end token for chat models
         try:
             im_end_tokens = llm.tokenize("<|im_end|>".encode(), add_bos=False)
@@ -330,26 +356,30 @@ def chat_stream():
             im_end_tokens = []
 
         for step in range(max_tokens):
+            logits = _get_logits(llm)
+            ent = float(_entropy(logits))
             tok = _sample(llm, _chat["temp"])
             llm.eval([tok])
             _chat["tokens"].append(tok)
 
             if tok == eos:
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
                 break
 
             piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
             response_text += piece
+            tok_texts.append(piece)
+            ents.append(ent)
 
             # Check for <|im_end|> in response
             if "<|im_end|>" in response_text:
                 response_text = response_text.replace("<|im_end|>", "")
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
                 break
 
-            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens'])})}\n\n"
+            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
         else:
-            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
 
         # Save assistant response to history (will be updated on continue)
         _chat["messages"].append({"role": "assistant", "content": response_text})
@@ -376,27 +406,33 @@ def chat_continue():
     def generate():
         response_text = prev_text
         eos = llm.token_eos()
+        tok_texts = []
+        ents = []
 
         for step in range(max_tokens):
+            logits = _get_logits(llm)
+            ent = float(_entropy(logits))
             tok = _sample(llm, _chat["temp"])
             llm.eval([tok])
             _chat["tokens"].append(tok)
 
             if tok == eos:
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
                 break
 
             piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
             response_text += piece
+            tok_texts.append(piece)
+            ents.append(ent)
 
             if "<|im_end|>" in response_text:
                 response_text = response_text.replace("<|im_end|>", "")
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
                 break
 
-            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens'])})}\n\n"
+            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
         else:
-            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
 
         # Update last assistant message
         _chat["messages"][-1]["content"] = response_text
@@ -667,6 +703,8 @@ HTML = """<!DOCTYPE html>
       <div class="bg-slate-900 px-4 py-2 flex items-center gap-2 border-b border-sky-900">
         <span id="title-a" class="text-sky-400 text-sm font-bold">Stream A</span>
         <span id="step-a" class="text-slate-500 text-xs ml-auto"></span>
+        <button id="btn-to-step-a" onclick="dualToStep('a')" style="display:none"
+          class="text-xs px-2 py-0.5 bg-sky-700 hover:bg-sky-600 text-white rounded transition-colors">→ Step</button>
       </div>
       <div class="bg-slate-800 scroll-panel">
         <div id="output-a" class="stream-content p-4 text-sm text-slate-200"></div>
@@ -676,6 +714,8 @@ HTML = """<!DOCTYPE html>
       <div class="bg-slate-900 px-4 py-2 flex items-center gap-2 border-b border-purple-900">
         <span id="title-b" class="text-purple-400 text-sm font-bold">Stream B</span>
         <span id="step-b" class="text-slate-500 text-xs"></span>
+        <button id="btn-to-step-b" onclick="dualToStep('b')" style="display:none"
+          class="text-xs px-2 py-0.5 bg-purple-700 hover:bg-purple-600 text-white rounded transition-colors">→ Step</button>
         <span id="diverge-badge"
           class="hidden ml-auto text-xs bg-amber-500 text-slate-900 px-2 py-0.5 rounded-full">
         </span>
@@ -777,8 +817,8 @@ HTML = """<!DOCTYPE html>
   }
 
   // ── Heatmap rendering ──────────────────────────────────────────────────────
-  function renderHeatmap(elId, toks, ents, promptText) {
-    const el = document.getElementById(elId);
+  function renderHeatmap(elOrId, toks, ents, promptText) {
+    const el = typeof elOrId === 'string' ? document.getElementById(elOrId) : elOrId;
     el.innerHTML = '';
     // Show prompt as plain text before colored generated tokens
     if (promptText) {
@@ -926,7 +966,12 @@ HTML = """<!DOCTYPE html>
     const r = await fetch('/step/next', {method: 'POST'});
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+    if (d.tok_texts && d.ents && d.tok_texts.length > 0) {
+      const promptText = d.full_text.slice(stepRoleLen, d.full_text.length - d.tok_texts.join('').length);
+      renderHeatmap('step-output', d.tok_texts, d.ents, promptText);
+    } else {
+      document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+    }
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = d.is_eos ? 'EOS' : 'step ' + d.step;
     updateTokenCounter(d.total_tokens);
@@ -946,7 +991,12 @@ HTML = """<!DOCTYPE html>
         stepStopAuto(false); return;
       }
       if (d.done) { stepStopAuto(true); return; }
-      document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+      if (d.tok_texts && d.ents && d.tok_texts.length > 0) {
+        const promptText = d.full_text.slice(stepRoleLen, d.full_text.length - d.tok_texts.join('').length);
+        renderHeatmap('step-output', d.tok_texts, d.ents, promptText);
+      } else {
+        document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+      }
       document.getElementById('step-status').textContent = 'step ' + d.step;
       updateTokenCounter(d.total_tokens);
       if (d.top_tokens) renderTop(d.top_tokens);
@@ -993,6 +1043,13 @@ HTML = """<!DOCTYPE html>
   });
 
   // ── Parallel / Compare ─────────────────────────────────────────────────────
+  let dualIsServer = false;
+
+  function hideToStepBtns() {
+    document.getElementById('btn-to-step-a').style.display = 'none';
+    document.getElementById('btn-to-step-b').style.display = 'none';
+  }
+
   function stopDual() {
     if (dualEs) { dualEs.close(); dualEs = null; }
     document.getElementById('btn-gen').style.display  = '';
@@ -1001,6 +1058,8 @@ HTML = """<!DOCTYPE html>
 
   function generate() {
     if (dualEs) { dualEs.close(); dualEs = null; }
+    dualIsServer = false;
+    hideToStepBtns();
     ['output-a','output-b'].forEach(id => { document.getElementById(id).textContent = ''; document.getElementById(id).innerHTML = ''; });
     ['step-a','step-b'].forEach(id => document.getElementById(id).textContent = '');
     document.getElementById('diverge-badge').classList.add('hidden');
@@ -1051,11 +1110,17 @@ HTML = """<!DOCTYPE html>
       }
       if (d.mode_tag) {
         document.getElementById('batch-tag').textContent = d.mode_tag;
+        dualIsServer = d.mode_tag.includes('llama-server');
         return;
       }
       if (d.done) {
         document.getElementById('status').textContent = 'Done.';
-        stopDual(); return;
+        stopDual();
+        if (!dualIsServer) {
+          document.getElementById('btn-to-step-a').style.display = '';
+          document.getElementById('btn-to-step-b').style.display = '';
+        }
+        return;
       }
       if (d.toks_a && d.ents_a) {
         // Show prompt text (from full text minus generated tokens) before colored tokens
@@ -1088,6 +1153,31 @@ HTML = """<!DOCTYPE html>
       document.getElementById('status').textContent = 'Stream ended.';
       stopDual();
     };
+  }
+
+  async function dualToStep(stream) {
+    const temp = parseFloat(document.getElementById('step-temp').value) || 0.0;
+    const top_k = parseInt(document.getElementById('step-topk').value) || 40;
+    document.getElementById('status').textContent = 'Switching to step mode…';
+    const r = await fetch('/dual/to-step', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stream, temp, top_k})
+    });
+    const d = await r.json();
+    if (d.error) {
+      document.getElementById('status').textContent = 'Error: ' + d.error;
+      return;
+    }
+    hideToStepBtns();
+    setMode('step');
+    document.getElementById('step-output').textContent = d.text;
+    stepRoleLen = 0;
+    if (d.top) renderTop(d.top);
+    if (d.total_tokens) updateTokenCounter(d.total_tokens);
+    document.getElementById('status').textContent = 'Step mode (from stream ' + stream.toUpperCase() + ')';
+    ['step-btn-next','step-btn-auto','step-btn-reset','step-btn-edit'].forEach(id => {
+      document.getElementById(id).disabled = false;
+    });
   }
 
   // ── Chat mode ────────────────────────────────────────────────────────────────
@@ -1131,7 +1221,12 @@ HTML = """<!DOCTYPE html>
         msgDiv.textContent = 'Error: ' + d.error;
         chatDone('eos'); return;
       }
-      if (chatLastLabel) {
+      if (d.toks && d.ents && d.toks.length > 0) {
+        const newText = d.toks.join('');
+        const prevText = d.text.endsWith(newText) ? d.text.slice(0, d.text.length - newText.length) : '';
+        renderHeatmap(msgDiv, d.toks, d.ents, prevText);
+        if (chatLastLabel) msgDiv.prepend(chatLastLabel);
+      } else if (chatLastLabel) {
         msgDiv.textContent = d.text;
         msgDiv.prepend(chatLastLabel);
       } else {
@@ -1265,6 +1360,8 @@ def stream():
                         payload['toks_b'] = toks_b
                         payload['ents_a'] = [round(e, 3) for e in ents_a]
                         payload['ents_b'] = [round(e, 3) for e in ents_b]
+                    _dual_result["text_a"] = text_a
+                    _dual_result["text_b"] = text_b
                     yield f"data: {json.dumps(payload)}\n\n"
         except Exception as e:
             import traceback; traceback.print_exc()
@@ -1278,6 +1375,33 @@ def stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/dual/to-step", methods=["POST"])
+def dual_to_step():
+    """Switch from parallel/compare result to step mode."""
+    if not llm:
+        return jsonify({"error": "no local model (server mode)"}), 400
+    data = request.json or {}
+    stream = data.get("stream", "a")
+    temp = float(data.get("temp", 0.0))
+    top_k = int(data.get("top_k", 40))
+    text = _dual_result["text_a"] if stream == "a" else _dual_result["text_b"]
+    if not text:
+        return jsonify({"error": "no dual result"}), 400
+    tokens = llm.tokenize(text.encode())
+    llm.reset()
+    llm.eval(tokens)
+    _step["tokens"] = list(tokens)
+    _step["prompt_tokens"] = list(tokens)
+    _step["temp"] = temp
+    _step["top_k"] = top_k
+    _step["ready"] = True
+    return jsonify({
+        "text": text,
+        "top": _step_top_tokens(),
+        "total_tokens": len(tokens),
+    })
 
 
 # ── entry point ────────────────────────────────────────────────────────────────
