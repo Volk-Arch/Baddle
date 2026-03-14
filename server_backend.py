@@ -319,13 +319,13 @@ def _server_generate_iter(
             text_a += tokens_a[step]
         done_a = step >= len(tokens_a) - 1
 
-        yield text_a, text_b, step, done_a, done_b
+        yield text_a, text_b, step, done_a, done_b, [], [], [], []
         step += 1
 
     # Flush remaining A tokens if A was longer
     while step <= len(tokens_a) - 1:
         text_a += tokens_a[step]
-        yield text_a, text_b, step, True, True
+        yield text_a, text_b, step, True, True, [], [], [], []
         step += 1
 
     t_b.join(timeout=5)

@@ -19,22 +19,22 @@ from main import pick_model, StreamCfg
 
 # These need llama-cpp-python — may be None in server-only mode
 try:
-    from main import load_model, _batch_generate_iter, _interleaved_generate_iter, _sample, _get_logits
+    from main import load_model, _batch_generate_iter, _interleaved_generate_iter, _sample, _get_logits, format_chat
 except ImportError:
-    load_model = _batch_generate_iter = _interleaved_generate_iter = _sample = _get_logits = None
+    load_model = _batch_generate_iter = _interleaved_generate_iter = _sample = _get_logits = format_chat = None
 
 app = Flask(__name__)
 llm        = None
 model_name = ""
 server_url = None
 
-# ── Prefixes ──────────────────────────────────────────────────────────────────
+# ── Roles ─────────────────────────────────────────────────────────────────────
 
-_PREFIXES_FILE = Path(__file__).parent / "prefixes.json"
+_ROLES_FILE = Path(__file__).parent / "roles.json"
 
-def _load_prefixes():
+def _load_roles():
     try:
-        return json.loads(_PREFIXES_FILE.read_text(encoding="utf-8"))
+        return json.loads(_ROLES_FILE.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return [{"name": "(none)", "text": ""}]
 
@@ -44,6 +44,7 @@ _step = {
     "tokens":        [],   # all tokens (prompt + generated)
     "prompt_tokens": [],   # prompt-only tokens (for reset)
     "temp":          0.0,
+    "top_k":         40,
     "ready":         False,
 }
 
@@ -85,6 +86,7 @@ def step_init():
     data   = request.get_json(force=True)
     prompt = data.get("prompt", "").strip()
     temp   = float(data.get("temp", 0.0))
+    top_k  = int(data.get("top_k", 40))
     if not prompt:
         return jsonify({"error": "empty prompt"})
     try:
@@ -94,6 +96,7 @@ def step_init():
         _step["prompt_tokens"] = list(tokens)
         _step["tokens"]        = list(tokens)
         _step["temp"]          = temp
+        _step["top_k"]         = top_k
         _step["ready"]         = True
         return jsonify({
             "text":        prompt,
@@ -109,7 +112,7 @@ def step_next():
     if not _step["ready"]:
         return jsonify({"error": "not initialized"})
     try:
-        tok    = _sample(llm, _step["temp"])
+        tok    = _sample(llm, _step["temp"], _step["top_k"])
         llm.eval([tok])
         _step["tokens"].append(tok)
         is_eos = tok == llm.token_eos()
@@ -119,8 +122,9 @@ def step_next():
             "token_text": llm.detokenize([tok]).decode("utf-8", errors="replace"),
             "full_text":  _step_full_text(),
             "top_tokens": _step_top_tokens(10),
-            "step":       len(_step["tokens"]) - len(_step["prompt_tokens"]),
-            "is_eos":     is_eos,
+            "step":         len(_step["tokens"]) - len(_step["prompt_tokens"]),
+            "total_tokens": len(_step["tokens"]),
+            "is_eos":       is_eos,
         })
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -135,15 +139,16 @@ def step_auto():
     def generate():
         try:
             for i in range(n):
-                tok = _sample(llm, _step["temp"])
+                tok = _sample(llm, _step["temp"], _step["top_k"])
                 llm.eval([tok])
                 _step["tokens"].append(tok)
                 is_eos = tok == llm.token_eos()
                 payload = {
-                    "full_text":  _step_full_text(),
-                    "step":       len(_step["tokens"]) - len(_step["prompt_tokens"]),
-                    "top_tokens": _step_top_tokens(5),
-                    "eos":        is_eos,
+                    "full_text":    _step_full_text(),
+                    "step":         len(_step["tokens"]) - len(_step["prompt_tokens"]),
+                    "total_tokens": len(_step["tokens"]),
+                    "top_tokens":   _step_top_tokens(5),
+                    "eos":          is_eos,
                 }
                 yield f"data: {json.dumps(payload)}\n\n"
                 if is_eos:
@@ -243,12 +248,180 @@ def step_edit():
 def step_temp():
     data = request.get_json(force=True)
     _step["temp"] = float(data.get("temp", 0.0))
-    return jsonify({"temp": _step["temp"]})
+    if "top_k" in data:
+        _step["top_k"] = int(data["top_k"])
+    return jsonify({"temp": _step["temp"], "top_k": _step["top_k"]})
 
 
-@app.route("/prefixes")
-def get_prefixes():
-    return jsonify(_load_prefixes())
+@app.route("/roles")
+def get_roles():
+    return jsonify(_load_roles())
+
+
+@app.route("/model/info")
+def model_info():
+    ctx = llm.n_ctx() if llm else 0
+    return jsonify({"n_ctx": ctx})
+
+
+# ── Chat mode state ───────────────────────────────────────────────────────────
+
+_chat = {
+    "messages": [],     # [{"role": ..., "content": ...}]
+    "tokens":   [],     # all tokens in current context
+    "temp":     0.7,
+    "ready":    False,
+}
+
+
+@app.route("/chat/send", methods=["POST"])
+def chat_send():
+    """Add user message, generate assistant response via SSE."""
+    if llm is None:
+        return jsonify({"error": "Chat mode requires in-process model (no --server)"})
+    data = request.get_json(force=True)
+    text = data.get("text", "").strip()
+    system = data.get("system", "")
+    temp = float(data.get("temp", 0.7))
+    if not text:
+        return jsonify({"error": "empty message"})
+
+    _chat["temp"] = temp
+
+    # Build messages list
+    if not _chat["messages"] and system:
+        _chat["messages"].append({"role": "system", "content": system})
+    # If system changed mid-conversation, update it
+    if _chat["messages"] and _chat["messages"][0]["role"] == "system":
+        _chat["messages"][0]["content"] = system
+
+    _chat["messages"].append({"role": "user", "content": text})
+
+    # Format with chat template
+    prompt_str = format_chat(llm, _chat["messages"])
+
+    # Tokenize and eval full conversation
+    tokens = llm.tokenize(prompt_str.encode())
+    llm.reset()
+    llm.eval(tokens)
+    _chat["tokens"] = list(tokens)
+    _chat["ready"] = True
+
+    return jsonify({"ok": True, "token_count": len(tokens)})
+
+
+@app.route("/chat/stream")
+def chat_stream():
+    """Stream assistant response token by token."""
+    if not _chat["ready"]:
+        def err():
+            yield f"data: {json.dumps({'error': 'not ready'})}\n\n"
+        return Response(err(), mimetype="text/event-stream")
+
+    max_tokens = int(request.args.get("n", 200))
+
+    def generate():
+        response_text = ""
+        eos = llm.token_eos()
+        # Detect im_end token for chat models
+        try:
+            im_end_tokens = llm.tokenize("<|im_end|>".encode(), add_bos=False)
+        except Exception:
+            im_end_tokens = []
+
+        for step in range(max_tokens):
+            tok = _sample(llm, _chat["temp"])
+            llm.eval([tok])
+            _chat["tokens"].append(tok)
+
+            if tok == eos:
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                break
+
+            piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
+            response_text += piece
+
+            # Check for <|im_end|> in response
+            if "<|im_end|>" in response_text:
+                response_text = response_text.replace("<|im_end|>", "")
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                break
+
+            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens'])})}\n\n"
+        else:
+            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+
+        # Save assistant response to history (will be updated on continue)
+        _chat["messages"].append({"role": "assistant", "content": response_text})
+        _chat["ready"] = True
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/chat/continue")
+def chat_continue():
+    """Continue generating from where the last response was truncated."""
+    if not _chat["ready"] or not _chat["messages"] or _chat["messages"][-1]["role"] != "assistant":
+        def err():
+            yield f"data: {json.dumps({'error': 'nothing to continue'})}\n\n"
+        return Response(err(), mimetype="text/event-stream")
+
+    max_tokens = int(request.args.get("n", 200))
+    prev_text = _chat["messages"][-1]["content"]
+
+    def generate():
+        response_text = prev_text
+        eos = llm.token_eos()
+
+        for step in range(max_tokens):
+            tok = _sample(llm, _chat["temp"])
+            llm.eval([tok])
+            _chat["tokens"].append(tok)
+
+            if tok == eos:
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                break
+
+            piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
+            response_text += piece
+
+            if "<|im_end|>" in response_text:
+                response_text = response_text.replace("<|im_end|>", "")
+                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+                break
+
+            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens'])})}\n\n"
+        else:
+            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens'])})}\n\n"
+
+        # Update last assistant message
+        _chat["messages"][-1]["content"] = response_text
+        _chat["ready"] = True
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/chat/reset", methods=["POST"])
+def chat_reset():
+    _chat["messages"] = []
+    _chat["tokens"] = []
+    _chat["ready"] = False
+    if llm:
+        llm.reset()
+    return jsonify({"ok": True})
+
+
+@app.route("/chat/history")
+def chat_history():
+    return jsonify(_chat["messages"])
 
 
 # ── HTML ───────────────────────────────────────────────────────────────────────
@@ -283,6 +456,10 @@ HTML = """<!DOCTYPE html>
     }
     .editing-badge { background: #0ea5e9; color: #0f172a; font-size: 0.65rem;
                      padding: 1px 8px; border-radius: 4px; font-weight: bold; }
+    .chat-msg { padding: 10px 14px; border-radius: 8px; margin-bottom: 8px; max-width: 85%; }
+    .chat-user { background: #1e3a5f; margin-left: auto; }
+    .chat-assistant { background: #1e293b; margin-right: auto; }
+    .chat-system { background: #1a1a2e; color: #94a3b8; font-size: 0.75rem; margin: 0 auto 8px; text-align: center; max-width: 100%; }
   </style>
 </head>
 <body class="text-slate-200 min-h-screen p-6">
@@ -292,17 +469,8 @@ HTML = """<!DOCTYPE html>
   <div class="flex items-baseline gap-4 mb-6">
     <h1 class="text-2xl font-bold text-sky-400">baddle</h1>
     <span class="text-slate-500 text-sm">{{ model }}</span>
+    <span id="token-counter" class="text-xs text-slate-600"></span>
     <span id="batch-tag" class="ml-auto text-xs text-slate-600"></span>
-  </div>
-
-  <!-- Prefix -->
-  <div class="flex flex-wrap gap-3 items-center mb-4">
-    <span class="text-slate-400 text-sm">Prefix</span>
-    <select id="prefix-select" onchange="onPrefixSelect()"
-      style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
-    </select>
-    <input id="prefix-text" type="text" placeholder="Custom prefix text…"
-      style="flex:1; min-width:200px; max-width:500px; font-size:0.875rem;">
   </div>
 
   <!-- Mode tabs -->
@@ -313,6 +481,8 @@ HTML = """<!DOCTYPE html>
       class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">parallel</button>
     <button id="tab-compare"  onclick="setMode('compare')"
       class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">compare</button>
+    <button id="tab-chat"    onclick="setMode('chat')"
+      class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">chat</button>
   </div>
 
   <!-- ══ STEP mode ══ -->
@@ -322,7 +492,11 @@ HTML = """<!DOCTYPE html>
       <span class="text-slate-400 text-sm w-16 shrink-0">Prompt</span>
       <input id="step-prompt" type="text" placeholder="Enter prompt…" style="width:380px">
       <span class="text-slate-400 text-sm">temp</span>
-      <input id="step-temp" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px">
+      <input id="step-temp" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px"
+             onchange="stepUpdateParams()" onblur="stepUpdateParams()">
+      <span class="text-slate-400 text-sm">top_k</span>
+      <input id="step-topk" type="number" value="40" min="1" max="100" style="width:70px"
+             onchange="stepUpdateParams()" onblur="stepUpdateParams()">
       <button onclick="stepInit()"
         class="btn-action" style="background:#0369a1"
         onmouseover="this.style.background='#0284c7'" onmouseout="this.style.background='#0369a1'">
@@ -512,16 +686,67 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ══ CHAT mode ══ -->
+  <div id="cfg-chat" class="hidden">
+    <div class="flex flex-wrap gap-3 items-center mb-4">
+      <span class="text-slate-400 text-sm">Role</span>
+      <select id="role-select" onchange="onRoleSelect()"
+        style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
+      </select>
+      <input id="role-text" type="text" placeholder="System prompt…"
+        style="flex:1; min-width:200px; max-width:400px; font-size:0.875rem;">
+      <span class="text-slate-400 text-sm ml-2">temp</span>
+      <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
+      <span class="text-slate-400 text-sm">max</span>
+      <input id="chat-max" type="number" value="200" min="1" max="2000" style="width:80px">
+      <button onclick="chatReset()"
+        class="btn-action ml-auto" style="background:#7f1d1d"
+        onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
+        Reset
+      </button>
+    </div>
+    <div id="chat-messages" class="rounded-lg border border-slate-700 bg-slate-800 p-4 mb-4"
+         style="min-height:300px; max-height:500px; overflow-y:auto; display:flex; flex-direction:column;">
+    </div>
+    <div class="flex gap-3">
+      <input id="chat-input" type="text" placeholder="Type a message…"
+        style="flex:1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}">
+      <button id="chat-btn-send" onclick="chatSend()"
+        class="px-6 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
+        Send
+      </button>
+      <button id="chat-btn-continue" onclick="chatContinue()" style="display:none"
+        class="px-6 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm transition-colors">
+        Continue
+      </button>
+      <button id="chat-btn-stop" onclick="chatStop()" style="display:none"
+        class="px-6 py-2 bg-red-700 hover:bg-red-600 text-white rounded text-sm transition-colors">
+        Stop
+      </button>
+    </div>
+  </div>
+
 </div>
 <script>
   let mode = 'step';
   let dualEs = null;
-  let prefixes = [];
+  let roles = [];
+  let modelCtx = 0;
 
-  // ── Prefix ──────────────────────────────────────────────────────────────────
-  fetch('/prefixes').then(r => r.json()).then(data => {
-    prefixes = data;
-    const sel = document.getElementById('prefix-select');
+  fetch('/model/info').then(r => r.json()).then(d => { modelCtx = d.n_ctx; });
+
+  function updateTokenCounter(used) {
+    const el = document.getElementById('token-counter');
+    if (!modelCtx || !used) { el.textContent = ''; return; }
+    const pct = Math.round(used / modelCtx * 100);
+    el.textContent = `${used} / ${modelCtx} tokens (${pct}%)`;
+    el.style.color = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : '';
+  }
+
+  // ── Roles ───────────────────────────────────────────────────────────────────
+  fetch('/roles').then(r => r.json()).then(data => {
+    roles = data;
+    const sel = document.getElementById('role-select');
     data.forEach((p, i) => {
       const opt = document.createElement('option');
       opt.value = i;
@@ -535,25 +760,52 @@ HTML = """<!DOCTYPE html>
     sel.appendChild(custom);
   });
 
-  function onPrefixSelect() {
-    const sel = document.getElementById('prefix-select');
-    const inp = document.getElementById('prefix-text');
+  function onRoleSelect() {
+    const sel = document.getElementById('role-select');
+    const inp = document.getElementById('role-text');
     if (sel.value === 'custom') {
       inp.value = '';
       inp.focus();
     } else {
-      inp.value = prefixes[parseInt(sel.value)].text;
+      inp.value = roles[parseInt(sel.value)].text;
     }
   }
 
-  function getPrefix() {
-    return document.getElementById('prefix-text').value;
+  function getRole() {
+    if (mode !== 'chat') return '';
+    return document.getElementById('role-text').value;
+  }
+
+  // ── Heatmap rendering ──────────────────────────────────────────────────────
+  function renderHeatmap(elId, toks, ents, promptText) {
+    const el = document.getElementById(elId);
+    el.innerHTML = '';
+    // Show prompt as plain text before colored generated tokens
+    if (promptText) {
+      const pre = document.createElement('span');
+      pre.textContent = promptText;
+      pre.style.color = '#94a3b8';
+      el.appendChild(pre);
+    }
+    // Normalize entropy: find max for color scaling
+    const maxEnt = Math.max(...ents, 0.01);
+    for (let i = 0; i < toks.length; i++) {
+      const span = document.createElement('span');
+      span.textContent = toks[i];
+      const ratio = (ents[i] || 0) / maxEnt; // 0=confident, 1=uncertain
+      // Green (confident) → Yellow → Red (uncertain)
+      const r = Math.round(ratio < 0.5 ? ratio * 2 * 255 : 255);
+      const g = Math.round(ratio < 0.5 ? 255 : (1 - ratio) * 2 * 255);
+      span.style.color = `rgb(${r},${g},80)`;
+      span.title = `entropy: ${(ents[i] || 0).toFixed(2)}`;
+      el.appendChild(span);
+    }
   }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
   function setMode(m) {
     mode = m;
-    ['step','parallel','compare'].forEach(t => {
+    ['step','parallel','compare','chat'].forEach(t => {
       document.getElementById('cfg-' + t).classList.toggle('hidden', t !== m);
       document.getElementById('tab-' + t).className =
         (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-1.5 rounded text-sm transition-colors';
@@ -563,12 +815,13 @@ HTML = """<!DOCTYPE html>
     document.getElementById('dual-panels').classList.toggle('hidden', !isDual);
     // Clear dual panels and stop stream on tab switch
     if (dualEs) { dualEs.close(); dualEs = null; }
-    ['output-a','output-b'].forEach(id => document.getElementById(id).textContent = '');
+    ['output-a','output-b'].forEach(id => { document.getElementById(id).textContent = ''; document.getElementById(id).innerHTML = ''; });
     ['step-a','step-b'].forEach(id => document.getElementById(id).textContent = '');
     document.getElementById('diverge-badge').classList.add('hidden');
     document.getElementById('status').textContent = '';
     document.getElementById('btn-gen').style.display = '';
     document.getElementById('btn-stop').style.display = 'none';
+    updateTokenCounter(0);
   }
 
   // ── Step mode ──────────────────────────────────────────────────────────────
@@ -591,7 +844,7 @@ HTML = """<!DOCTYPE html>
   }
 
   let stepEditing = false;
-  let stepPrefixLen = 0;  // length of prefix to hide from display
+  let stepRoleLen = 0;  // length of role text to hide from display
 
   function setStepButtons(enabled) {
     ['step-btn-next','step-btn-auto','step-btn-reset','step-btn-edit'].forEach(id => {
@@ -624,7 +877,7 @@ HTML = """<!DOCTYPE html>
   async function stepSync() {
     const el = document.getElementById('step-output');
     const visibleText = el.textContent;
-    const fullText = getPrefix() + visibleText;
+    const fullText = getRole() + visibleText;
     document.getElementById('step-status').textContent = 'Syncing…';
     const r = await fetch('/step/edit', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -632,7 +885,7 @@ HTML = """<!DOCTYPE html>
     });
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    el.textContent = d.full_text.slice(stepPrefixLen);
+    el.textContent = d.full_text.slice(stepRoleLen);
     renderTop(d.top_tokens);
     // Exit edit mode
     stepEditing = false;
@@ -651,20 +904,21 @@ HTML = """<!DOCTYPE html>
     const raw    = document.getElementById('step-prompt').value.trim();
     const temp   = parseFloat(document.getElementById('step-temp').value) || 0;
     if (!raw) return;
-    const pfx    = getPrefix();
+    const pfx    = getRole();
     const prompt = pfx + raw;
-    stepPrefixLen = pfx.length;
+    stepRoleLen = pfx.length;
     setStepButtons(false);
     document.getElementById('step-status').textContent = 'Initializing…';
     const r = await fetch('/step/init', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({prompt, temp})
+      body: JSON.stringify({prompt, temp, top_k: parseInt(document.getElementById('step-topk').value) || 40})
     });
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.text.slice(stepPrefixLen);
+    document.getElementById('step-output').textContent = d.text.slice(stepRoleLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = 'Ready  (' + d.token_count + ' prompt tokens)';
+    updateTokenCounter(d.token_count);
     setStepButtons(true);
   }
 
@@ -672,9 +926,10 @@ HTML = """<!DOCTYPE html>
     const r = await fetch('/step/next', {method: 'POST'});
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text.slice(stepPrefixLen);
+    document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = d.is_eos ? 'EOS' : 'step ' + d.step;
+    updateTokenCounter(d.total_tokens);
     if (d.is_eos) setStepButtons(false);
   }
 
@@ -691,12 +946,24 @@ HTML = """<!DOCTYPE html>
         stepStopAuto(false); return;
       }
       if (d.done) { stepStopAuto(true); return; }
-      document.getElementById('step-output').textContent = d.full_text.slice(stepPrefixLen);
+      document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
       document.getElementById('step-status').textContent = 'step ' + d.step;
+      updateTokenCounter(d.total_tokens);
       if (d.top_tokens) renderTop(d.top_tokens);
       if (d.eos) { stepStopAuto(false); document.getElementById('step-status').textContent = 'EOS'; }
     };
     stepAutoEs.onerror = function() { stepStopAuto(true); };
+  }
+
+  function stepUpdateParams() {
+    if (!document.getElementById('step-output').textContent) return;
+    fetch('/step/temp', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        temp: parseFloat(document.getElementById('step-temp').value) || 0,
+        top_k: parseInt(document.getElementById('step-topk').value) || 40,
+      })
+    });
   }
 
   function stepStopAuto(restoreButtons) {
@@ -709,7 +976,7 @@ HTML = """<!DOCTYPE html>
     const r = await fetch('/step/reset', {method: 'POST'});
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text.slice(stepPrefixLen);
+    document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = 'Reset';
     setStepButtons(true);
@@ -734,7 +1001,7 @@ HTML = """<!DOCTYPE html>
 
   function generate() {
     if (dualEs) { dualEs.close(); dualEs = null; }
-    ['output-a','output-b'].forEach(id => document.getElementById(id).textContent = '');
+    ['output-a','output-b'].forEach(id => { document.getElementById(id).textContent = ''; document.getElementById(id).innerHTML = ''; });
     ['step-a','step-b'].forEach(id => document.getElementById(id).textContent = '');
     document.getElementById('diverge-badge').classList.add('hidden');
     document.getElementById('batch-tag').textContent = '';
@@ -743,7 +1010,7 @@ HTML = """<!DOCTYPE html>
     document.getElementById('btn-stop').style.display = '';
 
     const params = new URLSearchParams({ mode });
-    const pfx = getPrefix();
+    const pfx = getRole();
     let promptA, promptB;
 
     if (mode === 'parallel') {
@@ -790,10 +1057,21 @@ HTML = """<!DOCTYPE html>
         document.getElementById('status').textContent = 'Done.';
         stopDual(); return;
       }
-      document.getElementById('output-a').textContent = d.a.slice(pfx.length);
-      document.getElementById('output-b').textContent = d.b.slice(pfx.length);
+      if (d.toks_a && d.ents_a) {
+        // Show prompt text (from full text minus generated tokens) before colored tokens
+        const genTextA = d.toks_a.join('');
+        const genTextB = d.toks_b.join('');
+        const promptA_text = d.a.endsWith(genTextA) ? d.a.slice(0, d.a.length - genTextA.length) : '';
+        const promptB_text = d.b.endsWith(genTextB) ? d.b.slice(0, d.b.length - genTextB.length) : '';
+        renderHeatmap('output-a', d.toks_a, d.ents_a, promptA_text);
+        renderHeatmap('output-b', d.toks_b, d.ents_b, promptB_text);
+      } else {
+        document.getElementById('output-a').textContent = d.a;
+        document.getElementById('output-b').textContent = d.b;
+      }
       document.getElementById('step-a').textContent = d.done_a ? 'EOS' : 'step ' + d.step;
       document.getElementById('step-b').textContent = d.done_b ? 'EOS' : 'step ' + d.step;
+      if (d.total_tokens) updateTokenCounter(d.total_tokens);
 
       if (mode === 'compare' && !diverged) {
         const ga = d.a.slice(promptA.length);
@@ -810,6 +1088,112 @@ HTML = """<!DOCTYPE html>
       document.getElementById('status').textContent = 'Stream ended.';
       stopDual();
     };
+  }
+
+  // ── Chat mode ────────────────────────────────────────────────────────────────
+  let chatEs = null;
+  let chatLastMsgDiv = null;
+  let chatLastLabel = null;
+
+  function chatAddMsg(role, content) {
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'chat-msg text-sm ' + (role === 'user' ? 'chat-user' : role === 'system' ? 'chat-system' : 'chat-assistant');
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.wordBreak = 'break-word';
+    div.textContent = content;
+    if (role !== 'system') {
+      const label = document.createElement('div');
+      label.className = 'text-xs mb-1 ' + (role === 'user' ? 'text-sky-400' : 'text-emerald-400');
+      label.textContent = role;
+      div.prepend(label);
+    }
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return div;
+  }
+
+  function chatShowButtons(state) {
+    document.getElementById('chat-btn-send').style.display = state === 'send' || state === 'continue' ? '' : 'none';
+    document.getElementById('chat-btn-continue').style.display = state === 'continue' ? '' : 'none';
+    document.getElementById('chat-btn-stop').style.display = state === 'streaming' ? '' : 'none';
+  }
+
+  function chatStreamTo(url, msgDiv) {
+    chatLastMsgDiv = msgDiv;
+    chatLastLabel = msgDiv.querySelector('.text-xs');
+    chatShowButtons('streaming');
+
+    chatEs = new EventSource(url);
+    chatEs.onmessage = function(e) {
+      const d = JSON.parse(e.data);
+      if (d.error) {
+        msgDiv.textContent = 'Error: ' + d.error;
+        chatDone('eos'); return;
+      }
+      if (chatLastLabel) {
+        msgDiv.textContent = d.text;
+        msgDiv.prepend(chatLastLabel);
+      } else {
+        msgDiv.textContent = d.text;
+      }
+      document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
+      if (d.total_tokens) updateTokenCounter(d.total_tokens);
+      if (d.done) chatDone(d.reason || 'eos');
+    };
+    chatEs.onerror = function() { chatDone('eos'); };
+  }
+
+  function chatDone(reason) {
+    if (chatEs) { chatEs.close(); chatEs = null; }
+    chatShowButtons(reason === 'limit' ? 'continue' : 'send');
+  }
+
+  async function chatSend() {
+    const input = document.getElementById('chat-input');
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+
+    chatAddMsg('user', text);
+
+    const temp = parseFloat(document.getElementById('chat-temp').value) || 0.7;
+    const system = getRole();
+
+    chatShowButtons('streaming');
+
+    const r = await fetch('/chat/send', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, system, temp})
+    });
+    const d = await r.json();
+    if (d.error) {
+      chatAddMsg('system', 'Error: ' + d.error);
+      chatShowButtons('send');
+      return;
+    }
+
+    const maxN = parseInt(document.getElementById('chat-max').value) || 200;
+    const msgDiv = chatAddMsg('assistant', '');
+    chatStreamTo('/chat/stream?n=' + maxN, msgDiv);
+  }
+
+  function chatContinue() {
+    if (!chatLastMsgDiv) return;
+    const maxN = parseInt(document.getElementById('chat-max').value) || 200;
+    chatStreamTo('/chat/continue?n=' + maxN, chatLastMsgDiv);
+  }
+
+  function chatStop() {
+    chatDone('eos');
+  }
+
+  async function chatReset() {
+    chatDone('eos');
+    chatLastMsgDiv = null;
+    chatLastLabel = null;
+    await fetch('/chat/reset', {method: 'POST'});
+    document.getElementById('chat-messages').innerHTML = '';
   }
 
   // Init UI state
@@ -843,6 +1227,9 @@ def stream():
     if seed >= 0:
         np.random.seed(seed)
 
+    # Estimate prompt token counts for token counter
+    prompt_toks = len(llm.tokenize(pa.encode())) if llm else 0
+
     def generate():
         def _iter():
             """Try server, then batch, then interleaved."""
@@ -870,8 +1257,15 @@ def stream():
                 if kind == "tag":
                     yield f"data: {json.dumps({'mode_tag': val})}\n\n"
                 else:
-                    text_a, text_b, step, done_a, done_b = val
-                    yield f"data: {json.dumps({'a': text_a, 'b': text_b, 'step': step, 'done_a': done_a, 'done_b': done_b})}\n\n"
+                    text_a, text_b, step, done_a, done_b, ents_a, ents_b, toks_a, toks_b = val
+                    total_tokens = prompt_toks + step + 1
+                    payload = {'a': text_a, 'b': text_b, 'step': step, 'done_a': done_a, 'done_b': done_b, 'total_tokens': total_tokens}
+                    if toks_a:
+                        payload['toks_a'] = toks_a
+                        payload['toks_b'] = toks_b
+                        payload['ents_a'] = [round(e, 3) for e in ents_a]
+                        payload['ents_b'] = [round(e, 3) for e in ents_b]
+                    yield f"data: {json.dumps(payload)}\n\n"
         except Exception as e:
             import traceback; traceback.print_exc()
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

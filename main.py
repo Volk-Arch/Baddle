@@ -95,6 +95,40 @@ def _probe_batch_support(llm: Llama):
     console.print("[dim]  batch: disabled (unified KV cache, no multi-seq)[/dim]\n")
 
 
+# ── chat template ─────────────────────────────────────────────────────────────
+
+def format_chat(llm: Llama, messages: list) -> str:
+    """Format chat messages using the model's built-in Jinja2 template.
+    messages: [{"role": "system"|"user"|"assistant", "content": "..."}]
+    Returns formatted prompt string with special tokens."""
+    try:
+        from jinja2 import BaseLoader, Environment
+        tmpl_str = llm.metadata.get("tokenizer.chat_template", "")
+        if not tmpl_str:
+            # Fallback: ChatML format (works with Qwen, many others)
+            parts = []
+            for m in messages:
+                parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>")
+            parts.append("<|im_start|>assistant\n")
+            return "\n".join(parts)
+        env = Environment(loader=BaseLoader(), keep_trailing_newline=True)
+        env.globals["raise_exception"] = lambda msg: (_ for _ in ()).throw(Exception(msg))
+        template = env.from_string(tmpl_str)
+        return template.render(
+            messages=messages,
+            add_generation_prompt=True,
+            bos_token=llm.detokenize([llm.token_bos()]).decode("utf-8", errors="replace"),
+            eos_token=llm.detokenize([llm.token_eos()]).decode("utf-8", errors="replace"),
+        )
+    except Exception:
+        # Ultimate fallback
+        parts = []
+        for m in messages:
+            parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>")
+        parts.append("<|im_start|>assistant\n")
+        return "\n".join(parts)
+
+
 # ── sampling ──────────────────────────────────────────────────────────────────
 
 def _get_logits(llm: Llama) -> np.ndarray:
@@ -106,11 +140,21 @@ def _get_logits(llm: Llama) -> np.ndarray:
     return np.ctypeslib.as_array(raw, shape=(n_vocab,)).copy().astype(np.float32)
 
 
-def _sample(llm: Llama, temp: float) -> int:
+def _sample(llm: Llama, temp: float, top_k: int = 40) -> int:
     """High-level sampler for step mode (uses llama_cpp internals)."""
     if temp == 0.0:
         return llm.sample(top_k=1, top_p=1.0, temp=1.0, repeat_penalty=1.0)
-    return llm.sample(top_k=40, top_p=0.95, temp=temp, repeat_penalty=1.1)
+    return llm.sample(top_k=top_k, top_p=0.95, temp=temp, repeat_penalty=1.1)
+
+
+def _entropy(logits: np.ndarray) -> float:
+    """Compute entropy from raw logits (before temperature)."""
+    l = logits.astype(np.float64)
+    l -= l.max()
+    p = np.exp(l)
+    p /= p.sum()
+    p = p[p > 0]
+    return float(-np.sum(p * np.log(p)))
 
 
 def _sample_logits(logits: np.ndarray, temp: float, top_k: int = 40) -> int:
@@ -253,6 +297,7 @@ def _batch_generate_iter(
         # Keep a stable numpy copy — the ctypes pointer may be invalidated by
         # subsequent KV operations (llama_kv_self_seq_cp, next decode, etc.)
         logits_a = np.array(raw[:n_vocab], dtype=np.float32)
+        ent_a_init = _entropy(logits_a)
         tok_a = _sample_logits(logits_a, cfg_a.temp, cfg_a.top_k)
 
         # ── Prefill B (seq_id=1) → sample tok_b ──────────────────────────────
@@ -282,6 +327,11 @@ def _batch_generate_iter(
             )
 
         ga, gb         = list(ta) + [tok_a], list(tb) + [tok_b]
+        ents_a         = [ent_a_init]
+        ents_b         = [_entropy(logits_a)]  # same logits for compare mode
+        _dtok = lambda tid: llm.detokenize([tid]).decode("utf-8", errors="replace")
+        toks_a_text    = [_dtok(tok_a)]
+        toks_b_text    = [_dtok(tok_b)]
         # tok_a/tok_b are the NEXT tokens to decode (sampled from prefill logits,
         # not yet in the KV cache).  They belong at positions len(ta) / len(tb).
         cur_pos_a      = len(ta)
@@ -291,7 +341,7 @@ def _batch_generate_iter(
         text_a         = llm.detokenize(ga).decode("utf-8", errors="replace")
         text_b         = llm.detokenize(gb).decode("utf-8", errors="replace")
 
-        yield text_a, text_b, 0, da, db
+        yield text_a, text_b, 0, da, db, list(ents_a), list(ents_b), list(toks_a_text), list(toks_b_text)
 
         # ── Generation: two sequential single-seq decodes per step ──────────
         # Mixed-seq batches (seq_id=0 + seq_id=1 in one llama_decode call)
@@ -314,8 +364,11 @@ def _batch_generate_iter(
                     raw = lc.llama_get_logits(ctx)
                 if not raw:
                     raise RuntimeError(f"llama_get_logits NULL for seq A at step {step}")
-                tok_a = _sample_logits(np.array(raw[:n_vocab], dtype=np.float32), cfg_a.temp, cfg_a.top_k)
+                logits = np.array(raw[:n_vocab], dtype=np.float32)
+                ents_a.append(_entropy(logits))
+                tok_a = _sample_logits(logits, cfg_a.temp, cfg_a.top_k)
                 ga.append(tok_a)
+                toks_a_text.append(_dtok(tok_a))
                 text_a = llm.detokenize(ga).decode("utf-8", errors="replace")
                 cur_pos_a += 1
                 if tok_a == llm.token_eos():
@@ -332,14 +385,17 @@ def _batch_generate_iter(
                     raw = lc.llama_get_logits(ctx)
                 if not raw:
                     raise RuntimeError(f"llama_get_logits NULL for seq B at step {step}")
-                tok_b = _sample_logits(np.array(raw[:n_vocab], dtype=np.float32), cfg_b.temp, cfg_b.top_k)
+                logits = np.array(raw[:n_vocab], dtype=np.float32)
+                ents_b.append(_entropy(logits))
+                tok_b = _sample_logits(logits, cfg_b.temp, cfg_b.top_k)
                 gb.append(tok_b)
+                toks_b_text.append(_dtok(tok_b))
                 text_b = llm.detokenize(gb).decode("utf-8", errors="replace")
                 cur_pos_b += 1
                 if tok_b == llm.token_eos():
                     db = True
 
-            yield text_a, text_b, step, da, db
+            yield text_a, text_b, step, da, db, list(ents_a), list(ents_b), list(toks_a_text), list(toks_b_text)
 
     finally:
         if hasattr(lc, "llama_batch_free"):
@@ -382,12 +438,17 @@ def _interleaved_generate_iter(
         else None
     )
 
+    _dtok = lambda tid: llm.detokenize([tid]).decode("utf-8", errors="replace")
     tokens_a = list(ta)
+    ents_a = []
+    toks_a_text = []
     for _ in range(max_tokens):
         logits = _get_logits(llm)
+        ents_a.append(_entropy(logits))
         tok = _sample_logits(logits, cfg_a.temp, cfg_a.top_k)
         llm.eval([tok])
         tokens_a.append(tok)
+        toks_a_text.append(_dtok(tok))
         if tok == llm.token_eos():
             break
 
@@ -400,14 +461,18 @@ def _interleaved_generate_iter(
         llm.reset(); llm.eval(tb)
 
     tokens_b = list(tb)
+    ents_b = []
+    toks_b_text = []
     # Pre-decode full A text once (avoids repeated detokenize)
     full_text_a = llm.detokenize(tokens_a).decode("utf-8", errors="replace")
 
     for step in range(max_tokens):
         logits = _get_logits(llm)
+        ents_b.append(_entropy(logits))
         tok = _sample_logits(logits, cfg_b.temp, cfg_b.top_k)
         llm.eval([tok])
         tokens_b.append(tok)
+        toks_b_text.append(_dtok(tok))
 
         done_b = tok == llm.token_eos()
 
@@ -418,7 +483,7 @@ def _interleaved_generate_iter(
 
         text_b = llm.detokenize(tokens_b).decode("utf-8", errors="replace")
 
-        yield text_a, text_b, step, done_a, done_b
+        yield text_a, text_b, step, done_a, done_b, ents_a[:a_end], list(ents_b), toks_a_text[:a_end], list(toks_b_text)
 
         if done_b:
             break
@@ -429,5 +494,5 @@ def _interleaved_generate_iter(
     for step in range(b_steps, len(gen_a)):
         a_end = step + 1
         text_a = llm.detokenize(tokens_a[:len(ta) + a_end]).decode("utf-8", errors="replace")
-        yield text_a, text_b, step, a_end >= len(gen_a), True
+        yield text_a, text_b, step, a_end >= len(gen_a), True, ents_a[:a_end], list(ents_b), toks_a_text[:a_end], list(toks_b_text)
 
