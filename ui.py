@@ -506,7 +506,10 @@ HTML = """<!DOCTYPE html>
     <h1 class="text-2xl font-bold text-sky-400">baddle</h1>
     <span class="text-slate-500 text-sm">{{ model }}</span>
     <span id="token-counter" class="text-xs text-slate-600"></span>
-    <span id="batch-tag" class="ml-auto text-xs text-slate-600"></span>
+    <label class="ml-auto flex items-center gap-1 text-xs text-slate-500 cursor-pointer select-none">
+      <input id="heatmap-toggle" type="checkbox" checked class="accent-sky-500"> heatmap
+    </label>
+    <span id="batch-tag" class="text-xs text-slate-600"></span>
   </div>
 
   <!-- Mode tabs -->
@@ -819,6 +822,10 @@ HTML = """<!DOCTYPE html>
   // ── Heatmap rendering ──────────────────────────────────────────────────────
   function renderHeatmap(elOrId, toks, ents, promptText) {
     const el = typeof elOrId === 'string' ? document.getElementById(elOrId) : elOrId;
+    if (!document.getElementById('heatmap-toggle').checked) {
+      el.textContent = (promptText || '') + toks.join('');
+      return;
+    }
     el.innerHTML = '';
     // Show prompt as plain text before colored generated tokens
     if (promptText) {
