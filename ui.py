@@ -281,7 +281,6 @@ def step_temp():
 def get_roles():
     return jsonify(_load_roles())
 
-
 @app.route("/model/info")
 def model_info():
     ctx = llm.n_ctx() if llm else 0
@@ -524,6 +523,16 @@ HTML = """<!DOCTYPE html>
       class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">chat</button>
   </div>
 
+  <!-- ══ Role (shared) ══ -->
+  <div class="flex flex-wrap gap-3 items-center mb-4">
+    <span class="text-slate-400 text-sm w-16 shrink-0">Role</span>
+    <select id="role-select" onchange="onRoleSelect()"
+      style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
+    </select>
+    <input id="role-text" type="text" placeholder="Role / system prompt…"
+      style="flex:1; min-width:200px; max-width:400px; font-size:0.875rem;">
+  </div>
+
   <!-- ══ STEP mode ══ -->
   <div id="cfg-step">
     <!-- Config row -->
@@ -732,13 +741,7 @@ HTML = """<!DOCTYPE html>
   <!-- ══ CHAT mode ══ -->
   <div id="cfg-chat" class="hidden">
     <div class="flex flex-wrap gap-3 items-center mb-4">
-      <span class="text-slate-400 text-sm">Role</span>
-      <select id="role-select" onchange="onRoleSelect()"
-        style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
-      </select>
-      <input id="role-text" type="text" placeholder="System prompt…"
-        style="flex:1; min-width:200px; max-width:400px; font-size:0.875rem;">
-      <span class="text-slate-400 text-sm ml-2">temp</span>
+      <span class="text-slate-400 text-sm">temp</span>
       <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
       <span class="text-slate-400 text-sm">max</span>
       <input id="chat-max" type="number" value="200" min="1" max="2000" style="width:80px">
@@ -796,10 +799,9 @@ HTML = """<!DOCTYPE html>
       opt.textContent = p.name;
       sel.appendChild(opt);
     });
-    // Add "Custom" option at the end
     const custom = document.createElement('option');
     custom.value = 'custom';
-    custom.textContent = '(custom)';
+    custom.textContent = '(свой)';
     sel.appendChild(custom);
   });
 
@@ -815,7 +817,6 @@ HTML = """<!DOCTYPE html>
   }
 
   function getRole() {
-    if (mode !== 'chat') return '';
     return document.getElementById('role-text').value;
   }
 
@@ -1129,17 +1130,20 @@ HTML = """<!DOCTYPE html>
         }
         return;
       }
+      const roleLen = getRole().length;
       if (d.toks_a && d.ents_a) {
-        // Show prompt text (from full text minus generated tokens) before colored tokens
+        // Show prompt text (from full text minus role prefix minus generated tokens) before colored tokens
         const genTextA = d.toks_a.join('');
         const genTextB = d.toks_b.join('');
-        const promptA_text = d.a.endsWith(genTextA) ? d.a.slice(0, d.a.length - genTextA.length) : '';
-        const promptB_text = d.b.endsWith(genTextB) ? d.b.slice(0, d.b.length - genTextB.length) : '';
+        const textA = d.a.slice(roleLen);
+        const textB = d.b.slice(roleLen);
+        const promptA_text = textA.endsWith(genTextA) ? textA.slice(0, textA.length - genTextA.length) : '';
+        const promptB_text = textB.endsWith(genTextB) ? textB.slice(0, textB.length - genTextB.length) : '';
         renderHeatmap('output-a', d.toks_a, d.ents_a, promptA_text);
         renderHeatmap('output-b', d.toks_b, d.ents_b, promptB_text);
       } else {
-        document.getElementById('output-a').textContent = d.a;
-        document.getElementById('output-b').textContent = d.b;
+        document.getElementById('output-a').textContent = d.a.slice(roleLen);
+        document.getElementById('output-b').textContent = d.b.slice(roleLen);
       }
       document.getElementById('step-a').textContent = d.done_a ? 'EOS' : 'step ' + d.step;
       document.getElementById('step-b').textContent = d.done_b ? 'EOS' : 'step ' + d.step;
