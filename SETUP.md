@@ -1,5 +1,7 @@
 # Установка и запуск
 
+**[English version →](SETUP_EN.md)**
+
 ## Требования
 
 - Python 3.10+
