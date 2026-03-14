@@ -28,6 +28,16 @@ llm        = None
 model_name = ""
 server_url = None
 
+# ── Prefixes ──────────────────────────────────────────────────────────────────
+
+_PREFIXES_FILE = Path(__file__).parent / "prefixes.json"
+
+def _load_prefixes():
+    try:
+        return json.loads(_PREFIXES_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return [{"name": "(none)", "text": ""}]
+
 # ── Step mode server state ─────────────────────────────────────────────────────
 
 _step = {
@@ -236,6 +246,11 @@ def step_temp():
     return jsonify({"temp": _step["temp"]})
 
 
+@app.route("/prefixes")
+def get_prefixes():
+    return jsonify(_load_prefixes())
+
+
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
 HTML = """<!DOCTYPE html>
@@ -278,6 +293,16 @@ HTML = """<!DOCTYPE html>
     <h1 class="text-2xl font-bold text-sky-400">baddle</h1>
     <span class="text-slate-500 text-sm">{{ model }}</span>
     <span id="batch-tag" class="ml-auto text-xs text-slate-600"></span>
+  </div>
+
+  <!-- Prefix -->
+  <div class="flex flex-wrap gap-3 items-center mb-4">
+    <span class="text-slate-400 text-sm">Prefix</span>
+    <select id="prefix-select" onchange="onPrefixSelect()"
+      style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
+    </select>
+    <input id="prefix-text" type="text" placeholder="Custom prefix text…"
+      style="flex:1; min-width:200px; max-width:500px; font-size:0.875rem;">
   </div>
 
   <!-- Mode tabs -->
@@ -491,6 +516,39 @@ HTML = """<!DOCTYPE html>
 <script>
   let mode = 'step';
   let dualEs = null;
+  let prefixes = [];
+
+  // ── Prefix ──────────────────────────────────────────────────────────────────
+  fetch('/prefixes').then(r => r.json()).then(data => {
+    prefixes = data;
+    const sel = document.getElementById('prefix-select');
+    data.forEach((p, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+    // Add "Custom" option at the end
+    const custom = document.createElement('option');
+    custom.value = 'custom';
+    custom.textContent = '(custom)';
+    sel.appendChild(custom);
+  });
+
+  function onPrefixSelect() {
+    const sel = document.getElementById('prefix-select');
+    const inp = document.getElementById('prefix-text');
+    if (sel.value === 'custom') {
+      inp.value = '';
+      inp.focus();
+    } else {
+      inp.value = prefixes[parseInt(sel.value)].text;
+    }
+  }
+
+  function getPrefix() {
+    return document.getElementById('prefix-text').value;
+  }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
   function setMode(m) {
@@ -533,6 +591,7 @@ HTML = """<!DOCTYPE html>
   }
 
   let stepEditing = false;
+  let stepPrefixLen = 0;  // length of prefix to hide from display
 
   function setStepButtons(enabled) {
     ['step-btn-next','step-btn-auto','step-btn-reset','step-btn-edit'].forEach(id => {
@@ -564,15 +623,16 @@ HTML = """<!DOCTYPE html>
 
   async function stepSync() {
     const el = document.getElementById('step-output');
-    const newText = el.textContent;
+    const visibleText = el.textContent;
+    const fullText = getPrefix() + visibleText;
     document.getElementById('step-status').textContent = 'Syncing…';
     const r = await fetch('/step/edit', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: newText})
+      body: JSON.stringify({text: fullText})
     });
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    el.textContent = d.full_text;
+    el.textContent = d.full_text.slice(stepPrefixLen);
     renderTop(d.top_tokens);
     // Exit edit mode
     stepEditing = false;
@@ -588,9 +648,12 @@ HTML = """<!DOCTYPE html>
   }
 
   async function stepInit() {
-    const prompt = document.getElementById('step-prompt').value.trim();
+    const raw    = document.getElementById('step-prompt').value.trim();
     const temp   = parseFloat(document.getElementById('step-temp').value) || 0;
-    if (!prompt) return;
+    if (!raw) return;
+    const pfx    = getPrefix();
+    const prompt = pfx + raw;
+    stepPrefixLen = pfx.length;
     setStepButtons(false);
     document.getElementById('step-status').textContent = 'Initializing…';
     const r = await fetch('/step/init', {
@@ -599,7 +662,7 @@ HTML = """<!DOCTYPE html>
     });
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.text;
+    document.getElementById('step-output').textContent = d.text.slice(stepPrefixLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = 'Ready  (' + d.token_count + ' prompt tokens)';
     setStepButtons(true);
@@ -609,7 +672,7 @@ HTML = """<!DOCTYPE html>
     const r = await fetch('/step/next', {method: 'POST'});
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text;
+    document.getElementById('step-output').textContent = d.full_text.slice(stepPrefixLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = d.is_eos ? 'EOS' : 'step ' + d.step;
     if (d.is_eos) setStepButtons(false);
@@ -628,7 +691,7 @@ HTML = """<!DOCTYPE html>
         stepStopAuto(false); return;
       }
       if (d.done) { stepStopAuto(true); return; }
-      document.getElementById('step-output').textContent = d.full_text;
+      document.getElementById('step-output').textContent = d.full_text.slice(stepPrefixLen);
       document.getElementById('step-status').textContent = 'step ' + d.step;
       if (d.top_tokens) renderTop(d.top_tokens);
       if (d.eos) { stepStopAuto(false); document.getElementById('step-status').textContent = 'EOS'; }
@@ -646,7 +709,7 @@ HTML = """<!DOCTYPE html>
     const r = await fetch('/step/reset', {method: 'POST'});
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text;
+    document.getElementById('step-output').textContent = d.full_text.slice(stepPrefixLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = 'Reset';
     setStepButtons(true);
@@ -680,11 +743,12 @@ HTML = """<!DOCTYPE html>
     document.getElementById('btn-stop').style.display = '';
 
     const params = new URLSearchParams({ mode });
+    const pfx = getPrefix();
     let promptA, promptB;
 
     if (mode === 'parallel') {
-      promptA = document.getElementById('pa').value;
-      promptB = document.getElementById('pb').value;
+      promptA = pfx + document.getElementById('pa').value;
+      promptB = pfx + document.getElementById('pb').value;
       const ta = document.getElementById('temp-pa').value;
       const tb = document.getElementById('temp-pb').value;
       params.set('pa', promptA); params.set('pb', promptB);
@@ -695,7 +759,7 @@ HTML = """<!DOCTYPE html>
       document.getElementById('title-a').textContent = 'Stream A';
       document.getElementById('title-b').textContent = 'Stream B';
     } else {
-      promptA = promptB = document.getElementById('pc').value;
+      promptA = promptB = pfx + document.getElementById('pc').value;
       const ta = document.getElementById('temp-a').value;
       const tb = document.getElementById('temp-b').value;
       const ka = document.getElementById('topk-a').value;
@@ -726,8 +790,8 @@ HTML = """<!DOCTYPE html>
         document.getElementById('status').textContent = 'Done.';
         stopDual(); return;
       }
-      document.getElementById('output-a').textContent = d.a;
-      document.getElementById('output-b').textContent = d.b;
+      document.getElementById('output-a').textContent = d.a.slice(pfx.length);
+      document.getElementById('output-b').textContent = d.b.slice(pfx.length);
       document.getElementById('step-a').textContent = d.done_a ? 'EOS' : 'step ' + d.step;
       document.getElementById('step-b').textContent = d.done_b ? 'EOS' : 'step ' + d.step;
 
