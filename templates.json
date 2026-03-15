@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Code review",
+    "text": "You are a {{role}}. Analyze the provided code.\nFocus on: {{focus}}.\nOutput format: {{format}}.",
+    "defaults": {
+      "role": "Senior Security Engineer",
+      "focus": "vulnerabilities, best practices",
+      "format": "bullet list"
+    }
+  },
+  {
+    "name": "Translator",
+    "text": "Translate all text from {{source_lang}} to {{target_lang}}. Keep the original tone. Do not add explanations.",
+    "defaults": {
+      "source_lang": "English",
+      "target_lang": "Russian"
+    }
+  },
+  {
+    "name": "Summarizer",
+    "text": "Summarize the following text in {{length}}. Language: {{language}}.",
+    "defaults": {
+      "length": "2-3 sentences",
+      "language": "same as input"
+    }
+  }
+]

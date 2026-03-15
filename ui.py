@@ -38,6 +38,16 @@ def _load_roles():
     except (FileNotFoundError, json.JSONDecodeError):
         return [{"name": "(none)", "text": ""}]
 
+# ── Templates ────────────────────────────────────────────────────────────────
+
+_TEMPLATES_FILE = Path(__file__).parent / "templates.json"
+
+def _load_templates():
+    try:
+        return json.loads(_TEMPLATES_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
 # ── Step mode server state ─────────────────────────────────────────────────────
 
 _step = {
@@ -281,6 +291,10 @@ def step_temp():
 def get_roles():
     return jsonify(_load_roles())
 
+@app.route("/templates")
+def get_templates():
+    return jsonify(_load_templates())
+
 @app.route("/model/info")
 def model_info():
     ctx = llm.n_ctx() if llm else 0
@@ -470,11 +484,15 @@ HTML = """<!DOCTYPE html>
   <style>
     body { background: #0f172a; font-family: 'Courier New', monospace; }
     .stream-content { white-space: pre-wrap; word-break: break-word; min-height: 200px; line-height: 1.6; }
-    input[type=text], input[type=number] {
+    input[type=text], input[type=number], textarea.auto-grow {
       background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
       padding: 6px 10px; border-radius: 6px; outline: none;
     }
-    input:focus { border-color: #38bdf8; }
+    textarea.auto-grow {
+      resize: none; overflow: hidden; min-height: 34px; line-height: 1.4;
+      font-family: inherit; font-size: 0.875rem; display: block;
+    }
+    input:focus, textarea.auto-grow:focus { border-color: #38bdf8; }
     .tab-active   { background: #0369a1; color: #fff; }
     .tab-inactive { background: #1e293b; color: #94a3b8; }
     .tab-inactive:hover { background: #273549; color: #e2e8f0; }
@@ -524,13 +542,13 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <!-- ══ Role (shared) ══ -->
-  <div class="flex flex-wrap gap-3 items-center mb-4">
-    <span class="text-slate-400 text-sm w-16 shrink-0">Role</span>
+  <div class="flex flex-wrap gap-3 items-start mb-4">
+    <span class="text-slate-400 text-sm w-16 shrink-0" style="margin-top:7px">Role</span>
     <select id="role-select" onchange="onRoleSelect()"
       style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
     </select>
-    <input id="role-text" type="text" placeholder="Role / system prompt…"
-      style="flex:1; min-width:200px; max-width:400px; font-size:0.875rem;">
+    <textarea id="role-text" class="auto-grow" placeholder="Role / system prompt…"
+      style="flex:1; min-width:200px; max-width:400px;" rows="1"></textarea>
   </div>
 
   <!-- ══ STEP mode ══ -->
@@ -538,7 +556,7 @@ HTML = """<!DOCTYPE html>
     <!-- Config row -->
     <div class="flex flex-wrap gap-3 items-center mb-4">
       <span class="text-slate-400 text-sm w-16 shrink-0">Prompt</span>
-      <input id="step-prompt" type="text" placeholder="Enter prompt…" style="width:380px">
+      <textarea id="step-prompt" class="auto-grow" placeholder="Enter prompt…" style="width:380px" rows="1"></textarea>
       <span class="text-slate-400 text-sm">temp</span>
       <input id="step-temp" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px"
              onchange="stepUpdateParams()" onblur="stepUpdateParams()">
@@ -625,7 +643,7 @@ HTML = """<!DOCTYPE html>
     <div class="grid grid-cols-1 gap-3 mb-4 max-w-2xl">
       <div class="flex gap-3 items-center">
         <span class="text-sky-400 text-sm w-20 shrink-0">Prompt A</span>
-        <input id="pa" type="text" placeholder="First prompt…" style="flex:1">
+        <textarea id="pa" class="auto-grow" placeholder="First prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="flex gap-3 items-center">
         <span class="text-sky-400 text-sm w-20 shrink-0">temp A</span>
@@ -633,7 +651,7 @@ HTML = """<!DOCTYPE html>
       </div>
       <div class="flex gap-3 items-center">
         <span class="text-purple-400 text-sm w-20 shrink-0">Prompt B</span>
-        <input id="pb" type="text" placeholder="Second prompt…" style="flex:1">
+        <textarea id="pb" class="auto-grow" placeholder="Second prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="flex gap-3 items-center">
         <span class="text-purple-400 text-sm w-20 shrink-0">temp B</span>
@@ -657,7 +675,7 @@ HTML = """<!DOCTYPE html>
     <div class="flex flex-col gap-3 mb-4 max-w-2xl">
       <div class="flex gap-3 items-center">
         <span class="text-slate-400 text-sm w-20 shrink-0">Prompt</span>
-        <input id="pc" type="text" placeholder="Shared prompt…" style="flex:1">
+        <textarea id="pc" class="auto-grow" placeholder="Shared prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div class="cfg-box border border-sky-900">
@@ -745,18 +763,21 @@ HTML = """<!DOCTYPE html>
       <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
       <span class="text-slate-400 text-sm">max</span>
       <input id="chat-max" type="number" value="200" min="1" max="2000" style="width:80px">
+      <select id="tpl-select" onchange="onTplSelect()" style="display:none;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:0.875rem;">
+      </select>
       <button onclick="chatReset()"
         class="btn-action ml-auto" style="background:#7f1d1d"
         onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
         Reset
       </button>
     </div>
+    <div id="tpl-vars" class="flex flex-wrap gap-3 items-center mb-4" style="display:none;"></div>
     <div id="chat-messages" class="rounded-lg border border-slate-700 bg-slate-800 p-4 mb-4"
          style="min-height:300px; max-height:500px; overflow-y:auto; display:flex; flex-direction:column;">
     </div>
     <div class="flex gap-3">
-      <input id="chat-input" type="text" placeholder="Type a message…"
-        style="flex:1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}">
+      <textarea id="chat-input" class="auto-grow" placeholder="Type a message…"
+        style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
       <button id="chat-btn-send" onclick="chatSend()"
         class="px-6 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
         Send
@@ -778,6 +799,15 @@ HTML = """<!DOCTYPE html>
   let dualEs = null;
   let roles = [];
   let modelCtx = 0;
+
+  // ── Auto-grow textareas ────────────────────────────────────────────────────
+  function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }
+  document.querySelectorAll('textarea.auto-grow').forEach(el => {
+    el.addEventListener('input', () => autoGrow(el));
+  });
 
   fetch('/model/info').then(r => r.json()).then(d => { modelCtx = d.n_ctx; });
 
@@ -814,10 +844,73 @@ HTML = """<!DOCTYPE html>
     } else {
       inp.value = roles[parseInt(sel.value)].text;
     }
+    autoGrow(inp);
   }
 
   function getRole() {
+    // If a template is active, build the role from template + variables
+    const tplSel = document.getElementById('tpl-select');
+    if (tplSel && tplSel.style.display !== 'none' && tplSel.value !== '' && tplSel.value !== 'none') {
+      const tpl = templates[parseInt(tplSel.value)];
+      if (tpl) {
+        let text = tpl.text;
+        const varsDiv = document.getElementById('tpl-vars');
+        varsDiv.querySelectorAll('input[data-var]').forEach(inp => {
+          const re = new RegExp('[{][{]' + inp.dataset.var + '[}][}]', 'g');
+          text = text.replace(re, inp.value);
+        });
+        return text;
+      }
+    }
     return document.getElementById('role-text').value;
+  }
+
+  // ── Templates ──────────────────────────────────────────────────────────────
+  let templates = [];
+  fetch('/templates').then(r => r.json()).then(data => {
+    templates = data;
+    if (!data.length) return;
+    const sel = document.getElementById('tpl-select');
+    sel.style.display = '';
+    const none = document.createElement('option');
+    none.value = 'none';
+    none.textContent = 'Template…';
+    sel.appendChild(none);
+    data.forEach((t, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = t.name;
+      sel.appendChild(opt);
+    });
+  });
+
+  function onTplSelect() {
+    const sel = document.getElementById('tpl-select');
+    const varsDiv = document.getElementById('tpl-vars');
+    if (sel.value === 'none') {
+      varsDiv.style.display = 'none';
+      varsDiv.innerHTML = '';
+      return;
+    }
+    const tpl = templates[parseInt(sel.value)];
+    if (!tpl) return;
+    varsDiv.innerHTML = '';
+    varsDiv.style.display = '';
+    // Extract {{var}} names from template text
+    const vars = [...new Set((tpl.text.match(/[{][{]([a-zA-Z0-9_]+)[}][}]/g) || []).map(m => m.slice(2, -2)))];
+    vars.forEach(v => {
+      const label = document.createElement('span');
+      label.className = 'text-slate-400 text-sm';
+      label.textContent = v;
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.dataset.var = v;
+      inp.value = (tpl.defaults && tpl.defaults[v]) || '';
+      inp.style.cssText = 'width:160px;font-size:0.875rem;';
+      inp.placeholder = v;
+      varsDiv.appendChild(label);
+      varsDiv.appendChild(inp);
+    });
   }
 
   // ── Heatmap rendering ──────────────────────────────────────────────────────
@@ -1260,6 +1353,7 @@ HTML = """<!DOCTYPE html>
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
+    autoGrow(input);
 
     chatAddMsg('user', text);
 
