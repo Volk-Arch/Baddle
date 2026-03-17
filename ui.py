@@ -473,6 +473,190 @@ def chat_history():
     return jsonify(_chat["messages"])
 
 
+# ── Graph thinking ────────────────────────────────────────────────────────────
+
+_graph = {"thoughts": [], "topic": ""}
+
+import re as _re
+
+
+def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9) -> str:
+    """Generate text from chat messages for graph mode."""
+    prompt_str = format_chat(llm, messages)
+    llm.reset()
+    tokens = llm.tokenize(prompt_str.encode())
+    llm.eval(tokens)
+
+    raw = ""
+    eos = llm.token_eos()
+    think_done = False
+    for _ in range(max_tokens):
+        tok = _sample(llm, temp)
+        llm.eval([tok])
+        if tok == eos:
+            break
+        piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
+        raw += piece
+        # Once past </think>, stop on im_end / im_start / newline control tokens
+        if not think_done and "</think>" in raw.lower():
+            think_done = True
+        if think_done and _re.search(r"<\|", raw[raw.lower().rfind("</think>") + 8:]):
+            break
+    # Extract text after </think> if present
+    low = raw.lower()
+    if "</think>" in low:
+        text = raw[low.index("</think>") + 8:]
+    else:
+        text = raw
+    # Clean any <tag> leftovers
+    text = _re.sub(r"<[^>]*>", "", text)
+    return text.strip()
+
+
+def _generate_thought(topic: str, existing: list[str]) -> str:
+    """Generate one short thought about the topic via chat."""
+    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the topic. Answer directly."
+    user = f"Topic: {topic}"
+    if existing:
+        user += "\nAlready suggested:\n" + "\n".join(f"- {t}" for t in existing[-5:])
+        user += "\nGenerate a NEW different idea."
+    else:
+        user += "\nGenerate one idea."
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    text = _graph_generate(messages, max_tokens=120)
+    # Cut at fake dialog continuations (Human:, User:, Assistant:)
+    text = _re.split(r"\s*(?:Human|User|Assistant)\s*:", text, flags=_re.IGNORECASE)[0]
+    # Clean: take first line, strip bullets/numbers/roles
+    text = text.split("\n")[0].strip()
+    for prefix in ["- ", "* ", "1. ", "1) "]:
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    # Remove trailing role names from broken control tokens
+    text = _re.sub(r"\s*(user|assistant|system)\s*$", "", text, flags=_re.IGNORECASE)
+    # Remove leading number like "1. " "2) "
+    text = _re.sub(r"^\d+[.)]\s*", "", text)
+    return text.strip()
+
+
+def _thought_tokens(text: str) -> set:
+    """Simple bag-of-tokens representation for similarity."""
+    toks = llm.tokenize(text.encode(), add_bos=False)
+    return set(toks)
+
+
+def _jaccard(a: set, b: set) -> float:
+    """Jaccard similarity between two token sets."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _compute_edges(thoughts: list[str], threshold: float) -> list[dict]:
+    """Compute similarity edges between thoughts."""
+    token_sets = [_thought_tokens(t) for t in thoughts]
+    edges = []
+    for i in range(len(thoughts)):
+        for j in range(i + 1, len(thoughts)):
+            sim = _jaccard(token_sets[i], token_sets[j])
+            if sim >= threshold:
+                edges.append({"from": i, "to": j, "weight": round(sim, 3)})
+    return edges
+
+
+def _find_clusters(n: int, edges: list[dict], threshold: float) -> list[list[int]]:
+    """Find connected components as clusters."""
+    adj = {i: set() for i in range(n)}
+    for e in edges:
+        adj[e["from"]].add(e["to"])
+        adj[e["to"]].add(e["from"])
+    visited = set()
+    clusters = []
+    for i in range(n):
+        if i in visited:
+            continue
+        # BFS
+        cluster = []
+        queue = [i]
+        while queue:
+            node = queue.pop(0)
+            if node in visited:
+                continue
+            visited.add(node)
+            cluster.append(node)
+            queue.extend(adj[node] - visited)
+        if len(cluster) >= 2:
+            clusters.append(sorted(cluster))
+    return clusters
+
+
+@app.route("/graph/think", methods=["POST"])
+def graph_think():
+    """Generate N thoughts about a topic."""
+    if llm is None:
+        return jsonify({"error": "Graph mode requires in-process model"})
+    data = request.get_json(force=True)
+    topic = data.get("topic", "").strip()
+    n = int(data.get("n", 6))
+    threshold = float(data.get("threshold", 0.3))
+    existing = data.get("existing", [])
+
+    if not topic:
+        return jsonify({"error": "empty topic"})
+
+    _graph["topic"] = topic
+    thoughts = list(existing)
+
+    attempts = 0
+    while len(thoughts) - len(existing) < n and attempts < n * 3:
+        attempts += 1
+        t = _generate_thought(topic, thoughts)
+        if not t or len(t) < 10:
+            continue  # too short / garbage
+        # Skip if it's just a model name or control token
+        if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
+            continue
+        # Skip near-duplicates
+        if any(t.lower() == ex.lower() for ex in thoughts):
+            continue
+        thoughts.append(t)
+
+    _graph["thoughts"] = thoughts
+    edges = _compute_edges(thoughts, threshold)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+
+    return jsonify({
+        "thoughts": thoughts,
+        "edges": edges,
+        "clusters": clusters,
+    })
+
+
+@app.route("/graph/collapse", methods=["POST"])
+def graph_collapse():
+    """Collapse a cluster into coherent text."""
+    if llm is None:
+        return jsonify({"error": "requires in-process model"})
+    data = request.get_json(force=True)
+    indices = data.get("cluster", [])
+    thoughts = _graph["thoughts"]
+    topic = _graph["topic"]
+
+    if not indices or not thoughts:
+        return jsonify({"error": "no cluster to collapse"})
+
+    cluster_texts = [thoughts[i] for i in indices if i < len(thoughts)]
+    system = "/no_think\nYou combine ideas into a coherent paragraph. Write naturally, do not list the ideas separately. Answer in the same language as the topic. Answer directly."
+    user = f"Topic: {topic}\n\nIdeas to combine:\n"
+    user += "\n".join(f"- {t}" for t in cluster_texts)
+    user += "\n\nWrite one coherent paragraph that connects these ideas."
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    text = _graph_generate(messages, max_tokens=400, temp=0.7)
+
+    return jsonify({"text": text})
+
+
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
 HTML = """<!DOCTYPE html>
@@ -539,6 +723,8 @@ HTML = """<!DOCTYPE html>
       class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">compare</button>
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">chat</button>
+    <button id="tab-graph"   onclick="setMode('graph')"
+      class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">graph</button>
   </div>
 
   <!-- ══ Role (shared) ══ -->
@@ -793,6 +979,52 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ══ GRAPH mode ══ -->
+  <div id="cfg-graph" class="hidden">
+    <div class="flex flex-wrap gap-3 items-center mb-4">
+      <span class="text-slate-400 text-sm">Topic</span>
+      <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
+        style="flex:1; max-width:400px;" rows="1"></textarea>
+      <span class="text-slate-400 text-sm">thoughts</span>
+      <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
+      <span class="text-slate-400 text-sm">threshold</span>
+      <input id="graph-threshold" type="number" value="0.15" step="0.05" min="0" max="1" style="width:70px">
+      <button id="graph-btn-think" onclick="graphThink()"
+        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
+        Think
+      </button>
+      <button id="graph-btn-collapse" onclick="graphCollapse()" style="display:none"
+        class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm transition-colors">
+        Collapse
+      </button>
+      <button id="graph-btn-more" onclick="graphMore()" style="display:none"
+        class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
+        + More
+      </button>
+      <button onclick="graphReset()"
+        class="btn-action ml-auto" style="background:#7f1d1d"
+        onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
+        Reset
+      </button>
+    </div>
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <svg id="graph-svg" width="100%" height="450"
+          style="background:#0f172a; border:1px solid #334155; border-radius:8px;"></svg>
+      </div>
+      <div>
+        <div id="graph-thoughts" class="scroll-panel rounded-lg border border-slate-700 bg-slate-800 p-4"
+          style="min-height:450px; max-height:450px; overflow-y:auto;">
+          <span class="text-slate-500 text-sm">Thoughts will appear here…</span>
+        </div>
+      </div>
+    </div>
+    <div id="graph-result" class="mt-4 rounded-lg border border-emerald-900 bg-slate-800 p-4" style="display:none;">
+      <div class="text-emerald-400 text-sm font-bold mb-2">Collapsed result</div>
+      <div id="graph-result-text" class="text-slate-200 text-sm whitespace-pre-wrap"></div>
+    </div>
+  </div>
+
 </div>
 <script>
   let mode = 'step';
@@ -946,7 +1178,7 @@ HTML = """<!DOCTYPE html>
   // ── Tab switching ──────────────────────────────────────────────────────────
   function setMode(m) {
     mode = m;
-    ['step','parallel','compare','chat'].forEach(t => {
+    ['step','parallel','compare','chat','graph'].forEach(t => {
       document.getElementById('cfg-' + t).classList.toggle('hidden', t !== m);
       document.getElementById('tab-' + t).className =
         (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-1.5 rounded text-sm transition-colors';
@@ -1394,6 +1626,185 @@ HTML = """<!DOCTYPE html>
     chatLastLabel = null;
     await fetch('/chat/reset', {method: 'POST'});
     document.getElementById('chat-messages').innerHTML = '';
+  }
+
+  // ── Graph thinking ────────────────────────────────────────────────────────
+  let graphData = { thoughts: [], edges: [], clusters: [] };
+
+  function graphDrawSvg() {
+    const svg = document.getElementById('graph-svg');
+    const W = svg.clientWidth || 500;
+    const H = 450;
+    svg.innerHTML = '';
+    const thoughts = graphData.thoughts;
+    if (!thoughts.length) return;
+
+    // Layout: circle
+    const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.35;
+    const positions = thoughts.map((_, i) => {
+      const angle = (2 * Math.PI * i / thoughts.length) - Math.PI / 2;
+      return { x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) };
+    });
+
+    // Determine cluster membership for coloring
+    const nodeCluster = new Array(thoughts.length).fill(-1);
+    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
+    const clusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
+
+    // Draw edges
+    graphData.edges.forEach(e => {
+      const a = positions[e.from], b = positions[e.to];
+      const opacity = Math.max(0.2, Math.min(1, e.weight * 2));
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+      line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+      line.setAttribute('stroke', '#475569');
+      line.setAttribute('stroke-width', Math.max(1, e.weight * 4));
+      line.setAttribute('stroke-opacity', opacity);
+      svg.appendChild(line);
+    });
+
+    // Draw nodes
+    positions.forEach((p, i) => {
+      const ci = nodeCluster[i];
+      const color = ci >= 0 ? clusterColors[ci % clusterColors.length] : '#64748b';
+
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
+      circle.setAttribute('r', ci >= 0 ? 10 : 7);
+      circle.setAttribute('fill', color);
+      circle.setAttribute('stroke', '#e2e8f0');
+      circle.setAttribute('stroke-width', ci >= 0 ? 2 : 1);
+      circle.style.cursor = 'pointer';
+      circle.onclick = () => graphSelectNode(i);
+      svg.appendChild(circle);
+
+      // Label: short text
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.setAttribute('x', p.x); label.setAttribute('y', p.y - 14);
+      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('fill', '#94a3b8');
+      label.setAttribute('font-size', '11');
+      const short = thoughts[i].length > 25 ? thoughts[i].slice(0, 24) + '...' : thoughts[i];
+      label.textContent = short;
+      svg.appendChild(label);
+    });
+  }
+
+  function graphUpdateThoughtsList() {
+    const div = document.getElementById('graph-thoughts');
+    const thoughts = graphData.thoughts;
+    if (!thoughts.length) {
+      div.innerHTML = '<span class="text-slate-500 text-sm">Thoughts will appear here...</span>';
+      return;
+    }
+    const nodeCluster = new Array(thoughts.length).fill(-1);
+    const clusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
+    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
+
+    div.innerHTML = thoughts.map((t, i) => {
+      const ci = nodeCluster[i];
+      const dot = ci >= 0
+        ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
+        : '<span style="color:#64748b">&#9675;</span> ';
+      return '<div class="mb-2 text-sm text-slate-200">' + dot + t + '</div>';
+    }).join('');
+  }
+
+  function graphSelectNode(i) {
+    // Highlight which cluster this node belongs to
+    const cl = (graphData.clusters || []).find(c => c.includes(i));
+    if (cl) {
+      const div = document.getElementById('graph-thoughts');
+      div.querySelectorAll('div').forEach((d, idx) => {
+        d.style.background = cl.includes(idx) ? '#1e3a5f' : '';
+      });
+    }
+  }
+
+  async function graphThink() {
+    const topic = document.getElementById('graph-topic').value.trim();
+    if (!topic) return;
+    const n = parseInt(document.getElementById('graph-n').value) || 6;
+    const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.15;
+
+    document.getElementById('graph-btn-think').disabled = true;
+    document.getElementById('graph-btn-think').textContent = 'Thinking...';
+
+    const r = await fetch('/graph/think', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ topic, n, threshold, existing: graphData.thoughts })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+
+    graphData = d;
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+
+    document.getElementById('graph-btn-think').disabled = false;
+    document.getElementById('graph-btn-think').textContent = 'Think';
+
+    const hasClusters = d.clusters && d.clusters.length > 0;
+    document.getElementById('graph-btn-collapse').style.display = hasClusters ? '' : 'none';
+    document.getElementById('graph-btn-more').style.display = '';
+  }
+
+  async function graphMore() {
+    const topic = document.getElementById('graph-topic').value.trim();
+    if (!topic) return;
+    const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.15;
+
+    document.getElementById('graph-btn-more').disabled = true;
+    const r = await fetch('/graph/think', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ topic, n: 3, threshold, existing: graphData.thoughts })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+
+    graphData = d;
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+
+    document.getElementById('graph-btn-more').disabled = false;
+    const hasClusters = d.clusters && d.clusters.length > 0;
+    document.getElementById('graph-btn-collapse').style.display = hasClusters ? '' : 'none';
+  }
+
+  async function graphCollapse() {
+    if (!graphData.clusters || !graphData.clusters.length) return;
+    // Collapse the largest cluster
+    const cluster = graphData.clusters.sort((a, b) => b.length - a.length)[0];
+
+    document.getElementById('graph-btn-collapse').disabled = true;
+    document.getElementById('graph-btn-collapse').textContent = 'Collapsing...';
+
+    const r = await fetch('/graph/collapse', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cluster })
+    });
+    const d = await r.json();
+
+    document.getElementById('graph-btn-collapse').disabled = false;
+    document.getElementById('graph-btn-collapse').textContent = 'Collapse';
+
+    if (d.error) { alert(d.error); return; }
+
+    const resultDiv = document.getElementById('graph-result');
+    resultDiv.style.display = '';
+    document.getElementById('graph-result-text').textContent = d.text;
+  }
+
+  function graphReset() {
+    graphData = { thoughts: [], edges: [], clusters: [] };
+    document.getElementById('graph-svg').innerHTML = '';
+    document.getElementById('graph-thoughts').innerHTML =
+      '<span class="text-slate-500 text-sm">Thoughts will appear here...</span>';
+    document.getElementById('graph-result').style.display = 'none';
+    document.getElementById('graph-result-text').textContent = '';
+    document.getElementById('graph-btn-collapse').style.display = 'none';
+    document.getElementById('graph-btn-more').style.display = 'none';
   }
 
   // Init UI state
