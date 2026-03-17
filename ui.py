@@ -477,10 +477,11 @@ def chat_history():
 
 _graph = {"thoughts": [], "topic": ""}
 
+import re as _re
+
 
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9) -> str:
     """Generate text from chat messages for graph mode."""
-    import re as _re
     prompt_str = format_chat(llm, messages)
     llm.reset()
     tokens = llm.tokenize(prompt_str.encode())
@@ -514,7 +515,7 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
 
 def _generate_thought(topic: str, existing: list[str]) -> str:
     """Generate one short thought about the topic via chat."""
-    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer directly."
+    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the topic. Answer directly."
     user = f"Topic: {topic}"
     if existing:
         user += "\nAlready suggested:\n" + "\n".join(f"- {t}" for t in existing[-5:])
@@ -524,6 +525,8 @@ def _generate_thought(topic: str, existing: list[str]) -> str:
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     text = _graph_generate(messages, max_tokens=120)
+    # Cut at fake dialog continuations (Human:, User:, Assistant:)
+    text = _re.split(r"\s*(?:Human|User|Assistant)\s*:", text, flags=_re.IGNORECASE)[0]
     # Clean: take first line, strip bullets/numbers/roles
     text = text.split("\n")[0].strip()
     for prefix in ["- ", "* ", "1. ", "1) "]:
@@ -531,6 +534,8 @@ def _generate_thought(topic: str, existing: list[str]) -> str:
             text = text[len(prefix):]
     # Remove trailing role names from broken control tokens
     text = _re.sub(r"\s*(user|assistant|system)\s*$", "", text, flags=_re.IGNORECASE)
+    # Remove leading number like "1. " "2) "
+    text = _re.sub(r"^\d+[.)]\s*", "", text)
     return text.strip()
 
 
@@ -641,7 +646,7 @@ def graph_collapse():
         return jsonify({"error": "no cluster to collapse"})
 
     cluster_texts = [thoughts[i] for i in indices if i < len(thoughts)]
-    system = "/no_think\nYou combine ideas into a coherent paragraph. Write naturally, do not list the ideas separately. Answer directly."
+    system = "/no_think\nYou combine ideas into a coherent paragraph. Write naturally, do not list the ideas separately. Answer in the same language as the topic. Answer directly."
     user = f"Topic: {topic}\n\nIdeas to combine:\n"
     user += "\n".join(f"- {t}" for t in cluster_texts)
     user += "\n\nWrite one coherent paragraph that connects these ideas."
