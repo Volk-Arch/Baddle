@@ -632,13 +632,44 @@ def graph_think():
     })
 
 
+@app.route("/graph/add", methods=["POST"])
+def graph_add():
+    """Add a user-provided thought and recompute edges."""
+    data = request.get_json(force=True)
+    text = data.get("text", "").strip()
+    threshold = float(data.get("threshold", 0.15))
+    if not text:
+        return jsonify({"error": "empty thought"})
+    _graph["thoughts"].append(text)
+    thoughts = _graph["thoughts"]
+    edges = _compute_edges(thoughts, threshold)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+
+
+@app.route("/graph/remove", methods=["POST"])
+def graph_remove():
+    """Remove a thought by index and recompute edges."""
+    data = request.get_json(force=True)
+    idx = int(data.get("index", -1))
+    threshold = float(data.get("threshold", 0.15))
+    thoughts = _graph["thoughts"]
+    if idx < 0 or idx >= len(thoughts):
+        return jsonify({"error": "invalid index"})
+    thoughts.pop(idx)
+    edges = _compute_edges(thoughts, threshold)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+
+
 @app.route("/graph/collapse", methods=["POST"])
 def graph_collapse():
-    """Collapse a cluster into coherent text."""
+    """Collapse a cluster: generate summary, remove source nodes, add result as new node."""
     if llm is None:
         return jsonify({"error": "requires in-process model"})
     data = request.get_json(force=True)
     indices = data.get("cluster", [])
+    threshold = float(data.get("threshold", 0.15))
     thoughts = _graph["thoughts"]
     topic = _graph["topic"]
 
@@ -654,7 +685,23 @@ def graph_collapse():
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     text = _graph_generate(messages, max_tokens=400, temp=0.7)
 
-    return jsonify({"text": text})
+    # Multi-level collapse: remove source nodes (reverse order), add result as new node
+    for i in sorted(indices, reverse=True):
+        if i < len(thoughts):
+            thoughts.pop(i)
+    thoughts.append(text)
+    _graph["thoughts"] = thoughts
+
+    # Recompute graph
+    edges = _compute_edges(thoughts, threshold)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+
+    return jsonify({
+        "text": text,
+        "thoughts": thoughts,
+        "edges": edges,
+        "clusters": clusters,
+    })
 
 
 # ── HTML ───────────────────────────────────────────────────────────────────────
@@ -993,10 +1040,7 @@ HTML = """<!DOCTYPE html>
         class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
         Think
       </button>
-      <button id="graph-btn-collapse" onclick="graphCollapse()" style="display:none"
-        class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm transition-colors">
-        Collapse
-      </button>
+      <span id="graph-collapse-btns"></span>
       <button id="graph-btn-more" onclick="graphMore()" style="display:none"
         class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
         + More
@@ -1005,6 +1049,15 @@ HTML = """<!DOCTYPE html>
         class="btn-action ml-auto" style="background:#7f1d1d"
         onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
         Reset
+      </button>
+    </div>
+    <div class="flex gap-2 mb-4">
+      <input id="graph-add-input" type="text" placeholder="Add your own thought..."
+        class="flex-1 text-sm" style="min-width:200px"
+        onkeydown="if(event.key==='Enter'){graphAddThought();}">
+      <button onclick="graphAddThought()"
+        class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white rounded text-sm transition-colors">
+        + Add
       </button>
     </div>
     <div class="grid grid-cols-2 gap-4">
@@ -1629,6 +1682,7 @@ HTML = """<!DOCTYPE html>
   }
 
   // ── Graph thinking ────────────────────────────────────────────────────────
+  const graphClusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
   let graphData = { thoughts: [], edges: [], clusters: [] };
 
   function graphDrawSvg() {
@@ -1649,7 +1703,7 @@ HTML = """<!DOCTYPE html>
     // Determine cluster membership for coloring
     const nodeCluster = new Array(thoughts.length).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
-    const clusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
+    const clusterColors = graphClusterColors;
 
     // Draw edges
     graphData.edges.forEach(e => {
@@ -1699,7 +1753,7 @@ HTML = """<!DOCTYPE html>
       return;
     }
     const nodeCluster = new Array(thoughts.length).fill(-1);
-    const clusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
+    const clusterColors = graphClusterColors;
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
 
     div.innerHTML = thoughts.map((t, i) => {
@@ -1707,7 +1761,9 @@ HTML = """<!DOCTYPE html>
       const dot = ci >= 0
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
         : '<span style="color:#64748b">&#9675;</span> ';
-      return '<div class="mb-2 text-sm text-slate-200">' + dot + t + '</div>';
+      const del = '<span onclick="graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
+      return '<div class="mb-2 text-sm text-slate-200" style="display:flex;align-items:baseline">'
+        + '<span style="flex:1">' + dot + t + '</span>' + del + '</div>';
     }).join('');
   }
 
@@ -1745,8 +1801,7 @@ HTML = """<!DOCTYPE html>
     document.getElementById('graph-btn-think').disabled = false;
     document.getElementById('graph-btn-think').textContent = 'Think';
 
-    const hasClusters = d.clusters && d.clusters.length > 0;
-    document.getElementById('graph-btn-collapse').style.display = hasClusters ? '' : 'none';
+    graphUpdateCollapseButtons();
     document.getElementById('graph-btn-more').style.display = '';
   }
 
@@ -1768,32 +1823,81 @@ HTML = """<!DOCTYPE html>
     graphUpdateThoughtsList();
 
     document.getElementById('graph-btn-more').disabled = false;
-    const hasClusters = d.clusters && d.clusters.length > 0;
-    document.getElementById('graph-btn-collapse').style.display = hasClusters ? '' : 'none';
+    graphUpdateCollapseButtons();
   }
 
-  async function graphCollapse() {
-    if (!graphData.clusters || !graphData.clusters.length) return;
-    // Collapse the largest cluster
-    const cluster = graphData.clusters.sort((a, b) => b.length - a.length)[0];
+  function graphUpdateCollapseButtons() {
+    const span = document.getElementById('graph-collapse-btns');
+    const clusters = graphData.clusters || [];
+    if (!clusters.length) { span.innerHTML = ''; return; }
+    span.innerHTML = clusters.map((cl, ci) => {
+      const color = graphClusterColors[ci % graphClusterColors.length];
+      return '<button onclick="graphCollapse(' + ci + ')" '
+        + 'class="px-3 py-2 text-white rounded text-sm transition-opacity hover:opacity-80 mr-1" '
+        + 'style="background:' + color + '">'
+        + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>';
+    }).join('');
+  }
 
-    document.getElementById('graph-btn-collapse').disabled = true;
-    document.getElementById('graph-btn-collapse').textContent = 'Collapsing...';
+  async function graphCollapse(clusterIdx) {
+    const clusters = graphData.clusters || [];
+    if (clusterIdx >= clusters.length) return;
+    const cluster = clusters[clusterIdx];
+    const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.15;
+
+    // Disable all collapse buttons
+    document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; b.textContent = 'Collapsing...'; });
 
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ cluster })
+      body: JSON.stringify({ cluster, threshold })
     });
     const d = await r.json();
 
-    document.getElementById('graph-btn-collapse').disabled = false;
-    document.getElementById('graph-btn-collapse').textContent = 'Collapse';
-
     if (d.error) { alert(d.error); return; }
+
+    // Update graph with new state (source nodes removed, result added)
+    graphData = { thoughts: d.thoughts, edges: d.edges, clusters: d.clusters };
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
 
     const resultDiv = document.getElementById('graph-result');
     resultDiv.style.display = '';
     document.getElementById('graph-result-text').textContent = d.text;
+  }
+
+  async function graphAddThought() {
+    const input = document.getElementById('graph-add-input');
+    const text = input.value.trim();
+    if (!text) return;
+    const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.15;
+    const r = await fetch('/graph/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, threshold })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    input.value = '';
+    graphData = d;
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
+    document.getElementById('graph-btn-more').style.display = '';
+  }
+
+  async function graphRemoveThought(i) {
+    const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.15;
+    const r = await fetch('/graph/remove', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: i, threshold })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphData = d;
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
   }
 
   function graphReset() {
@@ -1803,7 +1907,7 @@ HTML = """<!DOCTYPE html>
       '<span class="text-slate-500 text-sm">Thoughts will appear here...</span>';
     document.getElementById('graph-result').style.display = 'none';
     document.getElementById('graph-result-text').textContent = '';
-    document.getElementById('graph-btn-collapse').style.display = 'none';
+    document.getElementById('graph-collapse-btns').innerHTML = '';
     document.getElementById('graph-btn-more').style.display = 'none';
   }
 
