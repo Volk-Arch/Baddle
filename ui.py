@@ -623,7 +623,7 @@ def main():
         model_path = pick_model(args.model)
         model_name = model_path.name
         gpu_layers = 0 if args.no_gpu else args.gpu_layers
-        llm        = load_model(model_path, gpu_layers, args.ctx, embedding=True)
+        llm        = load_model(model_path, gpu_layers, args.ctx)
         init_graph(llm)
 
     url = f"http://localhost:{args.port}"
