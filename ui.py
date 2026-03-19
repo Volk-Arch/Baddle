@@ -475,7 +475,7 @@ def chat_history():
 
 # ── Graph thinking ────────────────────────────────────────────────────────────
 
-_graph = {"thoughts": [], "topic": ""}
+_graph = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": []}
 
 import re as _re
 
@@ -553,14 +553,24 @@ def _jaccard(a: set, b: set) -> float:
 
 
 def _compute_edges(thoughts: list[str], threshold: float) -> list[dict]:
-    """Compute similarity edges between thoughts."""
+    """Compute similarity edges between thoughts, applying manual overrides."""
     token_sets = [_thought_tokens(t) for t in thoughts]
+    manual_links = {(a, b) for a, b in _graph.get("manual_links", [])}
+    manual_unlinks = {(a, b) for a, b in _graph.get("manual_unlinks", [])}
     edges = []
     for i in range(len(thoughts)):
         for j in range(i + 1, len(thoughts)):
+            pair = (min(i, j), max(i, j))
+            if pair in manual_unlinks:
+                continue
             sim = _jaccard(token_sets[i], token_sets[j])
-            if sim >= threshold:
-                edges.append({"from": i, "to": j, "weight": round(sim, 3)})
+            manual = pair in manual_links
+            if sim >= threshold or manual:
+                edges.append({
+                    "from": i, "to": j,
+                    "weight": round(sim, 3),
+                    "manual": manual and sim < threshold,
+                })
     return edges
 
 
@@ -605,6 +615,9 @@ def graph_think():
         return jsonify({"error": "empty topic"})
 
     _graph["topic"] = topic
+    if not existing:
+        _graph["manual_links"] = []
+        _graph["manual_unlinks"] = []
     thoughts = list(existing)
 
     attempts = 0
@@ -647,6 +660,23 @@ def graph_add():
     return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
 
 
+def _remap_manual_edges(removed_indices: list[int]):
+    """Remap manual link/unlink indices after nodes are removed."""
+    removed = set(removed_indices)
+    for key in ("manual_links", "manual_unlinks"):
+        old = _graph.get(key, [])
+        new = []
+        for pair in old:
+            a, b = pair
+            if a in removed or b in removed:
+                continue
+            # Shift indices down
+            a2 = a - sum(1 for r in removed if r < a)
+            b2 = b - sum(1 for r in removed if r < b)
+            new.append([min(a2, b2), max(a2, b2)])
+        _graph[key] = new
+
+
 @app.route("/graph/remove", methods=["POST"])
 def graph_remove():
     """Remove a thought by index and recompute edges."""
@@ -657,6 +687,40 @@ def graph_remove():
     if idx < 0 or idx >= len(thoughts):
         return jsonify({"error": "invalid index"})
     thoughts.pop(idx)
+    _remap_manual_edges([idx])
+    edges = _compute_edges(thoughts, threshold)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+
+
+@app.route("/graph/link", methods=["POST"])
+def graph_link():
+    """Manually add or remove an edge between two thoughts."""
+    data = request.get_json(force=True)
+    a = int(data.get("a", -1))
+    b = int(data.get("b", -1))
+    threshold = float(data.get("threshold", 0.15))
+    thoughts = _graph["thoughts"]
+    if a < 0 or b < 0 or a >= len(thoughts) or b >= len(thoughts) or a == b:
+        return jsonify({"error": "invalid indices"})
+    pair = (min(a, b), max(a, b))
+    manual_links = _graph.setdefault("manual_links", [])
+    manual_unlinks = _graph.setdefault("manual_unlinks", [])
+    # Check if edge currently exists
+    edges_before = _compute_edges(thoughts, threshold)
+    has_edge = any(e["from"] == pair[0] and e["to"] == pair[1] for e in edges_before)
+    if has_edge:
+        # Remove the edge: if it was a manual link, remove it; otherwise add to unlinks
+        if list(pair) in manual_links:
+            manual_links.remove(list(pair))
+        else:
+            manual_unlinks.append(list(pair))
+    else:
+        # Add the edge: if it was manually unlinked, undo that; otherwise add to links
+        if list(pair) in manual_unlinks:
+            manual_unlinks.remove(list(pair))
+        else:
+            manual_links.append(list(pair))
     edges = _compute_edges(thoughts, threshold)
     clusters = _find_clusters(len(thoughts), edges, threshold)
     return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
@@ -686,9 +750,10 @@ def graph_collapse():
     text = _graph_generate(messages, max_tokens=400, temp=0.7)
 
     # Multi-level collapse: remove source nodes (reverse order), add result as new node
-    for i in sorted(indices, reverse=True):
-        if i < len(thoughts):
-            thoughts.pop(i)
+    valid_indices = [i for i in indices if i < len(thoughts)]
+    for i in sorted(valid_indices, reverse=True):
+        thoughts.pop(i)
+    _remap_manual_edges(valid_indices)
     thoughts.append(text)
     _graph["thoughts"] = thoughts
 
@@ -1064,6 +1129,7 @@ HTML = """<!DOCTYPE html>
       <div>
         <svg id="graph-svg" width="100%" height="450"
           style="background:#0f172a; border:1px solid #334155; border-radius:8px;"></svg>
+        <div class="text-slate-500 text-xs mt-1">Click two nodes to connect/disconnect them</div>
       </div>
       <div>
         <div id="graph-thoughts" class="scroll-panel rounded-lg border border-slate-700 bg-slate-800 p-4"
@@ -1684,6 +1750,7 @@ HTML = """<!DOCTYPE html>
   // ── Graph thinking ────────────────────────────────────────────────────────
   const graphClusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
   let graphData = { thoughts: [], edges: [], clusters: [] };
+  let graphSelectedNode = -1;  // for manual linking
 
   function graphDrawSvg() {
     const svg = document.getElementById('graph-svg');
@@ -1708,13 +1775,14 @@ HTML = """<!DOCTYPE html>
     // Draw edges
     graphData.edges.forEach(e => {
       const a = positions[e.from], b = positions[e.to];
-      const opacity = Math.max(0.2, Math.min(1, e.weight * 2));
+      const opacity = e.manual ? 0.8 : Math.max(0.2, Math.min(1, e.weight * 2));
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
       line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
-      line.setAttribute('stroke', '#475569');
-      line.setAttribute('stroke-width', Math.max(1, e.weight * 4));
+      line.setAttribute('stroke', e.manual ? '#a78bfa' : '#475569');
+      line.setAttribute('stroke-width', e.manual ? 2 : Math.max(1, e.weight * 4));
       line.setAttribute('stroke-opacity', opacity);
+      if (e.manual) line.setAttribute('stroke-dasharray', '6,3');
       svg.appendChild(line);
     });
 
@@ -1723,14 +1791,15 @@ HTML = """<!DOCTYPE html>
       const ci = nodeCluster[i];
       const color = ci >= 0 ? clusterColors[ci % clusterColors.length] : '#64748b';
 
+      const isSelected = i === graphSelectedNode;
       const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
-      circle.setAttribute('r', ci >= 0 ? 10 : 7);
+      circle.setAttribute('r', isSelected ? 13 : (ci >= 0 ? 10 : 7));
       circle.setAttribute('fill', color);
-      circle.setAttribute('stroke', '#e2e8f0');
-      circle.setAttribute('stroke-width', ci >= 0 ? 2 : 1);
+      circle.setAttribute('stroke', isSelected ? '#facc15' : '#e2e8f0');
+      circle.setAttribute('stroke-width', isSelected ? 3 : (ci >= 0 ? 2 : 1));
       circle.style.cursor = 'pointer';
-      circle.onclick = () => graphSelectNode(i);
+      circle.onclick = () => graphNodeClick(i);
       svg.appendChild(circle);
 
       // Label: short text
@@ -1767,15 +1836,36 @@ HTML = """<!DOCTYPE html>
     }).join('');
   }
 
-  function graphSelectNode(i) {
-    // Highlight which cluster this node belongs to
-    const cl = (graphData.clusters || []).find(c => c.includes(i));
-    if (cl) {
-      const div = document.getElementById('graph-thoughts');
-      div.querySelectorAll('div').forEach((d, idx) => {
-        d.style.background = cl.includes(idx) ? '#1e3a5f' : '';
-      });
+  async function graphNodeClick(i) {
+    if (graphSelectedNode === -1 || graphSelectedNode === i) {
+      // Select / deselect node
+      graphSelectedNode = graphSelectedNode === i ? -1 : i;
+      graphDrawSvg();
+      // Highlight cluster in thought list
+      const cl = (graphData.clusters || []).find(c => c.includes(i));
+      if (cl) {
+        const div = document.getElementById('graph-thoughts');
+        div.querySelectorAll('div').forEach((d, idx) => {
+          d.style.background = cl.includes(idx) ? '#1e3a5f' : '';
+        });
+      }
+      return;
     }
+    // Second click — toggle edge between selected and this node
+    const a = graphSelectedNode;
+    const b = i;
+    graphSelectedNode = -1;
+    const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.15;
+    const r = await fetch('/graph/link', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ a, b, threshold })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphData = d;
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
   }
 
   async function graphThink() {
@@ -1902,6 +1992,7 @@ HTML = """<!DOCTYPE html>
 
   function graphReset() {
     graphData = { thoughts: [], edges: [], clusters: [] };
+    graphSelectedNode = -1;
     document.getElementById('graph-svg').innerHTML = '';
     document.getElementById('graph-thoughts').innerHTML =
       '<span class="text-slate-500 text-sm">Thoughts will appear here...</span>';
