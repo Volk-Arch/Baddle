@@ -165,8 +165,9 @@ and stop it on exit.
 | **How it works** | One request, then the other (sequential) | Both requests on GPU in parallel |
 | **Speed** | ~2x of a single request | ~1x of a single request |
 | **Step mode** | Available (logits access) | Not available |
+| **Graph mode** | Available (embeddings + generation) | Not available |
 
-**Step mode requires in-process** (direct logits access).
+**Step and graph modes require in-process** (direct logits and embedding access).
 **For fast parallel/compare — use `--server`.**
 
 #### Where llama-server comes from
@@ -235,10 +236,12 @@ Parameters: **temp** (temperature), **max** (token limit per response).
 
 ```
 baddle/
-├── main.py            # engine: model, sampling, batch generation
+├── main.py            # engine: model, sampling, batch generation, embeddings
 ├── ui.py              # web interface (Flask + SSE), entry point
+├── graph.py           # graph thinking (Blueprint): generation, clustering, collapse
 ├── server_backend.py  # HTTP client for llama-server
 ├── setup.py           # installer: llama-cpp-python + llama-server
+├── templates/         # HTML/JS/CSS frontend
 ├── models/            # GGUF models
 └── llama-server/      # native binary (downloaded by setup.py)
 ```
