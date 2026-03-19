@@ -130,6 +130,7 @@ def format_chat(llm: Llama, messages: list) -> str:
         return "\n".join(parts)
 
 
+
 # ── sampling ──────────────────────────────────────────────────────────────────
 
 def _get_logits(llm: Llama) -> np.ndarray:
@@ -149,15 +150,24 @@ def _sample(llm: Llama, temp: float, top_k: int = 40) -> int:
 
 
 def get_embedding(llm: Llama, text: str) -> np.ndarray:
-    """Get embedding vector for text. Requires model loaded with embedding=True.
+    """Get embedding vector for text.
+    Temporarily enables embedding mode if needed, then restores previous state.
     Returns a single 1D vector (mean-pooled if the model returns per-token embeddings)."""
     try:
+        # Temporarily enable embedding mode
+        was_embedding = llm.context_params.embeddings
+        if not was_embedding:
+            llm.context_params.embeddings = True
         result = llm.create_embedding(text)
+        if not was_embedding:
+            llm.context_params.embeddings = False
         data = np.array(result["data"][0]["embedding"], dtype=np.float32)
         if data.ndim == 2:
             data = data.mean(axis=0)
         return data
     except Exception:
+        if not was_embedding:
+            llm.context_params.embeddings = False
         return np.array([], dtype=np.float32)
 
 
@@ -180,6 +190,7 @@ def _entropy(logits: np.ndarray) -> float:
     p /= p.sum()
     p = p[p > 0]
     return float(-np.sum(p * np.log(p)))
+
 
 
 def _sample_logits(logits: np.ndarray, temp: float, top_k: int = 40) -> int:
