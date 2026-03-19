@@ -75,9 +75,10 @@ def pick_model(arg: Optional[str]) -> Path:
 _batch_seq1_ok: Optional[bool] = None   # set by _probe_batch_support at load time
 
 
-def load_model(path: Path, gpu_layers: int, n_ctx: int) -> Llama:
+def load_model(path: Path, gpu_layers: int, n_ctx: int, embedding: bool = False) -> Llama:
     gl = "all" if gpu_layers == -1 else gpu_layers
-    kwargs = dict(model_path=str(path), n_gpu_layers=gpu_layers, n_ctx=n_ctx, verbose=False)
+    kwargs = dict(model_path=str(path), n_gpu_layers=gpu_layers, n_ctx=n_ctx, verbose=False,
+                  embedding=embedding)
     with console.status(f"Loading [bold]{path.name}[/bold]  (gpu_layers={gl}, ctx={n_ctx})..."):
         llm = Llama(**kwargs)
     console.print("[green]Model ready[/green]")
@@ -145,6 +146,30 @@ def _sample(llm: Llama, temp: float, top_k: int = 40) -> int:
     if temp == 0.0:
         return llm.sample(top_k=1, top_p=1.0, temp=1.0, repeat_penalty=1.0)
     return llm.sample(top_k=top_k, top_p=0.95, temp=temp, repeat_penalty=1.1)
+
+
+def get_embedding(llm: Llama, text: str) -> np.ndarray:
+    """Get embedding vector for text. Requires model loaded with embedding=True.
+    Returns a single 1D vector (mean-pooled if the model returns per-token embeddings)."""
+    try:
+        result = llm.create_embedding(text)
+        data = np.array(result["data"][0]["embedding"], dtype=np.float32)
+        if data.ndim == 2:
+            data = data.mean(axis=0)
+        return data
+    except Exception:
+        return np.array([], dtype=np.float32)
+
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity between two vectors."""
+    if len(a) == 0 or len(b) == 0:
+        return 0.0
+    dot = np.dot(a, b)
+    norm = np.linalg.norm(a) * np.linalg.norm(b)
+    if norm == 0:
+        return 0.0
+    return float(dot / norm)
 
 
 def _entropy(logits: np.ndarray) -> float:

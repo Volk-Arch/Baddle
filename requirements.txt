@@ -2,12 +2,15 @@
 # llama-cpp-python
 
 # Numerics
-numpy
+numpy>=1.20
 
 # CLI UI
-rich
-prompt_toolkit
-questionary
+rich>=10.0
+prompt_toolkit>=3.0
+questionary>=1.10
 
 # Web UI (python ui.py)
-flask
+flask>=2.0
+
+# Chat templates
+jinja2>=3.0

@@ -165,8 +165,9 @@ python ui.py --server http://localhost:8080
 | **Как работает** | Один запрос, потом второй (последовательно) | Оба запроса на GPU параллельно |
 | **Скорость** | ~2x от одного запроса | ~1x от одного запроса |
 | **Step mode** | Есть (доступ к logits) | Нет |
+| **Graph mode** | Есть (эмбеддинги + генерация) | Нет |
 
-**Для step mode нужен in-process** (прямой доступ к logits).
+**Для step и graph mode нужен in-process** (прямой доступ к logits и эмбеддингам).
 **Для быстрого parallel/compare — `--server`.**
 
 #### Откуда берётся llama-server
@@ -248,10 +249,12 @@ python ui.py --server http://localhost:8080
 
 ```
 baddle/
-├── main.py            # движок: модель, сэмплинг, batch-генерация
+├── main.py            # движок: модель, сэмплинг, batch-генерация, эмбеддинги
 ├── ui.py              # веб-интерфейс (Flask + SSE), точка входа
+├── graph.py           # графовое мышление (Blueprint): генерация, кластеризация, коллапс
 ├── server_backend.py  # HTTP-клиент для llama-server
 ├── setup.py           # установщик: llama-cpp-python + llama-server
+├── templates/         # HTML/JS/CSS фронтенд
 ├── models/            # GGUF-модели
 └── llama-server/      # нативный бинарник (скачивается setup.py)
 ```

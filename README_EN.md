@@ -80,6 +80,32 @@ is confident in its answer and where it's guessing.
 
 ---
 
+### `graph` — graph thinking
+
+![Graph mode](images/graph1.jpg)
+![Graph mode](images/graph2.jpg)
+
+An experimental non-linear generation mode. The model produces short thoughts
+on a topic, and a graph of connections is built between them using **cosine similarity
+on model embeddings**. Connected thoughts form clusters.
+
+**Force-directed layout** — connected nodes attract, unconnected nodes repel.
+The graph automatically finds a clear arrangement, visually highlighting clusters.
+Nodes can be **dragged** with the mouse for manual grouping.
+
+Clicking two nodes lets you **manually connect or disconnect** them —
+manual links are shown as dashed lines.
+
+A cluster can be **collapsed** — the model synthesizes related thoughts into a coherent
+paragraph. The collapsed result becomes a new node in the graph, and the process can be
+repeated, going deeper at each level.
+
+Cycle: generation → filtering → clustering → collapse → repeat.
+
+Works only in in-process mode (without `--server`).
+
+---
+
 ### Hybrid mode: parallel/compare → step
 
 After parallel or compare generation completes, a **→ Step** button appears for each
