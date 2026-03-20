@@ -69,6 +69,11 @@
   <!-- ══ Role (shared) ══ -->
   <div class="flex flex-wrap gap-3 items-start mb-4">
     <span class="text-slate-400 text-sm w-16 shrink-0" style="margin-top:7px">Role</span>
+    <select id="lang-select" onchange="onLangChange()"
+      style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; font-size:0.875rem; width:56px;">
+      <option value="en">EN</option>
+      <option value="ru">RU</option>
+    </select>
     <select id="role-select" onchange="onRoleSelect()"
       style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
     </select>
@@ -320,34 +325,31 @@
 
   <!-- ══ GRAPH mode ══ -->
   <div id="cfg-graph" class="hidden">
-    <div class="flex flex-wrap gap-3 items-center mb-4">
-      <span class="text-slate-400 text-sm">Topic</span>
-      <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
-        style="flex:1; max-width:400px;" rows="1"></textarea>
-      <span class="text-slate-400 text-sm">thoughts</span>
-      <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
-      <span class="text-slate-400 text-sm">similarity</span>
-      <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:4px 8px; border-radius:6px; font-size:0.8rem;">
-        <option value="embedding">Embedding</option>
-        <option value="jaccard">Jaccard</option>
-      </select>
-      <span class="text-slate-400 text-sm">threshold</span>
-      <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px">
-      <button id="graph-btn-think" onclick="graphThink()"
-        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
-        Think
-      </button>
-      <button id="graph-btn-more" onclick="graphMore()" style="display:none"
-        class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
-        + More
-      </button>
-      <button onclick="graphReset()"
-        class="btn-action ml-auto" style="background:#7f1d1d"
-        onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
-        Reset
-      </button>
+    <!-- Generate block -->
+    <div class="rounded-lg border border-slate-700 bg-slate-800/50 p-3 mb-3">
+      <div class="flex flex-wrap gap-3 items-center mb-2">
+        <span class="text-slate-400 text-sm">Topic</span>
+        <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
+          style="flex:1;" rows="1"></textarea>
+      </div>
+      <div class="flex flex-wrap gap-2 items-center">
+        <span class="text-slate-400 text-sm">thoughts</span>
+        <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
+        <span class="text-slate-400 text-sm">similarity</span>
+        <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:4px 8px; border-radius:6px; font-size:0.8rem;">
+          <option value="embedding">Embedding</option>
+          <option value="jaccard">Jaccard</option>
+        </select>
+        <span class="text-slate-400 text-sm">threshold</span>
+        <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px">
+        <button id="graph-btn-think" onclick="graphThink()"
+          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
+          Think
+        </button>
+      </div>
     </div>
-    <div class="flex gap-2 mb-4 items-center flex-wrap">
+    <!-- Add single thought -->
+    <div class="flex gap-2 mb-3 items-center flex-wrap">
       <input id="graph-add-input" type="text" placeholder="Add your own thought..."
         class="flex-1 text-sm" style="min-width:200px"
         onkeydown="if(event.key==='Enter'){graphAddThought();}">
@@ -355,22 +357,71 @@
         class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white rounded text-sm transition-colors">
         + Add
       </button>
-      <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
     </div>
-    <div id="graph-grid" class="grid grid-cols-2 gap-4" style="transition: all 0.3s ease;">
+    <!-- Actions bar: collapse + undo/layout/reset -->
+    <div id="graph-actions-bar" class="flex gap-2 mb-3 items-center flex-wrap" style="display:none;">
+      <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
+      <span class="flex-1"></span>
+      <button onclick="graphUndo()" id="graph-btn-undo" style="display:none"
+        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors">
+        ↩ Undo
+      </button>
+      <button onclick="graphRecalcLayout()"
+        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        title="Recalculate node positions">
+        ⟳ Layout
+      </button>
+      <button onclick="graphExport()"
+        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        title="Save graph to JSON file">
+        ↓ Save
+      </button>
+      <button onclick="document.getElementById('graph-import-file').click()"
+        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        title="Load graph from JSON file">
+        ↑ Load
+      </button>
+      <input type="file" id="graph-import-file" accept=".json" style="display:none" onchange="graphImport(event)">
+      <button onclick="graphReset()"
+        class="px-3 py-1.5 text-white rounded text-xs transition-colors" style="background:#7f1d1d"
+        onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
+        Reset
+      </button>
+    </div>
+    <div id="graph-main" style="transition: all 0.3s ease;">
       <div id="graph-svg-wrap" style="position:relative;">
         <svg id="graph-svg" width="100%" height="520"
           style="background:#0f172a; border:1px solid #334155; border-radius:8px; user-select:none;"></svg>
         <div class="flex items-center mt-1">
-          <span class="text-slate-500 text-xs">Drag nodes &middot; Click two nodes to connect/disconnect</span>
-          <button onclick="toggleGraphExpand()"
-            class="ml-auto text-slate-400 hover:text-sky-400 text-xs px-2 py-0.5 border border-slate-600 rounded transition-colors"
-            id="graph-expand-btn" title="Expand graph">⛶ Expand</button>
+          <span class="text-slate-500 text-xs">Drag nodes &middot; Click node to select &middot; Click two nodes to connect/disconnect</span>
         </div>
       </div>
-      <div id="graph-thoughts-wrap">
+      <!-- Detail panel: appears when a node is selected -->
+      <div id="graph-detail" class="mt-3 rounded-lg border border-slate-600 bg-slate-800 p-4" style="display:none;">
+        <div class="flex items-center gap-2 mb-2">
+          <span id="graph-detail-dot" style="font-size:18px;">&#9679;</span>
+          <span class="text-slate-300 text-sm font-bold flex-1">Selected thought</span>
+          <button onclick="graphDetailExpand()" class="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs" title="Generate child ideas branching from this thought">&#9758; Expand</button>
+          <button onclick="graphDetailElaborate()" class="px-2 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
+          <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white rounded text-xs">Edit</button>
+          <button onclick="graphDetailClose()" class="px-2 py-1 text-slate-400 hover:text-white text-xs">&times; Close</button>
+        </div>
+        <div id="graph-detail-view" class="text-slate-200 text-sm whitespace-pre-wrap"></div>
+        <div id="graph-detail-edit-wrap" style="display:none;" class="flex gap-2">
+          <textarea id="graph-detail-textarea" class="flex-1 text-sm" rows="3" style="min-height:60px;"></textarea>
+          <button onclick="graphDetailSave()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm self-end">Save</button>
+        </div>
+        <div id="graph-detail-elaborate-wrap" style="display:none;" class="flex gap-2 mt-2">
+          <input id="graph-detail-elaborate-input" type="text" placeholder="Direction to elaborate (optional)..."
+            class="flex-1 text-sm" onkeydown="if(event.key==='Enter'){graphDetailElaborateSend();}">
+          <button onclick="graphDetailElaborateSend()" class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm">Go</button>
+          <button onclick="document.getElementById('graph-detail-elaborate-wrap').style.display='none'" class="px-2 py-1 text-slate-400 hover:text-white text-xs">&times;</button>
+        </div>
+      </div>
+      <!-- Thoughts list below graph -->
+      <div id="graph-thoughts-wrap" class="mt-3">
         <div id="graph-thoughts" class="scroll-panel rounded-lg border border-slate-700 bg-slate-800 p-4"
-          style="min-height:520px; max-height:520px; overflow-y:auto;">
+          style="max-height:300px; overflow-y:auto;">
           <span class="text-slate-500 text-sm">Thoughts will appear here…</span>
         </div>
       </div>
@@ -408,10 +459,18 @@
   }
 
   // ── Roles ───────────────────────────────────────────────────────────────────
+  let allRoles = [];
   fetch('/roles').then(r => r.json()).then(data => {
-    roles = data;
+    allRoles = data;
+    populateRoles();
+  });
+
+  function populateRoles() {
+    const lang = document.getElementById('lang-select').value;
+    roles = allRoles.filter(r => !r.lang || r.lang === lang);
     const sel = document.getElementById('role-select');
-    data.forEach((p, i) => {
+    sel.innerHTML = '';
+    roles.forEach((p, i) => {
       const opt = document.createElement('option');
       opt.value = i;
       opt.textContent = p.name;
@@ -419,9 +478,15 @@
     });
     const custom = document.createElement('option');
     custom.value = 'custom';
-    custom.textContent = '(свой)';
+    custom.textContent = '(custom)';
     sel.appendChild(custom);
-  });
+    // Reset role text to first option
+    document.getElementById('role-text').value = roles.length ? roles[0].text : '';
+  }
+
+  function onLangChange() {
+    populateRoles();
+  }
 
   function onRoleSelect() {
     const sel = document.getElementById('role-select');
@@ -434,6 +499,8 @@
     }
     autoGrow(inp);
   }
+
+  const _langHints = { ru: 'Отвечай на русском языке.' };
 
   function getRole() {
     // If a template is active, build the role from template + variables
@@ -450,7 +517,13 @@
         return text;
       }
     }
-    return document.getElementById('role-text').value;
+    let text = document.getElementById('role-text').value;
+    // If role is empty and a non-English language is selected, add language hint
+    if (!text) {
+      const lang = document.getElementById('lang-select').value;
+      if (_langHints[lang]) text = _langHints[lang];
+    }
+    return text;
   }
 
   // ── Templates ──────────────────────────────────────────────────────────────
@@ -574,6 +647,7 @@
 
   let stepEditing = false;
   let stepRoleLen = 0;  // length of role text to hide from display
+  let stepPromptText = '';  // user's prompt text (without role prefix)
 
   function setStepButtons(enabled) {
     ['step-btn-next','step-btn-auto','step-btn-reset','step-btn-edit'].forEach(id => {
@@ -614,7 +688,9 @@
     });
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    el.textContent = d.full_text.slice(stepRoleLen);
+    const syncIdx = d.full_text.indexOf(stepPromptText);
+    el.textContent = syncIdx >= 0 ? d.full_text.slice(syncIdx) : d.full_text.slice(stepRoleLen);
+    stepPromptText = el.textContent;  // update prompt text after edit
     renderTop(d.top_tokens);
     // Exit edit mode
     stepEditing = false;
@@ -636,6 +712,7 @@
     const pfx    = getRole();
     const prompt = pfx + raw;
     stepRoleLen = pfx.length;
+    stepPromptText = raw;
     setStepButtons(false);
     document.getElementById('step-status').textContent = 'Initializing…';
     const r = await fetch('/step/init', {
@@ -656,10 +733,10 @@
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
     if (d.tok_texts && d.ents && d.tok_texts.length > 0) {
-      const promptText = d.full_text.slice(stepRoleLen, d.full_text.length - d.tok_texts.join('').length);
-      renderHeatmap('step-output', d.tok_texts, d.ents, promptText);
+      renderHeatmap('step-output', d.tok_texts, d.ents, stepPromptText);
     } else {
-      document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+      const idx = d.full_text.indexOf(stepPromptText);
+      document.getElementById('step-output').textContent = idx >= 0 ? d.full_text.slice(idx) : d.full_text.slice(stepRoleLen);
     }
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = d.is_eos ? 'EOS' : 'step ' + d.step;
@@ -681,10 +758,10 @@
       }
       if (d.done) { stepStopAuto(true); return; }
       if (d.tok_texts && d.ents && d.tok_texts.length > 0) {
-        const promptText = d.full_text.slice(stepRoleLen, d.full_text.length - d.tok_texts.join('').length);
-        renderHeatmap('step-output', d.tok_texts, d.ents, promptText);
+        renderHeatmap('step-output', d.tok_texts, d.ents, stepPromptText);
       } else {
-        document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+        const idx = d.full_text.indexOf(stepPromptText);
+        document.getElementById('step-output').textContent = idx >= 0 ? d.full_text.slice(idx) : d.full_text.slice(stepRoleLen);
       }
       document.getElementById('step-status').textContent = 'step ' + d.step;
       updateTokenCounter(d.total_tokens);
@@ -715,7 +792,8 @@
     const r = await fetch('/step/reset', {method: 'POST'});
     const d = await r.json();
     if (d.error) { document.getElementById('step-status').textContent = 'Error: ' + d.error; return; }
-    document.getElementById('step-output').textContent = d.full_text.slice(stepRoleLen);
+    const resetIdx = d.full_text.indexOf(stepPromptText);
+    document.getElementById('step-output').textContent = resetIdx >= 0 ? d.full_text.slice(resetIdx) : d.full_text.slice(stepRoleLen);
     renderTop(d.top_tokens);
     document.getElementById('step-status').textContent = 'Reset';
     setStepButtons(true);
@@ -811,28 +889,27 @@
         }
         return;
       }
-      const roleLen = getRole().length;
+      // Use the known prompt strings (from input fields) instead of extracting
+      // from detokenized text — tokenize/detokenize roundtrip may alter characters
+      const userPromptA = promptA.slice(getRole().length);
+      const userPromptB = promptB.slice(getRole().length);
       if (d.toks_a && d.ents_a) {
-        // Show prompt text (from full text minus role prefix minus generated tokens) before colored tokens
-        const genTextA = d.toks_a.join('');
-        const genTextB = d.toks_b.join('');
-        const textA = d.a.slice(roleLen);
-        const textB = d.b.slice(roleLen);
-        const promptA_text = textA.endsWith(genTextA) ? textA.slice(0, textA.length - genTextA.length) : '';
-        const promptB_text = textB.endsWith(genTextB) ? textB.slice(0, textB.length - genTextB.length) : '';
-        renderHeatmap('output-a', d.toks_a, d.ents_a, promptA_text);
-        renderHeatmap('output-b', d.toks_b, d.ents_b, promptB_text);
+        renderHeatmap('output-a', d.toks_a, d.ents_a, userPromptA);
+        renderHeatmap('output-b', d.toks_b, d.ents_b, userPromptB);
       } else {
-        document.getElementById('output-a').textContent = d.a.slice(roleLen);
-        document.getElementById('output-b').textContent = d.b.slice(roleLen);
+        // Server mode: no individual tokens, extract from full detokenized text
+        const idxA = d.a.indexOf(userPromptA);
+        const idxB = d.b.indexOf(userPromptB);
+        document.getElementById('output-a').textContent = idxA >= 0 ? d.a.slice(idxA) : d.a;
+        document.getElementById('output-b').textContent = idxB >= 0 ? d.b.slice(idxB) : d.b;
       }
       document.getElementById('step-a').textContent = d.done_a ? 'EOS' : 'step ' + d.step;
       document.getElementById('step-b').textContent = d.done_b ? 'EOS' : 'step ' + d.step;
       if (d.total_tokens) updateTokenCounter(d.total_tokens);
 
       if (mode === 'compare' && !diverged) {
-        const ga = d.a.slice(promptA.length);
-        const gb = d.b.slice(promptB.length);
+        const ga = d.toks_a ? d.toks_a.join('') : d.a.slice(promptA.length);
+        const gb = d.toks_b ? d.toks_b.join('') : d.b.slice(promptB.length);
         if (ga !== gb && (ga || gb)) {
           diverged = true;
           const badge = document.getElementById('diverge-badge');
@@ -864,6 +941,7 @@
     setMode('step');
     document.getElementById('step-output').textContent = d.text;
     stepRoleLen = 0;
+    stepPromptText = d.text;
     if (d.top) renderTop(d.top);
     if (d.total_tokens) updateTokenCounter(d.total_tokens);
     document.getElementById('status').textContent = 'Step mode (from stream ' + stream.toUpperCase() + ')';
@@ -992,8 +1070,65 @@
   let graphDragIdx = -1;
   let graphDragOffset = { x: 0, y: 0 };
   let graphSimTimer = null;
+  let graphUndoStack = [];  // [{data, positions, collapsed}]
+  const GRAPH_MAX_UNDO = 20;
+  let graphCollapsedNodes = new Set();  // indices of nodes created by collapse
+  let graphHubNodes = new Set();       // indices of nodes used as elaborate source
+  let graphDirectedEdges = [];         // [[from, to], ...] — elaborate edges
 
   let graphLastW = 0, graphLastH = 0;
+
+  function graphSaveUndo() {
+    graphUndoStack.push({
+      data: JSON.parse(JSON.stringify(graphData)),
+      positions: JSON.parse(JSON.stringify(graphNodePositions)),
+      collapsed: new Set(graphCollapsedNodes),
+      hubs: new Set(graphHubNodes),
+      directed: JSON.parse(JSON.stringify(graphDirectedEdges))
+    });
+    if (graphUndoStack.length > GRAPH_MAX_UNDO) graphUndoStack.shift();
+    document.getElementById('graph-btn-undo').style.display = '';
+  }
+
+  async function graphUndo() {
+    if (!graphUndoStack.length) return;
+    const state = graphUndoStack.pop();
+    graphNodePositions = state.positions;
+    graphCollapsedNodes = state.collapsed || new Set();
+    graphHubNodes = state.hubs || new Set();
+    graphDirectedEdges = state.directed || [];
+    graphSelectedNode = -1;
+    // Sync backend state
+    const r = await fetch('/graph/sync', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ thoughts: state.data.thoughts, ...graphGetParams() })
+    });
+    const d = await r.json();
+    graphData = d.error ? state.data : d;
+    graphRenderSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
+    graphShowDetail(-1);
+    if (!graphUndoStack.length) document.getElementById('graph-btn-undo').style.display = 'none';
+  }
+
+  function graphRecalcLayout() {
+    graphNodePositions = [];  // force fresh positions
+    graphDrawSvg();
+  }
+
+  // Update graph data + render without moving nodes (just redraw edges/clusters)
+  function graphUpdateView(d) {
+    graphData = d;
+    // Track hub nodes from backend
+    if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+    if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+    graphInitPositions();  // add positions for new nodes only
+    graphRenderSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
+    document.getElementById('graph-actions-bar').style.display = graphData.thoughts.length ? '' : 'none';
+  }
 
   function graphGetDimensions() {
     const svg = document.getElementById('graph-svg');
@@ -1090,6 +1225,29 @@
     }
   }
 
+  function graphConvexHull(points) {
+    // Graham scan for convex hull
+    if (points.length < 3) return points;
+    points = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (O, A, B) => (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x);
+    const lower = [];
+    for (const p of points) { while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop(); lower.push(p); }
+    const upper = [];
+    for (const p of points.reverse()) { while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop(); upper.push(p); }
+    return lower.slice(0, -1).concat(upper.slice(0, -1));
+  }
+
+  function graphExpandHull(hull, pad) {
+    // Expand hull outward by pad pixels
+    const cx = hull.reduce((s, p) => s + p.x, 0) / hull.length;
+    const cy = hull.reduce((s, p) => s + p.y, 0) / hull.length;
+    return hull.map(p => {
+      const dx = p.x - cx, dy = p.y - cy;
+      const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      return { x: p.x + (dx/dist) * pad, y: p.y + (dy/dist) * pad };
+    });
+  }
+
   function graphRenderSvg() {
     const svg = document.getElementById('graph-svg');
     svg.innerHTML = '';
@@ -1101,17 +1259,86 @@
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
     const clusterColors = graphClusterColors;
 
-    // Draw edges
+    // Draw cluster hulls
+    (graphData.clusters || []).forEach((cl, ci) => {
+      const pts = cl.map(idx => positions[idx]).filter(Boolean);
+      if (pts.length < 2) return;
+      const color = clusterColors[ci % clusterColors.length];
+      if (pts.length === 2) {
+        // Just a line between two points
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', pts[0].x); line.setAttribute('y1', pts[0].y);
+        line.setAttribute('x2', pts[1].x); line.setAttribute('y2', pts[1].y);
+        line.setAttribute('stroke', color); line.setAttribute('stroke-width', 20);
+        line.setAttribute('stroke-opacity', 0.08); line.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(line);
+      } else {
+        const hull = graphExpandHull(graphConvexHull(pts), 25);
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M' + hull.map(p => p.x+','+p.y).join('L') + 'Z');
+        path.setAttribute('fill', color); path.setAttribute('fill-opacity', '0.07');
+        path.setAttribute('stroke', color); path.setAttribute('stroke-opacity', '0.15');
+        path.setAttribute('stroke-width', '1');
+        path.style.pointerEvents = 'none';
+        svg.appendChild(path);
+      }
+    });
+
+    // Arrowhead marker for directed edges
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    marker.setAttribute('id', 'arrowhead'); marker.setAttribute('markerWidth', '8');
+    marker.setAttribute('markerHeight', '6'); marker.setAttribute('refX', '8');
+    marker.setAttribute('refY', '3'); marker.setAttribute('orient', 'auto');
+    const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    arrow.setAttribute('points', '0 0, 8 3, 0 6'); arrow.setAttribute('fill', '#c4b5fd');
+    marker.appendChild(arrow); defs.appendChild(marker); svg.appendChild(defs);
+
+    // Build directed edge lookup: "from,to" → true
+    const directedSet = new Set();
+    graphDirectedEdges.forEach(([a, b]) => directedSet.add(a + ',' + b));
+
+    // Draw edges — color by similarity strength
     graphData.edges.forEach(e => {
       const a = positions[e.from], b = positions[e.to];
       if (!a || !b) return;
+      // Check if this edge is directed (elaborate)
+      const isDirected = directedSet.has(e.from + ',' + e.to) || directedSet.has(e.to + ',' + e.from);
+      const dirFrom = directedSet.has(e.from + ',' + e.to) ? e.from : (directedSet.has(e.to + ',' + e.from) ? e.to : -1);
+
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
-      line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
-      line.setAttribute('stroke', e.manual ? '#a78bfa' : '#475569');
-      line.setAttribute('stroke-width', e.manual ? 2 : 1.5);
-      line.setAttribute('stroke-opacity', e.manual ? 0.8 : 0.5);
-      if (e.manual) line.setAttribute('stroke-dasharray', '6,3');
+      // For directed edges, shorten line to not overlap node
+      let x1 = a.x, y1 = a.y, x2 = b.x, y2 = b.y;
+      if (isDirected) {
+        const target = dirFrom === e.from ? b : a;
+        const source = dirFrom === e.from ? a : b;
+        const dx = target.x - source.x, dy = target.y - source.y;
+        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+        x1 = source.x; y1 = source.y;
+        x2 = target.x - (dx/dist) * 12; y2 = target.y - (dy/dist) * 12;
+      }
+      line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+      line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+
+      if (isDirected) {
+        line.setAttribute('stroke', '#c4b5fd');
+        line.setAttribute('stroke-width', 2);
+        line.setAttribute('stroke-opacity', 0.7);
+        line.setAttribute('marker-end', 'url(#arrowhead)');
+      } else if (e.manual) {
+        line.setAttribute('stroke', '#a78bfa');
+        line.setAttribute('stroke-width', 2);
+        line.setAttribute('stroke-opacity', 0.8);
+        line.setAttribute('stroke-dasharray', '6,3');
+      } else {
+        const w = Math.max(0, Math.min(1, e.weight || 0));
+        const r = Math.round(w < 0.5 ? 59 + w * 2 * 187 : 246 - (w - 0.5) * 2 * 230);
+        const g = Math.round(w < 0.5 ? 130 + w * 2 * 28 : 158 + (w - 0.5) * 2 * 27);
+        const b2 = Math.round(w < 0.5 ? 246 - w * 2 * 231 : 15);
+        line.setAttribute('stroke', `rgb(${r},${g},${b2})`);
+        line.setAttribute('stroke-width', 1.5 + w * 1.5);
+        line.setAttribute('stroke-opacity', 0.4 + w * 0.4);
+      }
       svg.appendChild(line);
     });
 
@@ -1121,49 +1348,101 @@
       const ci = nodeCluster[i];
       const color = ci >= 0 ? clusterColors[ci % clusterColors.length] : '#64748b';
       const isSelected = i === graphSelectedNode;
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
-      circle.setAttribute('r', isSelected ? 13 : (ci >= 0 ? 10 : 7));
-      circle.setAttribute('fill', color);
-      circle.setAttribute('stroke', isSelected ? '#facc15' : '#e2e8f0');
-      circle.setAttribute('stroke-width', isSelected ? 3 : (ci >= 0 ? 2 : 1));
-      circle.style.cursor = 'pointer';
-      circle.dataset.nodeIdx = i;
-      svg.appendChild(circle);
+      const isCollapsed = graphCollapsedNodes.has(i);
+      const isHub = graphHubNodes.has(i);
 
+      // Hub halo (drawn behind the node)
+      if (isHub && !isCollapsed) {
+        const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        halo.setAttribute('cx', p.x); halo.setAttribute('cy', p.y);
+        halo.setAttribute('r', 18);
+        halo.setAttribute('fill', 'none');
+        halo.setAttribute('stroke', '#c4b5fd');
+        halo.setAttribute('stroke-width', 2);
+        halo.setAttribute('stroke-opacity', 0.4);
+        halo.setAttribute('stroke-dasharray', '4,3');
+        halo.style.pointerEvents = 'none';
+        svg.appendChild(halo);
+      }
+
+      if (isCollapsed) {
+        // Collapsed nodes: rounded rectangle (diamond-like)
+        const size = isSelected ? 16 : 13;
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', p.x - size); rect.setAttribute('y', p.y - size);
+        rect.setAttribute('width', size * 2); rect.setAttribute('height', size * 2);
+        rect.setAttribute('rx', 4); rect.setAttribute('ry', 4);
+        rect.setAttribute('fill', color);
+        rect.setAttribute('stroke', isSelected ? '#facc15' : '#e2e8f0');
+        rect.setAttribute('stroke-width', isSelected ? 3 : 2);
+        rect.style.cursor = 'pointer';
+        rect.dataset.nodeIdx = i;
+        svg.appendChild(rect);
+      } else {
+        // Normal nodes: circle
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
+        circle.setAttribute('r', isSelected ? 13 : (ci >= 0 ? 10 : 7));
+        circle.setAttribute('fill', color);
+        circle.setAttribute('stroke', isSelected ? '#facc15' : '#e2e8f0');
+        circle.setAttribute('stroke-width', isSelected ? 3 : (ci >= 0 ? 2 : 1));
+        circle.style.cursor = 'pointer';
+        circle.dataset.nodeIdx = i;
+        svg.appendChild(circle);
+      }
+
+      // Label
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('x', p.x); label.setAttribute('y', p.y - 14);
+      label.setAttribute('x', p.x); label.setAttribute('y', p.y - (isCollapsed ? 20 : 14));
       label.setAttribute('text-anchor', 'middle');
       label.setAttribute('fill', '#94a3b8');
-      label.setAttribute('font-size', '11');
+      label.setAttribute('font-size', isCollapsed ? '12' : '11');
+      if (isCollapsed) label.setAttribute('font-weight', 'bold');
       label.style.pointerEvents = 'none';
-      const short = thoughts[i].length > 25 ? thoughts[i].slice(0, 24) + '...' : thoughts[i];
+      const maxLen = isCollapsed ? 35 : 25;
+      const short = thoughts[i].length > maxLen ? thoughts[i].slice(0, maxLen - 1) + '...' : thoughts[i];
       label.textContent = short;
       svg.appendChild(label);
     });
+
+    // Tooltip element (reused)
+    let tooltip = document.getElementById('graph-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.id = 'graph-tooltip';
+      tooltip.style.cssText = 'position:absolute;background:#1e293b;border:1px solid #475569;color:#e2e8f0;padding:8px 12px;border-radius:6px;font-size:12px;max-width:300px;pointer-events:none;display:none;z-index:50;white-space:pre-wrap;word-wrap:break-word;';
+      document.getElementById('graph-svg-wrap').appendChild(tooltip);
+    }
   }
 
-  function graphDrawSvg() {
+  function graphDrawSvg(gentle) {
     graphInitPositions();
-    graphRunForceSimulation(120);
+    // gentle=true: minor update (link/remove), less disruption
+    const iters = gentle ? 30 : 120;
+    const settleFrames = gentle ? 20 : 60;
+    graphRunForceSimulation(iters);
     graphRenderSvg();
-    // Continue gentle simulation for smooth settling
     if (graphSimTimer) cancelAnimationFrame(graphSimTimer);
     let ticks = 0;
     function tick() {
       graphRunForceSimulation(1);
       graphRenderSvg();
       ticks++;
-      if (ticks < 60) graphSimTimer = requestAnimationFrame(tick);
+      if (ticks < settleFrames) graphSimTimer = requestAnimationFrame(tick);
     }
     graphSimTimer = requestAnimationFrame(tick);
   }
 
-  // ── Drag & Drop ──────────────────────────────────────────────────────────
-  (function initGraphDrag() {
+  // ── Drag, Tooltip, Context Menu, Keyboard ─────────────────────────────────
+  (function initGraphInteractions() {
     const svg = document.getElementById('graph-svg');
     if (!svg) return;
     let dragMoved = false;
+
+    function getNodeTarget(e) {
+      if (!e.target.closest) return null;
+      return e.target.closest('[data-node-idx]');
+    }
 
     function getSvgPoint(e) {
       const rect = svg.getBoundingClientRect();
@@ -1173,7 +1452,7 @@
     }
 
     function onDown(e) {
-      const target = e.target.closest ? e.target.closest('circle[data-node-idx]') : null;
+      const target = getNodeTarget(e);
       if (!target) return;
       const idx = parseInt(target.dataset.nodeIdx);
       if (isNaN(idx) || idx < 0 || idx >= graphNodePositions.length) return;
@@ -1193,7 +1472,7 @@
       const pt = getSvgPoint(e);
       const node = graphNodePositions[graphDragIdx];
       const W = svg.clientWidth || 500;
-      const H = 450;
+      const H = parseInt(svg.getAttribute('height')) || 520;
       node.x = Math.max(20, Math.min(W - 20, pt.x + graphDragOffset.x));
       node.y = Math.max(20, Math.min(H - 20, pt.y + graphDragOffset.y));
       graphRenderSvg();
@@ -1205,7 +1484,6 @@
       graphDragIdx = -1;
       graphNodePositions[idx].fixed = false;
       if (!dragMoved) {
-        // It was a click, not a drag — handle node click for linking
         graphNodeClick(idx);
       }
     }
@@ -1216,7 +1494,94 @@
     window.addEventListener('touchmove', onMove, { passive: false });
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp);
+
+    // ── Tooltip on hover ──
+    svg.addEventListener('mousemove', function(e) {
+      const target = getNodeTarget(e);
+      const tooltip = document.getElementById('graph-tooltip');
+      if (!tooltip) return;
+      if (target && graphDragIdx < 0) {
+        const idx = parseInt(target.dataset.nodeIdx);
+        if (idx >= 0 && idx < graphData.thoughts.length) {
+          tooltip.textContent = graphData.thoughts[idx];
+          const rect = svg.getBoundingClientRect();
+          tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
+          tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
+          tooltip.style.display = '';
+          return;
+        }
+      }
+      tooltip.style.display = 'none';
+    });
+    svg.addEventListener('mouseleave', function() {
+      const tooltip = document.getElementById('graph-tooltip');
+      if (tooltip) tooltip.style.display = 'none';
+    });
+
+    // ── Context menu ──
+    svg.addEventListener('contextmenu', function(e) {
+      const target = getNodeTarget(e);
+      if (!target) return;
+      e.preventDefault();
+      const idx = parseInt(target.dataset.nodeIdx);
+      if (isNaN(idx) || idx < 0 || idx >= graphData.thoughts.length) return;
+      graphSelectedNode = idx;
+      graphRenderSvg();
+      graphShowDetail(idx);
+      graphShowContextMenu(e, idx);
+    });
   })();
+
+  // ── Context Menu ──
+  function graphShowContextMenu(e, idx) {
+    let menu = document.getElementById('graph-context-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'graph-context-menu';
+      menu.style.cssText = 'position:fixed;background:#1e293b;border:1px solid #475569;border-radius:6px;padding:4px 0;z-index:100;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+      document.body.appendChild(menu);
+    }
+    menu.innerHTML = [
+      { label: '☞ Expand', action: 'graphDetailExpand()' },
+      { label: '✎ Elaborate', action: 'graphDetailElaborate()' },
+      { label: '✏ Edit', action: 'graphDetailEdit()' },
+      { label: '✕ Delete', action: 'graphRemoveThought(' + idx + ')' },
+    ].map(item =>
+      '<div onclick="' + item.action + ';graphHideContextMenu()" style="padding:6px 16px;cursor:pointer;color:#e2e8f0;font-size:13px;" onmouseover="this.style.background=\'#334155\'" onmouseout="this.style.background=\'\'">' + item.label + '</div>'
+    ).join('');
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.style.display = '';
+    // Close on click outside
+    setTimeout(() => document.addEventListener('click', graphHideContextMenu, { once: true }), 0);
+  }
+
+  function graphHideContextMenu() {
+    const menu = document.getElementById('graph-context-menu');
+    if (menu) menu.style.display = 'none';
+  }
+
+  // ── Keyboard shortcuts ──
+  document.addEventListener('keydown', function(e) {
+    if (mode !== 'graph') return;
+    // Don't intercept when typing in inputs
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      e.preventDefault();
+      graphUndo();
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (graphSelectedNode >= 0) {
+        e.preventDefault();
+        graphRemoveThought(graphSelectedNode);
+        graphSelectedNode = -1;
+        graphShowDetail(-1);
+      }
+    } else if (e.key === 'Escape') {
+      graphDetailClose();
+      graphHideContextMenu();
+    }
+  });
 
   function graphUpdateThoughtsList() {
     const div = document.getElementById('graph-thoughts');
@@ -1264,31 +1629,146 @@
       // Select / deselect node
       graphSelectedNode = graphSelectedNode === i ? -1 : i;
       graphRenderSvg();
+      graphShowDetail(graphSelectedNode);
       // Highlight cluster in thought list
       const cl = (graphData.clusters || []).find(c => c.includes(i));
-      if (cl) {
-        const div = document.getElementById('graph-thoughts');
-        div.querySelectorAll('div').forEach((d, idx) => {
-          d.style.background = cl.includes(idx) ? '#1e3a5f' : '';
-        });
-      }
+      const div = document.getElementById('graph-thoughts');
+      div.querySelectorAll('div').forEach((d, idx) => {
+        d.style.background = (cl && cl.includes(idx)) ? '#1e3a5f' : '';
+      });
       return;
     }
     // Second click — toggle edge between selected and this node
     const a = graphSelectedNode;
     const b = i;
     graphSelectedNode = -1;
+    graphShowDetail(-1);
     const r = await fetch('/graph/link', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ a, b, ...graphGetParams() })
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
-    graphData = d;
-    graphRunForceSimulation(60);
+    graphSaveUndo();
+    graphUpdateView(d);
+  }
+
+  function graphShowDetail(idx) {
+    const panel = document.getElementById('graph-detail');
+    if (idx < 0 || idx >= graphData.thoughts.length) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = '';
+    const text = graphData.thoughts[idx];
+    document.getElementById('graph-detail-view').textContent = text;
+    document.getElementById('graph-detail-edit-wrap').style.display = 'none';
+    document.getElementById('graph-detail-view').style.display = '';
+    document.getElementById('graph-detail-edit-btn').textContent = 'Edit';
+    // Color dot by cluster
+    const nodeCluster = new Array(graphData.thoughts.length).fill(-1);
+    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(j => { nodeCluster[j] = ci; }));
+    const ci = nodeCluster[idx];
+    const color = ci >= 0 ? graphClusterColors[ci % graphClusterColors.length] : '#64748b';
+    document.getElementById('graph-detail-dot').style.color = color;
+  }
+
+  function graphDetailClose() {
+    graphSelectedNode = -1;
+    document.getElementById('graph-detail').style.display = 'none';
     graphRenderSvg();
-    graphUpdateThoughtsList();
-    graphUpdateCollapseButtons();
+    // Clear highlights
+    document.getElementById('graph-thoughts').querySelectorAll('div').forEach(d => { d.style.background = ''; });
+  }
+
+  function graphDetailEdit() {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const view = document.getElementById('graph-detail-view');
+    const wrap = document.getElementById('graph-detail-edit-wrap');
+    const btn = document.getElementById('graph-detail-edit-btn');
+    if (wrap.style.display === 'none') {
+      document.getElementById('graph-detail-textarea').value = graphData.thoughts[idx];
+      wrap.style.display = 'flex';
+      view.style.display = 'none';
+      btn.textContent = 'Cancel';
+    } else {
+      wrap.style.display = 'none';
+      view.style.display = '';
+      btn.textContent = 'Edit';
+    }
+  }
+
+  async function graphDetailSave() {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const newText = document.getElementById('graph-detail-textarea').value.trim();
+    if (!newText) return;
+    graphSaveUndo();
+    // Update via backend: remove old, add new, then reselect
+    const r1 = await fetch('/graph/remove', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: idx, ...graphGetParams() })
+    });
+    const d1 = await r1.json();
+    if (d1.error) { alert(d1.error); return; }
+    if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
+
+    const r2 = await fetch('/graph/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: newText, ...graphGetParams() })
+    });
+    const d2 = await r2.json();
+    if (d2.error) { alert(d2.error); return; }
+    graphSelectedNode = d2.thoughts.length - 1;
+    graphUpdateView(d2);
+    graphShowDetail(graphSelectedNode);
+  }
+
+  async function graphDetailExpand() {
+    // Generate child ideas branching from this thought
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const thought = graphData.thoughts[idx];
+    const btn = event.target;
+    btn.disabled = true; btn.textContent = '...';
+    const r = await fetch('/graph/expand', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: idx, n: 3, ...graphGetParams() })
+    });
+    const d = await r.json();
+    btn.disabled = false; btn.textContent = '\u261E Expand';
+    if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
+    graphUpdateView(d);
+  }
+
+  function graphDetailElaborate() {
+    // Show input for direction, then send
+    const wrap = document.getElementById('graph-detail-elaborate-wrap');
+    const input = document.getElementById('graph-detail-elaborate-input');
+    if (wrap.style.display === 'none') {
+      wrap.style.display = 'flex';
+      input.value = '';
+      input.focus();
+    } else {
+      wrap.style.display = 'none';
+    }
+  }
+
+  async function graphDetailElaborateSend() {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const direction = document.getElementById('graph-detail-elaborate-input').value.trim();
+    document.getElementById('graph-detail-elaborate-wrap').style.display = 'none';
+    const r = await fetch('/graph/elaborate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: idx, n: 3, direction, ...graphGetParams() })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
+    graphUpdateView(d);
   }
 
   async function graphThink() {
@@ -1306,7 +1786,10 @@
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
 
+    graphSaveUndo();
     graphData = d;
+    if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+    if (d.directed_edges) graphDirectedEdges = d.directed_edges;
     graphDrawSvg();
     graphUpdateThoughtsList();
 
@@ -1314,27 +1797,7 @@
     document.getElementById('graph-btn-think').textContent = 'Think';
 
     graphUpdateCollapseButtons();
-    document.getElementById('graph-btn-more').style.display = '';
-  }
-
-  async function graphMore() {
-    const topic = document.getElementById('graph-topic').value.trim();
-    if (!topic) return;
-
-    document.getElementById('graph-btn-more').disabled = true;
-    const r = await fetch('/graph/think', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic, n: 3, existing: graphData.thoughts, ...graphGetParams() })
-    });
-    const d = await r.json();
-    if (d.error) { alert(d.error); return; }
-
-    graphData = d;
-    graphDrawSvg();
-    graphUpdateThoughtsList();
-
-    document.getElementById('graph-btn-more').disabled = false;
-    graphUpdateCollapseButtons();
+    document.getElementById('graph-actions-bar').style.display = '';
   }
 
   function graphUpdateCollapseButtons() {
@@ -1366,6 +1829,7 @@
 
     if (d.error) { alert(d.error); return; }
 
+    graphSaveUndo();
     // Remove collapsed node positions, add new one at centroid
     const removedSet = new Set(cluster);
     let cx = 0, cy = 0, cnt = 0;
@@ -1377,14 +1841,22 @@
       }
     });
     if (cnt) { cx /= cnt; cy /= cnt; }
-    // Remove in reverse order
     [...removedSet].sort((a, b) => b - a).forEach(idx => {
       if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
     });
     graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
+    // Remap collapsed indices and mark new node as collapsed
+    const newCollapsed = new Set();
+    graphCollapsedNodes.forEach(ci => {
+      if (removedSet.has(ci)) return;
+      let newIdx = ci;
+      for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
+      newCollapsed.add(newIdx);
+    });
+    newCollapsed.add(d.thoughts.length - 1);  // the new summary node
+    graphCollapsedNodes = newCollapsed;
 
     graphData = { thoughts: d.thoughts, edges: d.edges, clusters: d.clusters };
-    graphRunForceSimulation(80);
     graphRenderSvg();
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
@@ -1404,12 +1876,9 @@
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
     input.value = '';
-    graphData = d;
-    graphDrawSvg();
-    graphUpdateThoughtsList();
-    graphUpdateCollapseButtons();
-    document.getElementById('graph-btn-more').style.display = '';
+    graphUpdateView(d);
   }
 
   async function graphRemoveThought(i) {
@@ -1419,43 +1888,103 @@
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
     if (i < graphNodePositions.length) graphNodePositions.splice(i, 1);
-    graphData = d;
-    graphRunForceSimulation(40);
-    graphRenderSvg();
-    graphUpdateThoughtsList();
-    graphUpdateCollapseButtons();
+    graphUpdateView(d);
   }
 
-  let graphExpanded = false;
-  function toggleGraphExpand() {
-    graphExpanded = !graphExpanded;
-    const grid = document.getElementById('graph-grid');
-    const svg = document.getElementById('graph-svg');
-    const thoughts = document.getElementById('graph-thoughts-wrap');
-    const btn = document.getElementById('graph-expand-btn');
-    if (graphExpanded) {
-      grid.style.gridTemplateColumns = '1fr';
-      svg.setAttribute('height', '700');
-      thoughts.style.display = 'none';
-      btn.textContent = '⛶ Collapse';
-    } else {
-      grid.style.gridTemplateColumns = '1fr 1fr';
-      svg.setAttribute('height', '520');
-      thoughts.style.display = '';
-      btn.textContent = '⛶ Expand';
-    }
-    if (graphData.thoughts.length) {
-      graphInitPositions();          // rescale positions to new SVG size
-      graphRunForceSimulation(30);   // brief settle
-      graphRenderSvg();
-    }
+
+
+  function graphExport() {
+    const state = {
+      topic: document.getElementById('graph-topic').value,
+      thoughts: graphData.thoughts,
+      edges: graphData.edges,
+      clusters: graphData.clusters,
+      positions: graphNodePositions,
+      collapsed: [...graphCollapsedNodes],
+      hubs: [...graphHubNodes],
+      directed: graphDirectedEdges,
+      manual_links: graphData.manual_links || [],
+      manual_unlinks: graphData.manual_unlinks || [],
+      threshold: parseFloat(document.getElementById('graph-threshold').value),
+      sim_mode: document.getElementById('graph-sim-mode').value,
+    };
+    const blob = new Blob([JSON.stringify(state, null, 2)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const topic = state.topic.slice(0, 30).replace(/[^a-zA-Zа-яА-Я0-9 ]/g, '').trim().replace(/\s+/g, '_') || 'graph';
+    a.download = `baddle_${topic}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function graphImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+      try {
+        const state = JSON.parse(e.target.result);
+        if (!state.thoughts || !Array.isArray(state.thoughts)) {
+          alert('Invalid graph file'); return;
+        }
+        // Restore topic and settings
+        document.getElementById('graph-topic').value = state.topic || '';
+        if (state.threshold) document.getElementById('graph-threshold').value = state.threshold;
+        if (state.sim_mode) document.getElementById('graph-sim-mode').value = state.sim_mode;
+
+        // Sync state to backend
+        const r = await fetch('/graph/sync', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            thoughts: state.thoughts,
+            topic: state.topic || '',
+            threshold: state.threshold || 0.91,
+            sim_mode: state.sim_mode || 'embedding',
+            manual_links: state.manual_links || [],
+            manual_unlinks: state.manual_unlinks || [],
+            directed_edges: state.directed || [],
+            hub_nodes: state.hubs || [],
+          })
+        });
+        const d = await r.json();
+        if (d.error) { alert(d.error); return; }
+
+        // Restore frontend state
+        graphData = d;
+        graphNodePositions = state.positions || [];
+        graphCollapsedNodes = new Set(state.collapsed || []);
+        graphHubNodes = new Set(state.hubs || []);
+        graphDirectedEdges = state.directed || [];
+        graphUndoStack = [];
+
+        // Ensure positions exist for all nodes
+        while (graphNodePositions.length < graphData.thoughts.length) {
+          graphNodePositions.push({x: Math.random() * 600 + 50, y: Math.random() * 400 + 50, vx: 0, vy: 0});
+        }
+
+        document.getElementById('graph-actions-bar').style.display = '';
+        document.getElementById('graph-btn-undo').style.display = 'none';
+        graphRenderSvg();
+        graphUpdateThoughtsList();
+        graphUpdateCollapseButtons();
+      } catch (err) {
+        alert('Error loading graph: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';  // reset file input
   }
 
   function graphReset() {
     graphData = { thoughts: [], edges: [], clusters: [] };
     graphSelectedNode = -1;
     graphNodePositions = [];
+    graphUndoStack = [];
+    graphCollapsedNodes = new Set();
+    graphHubNodes = new Set();
+    graphDirectedEdges = [];
     if (graphSimTimer) { cancelAnimationFrame(graphSimTimer); graphSimTimer = null; }
     document.getElementById('graph-svg').innerHTML = '';
     document.getElementById('graph-thoughts').innerHTML =
@@ -1463,7 +1992,9 @@
     document.getElementById('graph-result').style.display = 'none';
     document.getElementById('graph-result-text').textContent = '';
     document.getElementById('graph-collapse-btns').innerHTML = '';
-    document.getElementById('graph-btn-more').style.display = 'none';
+    document.getElementById('graph-detail').style.display = 'none';
+    document.getElementById('graph-btn-undo').style.display = 'none';
+    document.getElementById('graph-actions-bar').style.display = 'none';
   }
 
   // Init UI state

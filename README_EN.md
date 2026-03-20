@@ -4,17 +4,13 @@
 
 **[Русская версия →](README.md)**
 
-A tool for experimenting with neural network text generation.
-Lets you look inside the process — not just get an answer, but control it step by step.
+Humans don't think linearly. We throw out points — facts, hypotheses, associations —
+check if they connect, and if they do — go deeper. If not — gather more points
+or restructure the links.
 
-Most LLM interfaces are a black box: you send a prompt, you get text back.
-**baddle** opens that box: go token by token, see probability distributions,
-edit text right in the generation window, compare how the same prompt behaves
-with different settings — all in the browser.
-
-With the `--server` flag, baddle uses the native `llama-server` from llama.cpp,
-which can process **two prompts simultaneously** on the GPU — both generate
-in parallel and take roughly the same time as one.
+Baddle reproduces this process through LLMs. Not a chatbot — here you branch ideas,
+collapse clusters, intervene in generation at the individual token level.
+Everything runs locally via llama.cpp, no cloud required.
 
 **[Installation & Setup →](SETUP_EN.md)**
 
@@ -22,21 +18,51 @@ in parallel and take roughly the same time as one.
 
 ## Modes
 
+### `graph` — graph thinking
+
+![Graph mode](images/graph1.jpg)
+![Graph mode](images/graph2.jpg)
+
+The key mode. Enter a topic — the model generates a batch of short thoughts.
+Connections are built between them using **cosine similarity on model embeddings**.
+Similar thoughts connect, forming clusters.
+
+Two modes of thinking, implemented literally:
+
+- **Divergent** — Think generates a batch of ideas, Expand branches from a specific node
+- **Convergent** — Collapse merges a cluster into a coherent paragraph, Elaborate deepens a specific thought
+
+**Cycle: generate thoughts → build connections → cluster → collapse → repeat.** Each collapse raises the level of abstraction.
+
+**Interface:**
+- **Right-click** on a node → context menu (Expand / Elaborate / Edit / Delete)
+- **Hover** → full thought text
+- **Drag** → reposition nodes
+- **Click two nodes** → connect/disconnect (manual links shown as dashed lines)
+- **Convex hull** — semi-transparent boundary around clusters
+- **Collapsed nodes** — square shape, larger (visually distinct from regular thoughts)
+- **Edges** colored by connection strength: blue → yellow → green
+- **Ctrl+Z** — undo, **Delete** — remove node, **Esc** — deselect
+- **⟳ Layout** — recalculate node positions
+- **↓ Save / ↑ Load** — export/import graph as JSON (thoughts, edges, positions, clusters)
+
+Works only in in-process mode (without `--server`).
+
+---
+
 ### `step` — token-by-token generation
 
 ![Step mode](images/step.jpg)
 
-**Step mode** is the main research mode.
-The model generates **one token at a time**. After each token you can see
-the probability distribution (top-10), change temperature and top_k,
+The model generates **one token at a time**. After each token you see
+the probability distribution (top-10), can change temperature and top_k,
 and continue generating.
 
-The text in the generation window is **editable**. The `Edit` button enables
-editing mode: you can append text (inject), trim excess, fix any fragment —
-then press `Sync` so the model picks up the changes.
+Text is **editable** — `Edit` enables editing, `Sync` applies changes.
+The model picks up from there.
 
-Tokens are highlighted with a **confidence heatmap** — green (model is confident),
-yellow, red (high entropy, model is guessing).
+Tokens are highlighted with a **confidence heatmap** — green (confident),
+yellow, red (high entropy, guessing).
 
 ---
 
@@ -44,12 +70,10 @@ yellow, red (high entropy, model is guessing).
 
 ![Parallel mode](images/parallel.jpg)
 
-Two different prompts generate in parallel. The result is a live split-screen
-with both streams updating in real time.
+Two different prompts generate in parallel. Live split-screen,
+both streams updating in real time.
 
-Try giving opposite framings — the model will confidently argue both positions.
-Or two identical prompts with temp>0 — they diverge within 1–3 tokens,
-the first random token determines the entire trajectory.
+With the `--server` flag, both prompts are processed simultaneously on GPU.
 
 ---
 
@@ -57,13 +81,9 @@ the first random token determines the entire trajectory.
 
 ![Compare mode](images/compare.jpg)
 
-One prompt, but **two different configs** (temperature, top_k). Both streams start
-from identical tokens and diverge as soon as the parameters produce different samples.
-The interface shows the exact divergence step.
-
-On academic text the divergence comes late;
-on creative text — immediately. This is the token where the distribution was wide enough
-for different settings to make a different choice.
+One prompt, **two configs** (temperature, top_k, seed). Both streams start
+from identical tokens and diverge when parameters produce different samples.
+A badge shows the exact divergence step.
 
 ---
 
@@ -71,57 +91,22 @@ for different settings to make a different choice.
 
 ![Chat mode](images/chat.jpg)
 
-Chat with the model via chat template (ChatML / Jinja2). Configurable roles
-(system prompt), temperature, token limit. The **Continue** button lets you
-resume generation if the response was cut off by the token limit.
-
-Responses are highlighted with a confidence heatmap — you can see where the model
-is confident in its answer and where it's guessing.
-
----
-
-### `graph` — graph thinking
-
-![Graph mode](images/graph1.jpg)
-![Graph mode](images/graph2.jpg)
-
-An experimental non-linear generation mode. The model produces short thoughts
-on a topic, and a graph of connections is built between them using **cosine similarity
-on model embeddings**. Connected thoughts form clusters.
-
-**Force-directed layout** — connected nodes attract, unconnected nodes repel.
-The graph automatically finds a clear arrangement, visually highlighting clusters.
-Nodes can be **dragged** with the mouse for manual grouping.
-
-Clicking two nodes lets you **manually connect or disconnect** them —
-manual links are shown as dashed lines.
-
-A cluster can be **collapsed** — the model synthesizes related thoughts into a coherent
-paragraph. The collapsed result becomes a new node in the graph, and the process can be
-repeated, going deeper at each level.
-
-Cycle: generation → filtering → clustering → collapse → repeat.
-
-Works only in in-process mode (without `--server`).
+Chat via chat template (ChatML / Jinja2). Roles, temperature, token limit.
+**Continue** resumes truncated responses. Heatmap shows confidence.
 
 ---
 
 ### Hybrid mode: parallel/compare → step
 
-After parallel or compare generation completes, a **→ Step** button appears for each
-stream. It switches to step mode preserving the text and KV cache of the selected
-stream. You can continue generating token by token with full control.
-Works only in in-process mode (without `--server`).
+The **→ Step** button on each stream switches to step mode preserving
+text and KV cache. In-process mode only.
 
 ---
 
 ### Common features
 
-- **Confidence heatmap** — across all modes (step, parallel, compare, chat)
-  tokens are colored by entropy: green → yellow → red.
-  Shows where the model knew the answer and where it was guessing.
-- **Roles** — presets from `roles.json`, shared across all modes. In step/parallel/compare
-  used as prefix, in chat — as system message.
-- **Seed** — for reproducibility. With the same seed and parameters the model
-  produces identical results. Seed `-1` means random. Available in parallel and compare.
-- **Token counter** — shows used / available context tokens.
+- **Confidence heatmap** — across all modes, tokens colored by entropy
+- **Roles** — presets from `roles.json` (prefix in step/parallel/compare, system message in chat)
+- **Language** — EN/RU switcher: roles and default system prompt in the selected language
+- **Seed** — reproducible results (parallel, compare)
+- **Token counter** — used / available context tokens
