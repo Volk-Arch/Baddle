@@ -168,6 +168,8 @@ def _find_clusters(n: int, edges: list[dict], threshold: float) -> list[list[int
 def _remap_manual_edges(removed_indices: list[int]):
     """Remap manual link/unlink indices and embedding cache after nodes are removed."""
     removed = set(removed_indices)
+    def remap(idx):
+        return idx - sum(1 for r in removed if r < idx)
     for key in ("manual_links", "manual_unlinks"):
         old = _graph.get(key, [])
         new = []
@@ -175,14 +177,36 @@ def _remap_manual_edges(removed_indices: list[int]):
             a, b = pair
             if a in removed or b in removed:
                 continue
-            a2 = a - sum(1 for r in removed if r < a)
-            b2 = b - sum(1 for r in removed if r < b)
+            a2, b2 = remap(a), remap(b)
             new.append([min(a2, b2), max(a2, b2)])
         _graph[key] = new
+    # Remap directed edges (ordered: [from, to])
+    old_dir = _graph.get("directed_edges", [])
+    new_dir = []
+    for pair in old_dir:
+        a, b = pair
+        if a in removed or b in removed:
+            continue
+        new_dir.append([remap(a), remap(b)])
+    _graph["directed_edges"] = new_dir
+    # Remap hub nodes
+    old_hubs = _graph.get("hub_nodes", set())
+    _graph["hub_nodes"] = {remap(h) for h in old_hubs if h not in removed}
     cache = _graph.get("embeddings", [])
     for i in sorted(removed, reverse=True):
         if i < len(cache):
             cache.pop(i)
+
+
+def _graph_response(thoughts, edges, clusters, **extra):
+    """Build standard graph response with directed edges and hub nodes."""
+    resp = {
+        "thoughts": thoughts, "edges": edges, "clusters": clusters,
+        "directed_edges": _graph.get("directed_edges", []),
+        "hub_nodes": list(_graph.get("hub_nodes", set())),
+    }
+    resp.update(extra)
+    return jsonify(resp)
 
 
 # ── routes ───────────────────────────────────────────────────────────────────
@@ -207,6 +231,8 @@ def graph_think():
         _graph["manual_links"] = []
         _graph["manual_unlinks"] = []
         _graph["embeddings"] = []
+        _graph["directed_edges"] = []
+        _graph["hub_nodes"] = set()
     thoughts = list(existing)
     new_thoughts = []  # only thoughts generated in THIS call (for dedup prompt)
 
@@ -227,7 +253,7 @@ def graph_think():
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
 
-    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+    return _graph_response(thoughts, edges, clusters)
 
 
 @graph_bp.route("/graph/add", methods=["POST"])
@@ -243,7 +269,7 @@ def graph_add():
     thoughts = _graph["thoughts"]
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
-    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+    return _graph_response(thoughts, edges, clusters)
 
 
 @graph_bp.route("/graph/remove", methods=["POST"])
@@ -260,7 +286,7 @@ def graph_remove():
     _remap_manual_edges([idx])
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
-    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+    return _graph_response(thoughts, edges, clusters)
 
 
 @graph_bp.route("/graph/link", methods=["POST"])
@@ -291,7 +317,7 @@ def graph_link():
             manual_links.append(list(pair))
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
-    return jsonify({"thoughts": thoughts, "edges": edges, "clusters": clusters})
+    return _graph_response(thoughts, edges, clusters)
 
 
 @graph_bp.route("/graph/collapse", methods=["POST"])
@@ -328,9 +354,142 @@ def graph_collapse():
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
 
-    return jsonify({
-        "text": text,
-        "thoughts": thoughts,
-        "edges": edges,
-        "clusters": clusters,
-    })
+    return _graph_response(thoughts, edges, clusters, text=text)
+
+
+@graph_bp.route("/graph/sync", methods=["POST"])
+def graph_sync():
+    """Restore graph state (used by undo)."""
+    data = request.get_json(force=True)
+    thoughts = data.get("thoughts", [])
+    threshold = float(data.get("threshold", 0.91))
+    sim_mode = data.get("sim_mode", "embedding")
+    _graph["thoughts"] = thoughts
+    _graph["manual_links"] = data.get("manual_links", [])
+    _graph["manual_unlinks"] = data.get("manual_unlinks", [])
+    _graph["directed_edges"] = data.get("directed_edges", _graph.get("directed_edges", []))
+    _graph["hub_nodes"] = set(data.get("hub_nodes", _graph.get("hub_nodes", set())))
+    if "topic" in data:
+        _graph["topic"] = data["topic"]
+    _graph["embeddings"] = []  # will be recomputed
+    edges = _compute_edges(thoughts, threshold, sim_mode)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return _graph_response(thoughts, edges, clusters)
+
+
+@graph_bp.route("/graph/expand", methods=["POST"])
+def graph_expand():
+    """Generate child ideas branching from a specific thought (same topic, new angles)."""
+    if _llm is None:
+        return jsonify({"error": "requires in-process model"})
+    data = request.get_json(force=True)
+    idx = int(data.get("index", -1))
+    n = int(data.get("n", 3))
+    threshold = float(data.get("threshold", 0.91))
+    sim_mode = data.get("sim_mode", "embedding")
+    thoughts = _graph["thoughts"]
+
+    if idx < 0 or idx >= len(thoughts):
+        return jsonify({"error": "invalid index"})
+
+    source = thoughts[idx]
+    topic = _graph.get("topic", "")
+    new_thoughts = []
+
+    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the source text. Answer directly."
+
+    attempts = 0
+    while len(new_thoughts) < n and attempts < n * 3:
+        attempts += 1
+        user = f"Topic: {topic}\nSource idea: {source}"
+        if new_thoughts:
+            user += "\nAlready generated:\n" + "\n".join(f"- {t}" for t in new_thoughts)
+        user += "\nGenerate a NEW related idea that branches from the source idea. A different angle on the same subject."
+
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        t = _graph_generate(messages, max_tokens=120)
+        t = re.split(r"\s*(?:Human|User|Assistant)\s*:", t, flags=re.IGNORECASE)[0]
+        t = t.split("\n")[0].strip()
+        for prefix in ["- ", "* ", "1. ", "1) "]:
+            if t.startswith(prefix):
+                t = t[len(prefix):]
+        t = re.sub(r"^\d+[.)]\s*", "", t).strip()
+
+        if not t or len(t) < 10:
+            continue
+        if any(t.lower() == ex.lower() for ex in thoughts):
+            continue
+        thoughts.append(t)
+        new_thoughts.append(t)
+
+    _graph["thoughts"] = thoughts
+    edges = _compute_edges(thoughts, threshold, sim_mode)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return _graph_response(thoughts, edges, clusters)
+
+
+@graph_bp.route("/graph/elaborate", methods=["POST"])
+def graph_elaborate():
+    """Generate deeper ideas that elaborate on a specific thought (the source becomes a hub)."""
+    if _llm is None:
+        return jsonify({"error": "requires in-process model"})
+    data = request.get_json(force=True)
+    idx = int(data.get("index", -1))
+    n = int(data.get("n", 3))
+    threshold = float(data.get("threshold", 0.91))
+    sim_mode = data.get("sim_mode", "embedding")
+    direction = data.get("direction", "").strip()
+    thoughts = _graph["thoughts"]
+
+    if idx < 0 or idx >= len(thoughts):
+        return jsonify({"error": "invalid index"})
+
+    source = thoughts[idx]
+    topic = _graph.get("topic", "")
+    new_thoughts = []
+
+    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the source text. Answer directly."
+
+    attempts = 0
+    while len(new_thoughts) < n and attempts < n * 3:
+        attempts += 1
+        user = f"Topic: {topic}\nIdea to elaborate: {source}"
+        if direction:
+            user += f"\nDirection: {direction}"
+        if new_thoughts:
+            user += "\nAlready elaborated:\n" + "\n".join(f"- {t}" for t in new_thoughts)
+        user += "\nGo DEEPER into this specific idea. Unpack a detail, consequence, or mechanism. Not a new angle — dig into THIS idea."
+
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        t = _graph_generate(messages, max_tokens=120)
+        t = re.split(r"\s*(?:Human|User|Assistant)\s*:", t, flags=re.IGNORECASE)[0]
+        t = t.split("\n")[0].strip()
+        for prefix in ["- ", "* ", "1. ", "1) "]:
+            if t.startswith(prefix):
+                t = t[len(prefix):]
+        t = re.sub(r"^\d+[.)]\s*", "", t).strip()
+
+        if not t or len(t) < 10:
+            continue
+        if any(t.lower() == ex.lower() for ex in thoughts):
+            continue
+        thoughts.append(t)
+        new_thoughts.append(t)
+
+    # Force-link new thoughts to source and track directed edges
+    manual_links = _graph.setdefault("manual_links", [])
+    directed = _graph.setdefault("directed_edges", [])
+    hubs = _graph.setdefault("hub_nodes", set())
+    source_idx = idx
+    hubs.add(source_idx)
+    for t in new_thoughts:
+        new_idx = thoughts.index(t)
+        pair = [min(source_idx, new_idx), max(source_idx, new_idx)]
+        if pair not in manual_links:
+            manual_links.append(pair)
+        directed.append([source_idx, new_idx])
+
+    _graph["thoughts"] = thoughts
+    edges = _compute_edges(thoughts, threshold, sim_mode)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return _graph_response(thoughts, edges, clusters)
