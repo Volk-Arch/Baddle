@@ -310,6 +310,7 @@ _chat = {
     "messages": [],     # [{"role": ..., "content": ...}]
     "tokens":   [],     # all tokens in current context
     "temp":     0.7,
+    "top_k":    40,
     "ready":    False,
 }
 
@@ -323,10 +324,12 @@ def chat_send():
     text = data.get("text", "").strip()
     system = data.get("system", "")
     temp = float(data.get("temp", 0.7))
+    top_k = int(data.get("top_k", 40))
     if not text:
         return jsonify({"error": "empty message"})
 
     _chat["temp"] = temp
+    _chat["top_k"] = top_k
 
     # Build messages list
     if not _chat["messages"] and system:
@@ -374,7 +377,7 @@ def chat_stream():
         for step in range(max_tokens):
             logits = _get_logits(llm)
             ent = float(_entropy(logits))
-            tok = _sample(llm, _chat["temp"])
+            tok = _sample(llm, _chat["temp"], _chat["top_k"])
             llm.eval([tok])
             _chat["tokens"].append(tok)
 
@@ -428,7 +431,7 @@ def chat_continue():
         for step in range(max_tokens):
             logits = _get_logits(llm)
             ent = float(_entropy(logits))
-            tok = _sample(llm, _chat["temp"])
+            tok = _sample(llm, _chat["temp"], _chat["top_k"])
             llm.eval([tok])
             _chat["tokens"].append(tok)
 
