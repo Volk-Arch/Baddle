@@ -3,6 +3,7 @@
 
 import sys
 import json
+import re
 import argparse
 import threading
 import webbrowser
@@ -334,16 +335,13 @@ def chat_send():
     # Build messages list
     if not _chat["messages"] and system:
         _chat["messages"].append({"role": "system", "content": system})
-    # If system changed mid-conversation, update it
     if _chat["messages"] and _chat["messages"][0]["role"] == "system":
         _chat["messages"][0]["content"] = system
 
     _chat["messages"].append({"role": "user", "content": text})
 
-    # Format with chat template
+    # Format with chat template, tokenize and eval — keeps KV cache for fast continue
     prompt_str = format_chat(llm, _chat["messages"])
-
-    # Tokenize and eval full conversation
     tokens = llm.tokenize(prompt_str.encode())
     llm.reset()
     llm.eval(tokens)
@@ -351,6 +349,50 @@ def chat_send():
     _chat["ready"] = True
 
     return jsonify({"ok": True, "token_count": len(tokens)})
+
+
+def _chat_stream_impl(max_tokens: int, initial_text: str = ""):
+    """Shared streaming generator for chat stream and continue."""
+    response_text = initial_text
+    eos = llm.token_eos()
+    tok_texts = []
+    ents = []
+
+    # Build stop token set
+    stop_ids = {eos}
+    try:
+        im_end = llm.tokenize("<|im_end|>".encode(), add_bos=False)
+        if im_end:
+            stop_ids.add(im_end[-1])
+    except Exception:
+        pass
+
+    for step in range(max_tokens):
+        logits = _get_logits(llm)
+        ent = float(_entropy(logits))
+        tok = _sample(llm, _chat["temp"], _chat["top_k"])
+        llm.eval([tok])
+        _chat["tokens"].append(tok)
+
+        if tok in stop_ids:
+            yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
+            break
+
+        piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
+        response_text += piece
+        tok_texts.append(piece)
+        ents.append(ent)
+
+        yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
+    else:
+        yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
+
+    # Save/update assistant message
+    if _chat["messages"] and _chat["messages"][-1]["role"] == "assistant":
+        _chat["messages"][-1]["content"] = response_text
+    else:
+        _chat["messages"].append({"role": "assistant", "content": response_text})
+    _chat["ready"] = True
 
 
 @app.route("/chat/stream")
@@ -362,50 +404,8 @@ def chat_stream():
         return Response(err(), mimetype="text/event-stream")
 
     max_tokens = int(request.args.get("n", 200))
-
-    def generate():
-        response_text = ""
-        eos = llm.token_eos()
-        tok_texts = []
-        ents = []
-        # Detect im_end token for chat models
-        try:
-            im_end_tokens = llm.tokenize("<|im_end|>".encode(), add_bos=False)
-        except Exception:
-            im_end_tokens = []
-
-        for step in range(max_tokens):
-            logits = _get_logits(llm)
-            ent = float(_entropy(logits))
-            tok = _sample(llm, _chat["temp"], _chat["top_k"])
-            llm.eval([tok])
-            _chat["tokens"].append(tok)
-
-            if tok == eos:
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-                break
-
-            piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
-            response_text += piece
-            tok_texts.append(piece)
-            ents.append(ent)
-
-            # Check for <|im_end|> in response
-            if "<|im_end|>" in response_text:
-                response_text = response_text.replace("<|im_end|>", "")
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-                break
-
-            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-        else:
-            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-
-        # Save assistant response to history (will be updated on continue)
-        _chat["messages"].append({"role": "assistant", "content": response_text})
-        _chat["ready"] = True
-
     return Response(
-        stream_with_context(generate()),
+        stream_with_context(_chat_stream_impl(max_tokens)),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -421,44 +421,8 @@ def chat_continue():
 
     max_tokens = int(request.args.get("n", 200))
     prev_text = _chat["messages"][-1]["content"]
-
-    def generate():
-        response_text = prev_text
-        eos = llm.token_eos()
-        tok_texts = []
-        ents = []
-
-        for step in range(max_tokens):
-            logits = _get_logits(llm)
-            ent = float(_entropy(logits))
-            tok = _sample(llm, _chat["temp"], _chat["top_k"])
-            llm.eval([tok])
-            _chat["tokens"].append(tok)
-
-            if tok == eos:
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-                break
-
-            piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
-            response_text += piece
-            tok_texts.append(piece)
-            ents.append(ent)
-
-            if "<|im_end|>" in response_text:
-                response_text = response_text.replace("<|im_end|>", "")
-                yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-                break
-
-            yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-        else:
-            yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-
-        # Update last assistant message
-        _chat["messages"][-1]["content"] = response_text
-        _chat["ready"] = True
-
     return Response(
-        stream_with_context(generate()),
+        stream_with_context(_chat_stream_impl(max_tokens, initial_text=prev_text)),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

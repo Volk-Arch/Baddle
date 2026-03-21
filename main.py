@@ -78,7 +78,7 @@ _batch_seq1_ok: Optional[bool] = None   # set by _probe_batch_support at load ti
 def load_model(path: Path, gpu_layers: int, n_ctx: int, embedding: bool = False) -> Llama:
     gl = "all" if gpu_layers == -1 else gpu_layers
     kwargs = dict(model_path=str(path), n_gpu_layers=gpu_layers, n_ctx=n_ctx, verbose=False,
-                  embedding=embedding)
+                  embedding=embedding, logits_all=True)
     with console.status(f"Loading [bold]{path.name}[/bold]  (gpu_layers={gl}, ctx={n_ctx})..."):
         llm = Llama(**kwargs)
     console.print("[green]Model ready[/green]")
@@ -153,22 +153,20 @@ def get_embedding(llm: Llama, text: str) -> np.ndarray:
     """Get embedding vector for text.
     Temporarily enables embedding mode if needed, then restores previous state.
     Returns a single 1D vector (mean-pooled if the model returns per-token embeddings)."""
+    was_embedding = llm.context_params.embeddings
     try:
-        # Temporarily enable embedding mode
-        was_embedding = llm.context_params.embeddings
         if not was_embedding:
             llm.context_params.embeddings = True
         result = llm.create_embedding(text)
-        if not was_embedding:
-            llm.context_params.embeddings = False
         data = np.array(result["data"][0]["embedding"], dtype=np.float32)
         if data.ndim == 2:
             data = data.mean(axis=0)
         return data
     except Exception:
+        return np.array([], dtype=np.float32)
+    finally:
         if not was_embedding:
             llm.context_params.embeddings = False
-        return np.array([], dtype=np.float32)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -499,8 +497,9 @@ def _interleaved_generate_iter(
     tokens_b = list(tb)
     ents_b = []
     toks_b_text = []
-    # Pre-decode full A text once (avoids repeated detokenize)
-    full_text_a = llm.detokenize(tokens_a).decode("utf-8", errors="replace")
+    # Use original prompt strings directly — no detokenize roundtrip
+    prompt_a = pa
+    prompt_b = pb
 
     for step in range(max_tokens):
         logits = _get_logits(llm)
@@ -512,12 +511,13 @@ def _interleaved_generate_iter(
 
         done_b = tok == llm.token_eos()
 
-        # A text up to this step (slice from pre-decoded full text, or cap at end)
         a_end = min(step + 1, len(gen_a))
-        text_a = llm.detokenize(tokens_a[:len(ta) + a_end]).decode("utf-8", errors="replace")
+        gen_text_a = llm.detokenize(gen_a[:a_end]).decode("utf-8", errors="replace")
+        text_a = prompt_a + gen_text_a
         done_a = a_end >= len(gen_a)
 
-        text_b = llm.detokenize(tokens_b).decode("utf-8", errors="replace")
+        gen_text_b = llm.detokenize(tokens_b[len(tb):]).decode("utf-8", errors="replace")
+        text_b = prompt_b + gen_text_b
 
         yield text_a, text_b, step, done_a, done_b, ents_a[:a_end], list(ents_b), toks_a_text[:a_end], list(toks_b_text)
 
@@ -526,9 +526,11 @@ def _interleaved_generate_iter(
 
     # ── If A was longer than B, flush remaining A steps ──────────────────────
     b_steps = len(tokens_b) - len(tb)
-    text_b = llm.detokenize(tokens_b).decode("utf-8", errors="replace")
+    final_gen_b = llm.detokenize(tokens_b[len(tb):]).decode("utf-8", errors="replace")
+    text_b = prompt_b + final_gen_b
     for step in range(b_steps, len(gen_a)):
         a_end = step + 1
-        text_a = llm.detokenize(tokens_a[:len(ta) + a_end]).decode("utf-8", errors="replace")
+        gen_text_a = llm.detokenize(gen_a[:a_end]).decode("utf-8", errors="replace")
+        text_a = prompt_a + gen_text_a
         yield text_a, text_b, step, a_end >= len(gen_a), True, ents_a[:a_end], list(ents_b), toks_a_text[:a_end], list(toks_b_text)
 
