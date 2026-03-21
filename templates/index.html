@@ -48,6 +48,10 @@
     <span id="token-counter" class="text-xs text-slate-600"></span>
     <label class="ml-auto flex items-center gap-1 text-xs text-slate-500 cursor-pointer select-none">
       <input id="heatmap-toggle" type="checkbox" checked class="accent-sky-500"> heatmap
+      <span class="text-slate-500 text-xs" style="margin-left:6px">scale</span>
+      <input id="heatmap-scale" type="number" value="3" min="0.5" max="10" step="0.5"
+        style="width:45px;margin-left:2px" title="Entropy scale: tokens with entropy >= this value are fully red"
+        onchange="heatmapRescale()" onblur="heatmapRescale()">
     </label>
     <span id="batch-tag" class="text-xs text-slate-600"></span>
   </div>
@@ -349,6 +353,8 @@
         <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
         <span class="text-slate-400 text-sm">top_k</span>
         <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
+        <span class="text-slate-400 text-sm">seed</span>
+        <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
         <button id="graph-btn-think" onclick="graphThink()"
           class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
           Think
@@ -368,6 +374,15 @@
     <!-- Actions bar: collapse + undo/layout/reset -->
     <div id="graph-actions-bar" class="flex gap-2 mb-3 items-center flex-wrap" style="display:none;">
       <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
+      <button onclick="graphToggleManualCollapse()" id="graph-btn-manual-collapse"
+        class="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs transition-colors"
+        title="Select nodes manually then collapse them">
+        ✂ Select &amp; Collapse
+      </button>
+      <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse" style="display:none"
+        class="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs transition-colors">
+        Collapse selected (<span id="graph-collapse-count">0</span>)
+      </button>
       <span class="flex-1"></span>
       <button onclick="graphToggleLinkMode()" id="graph-btn-link"
         class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
@@ -610,12 +625,12 @@
       pre.style.color = '#94a3b8';
       el.appendChild(pre);
     }
-    // Normalize entropy: find max for color scaling
-    const maxEnt = Math.max(...ents, 0.01);
+    // Fixed entropy scale from UI control
+    const heatScale = parseFloat(document.getElementById('heatmap-scale').value) || 3;
     for (let i = 0; i < toks.length; i++) {
       const span = document.createElement('span');
       span.textContent = toks[i];
-      const ratio = (ents[i] || 0) / maxEnt; // 0=confident, 1=uncertain
+      const ratio = Math.min(1, (ents[i] || 0) / heatScale);
       // Green (confident) → Yellow → Red (uncertain)
       const r = Math.round(ratio < 0.5 ? ratio * 2 * 255 : 255);
       const g = Math.round(ratio < 0.5 ? 255 : (1 - ratio) * 2 * 255);
@@ -623,6 +638,21 @@
       span.title = `entropy: ${(ents[i] || 0).toFixed(2)}`;
       el.appendChild(span);
     }
+  }
+
+  // Store last heatmap data for rescaling
+  let _lastHeatmaps = {};
+  const _origRenderHeatmap = renderHeatmap;
+  renderHeatmap = function(elOrId, toks, ents, promptText) {
+    const id = typeof elOrId === 'string' ? elOrId : elOrId.id;
+    _lastHeatmaps[id] = { toks, ents, promptText };
+    _origRenderHeatmap(elOrId, toks, ents, promptText);
+  };
+  function heatmapRescale() {
+    Object.entries(_lastHeatmaps).forEach(([id, data]) => {
+      const el = document.getElementById(id);
+      if (el) _origRenderHeatmap(el, data.toks, data.ents, data.promptText);
+    });
   }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
@@ -1032,7 +1062,7 @@
 
   function chatDone(reason) {
     if (chatEs) { chatEs.close(); chatEs = null; }
-    chatShowButtons(reason === 'limit' ? 'continue' : 'send');
+    chatShowButtons(reason === 'limit' || reason === 'length' ? 'continue' : 'send');
   }
 
   async function chatSend() {
@@ -1085,10 +1115,12 @@
   }
 
   // ── Graph thinking ────────────────────────────────────────────────────────
-  const graphClusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
+  const graphClusterColors = ['#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316'];
   let graphData = { thoughts: [], edges: [], clusters: [] };
   let graphSelectedNode = -1;
   let graphLinkMode = false;  // toggle for manual linking
+  let graphManualCollapseMode = false;
+  let graphManualCollapseSet = new Set();
   let graphFlowMode = false;  // directed flow layout
   let graphZoom = 1;
   let graphPanX = 0, graphPanY = 0;
@@ -1127,6 +1159,8 @@
     // Sync backend state with full undo data
     const syncData = {
       thoughts: state.data.thoughts,
+      edges: state.data.edges || [],
+      clusters: state.data.clusters || [],
       manual_links: state.data.manual_links || [],
       manual_unlinks: state.data.manual_unlinks || [],
       directed_edges: state.directed || [],
@@ -1141,7 +1175,13 @@
       body: JSON.stringify(syncData)
     });
     const d = await r.json();
-    graphData = d.error ? state.data : d;
+    if (d.error) {
+      graphData = state.data;
+    } else {
+      graphData = d;
+      if (d.hub_nodes) { graphHubNodes = new Set(); d.hub_nodes.forEach(i => graphHubNodes.add(i)); }
+      if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+    }
     graphRenderSvg();
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
@@ -1182,19 +1222,30 @@
       if (i < old.length && old[i]) {
         positions.push({ x: old[i].x, y: old[i].y, vx: 0, vy: 0, fixed: old[i].fixed });
       } else {
-        // New node — place in flow column or on circle
+        let nx, ny;
         if (graphFlowMode) {
           const d = (graphData.depths || [])[i] || 0;
-          positions.push({ x: _flowColX(d), y: H / 2 + (Math.random() - 0.5) * H * 0.5, vx: 0, vy: 0, fixed: false });
+          nx = _flowColX(d);
+          ny = H / 2 + (Math.random() - 0.5) * H * 0.5;
         } else {
-          const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
-          const R = Math.min(W, H) * 0.35;
-          positions.push({
-            x: W/2 + R * Math.cos(angle) + (Math.random()-0.5) * 20,
-            y: H/2 + R * Math.sin(angle) + (Math.random()-0.5) * 20,
-            vx: 0, vy: 0, fixed: false
-          });
+          // Check if this node has a parent (directed edge)
+          let parentIdx = -1;
+          graphDirectedEdges.forEach(([from, to]) => { if (to === i) parentIdx = from; });
+          if (parentIdx >= 0 && parentIdx < positions.length) {
+            const px = positions[parentIdx].x, py = positions[parentIdx].y;
+            const dx = px - W/2, dy = py - H/2;
+            const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+            const spread = 50 + Math.random() * 30;
+            nx = px + (dx/dist) * spread + (Math.random()-0.5) * 30;
+            ny = py + (dy/dist) * spread + (Math.random()-0.5) * 30;
+          } else {
+            const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
+            const R = Math.min(W, H) * 0.35;
+            nx = W/2 + R * Math.cos(angle) + (Math.random()-0.5) * 20;
+            ny = H/2 + R * Math.sin(angle) + (Math.random()-0.5) * 20;
+          }
         }
+        positions.push({ x: nx, y: ny, vx: 0, vy: 0, fixed: false });
       }
     }
     graphNodePositions = positions.slice(0, n);
@@ -1204,7 +1255,10 @@
   // Flow layout constants
   const FLOW_COL_WIDTH = 280;
   const FLOW_COL_START = 120;
-  function _flowColX(depth) { return FLOW_COL_START + depth * FLOW_COL_WIDTH; }
+  function _flowColX(depth) {
+    if (depth === -1) return 40;  // topic root far left
+    return FLOW_COL_START + depth * FLOW_COL_WIDTH;
+  }
 
   // ── Flow layout: deterministic column placement ──
   function graphRunFlowLayout() {
@@ -1256,7 +1310,7 @@
     });
 
     // 5. Vertical collision resolution within same column
-    const minGap = 75;
+    const minGap = 85;
     for (let pass = 0; pass < 5; pass++) {
       Object.values(byDepth).forEach(col => {
         col.sort((a, b) => nodes[a].y - nodes[b].y);
@@ -1278,82 +1332,63 @@
     }
   }
 
-  // ── Free layout: force-directed simulation ──
+  // ── Free layout: fan/radial placement ──
   function graphRunFreeLayout(iterations) {
     const { W, H } = graphGetDimensions();
     const nodes = graphNodePositions;
-    const edges = graphData.edges;
     const n = nodes.length;
     if (n === 0) return;
-
-    const repulsion = 8000;
-    const clusterRepulsion = 15000;
-    const attraction = 0.06;
-    const damping = 0.85;
-    const centerPull = 0.01;
     const cx = W / 2, cy = H / 2;
-    const pad = 30;
+    const pad = 40;
 
+    // Build clusters and unclustered list
     const nodeCluster = new Array(n).fill(-1);
-    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { if (idx < n) nodeCluster[idx] = ci; }));
+    const clusters = graphData.clusters || [];
+    clusters.forEach((cl, ci) => cl.forEach(idx => { if (idx < n) nodeCluster[idx] = ci; }));
+    const unclustered = [];
+    for (let i = 0; i < n; i++) if (nodeCluster[i] < 0) unclustered.push(i);
 
-    const dirSet = new Set();
-    graphDirectedEdges.forEach(([a, b]) => { dirSet.add(a+','+b); });
+    // Each cluster + unclustered group gets a sector
+    const groups = clusters.map(cl => [...cl]);
+    if (unclustered.length) groups.push(unclustered);
+    const totalGroups = groups.length;
+    if (totalGroups === 0) return;
 
-    for (let iter = 0; iter < iterations; iter++) {
-      for (let i = 0; i < n; i++) {
-        if (nodes[i].fixed) continue;
-        let fx = 0, fy = 0;
-        // Repulsion
-        for (let j = 0; j < n; j++) {
-          if (i === j) continue;
-          let dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
-          let dist = Math.sqrt(dx*dx + dy*dy) || 1;
-          const rep = (nodeCluster[i]>=0 && nodeCluster[j]>=0 && nodeCluster[i]!==nodeCluster[j]) ? clusterRepulsion : repulsion;
-          let force = rep / (dist * dist);
-          fx += (dx/dist) * force;
-          fy += (dy/dist) * force;
+    const maxR = Math.min(W/2 - pad, H/2 - pad);
+
+    groups.forEach((group, gi) => {
+      // Sector angle range for this group
+      const sectorStart = (2 * Math.PI * gi / totalGroups) - Math.PI / 2;
+      const sectorEnd = (2 * Math.PI * (gi + 1) / totalGroups) - Math.PI / 2;
+      const sectorMid = (sectorStart + sectorEnd) / 2;
+      const sectorSpan = sectorEnd - sectorStart;
+
+      if (group.length === 1) {
+        const idx = group[0];
+        if (!nodes[idx].fixed) {
+          const r = maxR * 0.6;
+          nodes[idx].x = cx + r * Math.cos(sectorMid);
+          nodes[idx].y = cy + r * Math.sin(sectorMid);
         }
-        // Edge attraction — spring to ideal length
-        edges.forEach(e => {
-          let other = e.from === i ? e.to : (e.to === i ? e.from : -1);
-          if (other < 0) return;
-          const isDir = dirSet.has(e.from+','+e.to) || dirSet.has(e.to+','+e.from);
-          const idealLen = isDir ? 100 : 160;
-          let dx = nodes[other].x - nodes[i].x, dy = nodes[other].y - nodes[i].y;
-          let dist = Math.sqrt(dx*dx + dy*dy) || 1;
-          let strength = attraction * (isDir ? 2 : 1) * (dist - idealLen) / dist;
-          fx += dx * strength;
-          fy += dy * strength;
+      } else {
+        // Spread nodes within sector at varying radii
+        group.forEach((idx, j) => {
+          if (nodes[idx].fixed) return;
+          const t = (j + 0.5) / group.length;  // 0..1 within group
+          const angle = sectorStart + sectorSpan * 0.15 + t * sectorSpan * 0.7;
+          // Alternate between inner and outer radius to avoid overlap
+          const ringOffset = (j % 2 === 0) ? 0.5 : 0.8;
+          const r = maxR * (0.3 + ringOffset * 0.5);
+          nodes[idx].x = cx + r * Math.cos(angle);
+          nodes[idx].y = cy + r * Math.sin(angle);
         });
-        // Center pull
-        fx += (cx - nodes[i].x) * centerPull;
-        fy += (cy - nodes[i].y) * centerPull;
-        nodes[i].vx = (nodes[i].vx + fx) * damping;
-        nodes[i].vy = (nodes[i].vy + fy) * damping;
       }
-      // Apply and clamp
-      for (let i = 0; i < n; i++) {
-        if (nodes[i].fixed) continue;
-        nodes[i].x += nodes[i].vx;
-        nodes[i].y += nodes[i].vy;
-        nodes[i].x = Math.max(pad, Math.min(W-pad, nodes[i].x));
-        nodes[i].y = Math.max(pad, Math.min(H-pad, nodes[i].y));
-      }
-      // Collision
-      const minDist = 65;
-      for (let i = 0; i < n; i++) {
-        for (let j = i+1; j < n; j++) {
-          let dx = nodes[j].x-nodes[i].x, dy = nodes[j].y-nodes[i].y;
-          let dist = Math.sqrt(dx*dx+dy*dy) || 0.1;
-          if (dist < minDist) {
-            const overlap = (minDist-dist)/2;
-            const ux = dx/dist, uy = dy/dist;
-            if (!nodes[i].fixed) { nodes[i].x -= ux*overlap; nodes[i].y -= uy*overlap; }
-            if (!nodes[j].fixed) { nodes[j].x += ux*overlap; nodes[j].y += uy*overlap; }
-          }
-        }
-      }
+    });
+
+    // Clamp to bounds
+    for (let i = 0; i < n; i++) {
+      nodes[i].x = Math.max(pad, Math.min(W-pad, nodes[i].x));
+      nodes[i].y = Math.max(pad, Math.min(H-pad, nodes[i].y));
     }
   }
 
@@ -1401,61 +1436,6 @@
     const clusterColors = graphClusterColors;
     const depths = graphData.depths || [];
     const maxDepth = Math.max(0, ...depths);
-
-    // Flow mode: draw column guides and topic diamonds FIRST (behind everything)
-    if (graphFlowMode) {
-      const { W: fW, H: fH } = graphGetDimensions();
-      const pad = 30;
-      // Topic diamonds in flow mode
-      const topicsPerNode = graphData.topics || [];
-      const uniqueTopics = [...new Set(topicsPerNode.filter(t => t))];
-      if (uniqueTopics.length) {
-        const spacing = fH / (uniqueTopics.length + 1);
-        uniqueTopics.forEach((topic, ti) => {
-          const tx = 20;
-          const ty = spacing * (ti + 1);
-          // Lines to depth=0 nodes of this topic
-          positions.forEach((p, i) => {
-            if (!p) return;
-            const d = i < depths.length ? depths[i] : 0;
-            const t = i < topicsPerNode.length ? topicsPerNode[i] : '';
-            if (d === 0 && t === topic) {
-              const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-              line.setAttribute('x1', tx); line.setAttribute('y1', ty);
-              line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
-              line.setAttribute('stroke', '#f59e0b');
-              line.setAttribute('stroke-width', 1);
-              line.setAttribute('stroke-opacity', 0.35);
-              line.setAttribute('stroke-dasharray', '4,4');
-              line.style.pointerEvents = 'none';
-              svg.appendChild(line);
-            }
-          });
-          // Diamond
-          const size = 16;
-          const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-          diamond.setAttribute('points',
-            `${tx},${ty-size} ${tx+size},${ty} ${tx},${ty+size} ${tx-size},${ty}`);
-          diamond.setAttribute('fill', '#f59e0b');
-          diamond.setAttribute('stroke', '#fbbf24');
-          diamond.setAttribute('stroke-width', 2);
-          diamond.style.pointerEvents = 'none';
-          svg.appendChild(diamond);
-          // Label
-          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          label.setAttribute('x', tx);
-          label.setAttribute('y', ty - size - 5);
-          label.setAttribute('text-anchor', 'middle');
-          label.setAttribute('fill', '#fbbf24');
-          label.setAttribute('font-size', '12');
-          label.setAttribute('font-weight', 'bold');
-          label.style.pointerEvents = 'none';
-          const short = topic.length > 30 ? topic.slice(0, 27) + '...' : topic;
-          label.textContent = short;
-          svg.appendChild(label);
-        });
-      }
-    }
 
     // Draw cluster hulls
     (graphData.clusters || []).forEach((cl, ci) => {
@@ -1537,6 +1517,26 @@
       svg.appendChild(line);
     });
 
+    // Draw directed edges that are NOT covered by similarity edges
+    const edgeSet = new Set();
+    graphData.edges.forEach(e => { edgeSet.add(e.from+','+e.to); edgeSet.add(e.to+','+e.from); });
+    graphDirectedEdges.forEach(([from, to]) => {
+      if (edgeSet.has(from+','+to)) return;  // already drawn above
+      const a = positions[from], b = positions[to];
+      if (!a || !b) return;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+      line.setAttribute('x2', b.x - (dx/dist) * 12); line.setAttribute('y2', b.y - (dy/dist) * 12);
+      line.setAttribute('stroke', '#fbbf24');
+      line.setAttribute('stroke-width', 1.5);
+      line.setAttribute('stroke-opacity', 0.5);
+      line.setAttribute('stroke-dasharray', '4,4');
+      line.setAttribute('marker-end', 'url(#arrowhead)');
+      svg.appendChild(line);
+    });
+
     // In flow mode, detect dead-end nodes (no outgoing directed edges)
     const hasChildren = new Set();
     if (graphFlowMode) {
@@ -1551,7 +1551,10 @@
       const isSelected = i === graphSelectedNode;
       const isCollapsed = graphCollapsedNodes.has(i);
       const isHub = graphHubNodes.has(i);
-      const isDeadEnd = graphFlowMode && !hasChildren.has(i) && (graphData.depths || [])[i] > 0;
+      const nodeDepth = (graphData.depths || [])[i];
+      const isTopicRoot = nodeDepth === -1;
+      const isDeadEnd = graphFlowMode && !hasChildren.has(i) && nodeDepth > 0;
+      const isCollapseSelected = graphManualCollapseMode && graphManualCollapseSet.has(i);
 
       // Hub halo (drawn behind the node)
       if (isHub && !isCollapsed) {
@@ -1567,15 +1570,27 @@
         svg.appendChild(halo);
       }
 
-      // Entropy ring (green=confident, yellow=medium, red=uncertain)
+      // Entropy border (green=confident, yellow=medium, red=uncertain)
       const nodeEntData = (graphData.entropies && graphData.entropies[i]) || {};
-      const nodeUnc = nodeEntData.unc || 0;  // fraction of uncertain tokens
-      const entNorm = Math.min(1, nodeUnc * 3);  // 33%+ uncertain = fully red
+      const nodeUnc = nodeEntData.unc || 0;
+      const entNorm = Math.min(1, nodeUnc * 3);
       const entR = Math.round(entNorm < 0.5 ? entNorm * 2 * 255 : 255);
       const entG = Math.round(entNorm < 0.5 ? 255 : (1 - (entNorm - 0.5) * 2) * 255);
-      const entColor = `rgb(${entR},${entG},50)`;
+      const entColor = isCollapseSelected ? '#f43f5e' : (isTopicRoot || nodeUnc === 0) ? '#e2e8f0' : `rgb(${entR},${entG},50)`;
 
-      if (isCollapsed) {
+      if (isTopicRoot) {
+        // Topic root: diamond shape
+        const size = isSelected ? 18 : 16;
+        const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        diamond.setAttribute('points',
+          `${p.x},${p.y-size} ${p.x+size},${p.y} ${p.x},${p.y+size} ${p.x-size},${p.y}`);
+        diamond.setAttribute('fill', '#f59e0b');
+        diamond.setAttribute('stroke', isSelected ? '#facc15' : '#fbbf24');
+        diamond.setAttribute('stroke-width', isSelected ? 3 : 2);
+        diamond.style.cursor = 'pointer';
+        diamond.dataset.nodeIdx = i;
+        svg.appendChild(diamond);
+      } else if (isCollapsed) {
         // Collapsed nodes: rounded rectangle (diamond-like)
         const size = isSelected ? 16 : 13;
         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -1584,7 +1599,7 @@
         rect.setAttribute('rx', 4); rect.setAttribute('ry', 4);
         rect.setAttribute('fill', color);
         rect.setAttribute('stroke', isSelected ? '#facc15' : entColor);
-        rect.setAttribute('stroke-width', isSelected ? 3 : 1.5);
+        rect.setAttribute('stroke-width', isSelected ? 3 : (isCollapseSelected ? 3 : 1.5));
         rect.style.cursor = 'pointer';
         if (isDeadEnd) rect.setAttribute('opacity', 0.45);
         rect.dataset.nodeIdx = i;
@@ -1596,7 +1611,7 @@
         circle.setAttribute('r', isSelected ? 14 : (ci >= 0 ? 11 : 8));
         circle.setAttribute('fill', color);
         circle.setAttribute('stroke', isSelected ? '#facc15' : entColor);
-        circle.setAttribute('stroke-width', isSelected ? 3 : 1.5);
+        circle.setAttribute('stroke-width', isSelected ? 3 : (isCollapseSelected ? 3 : 1.5));
         circle.style.cursor = 'pointer';
         if (isDeadEnd) circle.setAttribute('opacity', 0.45);
         circle.dataset.nodeIdx = i;
@@ -1605,10 +1620,10 @@
 
       // Label
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      const fontSize = isCollapsed ? 12 : 11;
-      label.setAttribute('fill', '#94a3b8');
+      const fontSize = (isCollapsed || isTopicRoot) ? 12 : 11;
+      label.setAttribute('fill', isTopicRoot ? '#fbbf24' : '#94a3b8');
       label.setAttribute('font-size', fontSize);
-      if (isCollapsed) label.setAttribute('font-weight', 'bold');
+      if (isCollapsed || isTopicRoot) label.setAttribute('font-weight', 'bold');
       label.style.pointerEvents = 'none';
       if (isDeadEnd) label.setAttribute('opacity', 0.45);
 
@@ -1656,63 +1671,7 @@
       svg.appendChild(label);
     });
 
-    // Topic pseudo-nodes in free (non-flow) mode
-    if (!graphFlowMode) {
-      const topicsPerNode = graphData.topics || [];
-      const uniqueTopics = [...new Set(topicsPerNode.filter(t => t))];
-      if (uniqueTopics.length) {
-        uniqueTopics.forEach((topic, ti) => {
-          const topicNodes = [];
-          positions.forEach((p, i) => {
-            if (!p) return;
-            const d = i < depths.length ? depths[i] : 0;
-            const t = i < topicsPerNode.length ? topicsPerNode[i] : '';
-            if (d === 0 && t === topic) topicNodes.push(i);
-          });
-          if (!topicNodes.length) return;
-          let sumX = 0, sumY = 0;
-          topicNodes.forEach(i => { sumX += positions[i].x; sumY += positions[i].y; });
-          const tx = sumX / topicNodes.length - 60;
-          const ty = sumY / topicNodes.length;
-
-          topicNodes.forEach(i => {
-            const p = positions[i];
-            if (!p) return;
-            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-            line.setAttribute('x1', tx); line.setAttribute('y1', ty);
-            line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
-            line.setAttribute('stroke', '#f59e0b');
-            line.setAttribute('stroke-width', 1);
-            line.setAttribute('stroke-opacity', 0.3);
-            line.setAttribute('stroke-dasharray', '4,4');
-            line.style.pointerEvents = 'none';
-            svg.appendChild(line);
-          });
-
-          const size = 16;
-          const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-          diamond.setAttribute('points',
-            `${tx},${ty-size} ${tx+size},${ty} ${tx},${ty+size} ${tx-size},${ty}`);
-          diamond.setAttribute('fill', '#f59e0b');
-          diamond.setAttribute('stroke', '#fbbf24');
-          diamond.setAttribute('stroke-width', 2);
-          diamond.style.pointerEvents = 'none';
-          svg.appendChild(diamond);
-
-          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          label.setAttribute('x', tx);
-          label.setAttribute('y', ty - size - 5);
-          label.setAttribute('text-anchor', 'middle');
-          label.setAttribute('fill', '#fbbf24');
-          label.setAttribute('font-size', '12');
-          label.setAttribute('font-weight', 'bold');
-          label.style.pointerEvents = 'none';
-          const short = topic.length > 30 ? topic.slice(0, 27) + '...' : topic;
-          label.textContent = short;
-          svg.appendChild(label);
-        });
-      }
-    }
+    // (Topic diamonds are now real nodes — no pseudo-rendering needed)
 
     // Tooltip element (reused)
     let tooltip = document.getElementById('graph-tooltip');
@@ -1733,20 +1692,11 @@
       graphSimTimer = null;
       return;
     }
-    // Free mode: force-directed with settle animation
-    const iters = gentle ? 30 : 120;
-    const settleFrames = gentle ? 20 : 60;
-    graphRunFreeLayout(iters);
+    // Free mode: deterministic radial layout
+    graphRunFreeLayout();
     graphRenderSvg();
     if (graphSimTimer) cancelAnimationFrame(graphSimTimer);
-    let ticks = 0;
-    function tick() {
-      graphRunFreeLayout(1);
-      graphRenderSvg();
-      ticks++;
-      if (ticks < settleFrames) graphSimTimer = requestAnimationFrame(tick);
-    }
-    graphSimTimer = requestAnimationFrame(tick);
+    graphSimTimer = null;
   }
 
   // ── Drag, Tooltip, Context Menu, Keyboard ─────────────────────────────────
@@ -1865,7 +1815,7 @@
           const entData = (graphData.entropies && graphData.entropies[idx]) || {};
           const avg = (entData.avg || 0).toFixed(2);
           const unc = ((entData.unc || 0) * 100).toFixed(0);
-          tooltip.textContent = graphData.thoughts[idx] + '\n[avg: ' + avg + '  unc: ' + unc + '%]';
+          tooltip.textContent = graphData.thoughts[idx] + (entData.avg ? '\n[ent: ' + avg + '  unc: ' + unc + '%]' : '');
           const rect = svg.getBoundingClientRect();
           tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
           tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
@@ -1973,9 +1923,7 @@
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
         : '<span style="color:#64748b">&#9675;</span> ';
       const entData = (graphData.entropies && graphData.entropies[i]) || {};
-      const avg = (entData.avg || 0).toFixed(2);
-      const unc = ((entData.unc || 0) * 100).toFixed(0);
-      const entBadge = '<span style="color:#64748b;font-size:11px;white-space:nowrap;margin-left:8px">' + avg + ' / ' + unc + '%</span>';
+      const entBadge = entData.avg ? '<span style="color:#64748b;font-size:11px;white-space:nowrap;margin-left:8px">' + (entData.avg || 0).toFixed(2) + ' / ' + ((entData.unc || 0) * 100).toFixed(0) + '%</span>' : '';
       const del = '<span onclick="event.stopPropagation();graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
       return '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
         + 'class="mb-2 text-sm text-slate-200" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px" '
@@ -2026,7 +1974,83 @@
     const lang = document.getElementById('lang-select').value;
     const temp = parseFloat(document.getElementById('graph-temp').value);
     const top_k = parseInt(document.getElementById('graph-topk').value) || 40;
-    return { sim_mode, threshold, lang, temp, top_k };
+    const seed = parseInt(document.getElementById('graph-seed').value);
+    return { sim_mode, threshold, lang, temp, top_k, seed };
+  }
+
+  function graphToggleManualCollapse() {
+    graphManualCollapseMode = !graphManualCollapseMode;
+    graphManualCollapseSet.clear();
+    const btn = document.getElementById('graph-btn-manual-collapse');
+    const doBtn = document.getElementById('graph-btn-do-collapse');
+    if (graphManualCollapseMode) {
+      btn.style.background = '#b45309';
+      btn.textContent = '✂ Cancel';
+      doBtn.style.display = '';
+      document.getElementById('graph-collapse-count').textContent = '0';
+    } else {
+      btn.style.background = '';
+      btn.textContent = '✂ Select & Collapse';
+      doBtn.style.display = 'none';
+    }
+    graphRenderSvg();
+  }
+
+  async function graphDoManualCollapse() {
+    if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
+    const cluster = [...graphManualCollapseSet];
+    graphManualCollapseMode = false;
+    graphManualCollapseSet.clear();
+    document.getElementById('graph-btn-manual-collapse').style.background = '';
+    document.getElementById('graph-btn-manual-collapse').textContent = '✂ Select & Collapse';
+    document.getElementById('graph-btn-do-collapse').style.display = 'none';
+
+    document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; });
+
+    const r = await fetch('/graph/collapse', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cluster, collapse_mode: 'short', ...graphGetParams() })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+
+    graphSaveUndo();
+    // Remove collapsed positions, add new at centroid
+    const removedSet = new Set(cluster);
+    let cx = 0, cy = 0, cnt = 0;
+    cluster.forEach(idx => {
+      if (idx < graphNodePositions.length) {
+        cx += graphNodePositions[idx].x;
+        cy += graphNodePositions[idx].y;
+        cnt++;
+      }
+    });
+    if (cnt) { cx /= cnt; cy /= cnt; }
+    [...removedSet].sort((a, b) => b - a).forEach(idx => {
+      if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
+    });
+    graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
+
+    const newCollapsed = new Set();
+    graphCollapsedNodes.forEach(ci => {
+      if (removedSet.has(ci)) return;
+      let newIdx = ci;
+      for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
+      newCollapsed.add(newIdx);
+    });
+    newCollapsed.add(d.thoughts.length - 1);
+    graphCollapsedNodes = newCollapsed;
+
+    graphData = d;
+    if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+    if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+    graphRenderSvg();
+    graphUpdateThoughtsList();
+    graphUpdateCollapseButtons();
+
+    const resultDiv = document.getElementById('graph-result');
+    resultDiv.style.display = '';
+    document.getElementById('graph-result-text').textContent = d.text;
   }
 
   function graphToggleFlow() {
@@ -2092,6 +2116,19 @@
   }
 
   async function graphNodeClick(i) {
+    // Manual collapse mode — toggle selection
+    if (graphManualCollapseMode) {
+      const nodeDepth = (graphData.depths || [])[i];
+      if (nodeDepth === -1) return;  // can't collapse topic root
+      if (graphManualCollapseSet.has(i)) {
+        graphManualCollapseSet.delete(i);
+      } else {
+        graphManualCollapseSet.add(i);
+      }
+      document.getElementById('graph-collapse-count').textContent = graphManualCollapseSet.size;
+      graphRenderSvg();
+      return;
+    }
     if (!graphLinkMode || graphSelectedNode === -1 || graphSelectedNode === i) {
       // Select / deselect node
       graphSelectedNode = graphSelectedNode === i ? -1 : i;
@@ -2123,7 +2160,29 @@
     }
     panel.style.display = '';
     const text = graphData.thoughts[idx];
-    document.getElementById('graph-detail-view').textContent = text;
+    const entData = (graphData.entropies && graphData.entropies[idx]) || {};
+    const detailView = document.getElementById('graph-detail-view');
+    if (entData.tokens && entData.tokens.length) {
+      // Filter out <think>, </think>, control tokens
+      const visibleTokens = entData.tokens.filter(t =>
+        !t.token.match(/^<\/?think>$|^<\|.*\|>$/) && t.token.trim() !== ''
+      );
+      // Skip leading whitespace/newline tokens
+      let start = 0;
+      while (start < visibleTokens.length && visibleTokens[start].token.match(/^\s+$/)) start++;
+      const tokens = visibleTokens.slice(start);
+      // Render heatmap — color each token by entropy
+      const maxEnt = Math.max(0.5, ...tokens.map(t => t.ent));
+      detailView.innerHTML = tokens.map(t => {
+        const norm = Math.min(1, t.ent / maxEnt);
+        const r = Math.round(norm < 0.5 ? norm * 2 * 255 : 255);
+        const g = Math.round(norm < 0.5 ? 255 : (1 - (norm - 0.5) * 2) * 200);
+        const escaped = t.token.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return '<span title="ent: ' + t.ent.toFixed(2) + '" style="color:rgb(' + r + ',' + g + ',80)">' + escaped + '</span>';
+      }).join('');
+    } else {
+      detailView.textContent = text;
+    }
     document.getElementById('graph-detail-edit-wrap').style.display = 'none';
     document.getElementById('graph-detail-view').style.display = '';
     document.getElementById('graph-detail-edit-btn').textContent = 'Edit';
@@ -2339,7 +2398,9 @@
     newCollapsed.add(d.thoughts.length - 1);  // the new summary node
     graphCollapsedNodes = newCollapsed;
 
-    graphData = { thoughts: d.thoughts, edges: d.edges, clusters: d.clusters };
+    graphData = d;
+    if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+    if (d.directed_edges) graphDirectedEdges = d.directed_edges;
     graphRenderSvg();
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
@@ -2390,6 +2451,9 @@
       directed: graphDirectedEdges,
       manual_links: graphData.manual_links || [],
       manual_unlinks: graphData.manual_unlinks || [],
+      entropies: graphData.entropies || [],
+      depths: graphData.depths || [],
+      topics: graphData.topics || [],
       threshold: parseFloat(document.getElementById('graph-threshold').value),
       sim_mode: document.getElementById('graph-sim-mode').value,
     };
@@ -2422,6 +2486,8 @@
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             thoughts: state.thoughts,
+            edges: state.edges || [],
+            clusters: state.clusters || [],
             topic: state.topic || '',
             threshold: state.threshold || 0.91,
             sim_mode: state.sim_mode || 'embedding',
@@ -2429,6 +2495,9 @@
             manual_unlinks: state.manual_unlinks || [],
             directed_edges: state.directed || [],
             hub_nodes: state.hubs || [],
+            entropies: state.entropies || [],
+            depths: state.depths || [],
+            topics: state.topics || [],
           })
         });
         const d = await r.json();
@@ -2461,10 +2530,13 @@
   }
 
   function graphReset() {
+    fetch('/graph/reset', { method: 'POST' });
     graphData = { thoughts: [], edges: [], clusters: [] };
     graphSelectedNode = -1;
     graphLinkMode = false;
     graphFlowMode = false;
+    graphManualCollapseMode = false;
+    graphManualCollapseSet.clear();
     const flowBtn = document.getElementById('graph-btn-flow');
     if (flowBtn) { flowBtn.style.background = ''; flowBtn.onmouseover = null; flowBtn.onmouseout = null; }
     graphZoom = 1; graphPanX = 0; graphPanY = 0;
