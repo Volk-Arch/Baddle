@@ -1124,10 +1124,21 @@
     graphHubNodes = state.hubs || new Set();
     graphDirectedEdges = state.directed || [];
     graphSelectedNode = -1;
-    // Sync backend state
+    // Sync backend state with full undo data
+    const syncData = {
+      thoughts: state.data.thoughts,
+      manual_links: state.data.manual_links || [],
+      manual_unlinks: state.data.manual_unlinks || [],
+      directed_edges: state.directed || [],
+      hub_nodes: [...(state.hubs || [])],
+      entropies: state.data.entropies || [],
+      depths: state.data.depths || [],
+      topics: state.data.topics || [],
+      ...graphGetParams()
+    };
     const r = await fetch('/graph/sync', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ thoughts: state.data.thoughts, ...graphGetParams() })
+      body: JSON.stringify(syncData)
     });
     const d = await r.json();
     graphData = d.error ? state.data : d;
@@ -1166,138 +1177,180 @@
     const n = graphData.thoughts.length;
     const old = graphNodePositions;
     const positions = [];
-    const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.35;
-
-    // Rescale existing positions if SVG dimensions changed
-    const scaleX = (graphLastW > 0 && graphLastW !== W) ? W / graphLastW : 1;
-    const scaleY = (graphLastH > 0 && graphLastH !== H) ? H / graphLastH : 1;
 
     for (let i = 0; i < n; i++) {
       if (i < old.length && old[i]) {
-        positions.push({
-          x: old[i].x * scaleX,
-          y: old[i].y * scaleY,
-          vx: 0, vy: 0, fixed: old[i].fixed
-        });
+        positions.push({ x: old[i].x, y: old[i].y, vx: 0, vy: 0, fixed: old[i].fixed });
       } else {
-        const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
-        positions.push({
-          x: cx + R * Math.cos(angle) + (Math.random() - 0.5) * 20,
-          y: cy + R * Math.sin(angle) + (Math.random() - 0.5) * 20,
-          vx: 0, vy: 0, fixed: false
-        });
+        // New node — place in flow column or on circle
+        if (graphFlowMode) {
+          const d = (graphData.depths || [])[i] || 0;
+          positions.push({ x: _flowColX(d), y: H / 2 + (Math.random() - 0.5) * H * 0.5, vx: 0, vy: 0, fixed: false });
+        } else {
+          const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
+          const R = Math.min(W, H) * 0.35;
+          positions.push({
+            x: W/2 + R * Math.cos(angle) + (Math.random()-0.5) * 20,
+            y: H/2 + R * Math.sin(angle) + (Math.random()-0.5) * 20,
+            vx: 0, vy: 0, fixed: false
+          });
+        }
       }
     }
     graphNodePositions = positions.slice(0, n);
-    graphLastW = W;
-    graphLastH = H;
+    graphLastW = W; graphLastH = H;
   }
 
-  function graphRunForceSimulation(iterations) {
+  // Flow layout constants
+  const FLOW_COL_WIDTH = 280;
+  const FLOW_COL_START = 120;
+  function _flowColX(depth) { return FLOW_COL_START + depth * FLOW_COL_WIDTH; }
+
+  // ── Flow layout: deterministic column placement ──
+  function graphRunFlowLayout() {
+    const { W, H } = graphGetDimensions();
+    const nodes = graphNodePositions;
+    const n = nodes.length;
+    if (n === 0) return;
+    const depths = graphData.depths || [];
+    const pad = 25;
+
+    // 1. Set X to column, keep existing Y for fixed nodes
+    for (let i = 0; i < n; i++) {
+      if (!nodes[i].fixed) {
+        nodes[i].x = _flowColX(depths[i] || 0);
+      }
+    }
+
+    // 2. Build parent map from directed edges
+    const parentOf = new Array(n).fill(-1);
+    graphDirectedEdges.forEach(([from, to]) => { if (to < n) parentOf[to] = from; });
+
+    // 3. Group by depth column
+    const byDepth = {};
+    for (let i = 0; i < n; i++) {
+      const d = depths[i] || 0;
+      if (!byDepth[d]) byDepth[d] = [];
+      byDepth[d].push(i);
+    }
+
+    // 4. Place nodes in each column — children near their parent's Y
+    Object.keys(byDepth).sort((a,b) => a - b).forEach(dStr => {
+      const col = byDepth[dStr];
+      // Sort by parent Y so children cluster near parent
+      col.sort((a, b) => {
+        const pa = parentOf[a] >= 0 && nodes[parentOf[a]] ? nodes[parentOf[a]].y : H/2;
+        const pb = parentOf[b] >= 0 && nodes[parentOf[b]] ? nodes[parentOf[b]].y : H/2;
+        return pa - pb;
+      });
+      const spacing = Math.max(75, (H - 2*pad) / (col.length + 1));
+      const startY = pad + (H - 2*pad - spacing * (col.length - 1)) / 2;
+      col.forEach((idx, j) => {
+        if (!nodes[idx].fixed) {
+          const parentY = parentOf[idx] >= 0 && nodes[parentOf[idx]] ? nodes[parentOf[idx]].y : null;
+          // Blend between even distribution and parent proximity
+          const evenY = startY + j * spacing;
+          nodes[idx].y = parentY !== null ? parentY * 0.4 + evenY * 0.6 : evenY;
+        }
+      });
+    });
+
+    // 5. Vertical collision resolution within same column
+    const minGap = 75;
+    for (let pass = 0; pass < 5; pass++) {
+      Object.values(byDepth).forEach(col => {
+        col.sort((a, b) => nodes[a].y - nodes[b].y);
+        for (let j = 1; j < col.length; j++) {
+          const prev = col[j-1], curr = col[j];
+          const gap = nodes[curr].y - nodes[prev].y;
+          if (gap < minGap) {
+            const push = (minGap - gap) / 2;
+            if (!nodes[prev].fixed) nodes[prev].y -= push;
+            if (!nodes[curr].fixed) nodes[curr].y += push;
+          }
+        }
+      });
+    }
+
+    // 6. Clamp to bounds
+    for (let i = 0; i < n; i++) {
+      nodes[i].y = Math.max(pad, Math.min(H - pad, nodes[i].y));
+    }
+  }
+
+  // ── Free layout: force-directed simulation ──
+  function graphRunFreeLayout(iterations) {
     const { W, H } = graphGetDimensions();
     const nodes = graphNodePositions;
     const edges = graphData.edges;
     const n = nodes.length;
     if (n === 0) return;
 
-    const repulsion = 3000;
-    const clusterRepulsion = 6000;  // extra repulsion between different clusters
+    const repulsion = 8000;
+    const clusterRepulsion = 15000;
     const attraction = 0.06;
     const damping = 0.85;
     const centerPull = 0.01;
     const cx = W / 2, cy = H / 2;
     const pad = 30;
 
-    // Build node-to-cluster map
     const nodeCluster = new Array(n).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { if (idx < n) nodeCluster[idx] = ci; }));
 
-    // Flow mode: compute target X per depth column
-    const depths = graphData.depths || [];
-    const maxDepth = Math.max(0, ...depths);
-    const flowSpring = 0.3;  // strength of horizontal snap to depth column
+    const dirSet = new Set();
+    graphDirectedEdges.forEach(([a, b]) => { dirSet.add(a+','+b); });
 
     for (let iter = 0; iter < iterations; iter++) {
-      // Repulsion between all pairs
       for (let i = 0; i < n; i++) {
         if (nodes[i].fixed) continue;
         let fx = 0, fy = 0;
+        // Repulsion
         for (let j = 0; j < n; j++) {
           if (i === j) continue;
-          let dx = nodes[i].x - nodes[j].x;
-          let dy = nodes[i].y - nodes[j].y;
-          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          const rep = (nodeCluster[i] >= 0 && nodeCluster[j] >= 0 && nodeCluster[i] !== nodeCluster[j])
-            ? clusterRepulsion : repulsion;
+          let dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+          let dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          const rep = (nodeCluster[i]>=0 && nodeCluster[j]>=0 && nodeCluster[i]!==nodeCluster[j]) ? clusterRepulsion : repulsion;
           let force = rep / (dist * dist);
-          if (graphFlowMode) {
-            // In flow mode, only vertical repulsion matters
-            fy += (dy / dist) * force;
-            fx += (dx / dist) * force * 0.2;  // weaker horizontal repulsion
-          } else {
-            fx += (dx / dist) * force;
-            fy += (dy / dist) * force;
-          }
+          fx += (dx/dist) * force;
+          fy += (dy/dist) * force;
         }
-        // Attraction along edges — spring toward ideal length
-        const directedSet2 = new Set();
-        graphDirectedEdges.forEach(([a, b]) => directedSet2.add(a + ',' + b));
+        // Edge attraction — spring to ideal length
         edges.forEach(e => {
-          let other = -1;
-          if (e.from === i) other = e.to;
-          else if (e.to === i) other = e.from;
+          let other = e.from === i ? e.to : (e.to === i ? e.from : -1);
           if (other < 0) return;
-          // Shorter ideal length for parent-child (directed) edges
-          const isDir = directedSet2.has(e.from + ',' + e.to) || directedSet2.has(e.to + ',' + e.from);
-          const idealLen = isDir ? 60 : 100;
-          let dx = nodes[other].x - nodes[i].x;
-          let dy = nodes[other].y - nodes[i].y;
-          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          let displacement = dist - idealLen;
-          let strength = attraction * (isDir ? 2 : 1) * displacement / dist;
-          if (graphFlowMode) {
-            fy += dy * strength;
-          } else {
-            fx += dx * strength;
-            fy += dy * strength;
-          }
+          const isDir = dirSet.has(e.from+','+e.to) || dirSet.has(e.to+','+e.from);
+          const idealLen = isDir ? 100 : 160;
+          let dx = nodes[other].x - nodes[i].x, dy = nodes[other].y - nodes[i].y;
+          let dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          let strength = attraction * (isDir ? 2 : 1) * (dist - idealLen) / dist;
+          fx += dx * strength;
+          fy += dy * strength;
         });
-        // Flow mode: spring toward depth column
-        if (graphFlowMode && i < depths.length) {
-          const d = depths[i] || 0;
-          const targetX = pad + 60 + (maxDepth > 0 ? (d / maxDepth) * (W - 2 * pad - 120) : 0);
-          fx += (targetX - nodes[i].x) * flowSpring;
-        }
-        // Pull toward center (vertical only in flow mode)
-        if (graphFlowMode) {
-          fy += (cy - nodes[i].y) * centerPull;
-        } else {
-          fx += (cx - nodes[i].x) * centerPull;
-          fy += (cy - nodes[i].y) * centerPull;
-        }
+        // Center pull
+        fx += (cx - nodes[i].x) * centerPull;
+        fy += (cy - nodes[i].y) * centerPull;
         nodes[i].vx = (nodes[i].vx + fx) * damping;
         nodes[i].vy = (nodes[i].vy + fy) * damping;
       }
-      // Apply velocities and clamp to bounds
+      // Apply and clamp
       for (let i = 0; i < n; i++) {
         if (nodes[i].fixed) continue;
         nodes[i].x += nodes[i].vx;
         nodes[i].y += nodes[i].vy;
-        nodes[i].x = Math.max(pad, Math.min(W - pad, nodes[i].x));
-        nodes[i].y = Math.max(pad, Math.min(H - pad, nodes[i].y));
+        nodes[i].x = Math.max(pad, Math.min(W-pad, nodes[i].x));
+        nodes[i].y = Math.max(pad, Math.min(H-pad, nodes[i].y));
       }
-      // Collision: enforce minimum distance between nodes
-      const minDist = 45;
+      // Collision
+      const minDist = 65;
       for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          let dx = nodes[j].x - nodes[i].x;
-          let dy = nodes[j].y - nodes[i].y;
-          let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+        for (let j = i+1; j < n; j++) {
+          let dx = nodes[j].x-nodes[i].x, dy = nodes[j].y-nodes[i].y;
+          let dist = Math.sqrt(dx*dx+dy*dy) || 0.1;
           if (dist < minDist) {
-            const overlap = (minDist - dist) / 2;
-            const ux = dx / dist, uy = dy / dist;
-            if (!nodes[i].fixed) { nodes[i].x -= ux * overlap; nodes[i].y -= uy * overlap; }
-            if (!nodes[j].fixed) { nodes[j].x += ux * overlap; nodes[j].y += uy * overlap; }
+            const overlap = (minDist-dist)/2;
+            const ux = dx/dist, uy = dy/dist;
+            if (!nodes[i].fixed) { nodes[i].x -= ux*overlap; nodes[i].y -= uy*overlap; }
+            if (!nodes[j].fixed) { nodes[j].x += ux*overlap; nodes[j].y += uy*overlap; }
           }
         }
       }
@@ -1346,6 +1399,63 @@
     const nodeCluster = new Array(thoughts.length).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
     const clusterColors = graphClusterColors;
+    const depths = graphData.depths || [];
+    const maxDepth = Math.max(0, ...depths);
+
+    // Flow mode: draw column guides and topic diamonds FIRST (behind everything)
+    if (graphFlowMode) {
+      const { W: fW, H: fH } = graphGetDimensions();
+      const pad = 30;
+      // Topic diamonds in flow mode
+      const topicsPerNode = graphData.topics || [];
+      const uniqueTopics = [...new Set(topicsPerNode.filter(t => t))];
+      if (uniqueTopics.length) {
+        const spacing = fH / (uniqueTopics.length + 1);
+        uniqueTopics.forEach((topic, ti) => {
+          const tx = 20;
+          const ty = spacing * (ti + 1);
+          // Lines to depth=0 nodes of this topic
+          positions.forEach((p, i) => {
+            if (!p) return;
+            const d = i < depths.length ? depths[i] : 0;
+            const t = i < topicsPerNode.length ? topicsPerNode[i] : '';
+            if (d === 0 && t === topic) {
+              const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+              line.setAttribute('x1', tx); line.setAttribute('y1', ty);
+              line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
+              line.setAttribute('stroke', '#f59e0b');
+              line.setAttribute('stroke-width', 1);
+              line.setAttribute('stroke-opacity', 0.35);
+              line.setAttribute('stroke-dasharray', '4,4');
+              line.style.pointerEvents = 'none';
+              svg.appendChild(line);
+            }
+          });
+          // Diamond
+          const size = 16;
+          const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          diamond.setAttribute('points',
+            `${tx},${ty-size} ${tx+size},${ty} ${tx},${ty+size} ${tx-size},${ty}`);
+          diamond.setAttribute('fill', '#f59e0b');
+          diamond.setAttribute('stroke', '#fbbf24');
+          diamond.setAttribute('stroke-width', 2);
+          diamond.style.pointerEvents = 'none';
+          svg.appendChild(diamond);
+          // Label
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          label.setAttribute('x', tx);
+          label.setAttribute('y', ty - size - 5);
+          label.setAttribute('text-anchor', 'middle');
+          label.setAttribute('fill', '#fbbf24');
+          label.setAttribute('font-size', '12');
+          label.setAttribute('font-weight', 'bold');
+          label.style.pointerEvents = 'none';
+          const short = topic.length > 30 ? topic.slice(0, 27) + '...' : topic;
+          label.textContent = short;
+          svg.appendChild(label);
+        });
+      }
+    }
 
     // Draw cluster hulls
     (graphData.clusters || []).forEach((cl, ci) => {
@@ -1495,66 +1605,113 @@
 
       // Label
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('x', p.x); label.setAttribute('y', p.y - (isCollapsed ? 20 : 14));
-      label.setAttribute('text-anchor', 'middle');
+      const fontSize = isCollapsed ? 12 : 11;
       label.setAttribute('fill', '#94a3b8');
-      label.setAttribute('font-size', isCollapsed ? '12' : '11');
+      label.setAttribute('font-size', fontSize);
       if (isCollapsed) label.setAttribute('font-weight', 'bold');
       label.style.pointerEvents = 'none';
-      const maxLen = isCollapsed ? 35 : 25;
-      const short = thoughts[i].length > maxLen ? thoughts[i].slice(0, maxLen - 1) + '...' : thoughts[i];
-      label.textContent = short;
+      if (isDeadEnd) label.setAttribute('opacity', 0.45);
+
+      if (graphFlowMode) {
+        // Flow mode: text to the right of node, up to 2 lines
+        const nodeR = isCollapsed ? 16 : (isSelected ? 14 : 11);
+        const lx = p.x + nodeR + 6;
+        label.setAttribute('text-anchor', 'start');
+        const maxChars = 35;
+        const text = thoughts[i];
+        if (text.length <= maxChars) {
+          label.setAttribute('x', lx);
+          label.setAttribute('y', p.y + 4);
+          label.textContent = text;
+        } else {
+          // Word-wrap into 2 lines
+          const words = text.split(/\s+/);
+          let line1 = '', line2 = '';
+          for (const w of words) {
+            if (!line1 || (line1 + ' ' + w).length <= maxChars) {
+              line1 = line1 ? line1 + ' ' + w : w;
+            } else {
+              line2 = line2 ? line2 + ' ' + w : w;
+            }
+          }
+          if (line2.length > maxChars) line2 = line2.slice(0, maxChars - 3) + '...';
+          const t1 = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+          t1.setAttribute('x', lx); t1.setAttribute('dy', '0');
+          t1.textContent = line1;
+          const t2 = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+          t2.setAttribute('x', lx); t2.setAttribute('dy', String(fontSize + 2));
+          t2.textContent = line2;
+          label.appendChild(t1); label.appendChild(t2);
+          label.setAttribute('y', p.y - 2);
+        }
+      } else {
+        // Free mode: text above node, single line
+        label.setAttribute('x', p.x);
+        label.setAttribute('y', p.y - (isCollapsed ? 20 : 16));
+        label.setAttribute('text-anchor', 'middle');
+        const maxLen = 25;
+        const short = thoughts[i].length > maxLen ? thoughts[i].slice(0, maxLen - 1) + '...' : thoughts[i];
+        label.textContent = short;
+      }
       svg.appendChild(label);
     });
 
-    // Topic pseudo-node (visual root)
-    const topic = document.getElementById('graph-topic').value.trim();
-    if (topic && thoughts.length) {
-      const { W, H } = graphGetDimensions();
-      const tx = graphFlowMode ? 25 : W / 2;
-      const ty = graphFlowMode ? H / 2 : 20;
+    // Topic pseudo-nodes in free (non-flow) mode
+    if (!graphFlowMode) {
+      const topicsPerNode = graphData.topics || [];
+      const uniqueTopics = [...new Set(topicsPerNode.filter(t => t))];
+      if (uniqueTopics.length) {
+        uniqueTopics.forEach((topic, ti) => {
+          const topicNodes = [];
+          positions.forEach((p, i) => {
+            if (!p) return;
+            const d = i < depths.length ? depths[i] : 0;
+            const t = i < topicsPerNode.length ? topicsPerNode[i] : '';
+            if (d === 0 && t === topic) topicNodes.push(i);
+          });
+          if (!topicNodes.length) return;
+          let sumX = 0, sumY = 0;
+          topicNodes.forEach(i => { sumX += positions[i].x; sumY += positions[i].y; });
+          const tx = sumX / topicNodes.length - 60;
+          const ty = sumY / topicNodes.length;
 
-      // Dashed lines from topic to all depth=0 nodes
-      const depths = graphData.depths || [];
-      positions.forEach((p, i) => {
-        if (!p) return;
-        const d = i < depths.length ? depths[i] : 0;
-        if (d === 0) {
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          line.setAttribute('x1', tx); line.setAttribute('y1', ty);
-          line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
-          line.setAttribute('stroke', '#f59e0b');
-          line.setAttribute('stroke-width', 1);
-          line.setAttribute('stroke-opacity', 0.3);
-          line.setAttribute('stroke-dasharray', '4,4');
-          line.style.pointerEvents = 'none';
-          svg.appendChild(line);
-        }
-      });
+          topicNodes.forEach(i => {
+            const p = positions[i];
+            if (!p) return;
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', tx); line.setAttribute('y1', ty);
+            line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
+            line.setAttribute('stroke', '#f59e0b');
+            line.setAttribute('stroke-width', 1);
+            line.setAttribute('stroke-opacity', 0.3);
+            line.setAttribute('stroke-dasharray', '4,4');
+            line.style.pointerEvents = 'none';
+            svg.appendChild(line);
+          });
 
-      // Diamond shape for topic node
-      const size = 12;
-      const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      diamond.setAttribute('points',
-        `${tx},${ty-size} ${tx+size},${ty} ${tx},${ty+size} ${tx-size},${ty}`);
-      diamond.setAttribute('fill', '#f59e0b');
-      diamond.setAttribute('stroke', '#fbbf24');
-      diamond.setAttribute('stroke-width', 2);
-      diamond.style.pointerEvents = 'none';
-      svg.appendChild(diamond);
+          const size = 16;
+          const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          diamond.setAttribute('points',
+            `${tx},${ty-size} ${tx+size},${ty} ${tx},${ty+size} ${tx-size},${ty}`);
+          diamond.setAttribute('fill', '#f59e0b');
+          diamond.setAttribute('stroke', '#fbbf24');
+          diamond.setAttribute('stroke-width', 2);
+          diamond.style.pointerEvents = 'none';
+          svg.appendChild(diamond);
 
-      // Topic label
-      const topicLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      topicLabel.setAttribute('x', tx);
-      topicLabel.setAttribute('y', ty - size - 6);
-      topicLabel.setAttribute('text-anchor', 'middle');
-      topicLabel.setAttribute('fill', '#fbbf24');
-      topicLabel.setAttribute('font-size', '11');
-      topicLabel.setAttribute('font-weight', 'bold');
-      topicLabel.style.pointerEvents = 'none';
-      const topicShort = topic.length > 30 ? topic.slice(0, 27) + '...' : topic;
-      topicLabel.textContent = topicShort;
-      svg.appendChild(topicLabel);
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          label.setAttribute('x', tx);
+          label.setAttribute('y', ty - size - 5);
+          label.setAttribute('text-anchor', 'middle');
+          label.setAttribute('fill', '#fbbf24');
+          label.setAttribute('font-size', '12');
+          label.setAttribute('font-weight', 'bold');
+          label.style.pointerEvents = 'none';
+          const short = topic.length > 30 ? topic.slice(0, 27) + '...' : topic;
+          label.textContent = short;
+          svg.appendChild(label);
+        });
+      }
     }
 
     // Tooltip element (reused)
@@ -1569,15 +1726,22 @@
 
   function graphDrawSvg(gentle) {
     graphInitPositions();
-    // gentle=true: minor update (link/remove), less disruption
+    if (graphFlowMode) {
+      graphRunFlowLayout();
+      graphRenderSvg();
+      if (graphSimTimer) cancelAnimationFrame(graphSimTimer);
+      graphSimTimer = null;
+      return;
+    }
+    // Free mode: force-directed with settle animation
     const iters = gentle ? 30 : 120;
     const settleFrames = gentle ? 20 : 60;
-    graphRunForceSimulation(iters);
+    graphRunFreeLayout(iters);
     graphRenderSvg();
     if (graphSimTimer) cancelAnimationFrame(graphSimTimer);
     let ticks = 0;
     function tick() {
-      graphRunForceSimulation(1);
+      graphRunFreeLayout(1);
       graphRenderSvg();
       ticks++;
       if (ticks < settleFrames) graphSimTimer = requestAnimationFrame(tick);
@@ -1792,7 +1956,18 @@
     const clusterColors = graphClusterColors;
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
 
-    div.innerHTML = thoughts.map((t, i) => {
+    // Sort indices by cluster (clustered first, then unclustered)
+    const sorted = thoughts.map((_, i) => i);
+    sorted.sort((a, b) => {
+      const ca = nodeCluster[a], cb = nodeCluster[b];
+      if (ca === cb) return a - b;
+      if (ca < 0) return 1;
+      if (cb < 0) return -1;
+      return ca - cb;
+    });
+
+    div.innerHTML = sorted.map(i => {
+      const t = thoughts[i];
       const ci = nodeCluster[i];
       const dot = ci >= 0
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
@@ -1801,10 +1976,48 @@
       const avg = (entData.avg || 0).toFixed(2);
       const unc = ((entData.unc || 0) * 100).toFixed(0);
       const entBadge = '<span style="color:#64748b;font-size:11px;white-space:nowrap;margin-left:8px">' + avg + ' / ' + unc + '%</span>';
-      const del = '<span onclick="graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
-      return '<div class="mb-2 text-sm text-slate-200" style="display:flex;align-items:baseline">'
+      const del = '<span onclick="event.stopPropagation();graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
+      return '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
+        + 'class="mb-2 text-sm text-slate-200" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px" '
+        + 'onmouseover="this.style.background=\'#1e3a5f\'" onmouseout="graphHighlightListItem(this,' + i + ')">'
         + '<span style="flex:1">' + dot + t + '</span>' + entBadge + del + '</div>';
     }).join('');
+  }
+
+  function graphSelectFromList(idx) {
+    graphSelectedNode = idx;
+    graphRenderSvg();
+    graphShowDetail(idx);
+    graphHighlightClusterInList(idx);
+    // Scroll node into view if needed
+    if (graphNodePositions[idx]) {
+      const p = graphNodePositions[idx];
+      // TODO: could scroll SVG viewBox to node
+    }
+  }
+
+  function graphHighlightClusterInList(idx) {
+    const cl = (graphData.clusters || []).find(c => c.includes(idx));
+    const div = document.getElementById('graph-thoughts');
+    div.querySelectorAll('[data-thought-idx]').forEach(el => {
+      const i = parseInt(el.dataset.thoughtIdx);
+      if (i === idx) {
+        el.style.background = '#334155';
+      } else if (cl && cl.includes(i)) {
+        el.style.background = '#1e293b';
+      } else {
+        el.style.background = '';
+      }
+    });
+  }
+
+  function graphHighlightListItem(el, idx) {
+    // On mouseout, restore cluster highlight if node is selected
+    if (graphSelectedNode >= 0) {
+      graphHighlightClusterInList(graphSelectedNode);
+    } else {
+      el.style.background = '';
+    }
   }
 
   function graphGetParams() {
@@ -1828,6 +2041,8 @@
       btn.onmouseover = null;
       btn.onmouseout = null;
     }
+    // Reset positions so layout recalculates from scratch
+    graphNodePositions = [];
     graphDrawSvg();
   }
 
@@ -1882,12 +2097,7 @@
       graphSelectedNode = graphSelectedNode === i ? -1 : i;
       graphRenderSvg();
       graphShowDetail(graphSelectedNode);
-      // Highlight cluster in thought list
-      const cl = (graphData.clusters || []).find(c => c.includes(i));
-      const div = document.getElementById('graph-thoughts');
-      div.querySelectorAll('div').forEach((d, idx) => {
-        d.style.background = (cl && cl.includes(idx)) ? '#1e3a5f' : '';
-      });
+      graphHighlightClusterInList(graphSelectedNode);
       return;
     }
     // Link mode: second click — toggle edge between selected and this node
@@ -1930,7 +2140,7 @@
     graphDirectedEdges.forEach(([from, to]) => { if (to === idx) parentIdx = from; });
     if (parentIdx >= 0 && parentIdx < graphData.thoughts.length) {
       const pt = graphData.thoughts[parentIdx];
-      sourceText.textContent = pt.length > 80 ? pt.slice(0, 77) + '...' : pt;
+      sourceText.textContent = pt;
       sourceDiv.style.display = '';
     } else {
       sourceDiv.style.display = 'none';

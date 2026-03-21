@@ -41,7 +41,7 @@ Two modes of thinking, implemented literally:
 - **Link mode** → toggle button enables linking, click two nodes → connect/disconnect (dashed lines)
 - **Convex hull** — semi-transparent boundary around clusters
 - **Collapsed nodes** — square shape, larger (visually distinct from regular thoughts)
-- **Edges** colored by connection strength: blue → yellow → green
+- **Edges** — thickness and opacity by connection strength
 - **Scroll wheel** — zoom graph, **drag background** — pan
 - **Ctrl+Z** — undo, **Delete** — remove node, **Esc** — deselect
 - **⟳ Layout** — recalculate node positions
@@ -52,6 +52,8 @@ Two modes of thinking, implemented literally:
 - **Node entropy** — node borders colored by model confidence (green → yellow → red). Thought list and tooltip show average entropy and percentage of uncertain tokens
 - **→ Flow** — directed flow layout: nodes arranged left-to-right by depth (Think→Expand→Elaborate→Collapse). Dead-end branches fade out. Toggle between free graph and thinking flow
 - **Source tracking** — selecting a node shows which thought it originated from (purple "↳ from:")
+- **Thought list** — sorted by cluster, click text to select node on graph, click node to highlight cluster in list
+- **Topic diamonds** — root topics shown as diamonds, multiple topics supported in one graph
 
 Works only in in-process mode (without `--server`).
 
