@@ -64,13 +64,13 @@ def init_graph(llm):
 
 
 # ── state ────────────────────────────────────────────────────────────────────
-_graph = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [], "embeddings": []}
+_graph = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [], "embeddings": [], "entropies": []}
 
 
 # ── generation helpers ───────────────────────────────────────────────────────
 
-def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40) -> str:
-    """Generate text from chat messages for graph mode."""
+def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40) -> tuple[str, float]:
+    """Generate text from chat messages for graph mode. Returns (text, mean_entropy)."""
     prompt_str = format_chat(_llm, messages)
     _llm.reset()
     tokens = _llm.tokenize(prompt_str.encode())
@@ -79,7 +79,10 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
     raw = ""
     eos = _llm.token_eos()
     think_done = False
+    entropies = []
     for _ in range(max_tokens):
+        logits = _get_logits(_llm)
+        ent = float(_entropy(logits))
         tok = _sample(_llm, temp, top_k)
         _llm.eval([tok])
         if tok == eos:
@@ -88,6 +91,11 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
         raw += piece
         if not think_done and "</think>" in raw.lower():
             think_done = True
+            entropies = []  # reset — only count post-think entropy
+        elif think_done or "/no_think" in raw.lower()[:20]:
+            entropies.append(ent)
+        else:
+            entropies.append(ent)
         if think_done and re.search(r"<\|", raw[raw.lower().rfind("</think>") + 8:]):
             break
     low = raw.lower()
@@ -96,11 +104,13 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
     else:
         text = raw
     text = re.sub(r"<[^>]*>", "", text)
-    return text.strip()
+    mean_ent = sum(entropies) / len(entropies) if entropies else 0.0
+    unc = sum(1 for e in entropies if e > 2.0) / len(entropies) if entropies else 0.0
+    return text.strip(), {"avg": round(mean_ent, 3), "unc": round(unc, 3)}
 
 
-def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40) -> str:
-    """Generate one short thought about the topic via chat."""
+def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40) -> tuple[str, float]:
+    """Generate one short thought about the topic via chat. Returns (text, mean_entropy)."""
     system = _p(lang, "think")
     user = f"{_p(lang, 'topic')}: {topic}"
     if existing:
@@ -110,7 +120,7 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
         user += f"\n{_p(lang, 'one_idea')}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
+    text, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
     text = re.split(r"\s*(?:Human|User|Assistant)\s*:", text, flags=re.IGNORECASE)[0]
     text = text.split("\n")[0].strip()
     for prefix in ["- ", "* ", "1. ", "1) "]:
@@ -118,7 +128,7 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
             text = text[len(prefix):]
     text = re.sub(r"\s*(user|assistant|system)\s*$", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\d+[.)]\s*", "", text)
-    return text.strip()
+    return text.strip(), ent
 
 
 # ── similarity & clustering ──────────────────────────────────────────────────
@@ -249,6 +259,7 @@ def _graph_response(thoughts, edges, clusters, **extra):
         "thoughts": thoughts, "edges": edges, "clusters": clusters,
         "directed_edges": _graph.get("directed_edges", []),
         "hub_nodes": list(_graph.get("hub_nodes", set())),
+        "entropies": _graph.get("entropies", []),
     }
     resp.update(extra)
     return jsonify(resp)
@@ -279,15 +290,20 @@ def graph_think():
         _graph["manual_links"] = []
         _graph["manual_unlinks"] = []
         _graph["embeddings"] = []
+        _graph["entropies"] = []
         _graph["directed_edges"] = []
         _graph["hub_nodes"] = set()
     thoughts = list(existing)
+    ent_list = _graph.setdefault("entropies", [])
+    # Pad entropies for existing thoughts (e.g. manually added ones with no entropy)
+    while len(ent_list) < len(thoughts):
+        ent_list.append({"avg": 0.0, "unc": 0.0})
     new_thoughts = []  # only thoughts generated in THIS call (for dedup prompt)
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        t = _generate_thought(topic, new_thoughts, lang, temp, top_k)
+        t, ent = _generate_thought(topic, new_thoughts, lang, temp, top_k)
         if not t or len(t) < 10:
             continue
         if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
@@ -295,6 +311,7 @@ def graph_think():
         if any(t.lower() == ex.lower() for ex in thoughts):
             continue
         thoughts.append(t)
+        ent_list.append(ent)
         new_thoughts.append(t)
 
     _graph["thoughts"] = thoughts
@@ -328,6 +345,7 @@ def graph_add():
     if not text:
         return jsonify({"error": "empty thought"})
     _graph["thoughts"].append(text)
+    _graph.setdefault("entropies", []).append({"avg": 0.0, "unc": 0.0})
     thoughts = _graph["thoughts"]
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
@@ -345,6 +363,9 @@ def graph_remove():
     if idx < 0 or idx >= len(thoughts):
         return jsonify({"error": "invalid index"})
     thoughts.pop(idx)
+    ent_list = _graph.get("entropies", [])
+    if idx < len(ent_list):
+        ent_list.pop(idx)
     _remap_manual_edges([idx])
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
@@ -415,13 +436,17 @@ def graph_collapse():
     user += f"\n\n{instruction}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k)
+    text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k)
 
     valid_indices = [i for i in indices if i < len(thoughts)]
+    ent_list = _graph.setdefault("entropies", [])
     for i in sorted(valid_indices, reverse=True):
         thoughts.pop(i)
+        if i < len(ent_list):
+            ent_list.pop(i)
     _remap_manual_edges(valid_indices)
     thoughts.append(text)
+    ent_list.append(ent)
     _graph["thoughts"] = thoughts
 
     edges = _compute_edges(thoughts, threshold, sim_mode)
@@ -471,6 +496,9 @@ def graph_expand():
     source = thoughts[idx]
     topic = _graph.get("topic", "")
     new_thoughts = []
+    ent_list = _graph.setdefault("entropies", [])
+    while len(ent_list) < len(thoughts):
+        ent_list.append({"avg": 0.0, "unc": 0.0})
 
     system = _p(lang, "think")
 
@@ -483,7 +511,7 @@ def graph_expand():
         user += f"\n{_p(lang, 'branch')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
+        t, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
         t = re.split(r"\s*(?:Human|User|Assistant)\s*:", t, flags=re.IGNORECASE)[0]
         t = t.split("\n")[0].strip()
         for prefix in ["- ", "* ", "1. ", "1) "]:
@@ -496,6 +524,7 @@ def graph_expand():
         if any(t.lower() == ex.lower() for ex in thoughts):
             continue
         thoughts.append(t)
+        ent_list.append(ent)
         new_thoughts.append(t)
 
     _graph["thoughts"] = thoughts
@@ -526,6 +555,9 @@ def graph_elaborate():
     source = thoughts[idx]
     topic = _graph.get("topic", "")
     new_thoughts = []
+    ent_list = _graph.setdefault("entropies", [])
+    while len(ent_list) < len(thoughts):
+        ent_list.append({"avg": 0.0, "unc": 0.0})
 
     system = _p(lang, "think")
 
@@ -540,7 +572,7 @@ def graph_elaborate():
         user += f"\n{_p(lang, 'deeper')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
+        t, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
         t = re.split(r"\s*(?:Human|User|Assistant)\s*:", t, flags=re.IGNORECASE)[0]
         t = t.split("\n")[0].strip()
         for prefix in ["- ", "* ", "1. ", "1) "]:
@@ -553,6 +585,7 @@ def graph_elaborate():
         if any(t.lower() == ex.lower() for ex in thoughts):
             continue
         thoughts.append(t)
+        ent_list.append(ent)
         new_thoughts.append(t)
 
     # Force-link new thoughts to source and track directed edges

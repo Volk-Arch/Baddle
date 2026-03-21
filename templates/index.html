@@ -1192,11 +1192,16 @@
     if (n === 0) return;
 
     const repulsion = 3000;
+    const clusterRepulsion = 6000;  // extra repulsion between different clusters
     const attraction = 0.06;
     const damping = 0.85;
     const centerPull = 0.01;
     const cx = W / 2, cy = H / 2;
     const pad = 30;
+
+    // Build node-to-cluster map
+    const nodeCluster = new Array(n).fill(-1);
+    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { if (idx < n) nodeCluster[idx] = ci; }));
 
     for (let iter = 0; iter < iterations; iter++) {
       // Repulsion between all pairs
@@ -1208,7 +1213,10 @@
           let dx = nodes[i].x - nodes[j].x;
           let dy = nodes[i].y - nodes[j].y;
           let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          let force = repulsion / (dist * dist);
+          // Extra repulsion between nodes of different clusters
+          const rep = (nodeCluster[i] >= 0 && nodeCluster[j] >= 0 && nodeCluster[i] !== nodeCluster[j])
+            ? clusterRepulsion : repulsion;
+          let force = rep / (dist * dist);
           fx += (dx / dist) * force;
           fy += (dy / dist) * force;
         }
@@ -1406,6 +1414,14 @@
         svg.appendChild(halo);
       }
 
+      // Entropy ring (green=confident, yellow=medium, red=uncertain)
+      const nodeEntData = (graphData.entropies && graphData.entropies[i]) || {};
+      const nodeUnc = nodeEntData.unc || 0;  // fraction of uncertain tokens
+      const entNorm = Math.min(1, nodeUnc * 3);  // 33%+ uncertain = fully red
+      const entR = Math.round(entNorm < 0.5 ? entNorm * 2 * 255 : 255);
+      const entG = Math.round(entNorm < 0.5 ? 255 : (1 - (entNorm - 0.5) * 2) * 255);
+      const entColor = `rgb(${entR},${entG},50)`;
+
       if (isCollapsed) {
         // Collapsed nodes: rounded rectangle (diamond-like)
         const size = isSelected ? 16 : 13;
@@ -1414,7 +1430,7 @@
         rect.setAttribute('width', size * 2); rect.setAttribute('height', size * 2);
         rect.setAttribute('rx', 4); rect.setAttribute('ry', 4);
         rect.setAttribute('fill', color);
-        rect.setAttribute('stroke', isSelected ? '#facc15' : '#e2e8f0');
+        rect.setAttribute('stroke', isSelected ? '#facc15' : entColor);
         rect.setAttribute('stroke-width', isSelected ? 3 : 2);
         rect.style.cursor = 'pointer';
         rect.dataset.nodeIdx = i;
@@ -1425,8 +1441,8 @@
         circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
         circle.setAttribute('r', isSelected ? 13 : (ci >= 0 ? 10 : 7));
         circle.setAttribute('fill', color);
-        circle.setAttribute('stroke', isSelected ? '#facc15' : '#e2e8f0');
-        circle.setAttribute('stroke-width', isSelected ? 3 : (ci >= 0 ? 2 : 1));
+        circle.setAttribute('stroke', isSelected ? '#facc15' : entColor);
+        circle.setAttribute('stroke-width', isSelected ? 3 : 2);
         circle.style.cursor = 'pointer';
         circle.dataset.nodeIdx = i;
         svg.appendChild(circle);
@@ -1587,7 +1603,10 @@
       if (target && graphDragIdx < 0 && !graphPanning) {
         const idx = parseInt(target.dataset.nodeIdx);
         if (idx >= 0 && idx < graphData.thoughts.length) {
-          tooltip.textContent = graphData.thoughts[idx];
+          const entData = (graphData.entropies && graphData.entropies[idx]) || {};
+          const avg = (entData.avg || 0).toFixed(2);
+          const unc = ((entData.unc || 0) * 100).toFixed(0);
+          tooltip.textContent = graphData.thoughts[idx] + '\n[avg: ' + avg + '  unc: ' + unc + '%]';
           const rect = svg.getBoundingClientRect();
           tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
           tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
@@ -1683,9 +1702,13 @@
       const dot = ci >= 0
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
         : '<span style="color:#64748b">&#9675;</span> ';
+      const entData = (graphData.entropies && graphData.entropies[i]) || {};
+      const avg = (entData.avg || 0).toFixed(2);
+      const unc = ((entData.unc || 0) * 100).toFixed(0);
+      const entBadge = '<span style="color:#64748b;font-size:11px;white-space:nowrap;margin-left:8px">' + avg + ' / ' + unc + '%</span>';
       const del = '<span onclick="graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
       return '<div class="mb-2 text-sm text-slate-200" style="display:flex;align-items:baseline">'
-        + '<span style="flex:1">' + dot + t + '</span>' + del + '</div>';
+        + '<span style="flex:1">' + dot + t + '</span>' + entBadge + del + '</div>';
     }).join('');
   }
 
