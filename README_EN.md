@@ -49,11 +49,15 @@ Two modes of thinking, implemented literally:
 - **temp / top_k** — tune generation parameters directly in the graph interface
 - **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
 - **Collapse ▾** — short (paragraph) or long (detailed essay)
-- **Node entropy** — node borders colored by model confidence (green → yellow → red). Thought list and tooltip show average entropy and percentage of uncertain tokens
-- **→ Flow** — directed flow layout: nodes arranged left-to-right by depth (Think→Expand→Elaborate→Collapse). Dead-end branches fade out. Toggle between free graph and thinking flow
+- **Node entropy** — borders colored by confidence (green → red), per-token heatmap in detail panel on click
+- **→ Flow** — directed flow layout: nodes in columns by depth (Topic→Think→Expand→Elaborate). Dead-end branches fade out. Toggle free graph / flow
 - **Source tracking** — selecting a node shows which thought it originated from (purple "↳ from:")
 - **Thought list** — sorted by cluster, click text to select node on graph, click node to highlight cluster in list
-- **Topic diamonds** — root topics shown as diamonds, multiple topics supported in one graph
+- **Topic nodes** — root topics as full diamond-shaped nodes (depth=-1), multiple topics in one graph, directed edges to children
+- **Fan layout** — in free mode clusters occupy sectors, nodes don't overlap
+- **✂ Select & Collapse** — manual collapse: select arbitrary nodes by clicking, then collapse into one
+- **seed** — reproducible generation in graph mode
+- **Heatmap scale** — adjustable entropy scale next to the heatmap checkbox
 
 Works only in in-process mode (without `--server`).
 
