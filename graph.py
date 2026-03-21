@@ -64,7 +64,7 @@ def init_graph(llm):
 
 
 # ── state ────────────────────────────────────────────────────────────────────
-_graph = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [], "embeddings": [], "entropies": []}
+_graph = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [], "embeddings": [], "entropies": [], "depths": []}
 
 
 # ── generation helpers ───────────────────────────────────────────────────────
@@ -260,6 +260,7 @@ def _graph_response(thoughts, edges, clusters, **extra):
         "directed_edges": _graph.get("directed_edges", []),
         "hub_nodes": list(_graph.get("hub_nodes", set())),
         "entropies": _graph.get("entropies", []),
+        "depths": _graph.get("depths", []),
     }
     resp.update(extra)
     return jsonify(resp)
@@ -291,14 +292,17 @@ def graph_think():
         _graph["manual_unlinks"] = []
         _graph["embeddings"] = []
         _graph["entropies"] = []
+        _graph["depths"] = []
         _graph["directed_edges"] = []
         _graph["hub_nodes"] = set()
     thoughts = list(existing)
     ent_list = _graph.setdefault("entropies", [])
-    # Pad entropies for existing thoughts (e.g. manually added ones with no entropy)
+    depth_list = _graph.setdefault("depths", [])
     while len(ent_list) < len(thoughts):
         ent_list.append({"avg": 0.0, "unc": 0.0})
-    new_thoughts = []  # only thoughts generated in THIS call (for dedup prompt)
+    while len(depth_list) < len(thoughts):
+        depth_list.append(0)
+    new_thoughts = []
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
@@ -312,6 +316,7 @@ def graph_think():
             continue
         thoughts.append(t)
         ent_list.append(ent)
+        depth_list.append(0)
         new_thoughts.append(t)
 
     _graph["thoughts"] = thoughts
@@ -346,6 +351,7 @@ def graph_add():
         return jsonify({"error": "empty thought"})
     _graph["thoughts"].append(text)
     _graph.setdefault("entropies", []).append({"avg": 0.0, "unc": 0.0})
+    _graph.setdefault("depths", []).append(0)
     thoughts = _graph["thoughts"]
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
@@ -366,6 +372,9 @@ def graph_remove():
     ent_list = _graph.get("entropies", [])
     if idx < len(ent_list):
         ent_list.pop(idx)
+    depth_list = _graph.get("depths", [])
+    if idx < len(depth_list):
+        depth_list.pop(idx)
     _remap_manual_edges([idx])
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
@@ -440,13 +449,19 @@ def graph_collapse():
 
     valid_indices = [i for i in indices if i < len(thoughts)]
     ent_list = _graph.setdefault("entropies", [])
+    depth_list = _graph.setdefault("depths", [])
+    # Compute new depth before removing
+    max_depth = max((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
     for i in sorted(valid_indices, reverse=True):
         thoughts.pop(i)
         if i < len(ent_list):
             ent_list.pop(i)
+        if i < len(depth_list):
+            depth_list.pop(i)
     _remap_manual_edges(valid_indices)
     thoughts.append(text)
     ent_list.append(ent)
+    depth_list.append(max_depth + 1)
     _graph["thoughts"] = thoughts
 
     edges = _compute_edges(thoughts, threshold, sim_mode)
@@ -497,8 +512,12 @@ def graph_expand():
     topic = _graph.get("topic", "")
     new_thoughts = []
     ent_list = _graph.setdefault("entropies", [])
+    depth_list = _graph.setdefault("depths", [])
     while len(ent_list) < len(thoughts):
         ent_list.append({"avg": 0.0, "unc": 0.0})
+    while len(depth_list) < len(thoughts):
+        depth_list.append(0)
+    parent_depth = depth_list[idx] if idx < len(depth_list) else 0
 
     system = _p(lang, "think")
 
@@ -525,7 +544,18 @@ def graph_expand():
             continue
         thoughts.append(t)
         ent_list.append(ent)
+        depth_list.append(parent_depth + 1)
         new_thoughts.append(t)
+
+    # Track directed edges for expand (parent → child)
+    manual_links = _graph.setdefault("manual_links", [])
+    directed = _graph.setdefault("directed_edges", [])
+    for t in new_thoughts:
+        new_idx = thoughts.index(t)
+        pair = [min(idx, new_idx), max(idx, new_idx)]
+        if pair not in manual_links:
+            manual_links.append(pair)
+        directed.append([idx, new_idx])
 
     _graph["thoughts"] = thoughts
     edges = _compute_edges(thoughts, threshold, sim_mode)
@@ -556,8 +586,12 @@ def graph_elaborate():
     topic = _graph.get("topic", "")
     new_thoughts = []
     ent_list = _graph.setdefault("entropies", [])
+    depth_list = _graph.setdefault("depths", [])
     while len(ent_list) < len(thoughts):
         ent_list.append({"avg": 0.0, "unc": 0.0})
+    while len(depth_list) < len(thoughts):
+        depth_list.append(0)
+    parent_depth = depth_list[idx] if idx < len(depth_list) else 0
 
     system = _p(lang, "think")
 
@@ -586,6 +620,7 @@ def graph_elaborate():
             continue
         thoughts.append(t)
         ent_list.append(ent)
+        depth_list.append(parent_depth + 1)
         new_thoughts.append(t)
 
     # Force-link new thoughts to source and track directed edges

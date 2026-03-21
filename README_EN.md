@@ -50,6 +50,8 @@ Two modes of thinking, implemented literally:
 - **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
 - **Collapse ▾** — short (paragraph) or long (detailed essay)
 - **Node entropy** — node borders colored by model confidence (green → yellow → red). Thought list and tooltip show average entropy and percentage of uncertain tokens
+- **→ Flow** — directed flow layout: nodes arranged left-to-right by depth (Think→Expand→Elaborate→Collapse). Dead-end branches fade out. Toggle between free graph and thinking flow
+- **Source tracking** — selecting a node shows which thought it originated from (purple "↳ from:")
 
 Works only in in-process mode (without `--server`).
 

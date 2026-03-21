@@ -378,6 +378,11 @@
         class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors">
         ↩ Undo
       </button>
+      <button onclick="graphToggleFlow()" id="graph-btn-flow"
+        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        title="Toggle directed flow layout (left-to-right by depth)">
+        → Flow
+      </button>
       <button onclick="graphRecalcLayout()"
         class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
         title="Recalculate node positions">
@@ -417,6 +422,9 @@
           <button onclick="graphDetailElaborate()" class="px-2 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
           <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white rounded text-xs">Edit</button>
           <button onclick="graphDetailClose()" class="px-2 py-1 text-slate-400 hover:text-white text-xs">&times; Close</button>
+        </div>
+        <div id="graph-detail-source" class="text-xs mb-2" style="display:none;">
+          <span class="text-violet-400">↳ from:</span> <span id="graph-detail-source-text" class="text-violet-300"></span>
         </div>
         <div id="graph-detail-view" class="text-slate-200 text-sm whitespace-pre-wrap"></div>
         <div id="graph-detail-edit-wrap" style="display:none;" class="flex gap-2">
@@ -1081,6 +1089,7 @@
   let graphData = { thoughts: [], edges: [], clusters: [] };
   let graphSelectedNode = -1;
   let graphLinkMode = false;  // toggle for manual linking
+  let graphFlowMode = false;  // directed flow layout
   let graphZoom = 1;
   let graphPanX = 0, graphPanY = 0;
   let graphNodePositions = [];  // {x, y, vx, vy, fixed} per node
@@ -1203,6 +1212,11 @@
     const nodeCluster = new Array(n).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { if (idx < n) nodeCluster[idx] = ci; }));
 
+    // Flow mode: compute target X per depth column
+    const depths = graphData.depths || [];
+    const maxDepth = Math.max(0, ...depths);
+    const flowSpring = 0.3;  // strength of horizontal snap to depth column
+
     for (let iter = 0; iter < iterations; iter++) {
       // Repulsion between all pairs
       for (let i = 0; i < n; i++) {
@@ -1213,29 +1227,54 @@
           let dx = nodes[i].x - nodes[j].x;
           let dy = nodes[i].y - nodes[j].y;
           let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          // Extra repulsion between nodes of different clusters
           const rep = (nodeCluster[i] >= 0 && nodeCluster[j] >= 0 && nodeCluster[i] !== nodeCluster[j])
             ? clusterRepulsion : repulsion;
           let force = rep / (dist * dist);
-          fx += (dx / dist) * force;
-          fy += (dy / dist) * force;
+          if (graphFlowMode) {
+            // In flow mode, only vertical repulsion matters
+            fy += (dy / dist) * force;
+            fx += (dx / dist) * force * 0.2;  // weaker horizontal repulsion
+          } else {
+            fx += (dx / dist) * force;
+            fy += (dy / dist) * force;
+          }
         }
-        // Attraction along edges
+        // Attraction along edges — spring toward ideal length
+        const directedSet2 = new Set();
+        graphDirectedEdges.forEach(([a, b]) => directedSet2.add(a + ',' + b));
         edges.forEach(e => {
           let other = -1;
           if (e.from === i) other = e.to;
           else if (e.to === i) other = e.from;
           if (other < 0) return;
+          // Shorter ideal length for parent-child (directed) edges
+          const isDir = directedSet2.has(e.from + ',' + e.to) || directedSet2.has(e.to + ',' + e.from);
+          const idealLen = isDir ? 60 : 100;
           let dx = nodes[other].x - nodes[i].x;
           let dy = nodes[other].y - nodes[i].y;
           let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          let strength = attraction;
-          fx += dx * strength;
-          fy += dy * strength;
+          let displacement = dist - idealLen;
+          let strength = attraction * (isDir ? 2 : 1) * displacement / dist;
+          if (graphFlowMode) {
+            fy += dy * strength;
+          } else {
+            fx += dx * strength;
+            fy += dy * strength;
+          }
         });
-        // Pull toward center
-        fx += (cx - nodes[i].x) * centerPull;
-        fy += (cy - nodes[i].y) * centerPull;
+        // Flow mode: spring toward depth column
+        if (graphFlowMode && i < depths.length) {
+          const d = depths[i] || 0;
+          const targetX = pad + 60 + (maxDepth > 0 ? (d / maxDepth) * (W - 2 * pad - 120) : 0);
+          fx += (targetX - nodes[i].x) * flowSpring;
+        }
+        // Pull toward center (vertical only in flow mode)
+        if (graphFlowMode) {
+          fy += (cy - nodes[i].y) * centerPull;
+        } else {
+          fx += (cx - nodes[i].x) * centerPull;
+          fy += (cy - nodes[i].y) * centerPull;
+        }
         nodes[i].vx = (nodes[i].vx + fx) * damping;
         nodes[i].vy = (nodes[i].vy + fy) * damping;
       }
@@ -1381,15 +1420,18 @@
         line.setAttribute('stroke-dasharray', '6,3');
       } else {
         const w = Math.max(0, Math.min(1, e.weight || 0));
-        const r = Math.round(w < 0.5 ? 59 + w * 2 * 187 : 246 - (w - 0.5) * 2 * 230);
-        const g = Math.round(w < 0.5 ? 130 + w * 2 * 28 : 158 + (w - 0.5) * 2 * 27);
-        const b2 = Math.round(w < 0.5 ? 246 - w * 2 * 231 : 15);
-        line.setAttribute('stroke', `rgb(${r},${g},${b2})`);
-        line.setAttribute('stroke-width', 1.5 + w * 1.5);
-        line.setAttribute('stroke-opacity', 0.4 + w * 0.4);
+        line.setAttribute('stroke', '#94a3b8');
+        line.setAttribute('stroke-width', 1 + w * 3);
+        line.setAttribute('stroke-opacity', 0.3 + w * 0.5);
       }
       svg.appendChild(line);
     });
+
+    // In flow mode, detect dead-end nodes (no outgoing directed edges)
+    const hasChildren = new Set();
+    if (graphFlowMode) {
+      graphDirectedEdges.forEach(([from, to]) => hasChildren.add(from));
+    }
 
     // Draw nodes
     positions.forEach((p, i) => {
@@ -1399,6 +1441,7 @@
       const isSelected = i === graphSelectedNode;
       const isCollapsed = graphCollapsedNodes.has(i);
       const isHub = graphHubNodes.has(i);
+      const isDeadEnd = graphFlowMode && !hasChildren.has(i) && (graphData.depths || [])[i] > 0;
 
       // Hub halo (drawn behind the node)
       if (isHub && !isCollapsed) {
@@ -1431,19 +1474,21 @@
         rect.setAttribute('rx', 4); rect.setAttribute('ry', 4);
         rect.setAttribute('fill', color);
         rect.setAttribute('stroke', isSelected ? '#facc15' : entColor);
-        rect.setAttribute('stroke-width', isSelected ? 3 : 2);
+        rect.setAttribute('stroke-width', isSelected ? 3 : 1.5);
         rect.style.cursor = 'pointer';
+        if (isDeadEnd) rect.setAttribute('opacity', 0.45);
         rect.dataset.nodeIdx = i;
         svg.appendChild(rect);
       } else {
         // Normal nodes: circle
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
-        circle.setAttribute('r', isSelected ? 13 : (ci >= 0 ? 10 : 7));
+        circle.setAttribute('r', isSelected ? 14 : (ci >= 0 ? 11 : 8));
         circle.setAttribute('fill', color);
         circle.setAttribute('stroke', isSelected ? '#facc15' : entColor);
-        circle.setAttribute('stroke-width', isSelected ? 3 : 2);
+        circle.setAttribute('stroke-width', isSelected ? 3 : 1.5);
         circle.style.cursor = 'pointer';
+        if (isDeadEnd) circle.setAttribute('opacity', 0.45);
         circle.dataset.nodeIdx = i;
         svg.appendChild(circle);
       }
@@ -1461,6 +1506,56 @@
       label.textContent = short;
       svg.appendChild(label);
     });
+
+    // Topic pseudo-node (visual root)
+    const topic = document.getElementById('graph-topic').value.trim();
+    if (topic && thoughts.length) {
+      const { W, H } = graphGetDimensions();
+      const tx = graphFlowMode ? 25 : W / 2;
+      const ty = graphFlowMode ? H / 2 : 20;
+
+      // Dashed lines from topic to all depth=0 nodes
+      const depths = graphData.depths || [];
+      positions.forEach((p, i) => {
+        if (!p) return;
+        const d = i < depths.length ? depths[i] : 0;
+        if (d === 0) {
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', tx); line.setAttribute('y1', ty);
+          line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
+          line.setAttribute('stroke', '#f59e0b');
+          line.setAttribute('stroke-width', 1);
+          line.setAttribute('stroke-opacity', 0.3);
+          line.setAttribute('stroke-dasharray', '4,4');
+          line.style.pointerEvents = 'none';
+          svg.appendChild(line);
+        }
+      });
+
+      // Diamond shape for topic node
+      const size = 12;
+      const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      diamond.setAttribute('points',
+        `${tx},${ty-size} ${tx+size},${ty} ${tx},${ty+size} ${tx-size},${ty}`);
+      diamond.setAttribute('fill', '#f59e0b');
+      diamond.setAttribute('stroke', '#fbbf24');
+      diamond.setAttribute('stroke-width', 2);
+      diamond.style.pointerEvents = 'none';
+      svg.appendChild(diamond);
+
+      // Topic label
+      const topicLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      topicLabel.setAttribute('x', tx);
+      topicLabel.setAttribute('y', ty - size - 6);
+      topicLabel.setAttribute('text-anchor', 'middle');
+      topicLabel.setAttribute('fill', '#fbbf24');
+      topicLabel.setAttribute('font-size', '11');
+      topicLabel.setAttribute('font-weight', 'bold');
+      topicLabel.style.pointerEvents = 'none';
+      const topicShort = topic.length > 30 ? topic.slice(0, 27) + '...' : topic;
+      topicLabel.textContent = topicShort;
+      svg.appendChild(topicLabel);
+    }
 
     // Tooltip element (reused)
     let tooltip = document.getElementById('graph-tooltip');
@@ -1721,6 +1816,21 @@
     return { sim_mode, threshold, lang, temp, top_k };
   }
 
+  function graphToggleFlow() {
+    graphFlowMode = !graphFlowMode;
+    const btn = document.getElementById('graph-btn-flow');
+    if (graphFlowMode) {
+      btn.style.background = '#0369a1';
+      btn.onmouseover = function() { this.style.background='#0284c7'; };
+      btn.onmouseout = function() { this.style.background='#0369a1'; };
+    } else {
+      btn.style.background = '';
+      btn.onmouseover = null;
+      btn.onmouseout = null;
+    }
+    graphDrawSvg();
+  }
+
   function graphToggleLinkMode() {
     graphLinkMode = !graphLinkMode;
     const btn = document.getElementById('graph-btn-link');
@@ -1813,6 +1923,18 @@
     const ci = nodeCluster[idx];
     const color = ci >= 0 ? graphClusterColors[ci % graphClusterColors.length] : '#64748b';
     document.getElementById('graph-detail-dot').style.color = color;
+    // Show source (parent) if this node was created via expand/elaborate
+    const sourceDiv = document.getElementById('graph-detail-source');
+    const sourceText = document.getElementById('graph-detail-source-text');
+    let parentIdx = -1;
+    graphDirectedEdges.forEach(([from, to]) => { if (to === idx) parentIdx = from; });
+    if (parentIdx >= 0 && parentIdx < graphData.thoughts.length) {
+      const pt = graphData.thoughts[parentIdx];
+      sourceText.textContent = pt.length > 80 ? pt.slice(0, 77) + '...' : pt;
+      sourceDiv.style.display = '';
+    } else {
+      sourceDiv.style.display = 'none';
+    }
   }
 
   function graphDetailClose() {
@@ -2132,6 +2254,9 @@
     graphData = { thoughts: [], edges: [], clusters: [] };
     graphSelectedNode = -1;
     graphLinkMode = false;
+    graphFlowMode = false;
+    const flowBtn = document.getElementById('graph-btn-flow');
+    if (flowBtn) { flowBtn.style.background = ''; flowBtn.onmouseover = null; flowBtn.onmouseout = null; }
     graphZoom = 1; graphPanX = 0; graphPanY = 0;
     const linkBtn = document.getElementById('graph-btn-link');
     if (linkBtn) { linkBtn.style.background = ''; linkBtn.onmouseover = null; linkBtn.onmouseout = null; }
