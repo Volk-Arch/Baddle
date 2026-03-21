@@ -49,6 +49,7 @@ Two modes of thinking, implemented literally:
 - **temp / top_k** — tune generation parameters directly in the graph interface
 - **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
 - **Collapse ▾** — short (paragraph) or long (detailed essay)
+- **Node entropy** — node borders colored by model confidence (green → yellow → red). Thought list and tooltip show average entropy and percentage of uncertain tokens
 
 Works only in in-process mode (without `--server`).
 
