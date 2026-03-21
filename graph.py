@@ -8,6 +8,51 @@ from main import _sample, _get_logits, _entropy, format_chat, get_embedding, cos
 
 graph_bp = Blueprint("graph", __name__)
 
+# ── language-aware system prompts ────────────────────────────────────────────
+_PROMPTS = {
+    "en": {
+        "think":       "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer directly.",
+        "collapse":    "/no_think\nYou combine ideas into a coherent paragraph. Write naturally, do not list the ideas separately. Answer directly.",
+        "deeper":      "Go DEEPER into this specific idea. Unpack a detail, consequence, or mechanism. Not a new angle — dig into THIS idea.",
+        "branch":      "Generate a NEW related idea that branches from the source idea. A different angle on the same subject.",
+        "new_idea":    "Generate a NEW different idea.",
+        "one_idea":    "Generate one idea.",
+        "topic":       "Topic",
+        "already":     "Already suggested",
+        "ideas":       "Ideas to combine",
+        "write_para":  "Write one coherent paragraph that connects these ideas.",
+        "collapse_long": "/no_think\nYou write a detailed essay combining the given ideas. Develop each idea, show connections between them, add reasoning and examples. Write naturally as flowing text, not a list. Answer directly.",
+        "write_long":  "Write a detailed, multi-paragraph text that develops and connects these ideas.",
+        "source":      "Source idea",
+        "elaborate":   "Idea to elaborate",
+        "direction":   "Direction",
+        "already_gen": "Already generated",
+        "already_elab":"Already elaborated",
+    },
+    "ru": {
+        "think":       "/no_think\nТы генерируешь ОДНУ короткую идею (1 предложение, максимум 15 слов). Без нумерации, без списков, только идея. Отвечай сразу.",
+        "collapse":    "/no_think\nОбъедини идеи в связный абзац. Пиши естественно, не перечисляй идеи отдельно. Отвечай сразу.",
+        "deeper":      "Углубись В ЭТУ конкретную идею. Раскрой деталь, следствие или механизм. Не новый ракурс — копай ВГЛУБЬ.",
+        "branch":      "Сгенерируй НОВУЮ связанную идею, ответвлённую от исходной. Другой ракурс на ту же тему.",
+        "new_idea":    "Сгенерируй НОВУЮ, другую идею.",
+        "one_idea":    "Сгенерируй одну идею.",
+        "topic":       "Тема",
+        "already":     "Уже предложено",
+        "ideas":       "Идеи для объединения",
+        "write_para":  "Напиши один связный абзац, объединяющий эти идеи.",
+        "collapse_long": "/no_think\nНапиши развёрнутое эссе, объединяющее данные идеи. Раскрой каждую идею, покажи связи между ними, добавь рассуждения и примеры. Пиши связным текстом, не списком. Отвечай сразу.",
+        "write_long":  "Напиши развёрнутый текст из нескольких абзацев, раскрывающий и связывающий эти идеи.",
+        "source":      "Исходная идея",
+        "elaborate":   "Идея для углубления",
+        "direction":   "Направление",
+        "already_gen": "Уже сгенерировано",
+        "already_elab":"Уже углублено",
+    },
+}
+
+def _p(lang: str, key: str) -> str:
+    return _PROMPTS.get(lang, _PROMPTS["en"]).get(key, _PROMPTS["en"][key])
+
 # ── module-level model reference (set by init_graph) ─────────────────────────
 _llm = None
 
@@ -24,7 +69,7 @@ _graph = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [],
 
 # ── generation helpers ───────────────────────────────────────────────────────
 
-def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9) -> str:
+def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40) -> str:
     """Generate text from chat messages for graph mode."""
     prompt_str = format_chat(_llm, messages)
     _llm.reset()
@@ -35,7 +80,7 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
     eos = _llm.token_eos()
     think_done = False
     for _ in range(max_tokens):
-        tok = _sample(_llm, temp)
+        tok = _sample(_llm, temp, top_k)
         _llm.eval([tok])
         if tok == eos:
             break
@@ -54,18 +99,18 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
     return text.strip()
 
 
-def _generate_thought(topic: str, existing: list[str]) -> str:
+def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40) -> str:
     """Generate one short thought about the topic via chat."""
-    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the topic. Answer directly."
-    user = f"Topic: {topic}"
+    system = _p(lang, "think")
+    user = f"{_p(lang, 'topic')}: {topic}"
     if existing:
-        user += "\nAlready suggested:\n" + "\n".join(f"- {t}" for t in existing[-5:])
-        user += "\nGenerate a NEW different idea."
+        user += f"\n{_p(lang, 'already')}:\n" + "\n".join(f"- {t}" for t in existing[-5:])
+        user += f"\n{_p(lang, 'new_idea')}"
     else:
-        user += "\nGenerate one idea."
+        user += f"\n{_p(lang, 'one_idea')}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text = _graph_generate(messages, max_tokens=120)
+    text = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
     text = re.split(r"\s*(?:Human|User|Assistant)\s*:", text, flags=re.IGNORECASE)[0]
     text = text.split("\n")[0].strip()
     for prefix in ["- ", "* ", "1. ", "1) "]:
@@ -221,6 +266,9 @@ def graph_think():
     n = int(data.get("n", 6))
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
+    lang = data.get("lang", "en")
+    temp = float(data.get("temp", 0.9))
+    top_k = int(data.get("top_k", 40))
     existing = data.get("existing", [])
 
     if not topic:
@@ -239,7 +287,7 @@ def graph_think():
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        t = _generate_thought(topic, new_thoughts)
+        t = _generate_thought(topic, new_thoughts, lang, temp, top_k)
         if not t or len(t) < 10:
             continue
         if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
@@ -253,6 +301,20 @@ def graph_think():
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
 
+    return _graph_response(thoughts, edges, clusters)
+
+
+@graph_bp.route("/graph/recalc", methods=["POST"])
+def graph_recalc():
+    """Recompute edges and clusters with a new threshold (no generation)."""
+    data = request.get_json(force=True)
+    threshold = float(data.get("threshold", 0.91))
+    sim_mode = data.get("sim_mode", "embedding")
+    thoughts = _graph["thoughts"]
+    if not thoughts:
+        return jsonify({"error": "no thoughts"})
+    edges = _compute_edges(thoughts, threshold, sim_mode)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
     return _graph_response(thoughts, edges, clusters)
 
 
@@ -329,6 +391,10 @@ def graph_collapse():
     indices = data.get("cluster", [])
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
+    lang = data.get("lang", "en")
+    temp = float(data.get("temp", 0.7))
+    top_k = int(data.get("top_k", 40))
+    collapse_mode = data.get("collapse_mode", "short")
     thoughts = _graph["thoughts"]
     topic = _graph["topic"]
 
@@ -336,13 +402,20 @@ def graph_collapse():
         return jsonify({"error": "no cluster to collapse"})
 
     cluster_texts = [thoughts[i] for i in indices if i < len(thoughts)]
-    system = "/no_think\nYou combine ideas into a coherent paragraph. Write naturally, do not list the ideas separately. Answer in the same language as the topic. Answer directly."
-    user = f"Topic: {topic}\n\nIdeas to combine:\n"
+    if collapse_mode == "long":
+        system = _p(lang, "collapse_long")
+        instruction = _p(lang, "write_long")
+        max_tokens = 1500
+    else:
+        system = _p(lang, "collapse")
+        instruction = _p(lang, "write_para")
+        max_tokens = 400
+    user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
     user += "\n".join(f"- {t}" for t in cluster_texts)
-    user += "\n\nWrite one coherent paragraph that connects these ideas."
+    user += f"\n\n{instruction}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text = _graph_generate(messages, max_tokens=400, temp=0.7)
+    text = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k)
 
     valid_indices = [i for i in indices if i < len(thoughts)]
     for i in sorted(valid_indices, reverse=True):
@@ -387,6 +460,9 @@ def graph_expand():
     n = int(data.get("n", 3))
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
+    lang = data.get("lang", "en")
+    temp = float(data.get("temp", 0.9))
+    top_k = int(data.get("top_k", 40))
     thoughts = _graph["thoughts"]
 
     if idx < 0 or idx >= len(thoughts):
@@ -396,18 +472,18 @@ def graph_expand():
     topic = _graph.get("topic", "")
     new_thoughts = []
 
-    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the source text. Answer directly."
+    system = _p(lang, "think")
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        user = f"Topic: {topic}\nSource idea: {source}"
+        user = f"{_p(lang, 'topic')}: {topic}\n{_p(lang, 'source')}: {source}"
         if new_thoughts:
-            user += "\nAlready generated:\n" + "\n".join(f"- {t}" for t in new_thoughts)
-        user += "\nGenerate a NEW related idea that branches from the source idea. A different angle on the same subject."
+            user += f"\n{_p(lang, 'already_gen')}:\n" + "\n".join(f"- {t}" for t in new_thoughts)
+        user += f"\n{_p(lang, 'branch')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t = _graph_generate(messages, max_tokens=120)
+        t = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
         t = re.split(r"\s*(?:Human|User|Assistant)\s*:", t, flags=re.IGNORECASE)[0]
         t = t.split("\n")[0].strip()
         for prefix in ["- ", "* ", "1. ", "1) "]:
@@ -438,6 +514,9 @@ def graph_elaborate():
     n = int(data.get("n", 3))
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
+    lang = data.get("lang", "en")
+    temp = float(data.get("temp", 0.9))
+    top_k = int(data.get("top_k", 40))
     direction = data.get("direction", "").strip()
     thoughts = _graph["thoughts"]
 
@@ -448,20 +527,20 @@ def graph_elaborate():
     topic = _graph.get("topic", "")
     new_thoughts = []
 
-    system = "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer in the same language as the source text. Answer directly."
+    system = _p(lang, "think")
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        user = f"Topic: {topic}\nIdea to elaborate: {source}"
+        user = f"{_p(lang, 'topic')}: {topic}\n{_p(lang, 'elaborate')}: {source}"
         if direction:
-            user += f"\nDirection: {direction}"
+            user += f"\n{_p(lang, 'direction')}: {direction}"
         if new_thoughts:
-            user += "\nAlready elaborated:\n" + "\n".join(f"- {t}" for t in new_thoughts)
-        user += "\nGo DEEPER into this specific idea. Unpack a detail, consequence, or mechanism. Not a new angle — dig into THIS idea."
+            user += f"\n{_p(lang, 'already_elab')}:\n" + "\n".join(f"- {t}" for t in new_thoughts)
+        user += f"\n{_p(lang, 'deeper')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t = _graph_generate(messages, max_tokens=120)
+        t = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k)
         t = re.split(r"\s*(?:Human|User|Assistant)\s*:", t, flags=re.IGNORECASE)[0]
         t = t.split("\n")[0].strip()
         for prefix in ["- ", "* ", "1. ", "1) "]:

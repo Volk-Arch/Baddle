@@ -38,13 +38,17 @@ Two modes of thinking, implemented literally:
 - **Right-click** on a node → context menu (Expand / Elaborate / Edit / Delete)
 - **Hover** → full thought text
 - **Drag** → reposition nodes
-- **Click two nodes** → connect/disconnect (manual links shown as dashed lines)
+- **Link mode** → toggle button enables linking, click two nodes → connect/disconnect (dashed lines)
 - **Convex hull** — semi-transparent boundary around clusters
 - **Collapsed nodes** — square shape, larger (visually distinct from regular thoughts)
 - **Edges** colored by connection strength: blue → yellow → green
+- **Scroll wheel** — zoom graph, **drag background** — pan
 - **Ctrl+Z** — undo, **Delete** — remove node, **Esc** — deselect
 - **⟳ Layout** — recalculate node positions
 - **↓ Save / ↑ Load** — export/import graph as JSON (thoughts, edges, positions, clusters)
+- **temp / top_k** — tune generation parameters directly in the graph interface
+- **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
+- **Collapse ▾** — short (paragraph) or long (detailed essay)
 
 Works only in in-process mode (without `--server`).
 
@@ -107,6 +111,6 @@ text and KV cache. In-process mode only.
 
 - **Confidence heatmap** — across all modes, tokens colored by entropy
 - **Roles** — presets from `roles.json` (prefix in step/parallel/compare, system message in chat)
-- **Language** — EN/RU switcher: roles and default system prompt in the selected language
+- **Language** — EN/RU switcher: roles, system prompts (including graph mode) in the selected language
 - **Seed** — reproducible results (parallel, compare)
 - **Token counter** — used / available context tokens

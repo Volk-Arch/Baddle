@@ -291,6 +291,8 @@
     <div class="flex flex-wrap gap-3 items-center mb-4">
       <span class="text-slate-400 text-sm">temp</span>
       <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
+      <span class="text-slate-400 text-sm">top_k</span>
+      <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:70px">
       <span class="text-slate-400 text-sm">max</span>
       <input id="chat-max" type="number" value="200" min="1" max="2000" style="width:80px">
       <select id="tpl-select" onchange="onTplSelect()" style="display:none;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:0.875rem;">
@@ -341,7 +343,12 @@
           <option value="jaccard">Jaccard</option>
         </select>
         <span class="text-slate-400 text-sm">threshold</span>
-        <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px">
+        <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
+          onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
+        <span class="text-slate-400 text-sm">temp</span>
+        <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
+        <span class="text-slate-400 text-sm">top_k</span>
+        <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
         <button id="graph-btn-think" onclick="graphThink()"
           class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
           Think
@@ -362,6 +369,11 @@
     <div id="graph-actions-bar" class="flex gap-2 mb-3 items-center flex-wrap" style="display:none;">
       <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
       <span class="flex-1"></span>
+      <button onclick="graphToggleLinkMode()" id="graph-btn-link"
+        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        title="Toggle link mode: click two nodes to connect/disconnect">
+        🔗 Link
+      </button>
       <button onclick="graphUndo()" id="graph-btn-undo" style="display:none"
         class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors">
         ↩ Undo
@@ -393,7 +405,7 @@
         <svg id="graph-svg" width="100%" height="520"
           style="background:#0f172a; border:1px solid #334155; border-radius:8px; user-select:none;"></svg>
         <div class="flex items-center mt-1">
-          <span class="text-slate-500 text-xs">Drag nodes &middot; Click node to select &middot; Click two nodes to connect/disconnect</span>
+          <span class="text-slate-500 text-xs">Drag nodes &middot; Click node to select &middot; Enable Link mode to connect/disconnect nodes</span>
         </div>
       </div>
       <!-- Detail panel: appears when a node is selected -->
@@ -408,7 +420,8 @@
         </div>
         <div id="graph-detail-view" class="text-slate-200 text-sm whitespace-pre-wrap"></div>
         <div id="graph-detail-edit-wrap" style="display:none;" class="flex gap-2">
-          <textarea id="graph-detail-textarea" class="flex-1 text-sm" rows="3" style="min-height:60px;"></textarea>
+          <textarea id="graph-detail-textarea" class="flex-1 text-sm" rows="5"
+            style="min-height:120px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:8px; border-radius:6px;"></textarea>
           <button onclick="graphDetailSave()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm self-end">Save</button>
         </div>
         <div id="graph-detail-elaborate-wrap" style="display:none;" class="flex gap-2 mt-2">
@@ -1024,13 +1037,14 @@
     chatAddMsg('user', text);
 
     const temp = parseFloat(document.getElementById('chat-temp').value) || 0.7;
+    const top_k = parseInt(document.getElementById('chat-topk').value) || 40;
     const system = getRole();
 
     chatShowButtons('streaming');
 
     const r = await fetch('/chat/send', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text, system, temp})
+      body: JSON.stringify({text, system, temp, top_k})
     });
     const d = await r.json();
     if (d.error) {
@@ -1065,7 +1079,10 @@
   // ── Graph thinking ────────────────────────────────────────────────────────
   const graphClusterColors = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899'];
   let graphData = { thoughts: [], edges: [], clusters: [] };
-  let graphSelectedNode = -1;  // for manual linking
+  let graphSelectedNode = -1;
+  let graphLinkMode = false;  // toggle for manual linking
+  let graphZoom = 1;
+  let graphPanX = 0, graphPanY = 0;
   let graphNodePositions = [];  // {x, y, vx, vy, fixed} per node
   let graphDragIdx = -1;
   let graphDragOffset = { x: 0, y: 0 };
@@ -1222,6 +1239,21 @@
         nodes[i].x = Math.max(pad, Math.min(W - pad, nodes[i].x));
         nodes[i].y = Math.max(pad, Math.min(H - pad, nodes[i].y));
       }
+      // Collision: enforce minimum distance between nodes
+      const minDist = 45;
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          let dx = nodes[j].x - nodes[i].x;
+          let dy = nodes[j].y - nodes[i].y;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+          if (dist < minDist) {
+            const overlap = (minDist - dist) / 2;
+            const ux = dx / dist, uy = dy / dist;
+            if (!nodes[i].fixed) { nodes[i].x -= ux * overlap; nodes[i].y -= uy * overlap; }
+            if (!nodes[j].fixed) { nodes[j].x += ux * overlap; nodes[j].y += uy * overlap; }
+          }
+        }
+      }
     }
   }
 
@@ -1248,9 +1280,18 @@
     });
   }
 
+  function graphApplyViewBox() {
+    const svg = document.getElementById('graph-svg');
+    const W = svg.clientWidth || 500;
+    const H = parseInt(svg.getAttribute('height')) || 520;
+    const vw = W / graphZoom, vh = H / graphZoom;
+    svg.setAttribute('viewBox', `${graphPanX} ${graphPanY} ${vw} ${vh}`);
+  }
+
   function graphRenderSvg() {
     const svg = document.getElementById('graph-svg');
     svg.innerHTML = '';
+    graphApplyViewBox();
     const thoughts = graphData.thoughts;
     const positions = graphNodePositions;
     if (!thoughts.length || !positions.length) return;
@@ -1438,6 +1479,8 @@
     const svg = document.getElementById('graph-svg');
     if (!svg) return;
     let dragMoved = false;
+    let graphPanning = false;
+    let graphPanStart = { mx: 0, my: 0, px: 0, py: 0 };
 
     function getNodeTarget(e) {
       if (!e.target.closest) return null;
@@ -1448,12 +1491,27 @@
       const rect = svg.getBoundingClientRect();
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      return { x: clientX - rect.left, y: clientY - rect.top };
+      // Convert screen coords to SVG coords accounting for viewBox zoom/pan
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const W = svg.clientWidth || 500;
+      const H = parseInt(svg.getAttribute('height')) || 520;
+      return { x: graphPanX + px / graphZoom, y: graphPanY + py / graphZoom };
     }
 
     function onDown(e) {
       const target = getNodeTarget(e);
-      if (!target) return;
+      if (!target) {
+        // Background drag → pan
+        if (e.target === svg || e.target.closest('svg') === svg) {
+          e.preventDefault();
+          graphPanning = true;
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+          graphPanStart = { mx: clientX, my: clientY, px: graphPanX, py: graphPanY };
+        }
+        return;
+      }
       const idx = parseInt(target.dataset.nodeIdx);
       if (isNaN(idx) || idx < 0 || idx >= graphNodePositions.length) return;
       e.preventDefault();
@@ -1466,19 +1524,27 @@
     }
 
     function onMove(e) {
+      if (graphPanning) {
+        e.preventDefault();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        graphPanX = graphPanStart.px - (clientX - graphPanStart.mx) / graphZoom;
+        graphPanY = graphPanStart.py - (clientY - graphPanStart.my) / graphZoom;
+        graphApplyViewBox();
+        return;
+      }
       if (graphDragIdx < 0) return;
       e.preventDefault();
       dragMoved = true;
       const pt = getSvgPoint(e);
       const node = graphNodePositions[graphDragIdx];
-      const W = svg.clientWidth || 500;
-      const H = parseInt(svg.getAttribute('height')) || 520;
-      node.x = Math.max(20, Math.min(W - 20, pt.x + graphDragOffset.x));
-      node.y = Math.max(20, Math.min(H - 20, pt.y + graphDragOffset.y));
+      node.x = pt.x + graphDragOffset.x;
+      node.y = pt.y + graphDragOffset.y;
       graphRenderSvg();
     }
 
     function onUp(e) {
+      if (graphPanning) { graphPanning = false; return; }
       if (graphDragIdx < 0) return;
       const idx = graphDragIdx;
       graphDragIdx = -1;
@@ -1495,12 +1561,30 @@
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp);
 
+    // ── Zoom on scroll wheel ──
+    svg.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const W = svg.clientWidth || 500;
+      const H = parseInt(svg.getAttribute('height')) || 520;
+      // Mouse position in SVG coords before zoom
+      const mx = graphPanX + (e.clientX - rect.left) / graphZoom;
+      const my = graphPanY + (e.clientY - rect.top) / graphZoom;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newZoom = Math.max(0.2, Math.min(10, graphZoom * factor));
+      // Adjust pan so point under cursor stays fixed
+      graphPanX = mx - (e.clientX - rect.left) / newZoom;
+      graphPanY = my - (e.clientY - rect.top) / newZoom;
+      graphZoom = newZoom;
+      graphApplyViewBox();
+    }, { passive: false });
+
     // ── Tooltip on hover ──
     svg.addEventListener('mousemove', function(e) {
       const target = getNodeTarget(e);
       const tooltip = document.getElementById('graph-tooltip');
       if (!tooltip) return;
-      if (target && graphDragIdx < 0) {
+      if (target && graphDragIdx < 0 && !graphPanning) {
         const idx = parseInt(target.dataset.nodeIdx);
         if (idx >= 0 && idx < graphData.thoughts.length) {
           tooltip.textContent = graphData.thoughts[idx];
@@ -1608,13 +1692,31 @@
   function graphGetParams() {
     const sim_mode = document.getElementById('graph-sim-mode').value;
     const threshold = parseFloat(document.getElementById('graph-threshold').value) || 0.91;
-    return { sim_mode, threshold };
+    const lang = document.getElementById('lang-select').value;
+    const temp = parseFloat(document.getElementById('graph-temp').value);
+    const top_k = parseInt(document.getElementById('graph-topk').value) || 40;
+    return { sim_mode, threshold, lang, temp, top_k };
+  }
+
+  function graphToggleLinkMode() {
+    graphLinkMode = !graphLinkMode;
+    const btn = document.getElementById('graph-btn-link');
+    if (graphLinkMode) {
+      btn.style.background = '#7c3aed';
+      btn.onmouseover = function() { this.style.background='#6d28d9'; };
+      btn.onmouseout = function() { this.style.background='#7c3aed'; };
+    } else {
+      btn.style.background = '';
+      btn.onmouseover = null;
+      btn.onmouseout = null;
+      graphSelectedNode = -1;
+      graphRenderSvg();
+    }
   }
 
   function graphSimModeChanged() {
     const mode = document.getElementById('graph-sim-mode').value;
     const thEl = document.getElementById('graph-threshold');
-    // Set sensible default threshold for each mode
     if (mode === 'jaccard') {
       thEl.value = '0.15';
       thEl.step = '0.05';
@@ -1622,10 +1724,27 @@
       thEl.value = '0.91';
       thEl.step = '0.01';
     }
+    graphRecalcEdges();
+  }
+
+  let _recalcTimer = null;
+  async function graphRecalcEdges() {
+    if (!graphData.thoughts.length) return;
+    clearTimeout(_recalcTimer);
+    _recalcTimer = setTimeout(async () => {
+      const r = await fetch('/graph/recalc', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (d.error) return;
+      graphUpdateView(d);
+      graphUpdateCollapseButtons();
+    }, 300);
   }
 
   async function graphNodeClick(i) {
-    if (graphSelectedNode === -1 || graphSelectedNode === i) {
+    if (!graphLinkMode || graphSelectedNode === -1 || graphSelectedNode === i) {
       // Select / deselect node
       graphSelectedNode = graphSelectedNode === i ? -1 : i;
       graphRenderSvg();
@@ -1638,7 +1757,7 @@
       });
       return;
     }
-    // Second click — toggle edge between selected and this node
+    // Link mode: second click — toggle edge between selected and this node
     const a = graphSelectedNode;
     const b = i;
     graphSelectedNode = -1;
@@ -1806,24 +1925,33 @@
     if (!clusters.length) { span.innerHTML = ''; return; }
     span.innerHTML = clusters.map((cl, ci) => {
       const color = graphClusterColors[ci % graphClusterColors.length];
-      return '<button onclick="graphCollapse(' + ci + ')" '
-        + 'class="px-3 py-2 text-white rounded text-sm transition-opacity hover:opacity-80 mr-1" '
-        + 'style="background:' + color + '">'
-        + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>';
+      return '<span class="inline-flex mr-1">'
+        + '<button onclick="graphCollapse(' + ci + ',\'short\')" '
+        + 'class="px-3 py-2 text-white text-sm transition-opacity hover:opacity-80" '
+        + 'style="background:' + color + ';border-radius:6px 0 0 6px">'
+        + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>'
+        + '<select onchange="graphCollapse(' + ci + ',this.value);this.value=\'\'" '
+        + 'style="background:' + color + ';filter:brightness(0.85);color:#fff;border:none;border-radius:0 6px 6px 0;padding:0 4px;cursor:pointer;font-size:12px;width:24px;appearance:none;text-align:center;" title="Collapse mode">'
+        + '<option value="">▾</option>'
+        + '<option value="short">Short</option>'
+        + '<option value="long">Long</option>'
+        + '</select></span>';
     }).join('');
   }
 
-  async function graphCollapse(clusterIdx) {
+  async function graphCollapse(clusterIdx, collapse_mode) {
+    collapse_mode = collapse_mode || 'short';
     const clusters = graphData.clusters || [];
     if (clusterIdx >= clusters.length) return;
     const cluster = clusters[clusterIdx];
 
     // Disable all collapse buttons
     document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; b.textContent = 'Collapsing...'; });
+    document.querySelectorAll('#graph-collapse-btns select').forEach(s => { s.disabled = true; });
 
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ cluster, ...graphGetParams() })
+      body: JSON.stringify({ cluster, collapse_mode, ...graphGetParams() })
     });
     const d = await r.json();
 
@@ -1980,6 +2108,10 @@
   function graphReset() {
     graphData = { thoughts: [], edges: [], clusters: [] };
     graphSelectedNode = -1;
+    graphLinkMode = false;
+    graphZoom = 1; graphPanX = 0; graphPanY = 0;
+    const linkBtn = document.getElementById('graph-btn-link');
+    if (linkBtn) { linkBtn.style.background = ''; linkBtn.onmouseover = null; linkBtn.onmouseout = null; }
     graphNodePositions = [];
     graphUndoStack = [];
     graphCollapsedNodes = new Set();
