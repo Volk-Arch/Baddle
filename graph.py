@@ -77,16 +77,19 @@ def init_graph(llm):
 
 
 # ── state ────────────────────────────────────────────────────────────────────
-_GRAPH_EMPTY = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [], "embeddings": [], "entropies": [], "depths": [], "topics": [], "directed_edges": [], "hub_nodes": set()}
-_graph = dict(_GRAPH_EMPTY)
+def _fresh_graph():
+    return {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [],
+            "embeddings": [], "entropies": [], "depths": [], "topics": [],
+            "directed_edges": [], "hub_nodes": set()}
+
+_graph = _fresh_graph()
 
 
 @graph_bp.route("/graph/reset", methods=["POST"])
 def graph_reset():
     """Reset all graph state."""
     global _graph
-    _graph = dict(_GRAPH_EMPTY)
-    _graph["hub_nodes"] = set()  # fresh set, not shared reference
+    _graph = _fresh_graph()
     return jsonify({"ok": True})
 
 
