@@ -48,14 +48,19 @@ Two modes of thinking, implemented literally:
 - **↓ Save / ↑ Load** — export/import graph as JSON (thoughts, edges, positions, clusters)
 - **temp / top_k** — tune generation parameters directly in the graph interface
 - **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
-- **Collapse ▾** — short (paragraph) or long (detailed essay)
-- **Node entropy** — borders colored by confidence (green → red), per-token heatmap in detail panel on click
-- **→ Flow** — directed flow layout: nodes in columns by depth (Topic→Think→Expand→Elaborate). Dead-end branches fade out. Toggle free graph / flow
+- **Collapse ▾** — short (paragraph), long (detailed essay), or custom token limit
+- **Collapse prompt** — custom instruction for collapse ("compare", "find contradictions", "write a plan")
+- **Collapse without merging** — "keep" checkbox: generates text but keeps original nodes (for testing different collapses)
+- **Node entropy** — per-token heatmap in detail panel on click
+- **→ Flow** — directed flow layout: nodes in columns by depth (Topic→Think→Expand→Elaborate). Toggle free graph / flow
 - **Source tracking** — selecting a node shows which thought it originated from (purple "↳ from:")
 - **Thought list** — sorted by cluster, click text to select node on graph, click node to highlight cluster in list
 - **Topic nodes** — root topics as full diamond-shaped nodes (depth=-1), multiple topics in one graph, directed edges to children
 - **Fan layout** — in free mode clusters occupy sectors, nodes don't overlap
-- **✂ Select & Collapse** — manual collapse: select arbitrary nodes by clicking, then collapse into one
+- **✂ Select → Collapse / → Chat** — manual selection of arbitrary nodes, then Collapse or send to chat as context
+- **☐ All** — select all nodes with one button
+- **→ Chat with graph context** — selected nodes are sent to chat as context (option "structure" includes full graph: clusters, edges, weights)
+- **To Graph** — manually add text to graph without links, or send collapse result back to graph
 - **seed** — reproducible generation in graph mode
 - **Heatmap scale** — adjustable entropy scale next to the heatmap checkbox
 

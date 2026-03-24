@@ -89,8 +89,6 @@
       class="tab-active px-4 py-2 text-sm">step</button>
     <button id="tab-parallel" onclick="setMode('parallel')"
       class="tab-inactive px-4 py-2 text-sm">parallel</button>
-    <button id="tab-compare"  onclick="setMode('compare')"
-      class="tab-inactive px-4 py-2 text-sm">compare</button>
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
     <button id="tab-graph"   onclick="setMode('graph')"
@@ -213,60 +211,37 @@
 
   <!-- ══ PARALLEL mode ══ -->
   <div id="cfg-parallel" class="hidden">
-    <div class="grid grid-cols-1 gap-3 mb-4 max-w-2xl">
+    <div class="flex flex-col gap-3 mb-4 max-w-2xl">
       <div class="flex gap-3 items-center">
         <span class="text-blue-400 text-sm w-20 shrink-0">Prompt A</span>
         <textarea id="pa" class="auto-grow" placeholder="First prompt…" style="flex:1" rows="1"></textarea>
       </div>
-      <div class="flex gap-3 items-center">
-        <span class="text-blue-400 text-sm w-20 shrink-0">temp A</span>
-        <input id="temp-pa" type="number" value="0.7" step="0.1" min="0" max="2" style="width:80px">
-      </div>
-      <div class="flex gap-3 items-center">
+      <div id="parallel-prompt-b" class="flex gap-3 items-center">
         <span class="text-purple-400 text-sm w-20 shrink-0">Prompt B</span>
         <textarea id="pb" class="auto-grow" placeholder="Second prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="flex gap-3 items-center">
-        <span class="text-purple-400 text-sm w-20 shrink-0">temp B</span>
-        <input id="temp-pb" type="number" value="0.7" step="0.1" min="0" max="2" style="width:80px">
-      </div>
-      <div class="flex gap-6 items-center mt-1">
-        <label class="text-neutral-500 text-sm flex items-center gap-2">
-          max tokens
-          <input id="n-p" type="number" value="50" min="1" max="500" style="width:70px">
+        <label style="color:#60a5fa;font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer" title="Same prompt, different parameters">
+          <input type="checkbox" id="parallel-compare-mode" onchange="toggleCompareMode()"> compare
         </label>
-        <label class="text-neutral-500 text-sm flex items-center gap-2">
-          seed
-          <input id="seed-p" type="number" value="-1" min="-1" style="width:80px">
-        </label>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══ COMPARE mode ══ -->
-  <div id="cfg-compare" class="hidden">
-    <div class="flex flex-col gap-3 mb-4 max-w-2xl">
-      <div class="flex gap-3 items-center">
-        <span class="text-neutral-500 text-sm w-20 shrink-0">Prompt</span>
-        <textarea id="pc" class="auto-grow" placeholder="Shared prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div class="cfg-box border border-sky-900">
-          <div class="text-blue-400 text-sm font-bold mb-3">Config A</div>
+          <div class="text-blue-400 text-sm font-bold mb-2">Config A</div>
           <label class="text-neutral-500 text-sm flex items-center gap-2 mb-2">
-            temperature
-            <input id="temp-a" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px">
+            temp
+            <input id="temp-pa" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
           </label>
           <label class="text-neutral-500 text-sm flex items-center gap-2">
             top_k
-            <input id="topk-a" type="number" value="1" min="1" max="100" style="width:70px">
+            <input id="topk-a" type="number" value="40" min="1" max="100" style="width:70px">
           </label>
         </div>
         <div class="cfg-box border border-purple-900">
-          <div class="text-purple-400 text-sm font-bold mb-3">Config B</div>
+          <div class="text-purple-400 text-sm font-bold mb-2">Config B</div>
           <label class="text-neutral-500 text-sm flex items-center gap-2 mb-2">
-            temperature
-            <input id="temp-b" type="number" value="1.0" step="0.1" min="0" max="2" style="width:70px">
+            temp
+            <input id="temp-pb" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
           </label>
           <label class="text-neutral-500 text-sm flex items-center gap-2">
             top_k
@@ -277,11 +252,11 @@
       <div class="flex gap-6 items-center">
         <label class="text-neutral-500 text-sm flex items-center gap-2">
           max tokens
-          <input id="n-c" type="number" value="60" min="1" max="500" style="width:70px">
+          <input id="n-p" type="number" value="60" min="1" max="500" style="width:70px">
         </label>
         <label class="text-neutral-500 text-sm flex items-center gap-2">
           seed
-          <input id="seed-c" type="number" value="-1" min="-1" style="width:80px">
+          <input id="seed-p" type="number" value="-1" min="-1" style="width:80px">
         </label>
       </div>
     </div>
@@ -347,24 +322,56 @@
       </button>
     </div>
     <div id="tpl-vars" class="flex flex-wrap gap-3 items-center mb-4" style="display:none;"></div>
-    <div id="chat-messages" class="border border-neutral-800 bg-neutral-900 p-4 mb-4"
-         style="min-height:300px; max-height:500px; overflow-y:auto; display:flex; flex-direction:column;">
-    </div>
-    <div class="flex gap-3">
-      <textarea id="chat-input" class="auto-grow" placeholder="Type a message…"
-        style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
-      <button id="chat-btn-send" onclick="chatSend()"
-        class="px-6 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-sm transition-colors">
-        Send
-      </button>
-      <button id="chat-btn-continue" onclick="chatContinue()" style="display:none"
-        class="px-6 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm transition-colors">
-        Continue
-      </button>
-      <button id="chat-btn-stop" onclick="chatStop()" style="display:none"
+    <div style="display:flex;gap:8px;">
+      <!-- Left: chat messages + input -->
+      <div style="flex:1;min-width:0;">
+        <div id="chat-messages" class="border border-neutral-800 bg-neutral-900 p-4 mb-4"
+             style="min-height:300px; max-height:500px; overflow-y:auto; display:flex; flex-direction:column;">
+        </div>
+        <div class="flex gap-3">
+          <textarea id="chat-input" class="auto-grow" placeholder="Type a message…"
+            style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
+          <button id="chat-btn-send" onclick="chatSend()"
+            class="px-6 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-sm transition-colors">
+            Send
+          </button>
+          <button id="chat-btn-continue" onclick="chatContinue()" style="display:none"
+            class="px-6 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm transition-colors">
+            Continue
+          </button>
+          <button id="chat-btn-stop" onclick="chatStop()" style="display:none"
         class="px-6 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-sm transition-colors">
         Stop
       </button>
+        </div>
+      </div>
+      <!-- Right sidebar: context buffer -->
+      <div id="chat-context-sidebar" style="width:300px;flex-shrink:0;">
+        <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Context</span>
+          <span class="flex gap-2 items-center">
+            <label style="color:#60a5fa;font-size:10px;display:flex;align-items:center;gap:3px" title="Include graph structure (clusters, edges, weights)">
+              <input type="checkbox" id="chat-graph-structure"> structure
+            </label>
+            <button onclick="chatContextClear()" style="color:#5a5a5a;font-size:10px;" class="hover:text-white" title="Clear all context">✕ clear</button>
+          </span>
+        </div>
+        <div id="chat-context-items" style="max-height:400px;overflow-y:auto;background:#252526;border:1px solid #3c3c3c;border-top:none;padding:6px;font-size:12px;">
+          <span style="color:#5a5a5a;font-size:11px;">Add context: graph nodes, text, or chat responses</span>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:end;">
+          <textarea id="chat-context-input" placeholder="Add text to context…" rows="1"
+            style="flex:1;font-size:11px;padding:4px 6px;resize:vertical;min-height:26px;max-height:120px;" class="auto-grow bg-neutral-800 border border-neutral-700 text-neutral-200"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatContextAddManual();}"></textarea>
+          <button onclick="chatContextAddManual()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs border border-neutral-700" style="flex-shrink:0;">+ ctx</button>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:end;">
+          <textarea id="chat-to-graph-input" placeholder="Send text to graph…" rows="1"
+            style="flex:1;font-size:11px;padding:4px 6px;resize:vertical;min-height:26px;max-height:120px;" class="auto-grow bg-neutral-800 border border-neutral-700 text-neutral-200"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatToGraphFromInput();}"></textarea>
+          <button onclick="chatToGraphFromInput()" class="px-2 py-1 text-xs border border-emerald-800 text-emerald-400" style="background:#064e3b55;flex-shrink:0;">→ graph</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -373,15 +380,29 @@
     <!-- Actions bar: collapse + undo/layout/reset -->
     <div id="graph-actions-bar" class="flex gap-2 mb-3 items-center flex-wrap" style="display:none;">
       <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
-      <button onclick="graphToggleManualCollapse()" id="graph-btn-manual-collapse"
+      <button onclick="graphToggleManualSelect()" id="graph-btn-manual-select"
         class="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs transition-colors"
-        title="Select nodes manually then collapse them">
-        ✂ Select &amp; Collapse
+        title="Select nodes manually for collapse or chat">
+        ✂ Select
       </button>
-      <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse" style="display:none"
-        class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-xs transition-colors">
-        Collapse selected (<span id="graph-collapse-count">0</span>)
+      <button onclick="graphSelectAll()" id="graph-btn-select-all"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
+        title="Select all nodes">
+        ☐ All
       </button>
+      <span id="graph-selection-actions" style="display:none" class="flex gap-1 items-center">
+        <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse"
+          class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-xs transition-colors">
+          Collapse (<span id="graph-collapse-count">0</span>)
+        </button>
+        <button onclick="graphSendToChat()" id="graph-btn-to-chat"
+          class="px-3 py-1.5 bg-blue-900/50 hover:bg-blue-800/50 border border-blue-800 text-white text-xs transition-colors">
+          → Chat
+        </button>
+        <label style="color:#969696;font-size:11px;display:flex;align-items:center;gap:3px" title="Keep original nodes after collapse">
+          <input type="checkbox" id="graph-no-merge"> keep
+        </label>
+      </span>
       <span class="flex-1"></span>
       <button onclick="graphToggleLinkMode()" id="graph-btn-link"
         class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
@@ -437,6 +458,7 @@
             <button onclick="graphDetailExpand()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate child ideas branching from this thought">&#9758; Expand</button>
             <button onclick="graphDetailElaborate()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
             <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs">Edit</button>
+            <button onclick="graphDetailToChat()" class="px-2 py-1 text-blue-400 hover:text-blue-300 text-xs border border-blue-800" title="Send this thought to chat as context">&rarr; Chat</button>
             <button onclick="graphDetailClose()" class="px-2 py-1 text-neutral-500 hover:text-white text-xs">&times; Close</button>
           </div>
           <div id="graph-detail-source" class="text-xs mb-2" style="display:none;">
@@ -464,9 +486,21 @@
         </div>
       </div>
     </div>
+    <!-- Collapse prompt -->
+    <div id="graph-collapse-prompt-wrap" class="mt-2" style="display:none;">
+      <div class="flex gap-2 items-center">
+        <span style="color:#969696;font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Collapse prompt</span>
+        <input id="graph-collapse-prompt" type="text" placeholder="Custom instruction for collapse (e.g. compare, find contradictions)…"
+          style="flex:1;font-size:12px;" class="bg-neutral-800 border border-neutral-700 text-neutral-200 px-2 py-1">
+      </div>
+    </div>
+    <!-- Collapsed result -->
     <div id="graph-result" class="mt-3 border border-neutral-800 bg-neutral-900 p-3" style="display:none;">
       <div class="panel-header" style="margin:-3px -3px 8px -3px;padding:4px 12px">Collapsed result</div>
       <div id="graph-result-text" class="text-neutral-200 text-sm whitespace-pre-wrap max-h-96 overflow-y-auto" style="font-family:Consolas,monospace;font-size:13px;"></div>
+      <div class="flex gap-2 mt-2">
+        <button onclick="graphResultToGraph()" class="px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs border border-neutral-700">→ To Graph</button>
+      </div>
     </div>
     <!-- Input panel (below graph) -->
     <div class="mt-3 border border-neutral-800 bg-neutral-900/50 p-3">
@@ -708,16 +742,30 @@
   }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
+  function toggleCompareMode() {
+    const isCompare = document.getElementById('parallel-compare-mode').checked;
+    document.getElementById('parallel-prompt-b').style.display = isCompare ? 'none' : '';
+    if (isCompare) {
+      document.getElementById('temp-pa').value = '0.0';
+      document.getElementById('temp-pb').value = '1.0';
+      document.getElementById('topk-a').value = '1';
+      document.getElementById('topk-b').value = '40';
+    }
+  }
+
   function setMode(m) {
+    // Map old 'compare' to 'parallel' with compare checkbox
+    if (m === 'compare') { m = 'parallel'; document.getElementById('parallel-compare-mode').checked = true; toggleCompareMode(); }
     mode = m;
-    ['step','parallel','compare','chat','graph'].forEach(t => {
-      document.getElementById('cfg-' + t).classList.toggle('hidden', t !== m);
-      document.getElementById('tab-' + t).className =
-        (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-2 text-sm';
+    ['step','parallel','chat','graph'].forEach(t => {
+      const el = document.getElementById('cfg-' + t);
+      if (el) el.classList.toggle('hidden', t !== m);
+      const tab = document.getElementById('tab-' + t);
+      if (tab) tab.className = (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-2 text-sm';
     });
     const sbMode = document.getElementById('sb-mode');
-    if (sbMode) sbMode.textContent = m;
-    const isDual = m === 'parallel' || m === 'compare';
+    if (sbMode) sbMode.textContent = m + (m === 'parallel' && document.getElementById('parallel-compare-mode').checked ? ' (compare)' : '');
+    const isDual = m === 'parallel';
     document.getElementById('dual-controls').classList.toggle('hidden', !isDual);
     document.getElementById('dual-panels').classList.toggle('hidden', !isDual);
     // Clear dual panels and stop stream on tab switch
@@ -940,36 +988,31 @@
     document.getElementById('btn-gen').style.display  = 'none';
     document.getElementById('btn-stop').style.display = '';
 
-    const params = new URLSearchParams({ mode });
+    const isCompare = document.getElementById('parallel-compare-mode').checked;
+    const params = new URLSearchParams({ mode: isCompare ? 'compare' : 'parallel' });
     const pfx = getRole();
     let promptA, promptB;
 
-    if (mode === 'parallel') {
-      promptA = pfx + document.getElementById('pa').value;
-      promptB = pfx + document.getElementById('pb').value;
-      const ta = document.getElementById('temp-pa').value;
-      const tb = document.getElementById('temp-pb').value;
-      params.set('pa', promptA); params.set('pb', promptB);
-      params.set('n',  document.getElementById('n-p').value);
-      params.set('temp_a', ta); params.set('temp_b', tb);
-      params.set('top_k_a', 40); params.set('top_k_b', 40);
-      params.set('seed', document.getElementById('seed-p').value);
-      document.getElementById('title-a').textContent = 'Stream A';
-      document.getElementById('title-b').textContent = 'Stream B';
-    } else {
-      promptA = promptB = pfx + document.getElementById('pc').value;
-      const ta = document.getElementById('temp-a').value;
-      const tb = document.getElementById('temp-b').value;
-      const ka = document.getElementById('topk-a').value;
-      const kb = document.getElementById('topk-b').value;
-      params.set('pa', promptA); params.set('pb', promptA);
-      params.set('n',  document.getElementById('n-c').value);
-      params.set('temp_a', ta); params.set('temp_b', tb);
-      params.set('top_k_a', ka); params.set('top_k_b', kb);
-      params.set('seed', document.getElementById('seed-c').value);
+    const ta = document.getElementById('temp-pa').value;
+    const tb = document.getElementById('temp-pb').value;
+    const ka = document.getElementById('topk-a').value;
+    const kb = document.getElementById('topk-b').value;
+
+    if (isCompare) {
+      promptA = promptB = pfx + document.getElementById('pa').value;
       document.getElementById('title-a').textContent = `temp=${ta}  top_k=${ka}`;
       document.getElementById('title-b').textContent = `temp=${tb}  top_k=${kb}`;
+    } else {
+      promptA = pfx + document.getElementById('pa').value;
+      promptB = pfx + document.getElementById('pb').value;
+      document.getElementById('title-a').textContent = 'Stream A';
+      document.getElementById('title-b').textContent = 'Stream B';
     }
+    params.set('pa', promptA); params.set('pb', isCompare ? promptA : promptB);
+    params.set('n', document.getElementById('n-p').value);
+    params.set('temp_a', ta); params.set('temp_b', tb);
+    params.set('top_k_a', ka); params.set('top_k_b', kb);
+    params.set('seed', document.getElementById('seed-p').value);
 
     let diverged = false;
     dualEs = new EventSource('/stream?' + params.toString());
@@ -1012,7 +1055,7 @@
       document.getElementById('step-b').textContent = d.done_b ? 'EOS' : 'step ' + d.step;
       if (d.total_tokens) updateTokenCounter(d.total_tokens);
 
-      if (mode === 'compare' && !diverged) {
+      if (isCompare && !diverged) {
         const ga = d.toks_a ? d.toks_a.join('') : d.a.slice(promptA.length);
         const gb = d.toks_b ? d.toks_b.join('') : d.b.slice(promptB.length);
         if (ga !== gb && (ga || gb)) {
@@ -1068,10 +1111,32 @@
     div.style.wordBreak = 'break-word';
     div.textContent = content;
     if (role !== 'system') {
-      const label = document.createElement('div');
-      label.className = 'text-xs mb-1 ' + (role === 'user' ? 'text-blue-400' : 'text-emerald-400');
+      const header = document.createElement('div');
+      header.className = 'text-xs mb-1 flex justify-between items-center';
+      const label = document.createElement('span');
+      label.className = role === 'user' ? 'text-blue-400' : 'text-emerald-400';
       label.textContent = role;
-      div.prepend(label);
+      header.appendChild(label);
+      if (role === 'assistant') {
+        const btnWrap = document.createElement('span');
+        btnWrap.style.cssText = 'display:flex;gap:6px;';
+        const ctxBtn = document.createElement('button');
+        ctxBtn.textContent = '→ ctx';
+        ctxBtn.style.cssText = 'color:#5a5a5a;font-size:10px;cursor:pointer;';
+        ctxBtn.onmouseover = function() { this.style.color = '#60a5fa'; };
+        ctxBtn.onmouseout = function() { this.style.color = '#5a5a5a'; };
+        ctxBtn.onclick = function() { chatContextAddFromChat(div.textContent.replace(/^assistant/, '').trim()); };
+        btnWrap.appendChild(ctxBtn);
+        const graphBtn = document.createElement('button');
+        graphBtn.textContent = '→ graph';
+        graphBtn.style.cssText = 'color:#5a5a5a;font-size:10px;cursor:pointer;';
+        graphBtn.onmouseover = function() { this.style.color = '#10b981'; };
+        graphBtn.onmouseout = function() { this.style.color = '#5a5a5a'; };
+        graphBtn.onclick = function() { chatSendToGraph(div.textContent.replace(/^assistant/, '').trim()); };
+        btnWrap.appendChild(graphBtn);
+        header.appendChild(btnWrap);
+      }
+      div.prepend(header);
     }
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
@@ -1130,7 +1195,13 @@
 
     const temp = parseFloat(document.getElementById('chat-temp').value) || 0.7;
     const top_k = parseInt(document.getElementById('chat-topk').value) || 40;
-    const system = getRole();
+    let system = getRole();
+
+    // Prepend context sidebar items if available
+    const ctxText = chatContextGetText();
+    if (ctxText) {
+      system = system ? system + '\n\n' + ctxText : ctxText;
+    }
 
     chatShowButtons('streaming');
 
@@ -2045,68 +2116,301 @@
     return { sim_mode, threshold, lang, temp, top_k, seed, maxtok_think, maxtok_expand, maxtok_elaborate };
   }
 
-  function graphToggleManualCollapse() {
+  function graphToggleManualSelect() {
     graphManualCollapseMode = !graphManualCollapseMode;
     graphManualCollapseSet.clear();
-    const btn = document.getElementById('graph-btn-manual-collapse');
-    const doBtn = document.getElementById('graph-btn-do-collapse');
+    const btn = document.getElementById('graph-btn-manual-select');
+    const actions = document.getElementById('graph-selection-actions');
+    const promptWrap = document.getElementById('graph-collapse-prompt-wrap');
     if (graphManualCollapseMode) {
       btn.style.background = '#b45309';
       btn.textContent = '✂ Cancel';
-      doBtn.style.display = '';
+      actions.style.display = '';
+      promptWrap.style.display = '';
       document.getElementById('graph-collapse-count').textContent = '0';
     } else {
       btn.style.background = '';
-      btn.textContent = '✂ Select & Collapse';
-      doBtn.style.display = 'none';
+      btn.textContent = '✂ Select';
+      actions.style.display = 'none';
+      promptWrap.style.display = 'none';
     }
     graphRenderSvg();
+  }
+
+  function graphSelectAll() {
+    graphManualCollapseMode = true;
+    graphManualCollapseSet.clear();
+    const depths = graphData.depths || [];
+    (graphData.thoughts || []).forEach((_, i) => {
+      if (i < depths.length && depths[i] === -1) return; // skip topic roots
+      graphManualCollapseSet.add(i);
+    });
+    const btn = document.getElementById('graph-btn-manual-select');
+    btn.style.background = '#b45309';
+    btn.textContent = '✂ Cancel';
+    document.getElementById('graph-selection-actions').style.display = '';
+    document.getElementById('graph-collapse-prompt-wrap').style.display = '';
+    document.getElementById('graph-collapse-count').textContent = graphManualCollapseSet.size;
+    graphRenderSvg();
+  }
+
+  function graphSendToChat() {
+    if (graphManualCollapseSet.size === 0) { alert('Select at least 1 node'); return; }
+    const thoughts = graphData.thoughts || [];
+    const edges = graphData.edges || [];
+    const clusters = graphData.clusters || [];
+    const topics = graphData.topics || [];
+    const depths = graphData.depths || [];
+    const selected = [...graphManualCollapseSet].sort((a, b) => a - b);
+    const texts = selected.map(i => thoughts[i]).filter(Boolean);
+
+    // Store structure for structured context mode
+    window._graphChatContext = texts;
+    window._graphChatIndices = selected;
+    window._graphChatStructure = { thoughts, edges, clusters, topics, depths, directed: graphDirectedEdges };
+
+    // Add each node to context sidebar
+    texts.forEach(t => chatContextAdd(t, 'graph'));
+
+    // Switch to chat mode
+    setMode('chat');
+
+    // Exit selection mode
+    graphManualCollapseMode = false;
+    graphManualCollapseSet.clear();
+    document.getElementById('graph-btn-manual-select').style.background = '';
+    document.getElementById('graph-btn-manual-select').textContent = '✂ Select';
+    document.getElementById('graph-selection-actions').style.display = 'none';
+    document.getElementById('graph-collapse-prompt-wrap').style.display = 'none';
+  }
+
+  // ── Chat context sidebar ──────────────────────────────────────────────
+  let chatContextItems = []; // [{text, source, enabled}]
+
+  function chatContextRender() {
+    const el = document.getElementById('chat-context-items');
+    if (!chatContextItems.length) {
+      el.innerHTML = '<span style="color:#5a5a5a;font-size:11px;">Add context: graph nodes, text, or chat responses</span>';
+      return;
+    }
+    el.innerHTML = chatContextItems.map((item, i) => {
+      const srcColor = item.source === 'graph' ? '#60a5fa' : item.source === 'chat' ? '#34d399' : '#a78bfa';
+      const srcLabel = item.source === 'graph' ? 'graph' : item.source === 'chat' ? 'chat' : 'manual';
+      const opacity = item.enabled ? '1' : '0.4';
+      return '<div style="padding:3px 4px;border-bottom:1px solid #333;opacity:' + opacity + ';display:flex;align-items:start;gap:4px;" data-ctx-idx="' + i + '">'
+        + '<input type="checkbox" ' + (item.enabled ? 'checked' : '') + ' onchange="chatContextToggle(' + i + ')" style="margin-top:2px;flex-shrink:0">'
+        + '<span style="color:' + srcColor + ';font-size:9px;text-transform:uppercase;flex-shrink:0;margin-top:1px;">' + srcLabel + '</span>'
+        + '<span style="color:#cccccc;flex:1;word-break:break-word;">' + item.text.replace(/</g, '&lt;').substring(0, 150)
+        + (item.text.length > 150 ? '…' : '') + '</span>'
+        + '<button onclick="chatContextRemove(' + i + ')" style="color:#5a5a5a;flex-shrink:0;font-size:10px;" class="hover:text-white">✕</button>'
+        + '</div>';
+    }).join('');
+  }
+
+  function chatContextAdd(text, source) {
+    chatContextItems.push({ text: text.trim(), source: source || 'manual', enabled: true });
+    chatContextRender();
+  }
+
+  function chatContextAddManual() {
+    const input = document.getElementById('chat-context-input');
+    const text = input.value.trim();
+    if (!text) return;
+    chatContextAdd(text, 'manual');
+    input.value = '';
+  }
+
+  function chatContextRemove(i) {
+    chatContextItems.splice(i, 1);
+    chatContextRender();
+  }
+
+  function chatContextToggle(i) {
+    chatContextItems[i].enabled = !chatContextItems[i].enabled;
+    chatContextRender();
+  }
+
+  function chatContextClear() {
+    chatContextItems = [];
+    window._graphChatContext = null;
+    window._graphChatIndices = null;
+    window._graphChatStructure = null;
+    chatContextRender();
+  }
+
+  function chatContextGetText() {
+    const enabled = chatContextItems.filter(i => i.enabled);
+    if (!enabled.length) return '';
+    const useStructure = document.getElementById('chat-graph-structure') && document.getElementById('chat-graph-structure').checked;
+    if (useStructure && window._graphChatStructure) {
+      return _buildGraphStructureContext();
+    }
+    return 'Context:\n' + enabled.map((item, i) => (i + 1) + '. ' + item.text).join('\n');
+  }
+
+  // Add chat response to context sidebar
+  function chatContextAddFromChat(text) {
+    chatContextAdd(text.substring(0, 500), 'chat');
+  }
+
+  async function chatSendToGraph(text) {
+    if (!text) return;
+    const r = await fetch('/graph/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: text.substring(0, 500), ...graphGetParams() })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
+    graphUpdateView(d);
+  }
+
+  function chatToGraphFromInput() {
+    const input = document.getElementById('chat-to-graph-input');
+    const text = input.value.trim();
+    if (!text) return;
+    chatSendToGraph(text);
+    input.value = '';
+  }
+
+  function chatClearGraphContext() {
+    chatContextClear();
+  }
+
+  function _buildGraphStructureContext() {
+    const s = window._graphChatStructure;
+    const indices = window._graphChatIndices || [];
+    const selectedSet = new Set(indices);
+    if (!s) return '';
+
+    const lines = ['=== Graph Context ==='];
+
+    // Group selected nodes by cluster
+    const clusterMap = new Map(); // clusterIdx → [nodeIdx]
+    const nodeCluster = new Map(); // nodeIdx → clusterIdx
+    (s.clusters || []).forEach((cl, ci) => {
+      cl.forEach(ni => { nodeCluster.set(ni, ci); });
+    });
+    indices.forEach(ni => {
+      const ci = nodeCluster.has(ni) ? nodeCluster.get(ni) : -1;
+      if (!clusterMap.has(ci)) clusterMap.set(ci, []);
+      clusterMap.get(ci).push(ni);
+    });
+
+    // Group by topic
+    const topicGroups = new Map(); // topic → [clusterIdx]
+    clusterMap.forEach((nodes, ci) => {
+      const topic = nodes.length > 0 && nodes[0] < s.topics.length ? s.topics[nodes[0]] : '?';
+      if (!topicGroups.has(topic)) topicGroups.set(topic, []);
+      topicGroups.get(topic).push(ci);
+    });
+
+    topicGroups.forEach((clusterIdxList, topic) => {
+      if (topic) lines.push('\nTopic: ' + topic);
+      clusterIdxList.forEach(ci => {
+        const nodes = clusterMap.get(ci);
+        if (ci >= 0) lines.push('\nCluster ' + (ci + 1) + ':');
+        nodes.forEach(ni => {
+          const depth = ni < s.depths.length ? s.depths[ni] : 0;
+          const depthLabel = depth === -1 ? ' [root]' : depth > 0 ? ' [d' + depth + ']' : '';
+          lines.push('  [' + ni + '] ' + (s.thoughts[ni] || '?') + depthLabel);
+        });
+        // Edges within this cluster between selected nodes
+        const clEdges = (s.edges || []).filter(e =>
+          selectedSet.has(e[0]) && selectedSet.has(e[1]) &&
+          nodes.includes(e[0]) && nodes.includes(e[1])
+        );
+        if (clEdges.length > 0) {
+          lines.push('  Edges: ' + clEdges.map(e => e[0] + '↔' + e[1] + ' (' + (e[2] || 0).toFixed(2) + ')').join(', '));
+        }
+      });
+    });
+
+    // Cross-cluster edges
+    const crossEdges = (s.edges || []).filter(e => {
+      if (!selectedSet.has(e[0]) || !selectedSet.has(e[1])) return false;
+      return nodeCluster.get(e[0]) !== nodeCluster.get(e[1]);
+    });
+    if (crossEdges.length > 0) {
+      lines.push('\nCross-cluster edges: ' + crossEdges.map(e => e[0] + '↔' + e[1] + ' (' + (e[2] || 0).toFixed(2) + ')').join(', '));
+    }
+
+    // Directed edges between selected
+    const dirEdges = (s.directed || []).filter(e => selectedSet.has(e[0]) && selectedSet.has(e[1]));
+    if (dirEdges.length > 0) {
+      lines.push('\nDirected edges: ' + dirEdges.map(e => e[0] + '→' + e[1]).join(', '));
+    }
+
+    lines.push('\n===');
+    return lines.join('\n');
   }
 
   async function graphDoManualCollapse() {
     if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
     const cluster = [...graphManualCollapseSet];
+    const no_merge = document.getElementById('graph-no-merge').checked;
+    const collapse_prompt = document.getElementById('graph-collapse-prompt').value.trim();
+
     graphManualCollapseMode = false;
     graphManualCollapseSet.clear();
-    document.getElementById('graph-btn-manual-collapse').style.background = '';
-    document.getElementById('graph-btn-manual-collapse').textContent = '✂ Select & Collapse';
-    document.getElementById('graph-btn-do-collapse').style.display = 'none';
+    document.getElementById('graph-btn-manual-select').style.background = '';
+    document.getElementById('graph-btn-manual-select').textContent = '✂ Select';
+    document.getElementById('graph-selection-actions').style.display = 'none';
+    document.getElementById('graph-collapse-prompt-wrap').style.display = 'none';
 
     document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; });
 
+    const body = { cluster, collapse_mode: 'short', no_merge, ...graphGetParams() };
+    if (collapse_prompt) body.collapse_prompt = collapse_prompt;
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ cluster, collapse_mode: 'short', ...graphGetParams() })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
 
     graphSaveUndo();
-    // Remove collapsed positions, add new at centroid
-    const removedSet = new Set(cluster);
-    let cx = 0, cy = 0, cnt = 0;
-    cluster.forEach(idx => {
-      if (idx < graphNodePositions.length) {
-        cx += graphNodePositions[idx].x;
-        cy += graphNodePositions[idx].y;
-        cnt++;
-      }
-    });
-    if (cnt) { cx /= cnt; cy /= cnt; }
-    [...removedSet].sort((a, b) => b - a).forEach(idx => {
-      if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
-    });
-    graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
 
-    const newCollapsed = new Set();
-    graphCollapsedNodes.forEach(ci => {
-      if (removedSet.has(ci)) return;
-      let newIdx = ci;
-      for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
-      newCollapsed.add(newIdx);
-    });
-    newCollapsed.add(d.thoughts.length - 1);
-    graphCollapsedNodes = newCollapsed;
+    if (!no_merge) {
+      // Remove collapsed positions, add new at centroid
+      const removedSet = new Set(cluster);
+      let cx = 0, cy = 0, cnt = 0;
+      cluster.forEach(idx => {
+        if (idx < graphNodePositions.length) {
+          cx += graphNodePositions[idx].x;
+          cy += graphNodePositions[idx].y;
+          cnt++;
+        }
+      });
+      if (cnt) { cx /= cnt; cy /= cnt; }
+      [...removedSet].sort((a, b) => b - a).forEach(idx => {
+        if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
+      });
+      graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
+
+      const newCollapsed = new Set();
+      graphCollapsedNodes.forEach(ci => {
+        if (removedSet.has(ci)) return;
+        let newIdx = ci;
+        for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
+        newCollapsed.add(newIdx);
+      });
+      newCollapsed.add(d.thoughts.length - 1);
+      graphCollapsedNodes = newCollapsed;
+    } else {
+      // No merge — just add new node position near centroid
+      let cx = 0, cy = 0, cnt = 0;
+      cluster.forEach(idx => {
+        if (idx < graphNodePositions.length) {
+          cx += graphNodePositions[idx].x;
+          cy += graphNodePositions[idx].y;
+          cnt++;
+        }
+      });
+      if (cnt) { cx /= cnt; cy /= cnt; }
+      graphNodePositions.push({ x: (cx || 250) + 30, y: (cy || 225) + 30, vx: 0, vy: 0, fixed: false });
+      graphCollapsedNodes.add(d.thoughts.length - 1);
+    }
 
     graphData = d;
     if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
@@ -2271,6 +2575,22 @@
     } else {
       sourceDiv.style.display = 'none';
     }
+  }
+
+  function graphDetailToChat() {
+    const idx = graphSelectedNode;
+    if (idx < 0 || idx >= graphData.thoughts.length) return;
+    const text = graphData.thoughts[idx];
+    // Store structure for structured mode
+    window._graphChatStructure = window._graphChatStructure || {
+      thoughts: graphData.thoughts, edges: graphData.edges,
+      clusters: graphData.clusters, topics: graphData.topics,
+      depths: graphData.depths, directed: graphDirectedEdges
+    };
+    window._graphChatIndices = [idx];
+    window._graphChatContext = [text];
+    chatContextAdd(text, 'graph');
+    setMode('chat');
   }
 
   function graphDetailClose() {
@@ -2440,6 +2760,8 @@
 
     const body = { cluster, collapse_mode, ...graphGetParams() };
     if (custom_tokens > 0) body.max_tokens = custom_tokens;
+    const collapsePrompt = document.getElementById('graph-collapse-prompt');
+    if (collapsePrompt && collapsePrompt.value.trim()) body.collapse_prompt = collapsePrompt.value.trim();
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
@@ -2500,6 +2822,28 @@
     graphSaveUndo();
     input.value = '';
     graphUpdateView(d);
+  }
+
+  async function graphToGraphAdd() {
+    const input = document.getElementById('graph-to-graph-input');
+    const text = input.value.trim();
+    if (!text) return;
+    const r = await fetch('/graph/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, ...graphGetParams() })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
+    input.value = '';
+    graphUpdateView(d);
+  }
+
+  function graphResultToGraph() {
+    const text = document.getElementById('graph-result-text').textContent.trim();
+    if (!text) return;
+    document.getElementById('graph-to-graph-input').value = text;
+    graphToGraphAdd();
   }
 
   async function graphRemoveThought(i) {

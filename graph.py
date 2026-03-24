@@ -516,6 +516,8 @@ def graph_collapse():
     seed = int(data.get("seed", -1))
     collapse_mode = data.get("collapse_mode", "short")
     custom_max_tokens = data.get("max_tokens")
+    user_prompt = data.get("collapse_prompt", "").strip()
+    no_merge = data.get("no_merge", False)
     thoughts = _graph["thoughts"]
     topic = _graph["topic"]
 
@@ -535,7 +537,10 @@ def graph_collapse():
         max_tokens = int(custom_max_tokens)
     user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
     user += "\n".join(f"- {t}" for t in cluster_texts)
-    user += f"\n\n{instruction}"
+    if user_prompt:
+        user += f"\n\n{user_prompt}"
+    else:
+        user += f"\n\n{instruction}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
@@ -554,35 +559,55 @@ def graph_collapse():
     valid_indices = [i for i in indices if i < len(thoughts)]
     ent_list = _graph.setdefault("entropies", [])
     depth_list = _graph.setdefault("depths", [])
-    # Collapsed node inherits minimum depth from cluster (it replaces the group)
-    min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
     topics_list = _graph.setdefault("topics", [])
-    collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
-    for i in sorted(valid_indices, reverse=True):
-        thoughts.pop(i)
-        if i < len(ent_list):
-            ent_list.pop(i)
-        if i < len(depth_list):
-            depth_list.pop(i)
-        if i < len(topics_list):
-            topics_list.pop(i)
-    _remap_manual_edges(valid_indices)
-    thoughts.append(text)
-    ent_list.append(ent)
-    depth_list.append(min_depth)
-    topics_list.append(collapsed_topic)
-    new_idx = len(thoughts) - 1
 
-    # Link collapsed node to its topic root (find topic node with depth=-1)
-    directed = _graph.setdefault("directed_edges", [])
-    manual_links = _graph.setdefault("manual_links", [])
-    for i, t in enumerate(thoughts):
-        if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
-            directed.append([i, new_idx])
-            pair = [min(i, new_idx), max(i, new_idx)]
-            if pair not in manual_links:
-                manual_links.append(pair)
-            break
+    if no_merge:
+        # Test mode: add collapsed text as new node but keep originals
+        collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
+        min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
+        thoughts.append(text)
+        ent_list.append(ent)
+        depth_list.append(min_depth)
+        topics_list.append(collapsed_topic)
+        new_idx = len(thoughts) - 1
+        # Link to topic root
+        directed = _graph.setdefault("directed_edges", [])
+        manual_links = _graph.setdefault("manual_links", [])
+        for i, t in enumerate(thoughts):
+            if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
+                directed.append([i, new_idx])
+                pair = [min(i, new_idx), max(i, new_idx)]
+                if pair not in manual_links:
+                    manual_links.append(pair)
+                break
+    else:
+        # Normal mode: remove source nodes, add collapsed result
+        min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
+        collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
+        for i in sorted(valid_indices, reverse=True):
+            thoughts.pop(i)
+            if i < len(ent_list):
+                ent_list.pop(i)
+            if i < len(depth_list):
+                depth_list.pop(i)
+            if i < len(topics_list):
+                topics_list.pop(i)
+        _remap_manual_edges(valid_indices)
+        thoughts.append(text)
+        ent_list.append(ent)
+        depth_list.append(min_depth)
+        topics_list.append(collapsed_topic)
+        new_idx = len(thoughts) - 1
+        # Link collapsed node to its topic root
+        directed = _graph.setdefault("directed_edges", [])
+        manual_links = _graph.setdefault("manual_links", [])
+        for i, t in enumerate(thoughts):
+            if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
+                directed.append([i, new_idx])
+                pair = [min(i, new_idx), max(i, new_idx)]
+                if pair not in manual_links:
+                    manual_links.append(pair)
+                break
 
     _graph["thoughts"] = thoughts
 
