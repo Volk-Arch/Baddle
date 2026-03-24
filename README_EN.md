@@ -89,19 +89,13 @@ yellow, red (high entropy, guessing).
 ![Parallel mode](images/parallel.jpg)
 
 Two different prompts generate in parallel. Live split-screen,
-both streams updating in real time.
+both streams updating in real time. Each stream has its own **temp** and **top_k**.
 
-With the `--server` flag, both prompts are processed simultaneously on GPU.
-
----
-
-### `compare` — one prompt, two parameter sets
-
-![Compare mode](images/compare.jpg)
-
-One prompt, **two configs** (temperature, top_k, seed). Both streams start
+**compare** checkbox — one prompt, two parameter sets. Both streams start
 from identical tokens and diverge when parameters produce different samples.
 A badge shows the exact divergence step.
+
+With the `--server` flag, both prompts are processed simultaneously on GPU.
 
 ---
 
@@ -111,6 +105,12 @@ A badge shows the exact divergence step.
 
 Chat via chat template (ChatML / Jinja2). Roles, temperature, token limit.
 **Continue** resumes truncated responses. Heatmap shows confidence.
+
+**Context sidebar** — right panel with a persistent context buffer:
+- Add context from graph (→ Chat), from model responses (→ ctx), or manually
+- Toggle or remove individual items
+- **structure** checkbox — passes full graph structure (clusters, edges, weights)
+- **→ graph** — send text from chat to graph without switching tabs
 
 ---
 
