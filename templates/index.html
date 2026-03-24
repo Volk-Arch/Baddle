@@ -73,13 +73,6 @@
     <span style="color:#969696;font-size:12px">{{ model }}</span>
     <span id="token-counter" style="color:#5a5a5a;font-size:11px"></span>
     <span class="flex-1"></span>
-    <label class="flex items-center gap-1 cursor-pointer select-none" style="color:#969696;font-size:12px">
-      <input id="heatmap-toggle" type="checkbox" checked style="accent-color:#007acc"> heatmap
-      <span style="margin-left:4px;color:#969696;font-size:11px">scale</span>
-      <input id="heatmap-scale" type="number" value="3" min="0.5" max="10" step="0.5"
-        style="width:56px;margin-left:2px;padding:2px 4px;font-size:11px" title="Entropy scale"
-        onchange="heatmapRescale()" onblur="heatmapRescale()">
-    </label>
     <span id="batch-tag" style="color:#5a5a5a;font-size:11px"></span>
   </div>
 
@@ -117,6 +110,18 @@
     </select>
     <textarea id="role-text" class="auto-grow" placeholder="Role / system prompt…"
       style="flex:1; min-width:200px; max-width:400px;" rows="1"></textarea>
+    <span class="flex-1"></span>
+    <label class="flex items-center gap-1 cursor-pointer select-none" style="color:#969696;font-size:12px;margin-top:4px"
+      title="Heatmap: color tokens by model confidence. Red = uncertain, green = confident.">
+      <input id="heatmap-toggle" type="checkbox" checked style="accent-color:#007acc"> heatmap
+      <span style="margin-left:6px;color:#4ec36e;font-size:10px">&#9632;</span>
+      <input id="heatmap-scale" type="range" min="0.5" max="10" step="0.5" value="3"
+        style="width:60px;margin:0 2px;accent-color:#007acc;vertical-align:middle"
+        oninput="document.getElementById('heatmap-scale-val').textContent=this.value;heatmapRescale()"
+        title="Sensitivity: lower = more red tokens shown">
+      <span style="color:#ef4444;font-size:10px">&#9632;</span>
+      <span id="heatmap-scale-val" style="color:#5a5a5a;font-size:10px;margin-left:2px;min-width:16px">3</span>
+    </label>
   </div>
 
   <!-- ══ STEP mode ══ -->
@@ -469,24 +474,6 @@
         <span style="color:#969696;font-size:12px;text-transform:uppercase;letter-spacing:0.05em">Topic</span>
         <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
           style="flex:1;" rows="1"></textarea>
-      </div>
-      <div class="flex flex-wrap gap-2 items-center">
-        <span style="color:#5a5a5a;font-size:12px">thoughts</span>
-        <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
-        <span style="color:#5a5a5a;font-size:12px">similarity</span>
-        <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; font-size:12px;">
-          <option value="embedding">Embedding</option>
-          <option value="jaccard">Jaccard</option>
-        </select>
-        <span style="color:#5a5a5a;font-size:12px">threshold</span>
-        <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
-          onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
-        <span style="color:#5a5a5a;font-size:12px">temp</span>
-        <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
-        <span style="color:#5a5a5a;font-size:12px">top_k</span>
-        <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
-        <span style="color:#5a5a5a;font-size:12px">seed</span>
-        <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
         <button id="graph-btn-think" onclick="graphThink()"
           class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#007acc;border:none;border-radius:2px;">
           Think
@@ -495,6 +482,40 @@
           class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#3c3c3c;border:1px solid #3c3c3c;border-radius:2px;">
           + Add
         </button>
+      </div>
+      <!-- Collapsible params -->
+      <details id="graph-params-details" style="margin-top:4px;">
+        <summary style="color:#969696;font-size:11px;cursor:pointer;user-select:none;letter-spacing:0.03em">
+          Parameters
+        </summary>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:#5a5a5a;font-size:12px">thoughts</span>
+          <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
+          <span style="color:#5a5a5a;font-size:12px">similarity</span>
+          <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; font-size:12px;">
+            <option value="embedding">Embedding</option>
+            <option value="jaccard">Jaccard</option>
+          </select>
+          <span style="color:#5a5a5a;font-size:12px">threshold</span>
+          <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
+            onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
+          <span style="color:#5a5a5a;font-size:12px">temp</span>
+          <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
+          <span style="color:#5a5a5a;font-size:12px">top_k</span>
+          <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
+          <span style="color:#5a5a5a;font-size:12px">seed</span>
+          <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
+        </div>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:#5a5a5a;font-size:12px">max tokens:</span>
+          <span style="color:#5a5a5a;font-size:11px">think</span>
+          <input id="graph-maxtok-think" type="number" value="60" min="10" max="500" style="width:60px" title="Max tokens for Think">
+          <span style="color:#5a5a5a;font-size:11px">expand</span>
+          <input id="graph-maxtok-expand" type="number" value="120" min="10" max="500" style="width:60px" title="Max tokens for Expand">
+          <span style="color:#5a5a5a;font-size:11px">elaborate</span>
+          <input id="graph-maxtok-elaborate" type="number" value="120" min="10" max="1000" style="width:60px" title="Max tokens for Elaborate">
+        </div>
+      </details>
       </div>
     </div>
   </div>
@@ -2018,7 +2039,10 @@
     const temp = parseFloat(document.getElementById('graph-temp').value);
     const top_k = parseInt(document.getElementById('graph-topk').value) || 40;
     const seed = parseInt(document.getElementById('graph-seed').value);
-    return { sim_mode, threshold, lang, temp, top_k, seed };
+    const maxtok_think = parseInt(document.getElementById('graph-maxtok-think').value) || 60;
+    const maxtok_expand = parseInt(document.getElementById('graph-maxtok-expand').value) || 120;
+    const maxtok_elaborate = parseInt(document.getElementById('graph-maxtok-elaborate').value) || 120;
+    return { sim_mode, threshold, lang, temp, top_k, seed, maxtok_think, maxtok_expand, maxtok_elaborate };
   }
 
   function graphToggleManualCollapse() {
@@ -2390,14 +2414,22 @@
         + '<select onchange="graphCollapse(' + ci + ',this.value);this.value=\'\'" '
         + 'style="background:' + color + '33;border:1px solid ' + color + ';border-left:none;color:' + color + ';border-radius:0 8px 8px 0;padding:0 4px;cursor:pointer;font-size:12px;width:24px;appearance:none;text-align:center;" title="Collapse mode">'
         + '<option value="">▾</option>'
-        + '<option value="short">Short</option>'
-        + '<option value="long">Long</option>'
+        + '<option value="short">Short (400)</option>'
+        + '<option value="long">Long (1500)</option>'
+        + '<option value="custom">Custom...</option>'
         + '</select></span>';
     }).join('');
   }
 
   async function graphCollapse(clusterIdx, collapse_mode) {
     collapse_mode = collapse_mode || 'short';
+    let custom_tokens = 0;
+    if (collapse_mode === 'custom') {
+      const val = prompt('Max tokens for collapse:', '800');
+      if (!val) return;
+      custom_tokens = parseInt(val);
+      if (isNaN(custom_tokens) || custom_tokens < 50) return;
+    }
     const clusters = graphData.clusters || [];
     if (clusterIdx >= clusters.length) return;
     const cluster = clusters[clusterIdx];
@@ -2406,9 +2438,11 @@
     document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; b.textContent = 'Collapsing...'; });
     document.querySelectorAll('#graph-collapse-btns select').forEach(s => { s.disabled = true; });
 
+    const body = { cluster, collapse_mode, ...graphGetParams() };
+    if (custom_tokens > 0) body.max_tokens = custom_tokens;
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ cluster, collapse_mode, ...graphGetParams() })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
 
