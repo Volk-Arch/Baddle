@@ -174,7 +174,7 @@ def _clean_thought(text: str, topic: str) -> str:
     return best.strip()
 
 
-def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, float]:
+def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40, seed: int = -1, max_tokens: int = 60) -> tuple[str, float]:
     """Generate one short thought about the topic via chat. Returns (text, mean_entropy)."""
     system = _p(lang, "think")
     user = f"{_p(lang, 'topic')}: {topic}"
@@ -185,7 +185,7 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
         user += f"\n{_p(lang, 'one_idea')}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k, seed=seed)
+    text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
     return _clean_thought(text, topic), ent
 
 
@@ -346,6 +346,7 @@ def graph_think():
     temp = float(data.get("temp", 0.9))
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
+    maxtok_think = int(data.get("maxtok_think", 60))
     existing = data.get("existing", [])
 
     if not topic:
@@ -384,7 +385,7 @@ def graph_think():
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        t, ent = _generate_thought(topic, new_thoughts, lang, temp, top_k, seed)
+        t, ent = _generate_thought(topic, new_thoughts, lang, temp, top_k, seed, maxtok_think)
         if not t or len(t) < 10:
             continue
         if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
@@ -514,6 +515,7 @@ def graph_collapse():
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
     collapse_mode = data.get("collapse_mode", "short")
+    custom_max_tokens = data.get("max_tokens")
     thoughts = _graph["thoughts"]
     topic = _graph["topic"]
 
@@ -529,6 +531,8 @@ def graph_collapse():
         system = _p(lang, "collapse")
         instruction = _p(lang, "write_para")
         max_tokens = 800
+    if custom_max_tokens:
+        max_tokens = int(custom_max_tokens)
     user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
     user += "\n".join(f"- {t}" for t in cluster_texts)
     user += f"\n\n{instruction}"
@@ -633,6 +637,7 @@ def graph_expand():
     temp = float(data.get("temp", 0.9))
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
+    maxtok_expand = int(data.get("maxtok_expand", 120))
     thoughts = _graph["thoughts"]
 
     if idx < 0 or idx >= len(thoughts):
@@ -656,7 +661,7 @@ def graph_expand():
         user += f"\n{_p(lang, 'branch')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k, seed=seed)
+        t, ent = _graph_generate(messages, max_tokens=maxtok_expand, temp=temp, top_k=top_k, seed=seed)
         t = _clean_thought(t, topic)
 
         if not t or len(t) < 10:
@@ -701,6 +706,7 @@ def graph_elaborate():
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
     direction = data.get("direction", "").strip()
+    maxtok_elaborate = int(data.get("maxtok_elaborate", 120))
     thoughts = _graph["thoughts"]
 
     if idx < 0 or idx >= len(thoughts):
@@ -726,7 +732,7 @@ def graph_elaborate():
         user += f"\n{_p(lang, 'deeper')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k, seed=seed)
+        t, ent = _graph_generate(messages, max_tokens=maxtok_elaborate, temp=temp, top_k=top_k, seed=seed)
         t = _clean_thought(t, topic)
 
         if not t or len(t) < 10:
