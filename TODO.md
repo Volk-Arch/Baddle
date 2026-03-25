@@ -10,7 +10,7 @@
 
 ---
 
-## Done (this session)
+## Done
 
 - [x] Промпт при коллапсе — пользовательская инструкция вместо дефолтного "объедини"
 - [x] Коллапс без схлопывания (keep mode) — генерация текста без удаления исходных узлов
@@ -19,28 +19,36 @@
 - [x] Chat с контекстом графа — выбранные узлы передаются как context в чат
 - [x] To Graph — ручной ввод текста в граф без привязки
 - [x] Результат коллапса → To Graph (кнопка)
+- [x] Вынос модулей — step.py, chat.py, parallel.py как Blueprints, ui.py = entry point
+- [x] Объединение parallel/compare в одну вкладку (чекбокс compare)
+- [x] top_k в parallel mode
+- [x] API mode — OpenAI-compatible API для graph (think/expand/elaborate/collapse)
+- [x] Hybrid mode — роутинг по компонентам (graph=API, embeddings=local, chat=выбор)
+- [x] Settings panel — выбор mode, API URL/key/model, подгрузка списка моделей
+- [x] Выбор и горячая смена локальной модели (Reload без перезапуска)
+- [x] Персистентные настройки (settings.json)
+- [x] Запуск без модели — auto-open Settings
 
 ## High priority
 
 - [ ] Constraint-based layout — d3-force/dagre/ELK для правильного размещения узлов без пересечений
-- [ ] Поиск/вопрос по графу — поиск по тексту узлов, вопрос модели по содержимому
 - [ ] Энтропия в графе — вернуть когда будет контрастная шкала (автонормализация по графу)
 
 ## Medium priority
 
 - [ ] Извлечение графа из текста — вставляешь статью/текст, модель извлекает сущности и связи, строит граф (llm graph transform)
+- [ ] Пересчёт ветки — выбираешь цепочку узлов, вводишь новые вводные, пересчитать
 - [ ] Кластеризация — spectral/DBSCAN вместо connected components + фильтр повторных мыслей по similarity
 - [ ] Экспорт — граф в PNG/SVG/GraphML/DOT/markdown, импорт/экспорт Obsidian (связанные md-файлы)
-- [ ] Использование моделей через API (OpenAI-compatible) — heatmap отключать при отсутствии logprobs
-- [ ] Вынос модулей в отдельные файлы (graph.py уже вынесен, нужно step/chat/parallel)
+- [ ] Directed flow layout — ветки как mind map, авторасширение секторов при росте (только flow mode)
+- [ ] Grid/card layout в flow mode — узлы как ячейки таблицы вместо кругов
 - [ ] Лёгкая модель с дообучением по графу (fine-tuning для задач кластеризации/collapse)
-- [ ] Chat на create_chat_completion со stream=True
+- [ ] EXE-установщик — pyinstaller/nuitka, bundled с Python
 
 ## Low priority
 
-- [ ] Варианты продолжения в step mode — 3-5 вариантов следующих N токенов, клик применяет. Visual branching
-- [ ] REST API — стабильные эндпоинты для интеграций из скриптов/ноутбуков
-- [ ] Benchmark — автопрогон тем, метрики (кластеры, уникальность, diversity), сравнение моделей/квантизаций
-- [ ] EXE-установщик — pyinstaller/nuitka, bundled с Python, инструкция по загрузке модели
+- [ ] Варианты продолжения в step mode — 3-5 вариантов следующих N токенов, клик применяет
+- [ ] REST API — стабильные эндпоинты для интеграций
+- [ ] Benchmark — автопрогон тем, метрики, сравнение моделей/квантизаций
 
 ---

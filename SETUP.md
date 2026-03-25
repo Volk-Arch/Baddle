@@ -250,8 +250,11 @@ python ui.py --server http://localhost:8080
 ```
 baddle/
 ├── main.py            # движок: модель, сэмплинг, batch-генерация, эмбеддинги
-├── ui.py              # веб-интерфейс (Flask + SSE), точка входа
+├── ui.py              # точка входа (Flask app), общие routes, инициализация модулей
 ├── graph.py           # графовое мышление (Blueprint): генерация, кластеризация, коллапс
+├── chat.py            # чат (Blueprint): диалог, streaming, continue, history
+├── step.py            # пошаговый режим (Blueprint): токен-за-токеном, edit, top-tokens
+├── parallel.py        # параллельный/compare режим (Blueprint): два потока
 ├── server_backend.py  # HTTP-клиент для llama-server
 ├── setup.py           # установщик: llama-cpp-python + llama-server
 ├── templates/         # HTML/JS/CSS фронтенд
