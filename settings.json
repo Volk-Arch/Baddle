@@ -1,0 +1,12 @@
+{
+  "mode": "local",
+  "api_url": "",
+  "api_key": "",
+  "api_model": "",
+  "hybrid_graph": "api",
+  "hybrid_embeddings": "local",
+  "hybrid_chat": "api",
+  "local_model": "Qwen3-8B-Q4_K_M.gguf",
+  "local_gpu_layers": -1,
+  "local_ctx": 4096
+}

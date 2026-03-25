@@ -237,8 +237,11 @@ Parameters: **temp** (temperature), **max** (token limit per response).
 ```
 baddle/
 ├── main.py            # engine: model, sampling, batch generation, embeddings
-├── ui.py              # web interface (Flask + SSE), entry point
+├── ui.py              # entry point (Flask app), common routes, module init
 ├── graph.py           # graph thinking (Blueprint): generation, clustering, collapse
+├── chat.py            # chat (Blueprint): dialogue, streaming, continue, history
+├── step.py            # step mode (Blueprint): token-by-token, edit, top-tokens
+├── parallel.py        # parallel/compare mode (Blueprint): dual streams
 ├── server_backend.py  # HTTP client for llama-server
 ├── setup.py           # installer: llama-cpp-python + llama-server
 ├── templates/         # HTML/JS/CSS frontend

@@ -1,7 +1,10 @@
 """baddle — graph thinking mode (Blueprint)"""
 
 import re
+import logging
 import numpy as np
+
+log = logging.getLogger(__name__)
 from flask import Blueprint, request, jsonify
 
 from main import _sample, _get_logits, _entropy, format_chat, get_embedding, cosine_similarity
@@ -96,8 +99,37 @@ def graph_reset():
 # ── generation helpers ───────────────────────────────────────────────────────
 
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, dict]:
-    """Generate text from chat messages using create_chat_completion. Returns (text, entropy_info)."""
-    use_logprobs = getattr(_graph_generate, '_logprobs_ok', True)
+    """Generate text from chat messages. Uses API or local model based on settings.
+    Returns (text, entropy_info)."""
+    from api_backend import use_api_for
+
+    if use_api_for("graph"):
+        return _graph_generate_api(messages, max_tokens, temp, top_k)
+    return _graph_generate_local(messages, max_tokens, temp, top_k, seed)
+
+
+def _graph_generate_api(messages: list[dict], max_tokens: int, temp: float, top_k: int) -> tuple[str, dict]:
+    """Generate via OpenAI-compatible API."""
+    from api_backend import api_chat_completion
+
+    text, avg_ent, unc_pct, token_ents_raw, token_texts = api_chat_completion(
+        messages, max_tokens=max_tokens, temperature=temp, top_k=top_k,
+    )
+    # Clean thinking blocks
+    text = _clean_thinking(text)
+    # Build token entropy info
+    token_ents = []
+    for i, e in enumerate(token_ents_raw):
+        tok = token_texts[i] if i < len(token_texts) else ""
+        token_ents.append({"token": tok, "ent": round(float(e), 3)})
+    return text, {"avg": round(float(avg_ent), 3), "unc": round(float(unc_pct), 3), "tokens": token_ents}
+
+
+def _graph_generate_local(messages: list[dict], max_tokens: int, temp: float, top_k: int, seed: int) -> tuple[str, dict]:
+    """Generate via local llama.cpp model."""
+    use_logprobs = getattr(_graph_generate_local, '_logprobs_ok', True)
+    # Reset KV cache before each generation to avoid stale state
+    _llm.reset()
     try:
         kwargs = dict(
             messages=messages,
@@ -113,9 +145,9 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
             kwargs["logprobs"] = True
             kwargs["top_logprobs"] = 1
         result = _llm.create_chat_completion(**kwargs)
-    except (ValueError, RuntimeError):
-        # logprobs not supported — disable permanently and retry
-        _graph_generate._logprobs_ok = False
+    except (ValueError, RuntimeError) as e:
+        log.warning(f"[graph_generate_local] logprobs failed: {e}, retrying without")
+        _graph_generate_local._logprobs_ok = False
         _llm.reset()
         result = _llm.create_chat_completion(
             messages=messages,
@@ -126,23 +158,12 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
             repeat_penalty=1.1,
         )
     raw = result["choices"][0]["message"]["content"] or ""
-    # Remove <think>...</think> blocks
-    low = raw.lower()
-    if "</think>" in low:
-        text = raw[low.index("</think>") + 8:]
-    else:
-        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE)
-        text = text if text.strip() else raw
-    # Clean residual tags
-    text = re.sub(r"<[^>]*>", "", text)
-    text = text.strip()
+    text = _clean_thinking(raw)
     # Extract per-token entropy from logprobs
     logprobs_data = result["choices"][0].get("logprobs")
     avg_ent = 0.0
     unc = 0.0
-    token_ents = []  # per-token: [{token, ent}, ...]
-    if not logprobs_data:
-        print(f"[graph_generate] logprobs missing (use_logprobs={use_logprobs}, _logprobs_ok={getattr(_graph_generate, '_logprobs_ok', True)})")
+    token_ents = []
     if logprobs_data and logprobs_data.get("content"):
         for lp in logprobs_data["content"]:
             if "logprob" in lp:
@@ -153,6 +174,18 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
             avg_ent = sum(lps) / len(lps)
             unc = sum(1 for lp in lps if lp > 2.0) / len(lps)
     return text, {"avg": round(float(avg_ent), 3), "unc": round(float(unc), 3), "tokens": token_ents}
+
+
+def _clean_thinking(raw: str) -> str:
+    """Remove <think>...</think> blocks and residual tags from generated text."""
+    low = raw.lower()
+    if "</think>" in low:
+        text = raw[low.index("</think>") + 8:]
+    else:
+        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE)
+        text = text if text.strip() else raw
+    text = re.sub(r"<[^>]*>", "", text)
+    return text.strip()
 
 
 def _clean_thought(text: str, topic: str) -> str:
@@ -193,19 +226,30 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
 
 def _ensure_embeddings(thoughts: list[str]):
     """Compute and cache embeddings for all thoughts."""
+    from api_backend import use_api_for, api_get_embedding
+
     cache = _graph.setdefault("embeddings", [])
     while len(cache) < len(thoughts):
         idx = len(cache)
-        emb = get_embedding(_llm, thoughts[idx])
-        cache.append(emb.tolist() if len(emb) > 0 else None)
+        if use_api_for("embeddings"):
+            emb = api_get_embedding(thoughts[idx])
+            cache.append(emb if emb else None)
+        else:
+            emb = get_embedding(_llm, thoughts[idx])
+            cache.append(emb.tolist() if len(emb) > 0 else None)
     while len(cache) > len(thoughts):
         cache.pop()
 
 
 def _jaccard(i: int, j: int, thoughts: list[str]) -> float:
     """Jaccard similarity on token sets."""
-    toks_i = set(_llm.tokenize(thoughts[i].encode(), add_bos=False))
-    toks_j = set(_llm.tokenize(thoughts[j].encode(), add_bos=False))
+    if _llm is None:
+        # Fallback: word-level jaccard when no local model
+        toks_i = set(thoughts[i].lower().split())
+        toks_j = set(thoughts[j].lower().split())
+    else:
+        toks_i = set(_llm.tokenize(thoughts[i].encode(), add_bos=False))
+        toks_j = set(_llm.tokenize(thoughts[j].encode(), add_bos=False))
     if not toks_i or not toks_j:
         return 0.0
     return len(toks_i & toks_j) / len(toks_i | toks_j)

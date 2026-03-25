@@ -128,3 +128,9 @@ text and KV cache. In-process mode only.
 - **Language** — EN/RU switcher: roles, system prompts (including graph mode) in the selected language
 - **Seed** — reproducible results (parallel, compare)
 - **Token counter** — used / available context tokens
+- **Settings** — choose how the app runs:
+  - **Local** — everything on local model (llama.cpp)
+  - **API** — OpenAI-compatible API (GPT-4, Claude, etc.) for graph and chat
+  - **Hybrid** — per-component routing (e.g. graph via API, embeddings locally)
+  - Auto-load model list from API, hot-swap local models without restart
+  - Settings persist in `settings.json`
