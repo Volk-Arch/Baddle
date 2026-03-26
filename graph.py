@@ -98,6 +98,12 @@ def graph_reset():
 
 # ── generation helpers ───────────────────────────────────────────────────────
 
+def _api_available() -> bool:
+    """Check if API mode is configured for graph generation."""
+    from api_backend import use_api_for
+    return use_api_for("graph")
+
+
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, dict]:
     """Generate text from chat messages. Uses API or local model based on settings.
     Returns (text, entropy_info)."""
@@ -385,8 +391,8 @@ def _graph_response(thoughts, edges, clusters, **extra):
 @graph_bp.route("/graph/think", methods=["POST"])
 def graph_think():
     """Generate N thoughts about a topic."""
-    if _llm is None:
-        return jsonify({"error": "Graph mode requires in-process model"})
+    if _llm is None and not _api_available():
+        return jsonify({"error": "requires in-process model or API"})
     data = request.get_json(force=True)
     topic = data.get("topic", "").strip()
     n = int(data.get("n", 6))
@@ -554,8 +560,11 @@ def graph_link():
 @graph_bp.route("/graph/collapse", methods=["POST"])
 def graph_collapse():
     """Collapse a cluster: generate summary, remove source nodes, add result."""
-    if _llm is None:
-        return jsonify({"error": "requires in-process model"})
+    if _llm is None and not _api_available():
+        # Check if collapse_override is provided (from Generation Studio)
+        data_peek = request.get_json(silent=True) or {}
+        if not data_peek.get("collapse_override"):
+            return jsonify({"error": "requires in-process model or API"})
     data = request.get_json(force=True)
     indices = data.get("cluster", [])
     threshold = float(data.get("threshold", 0.91))
@@ -568,43 +577,48 @@ def graph_collapse():
     custom_max_tokens = data.get("max_tokens")
     user_prompt = data.get("collapse_prompt", "").strip()
     no_merge = data.get("no_merge", False)
+    collapse_override = data.get("collapse_override", "").strip()
     thoughts = _graph["thoughts"]
     topic = _graph["topic"]
 
     if not indices or not thoughts:
         return jsonify({"error": "no cluster to collapse"})
 
-    cluster_texts = [thoughts[i] for i in indices if i < len(thoughts)]
-    if collapse_mode == "long":
-        system = _p(lang, "collapse_long")
-        instruction = _p(lang, "write_long")
-        max_tokens = 2000
+    if collapse_override:
+        # Text already generated via Generation Studio — skip generation
+        text = collapse_override
+        ent = {"avg": 0, "unc": 0, "tokens": []}
     else:
-        system = _p(lang, "collapse")
-        instruction = _p(lang, "write_para")
-        max_tokens = 800
-    if custom_max_tokens:
-        max_tokens = int(custom_max_tokens)
-    user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
-    user += "\n".join(f"- {t}" for t in cluster_texts)
-    if user_prompt:
-        user += f"\n\n{user_prompt}"
-    else:
-        user += f"\n\n{instruction}"
+        cluster_texts = [thoughts[i] for i in indices if i < len(thoughts)]
+        if collapse_mode == "long":
+            system = _p(lang, "collapse_long")
+            instruction = _p(lang, "write_long")
+            max_tokens = 2000
+        else:
+            system = _p(lang, "collapse")
+            instruction = _p(lang, "write_para")
+            max_tokens = 800
+        if custom_max_tokens:
+            max_tokens = int(custom_max_tokens)
+        user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
+        user += "\n".join(f"- {t}" for t in cluster_texts)
+        if user_prompt:
+            user += f"\n\n{user_prompt}"
+        else:
+            user += f"\n\n{instruction}"
 
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
-    # If text was cut mid-sentence, try to continue
-    if text and not text.rstrip().endswith(('.', '!', '?', '。', '»', '"')):
-        messages_cont = list(messages) + [{"role": "assistant", "content": text}]
-        cont, ent2 = _graph_generate(messages_cont, max_tokens=max_tokens // 2, temp=temp, top_k=top_k, seed=seed)
-        if cont:
-            text = text + cont
-            # Merge entropy data
-            if ent.get("tokens") and ent2.get("tokens"):
-                ent["tokens"].extend(ent2["tokens"])
-            ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
-            ent["unc"] = max(ent["unc"], ent2["unc"])
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
+        # If text was cut mid-sentence, try to continue
+        if text and not text.rstrip().endswith(('.', '!', '?', '。', '»', '"')):
+            messages_cont = list(messages) + [{"role": "assistant", "content": text}]
+            cont, ent2 = _graph_generate(messages_cont, max_tokens=max_tokens // 2, temp=temp, top_k=top_k, seed=seed)
+            if cont:
+                text = text + cont
+                if ent.get("tokens") and ent2.get("tokens"):
+                    ent["tokens"].extend(ent2["tokens"])
+                ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
+                ent["unc"] = max(ent["unc"], ent2["unc"])
 
     valid_indices = [i for i in indices if i < len(thoughts)]
     ent_list = _graph.setdefault("entropies", [])
@@ -701,8 +715,8 @@ def graph_sync():
 @graph_bp.route("/graph/expand", methods=["POST"])
 def graph_expand():
     """Generate child ideas branching from a specific thought (same topic, new angles)."""
-    if _llm is None:
-        return jsonify({"error": "requires in-process model"})
+    if _llm is None and not _api_available():
+        return jsonify({"error": "requires in-process model or API"})
     data = request.get_json(force=True)
     idx = int(data.get("index", -1))
     n = int(data.get("n", 3))
@@ -769,8 +783,8 @@ def graph_expand():
 @graph_bp.route("/graph/elaborate", methods=["POST"])
 def graph_elaborate():
     """Generate deeper ideas that elaborate on a specific thought (the source becomes a hub)."""
-    if _llm is None:
-        return jsonify({"error": "requires in-process model"})
+    if _llm is None and not _api_available():
+        return jsonify({"error": "requires in-process model or API"})
     data = request.get_json(force=True)
     idx = int(data.get("index", -1))
     n = int(data.get("n", 3))
@@ -838,3 +852,149 @@ def graph_elaborate():
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
     return _graph_response(thoughts, edges, clusters)
+
+
+# ── Generation Studio ────────────────────────────────────────────────────────
+
+@graph_bp.route("/graph/studio/generate", methods=["POST"])
+def graph_studio_generate():
+    """Generate one variant for Generation Studio.
+
+    Supports modes: rephrase, elaborate_preview, expand_preview, collapse_preview, freeform.
+    Returns { text, entropy_info } without modifying graph state.
+    """
+    data = request.get_json(force=True)
+    mode = data.get("mode", "rephrase")
+    source_text = data.get("source_text", "")
+    instruction = data.get("instruction", "")
+    temp = float(data.get("temp", 0.9))
+    top_k = int(data.get("top_k", 40))
+    max_tokens = int(data.get("max_tokens", 1000))
+    seed = int(data.get("seed", -1))
+    lang = data.get("lang", "en")
+    topic = _graph.get("topic", "")
+
+    if mode == "rephrase":
+        system = "You rephrase the given text. Keep the core meaning. Answer with ONLY the rephrased text, nothing else."
+        user = f"Original: {source_text}"
+        if instruction:
+            user += f"\nInstruction: {instruction}"
+        user += "\nRephrased:"
+
+    elif mode == "elaborate_preview":
+        system = _p(lang, "think")
+        user = f"{_p(lang, 'topic')}: {topic}\n{_p(lang, 'elaborate')}: {source_text}"
+        if instruction:
+            user += f"\n{_p(lang, 'direction')}: {instruction}"
+        user += f"\n{_p(lang, 'deeper')}"
+
+    elif mode == "expand_preview":
+        system = _p(lang, "think")
+        user = f"{_p(lang, 'topic')}: {topic}\n{_p(lang, 'parent')}: {source_text}"
+        if instruction:
+            user += f"\nFocus: {instruction}"
+        user += f"\n{_p(lang, 'new_idea')}"
+
+    elif mode == "collapse_preview":
+        system = _p(lang, "collapse")
+        ideas = data.get("ideas", [])
+        user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
+        user += "\n".join(f"- {idea}" for idea in ideas)
+        if instruction:
+            user += f"\n{instruction}"
+
+    else:  # freeform
+        system = "You are a helpful assistant."
+        user = instruction if instruction else source_text
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
+    text = _clean_thought(text, topic) if mode != "collapse_preview" else text
+
+    # Clean <think> tags from collapse too
+    if mode == "collapse_preview" and "<think>" in text:
+        import re
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    return jsonify({"text": text, "entropy": ent})
+
+
+@graph_bp.route("/graph/studio/apply-rephrase", methods=["POST"])
+def graph_studio_apply_rephrase():
+    """Apply a rephrase result: replace the text of a node, keep all links/positions."""
+    data = request.get_json(force=True)
+    idx = int(data.get("index", -1))
+    new_text = data.get("text", "").strip()
+    threshold = float(data.get("threshold", 0.91))
+    sim_mode = data.get("sim_mode", "embedding")
+
+    thoughts = _graph["thoughts"]
+    if idx < 0 or idx >= len(thoughts):
+        return jsonify({"error": "invalid index"})
+    if not new_text:
+        return jsonify({"error": "empty text"})
+
+    thoughts[idx] = new_text
+    # Invalidate embedding cache for this node
+    cache = _graph.get("embeddings", [])
+    if idx < len(cache):
+        cache[idx] = None
+
+    edges = _compute_edges(thoughts, threshold, sim_mode)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return _graph_response(thoughts, edges, clusters)  # apply-rephrase
+
+
+@graph_bp.route("/graph/studio/apply-child", methods=["POST"])
+def graph_studio_apply_child():
+    """Apply an elaborate/expand result: add as child node linked to parent with directed edge."""
+    data = request.get_json(force=True)
+    parent_idx = int(data.get("index", -1))
+    new_text = data.get("text", "").strip()
+    child_type = data.get("type", "elaborate")  # "elaborate" or "expand"
+    threshold = float(data.get("threshold", 0.91))
+    sim_mode = data.get("sim_mode", "embedding")
+
+    thoughts = _graph["thoughts"]
+    topic = _graph.get("topic", "")
+    if parent_idx < 0 or parent_idx >= len(thoughts):
+        return jsonify({"error": "invalid parent index"})
+    if not new_text:
+        return jsonify({"error": "empty text"})
+
+    # Add the new thought
+    thoughts.append(new_text)
+    new_idx = len(thoughts) - 1
+
+    # Set up metadata
+    ent_list, depth_list, topics_list = _ensure_lists(thoughts, topic)
+    parent_depth = depth_list[parent_idx] if parent_idx < len(depth_list) else 0
+    parent_topic = topics_list[parent_idx] if parent_idx < len(topics_list) else topic
+    if new_idx < len(depth_list):
+        depth_list[new_idx] = parent_depth + 1
+    else:
+        depth_list.append(parent_depth + 1)
+    if new_idx < len(topics_list):
+        topics_list[new_idx] = parent_topic
+    else:
+        topics_list.append(parent_topic)
+    if new_idx >= len(ent_list):
+        ent_list.append({"avg": 0, "unc": 0, "tokens": []})
+
+    # Create directed edge and manual link
+    manual_links = _graph.setdefault("manual_links", [])
+    directed = _graph.setdefault("directed_edges", [])
+    hubs = _graph.setdefault("hub_nodes", set())
+
+    pair = [min(parent_idx, new_idx), max(parent_idx, new_idx)]
+    if pair not in manual_links:
+        manual_links.append(pair)
+    directed.append([parent_idx, new_idx])
+
+    if child_type == "elaborate":
+        hubs.add(parent_idx)
+
+    _graph["thoughts"] = thoughts
+    edges = _compute_edges(thoughts, threshold, sim_mode)
+    clusters = _find_clusters(len(thoughts), edges, threshold)
+    return _graph_response(thoughts, edges, clusters)  # apply-child

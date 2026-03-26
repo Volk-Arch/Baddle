@@ -139,3 +139,9 @@ Badge показывает точный шаг расхождения.
 > ⚠️ **LM Studio**: включите опцию **"Only Keep Last JIT Loaded Model"** = OFF,
 > иначе модель выгружается между chat и embedding запросами. Или используйте
 > Jaccard similarity вместо Embedding — он не требует отдельного API-вызова.
+
+- **Generation Studio** — универсальная модалка для генерации с выбором вариантов. Rephrase, Elaborate, Expand, Collapse — всё через Studio с настройками temp/top_k/max_tokens, пакетная генерация N вариантов, сравнение и применение лучшего
+
+---
+
+📄 [Видение и архитектура](VISION.md) · 📋 [TODO](TODO.md) · 📝 [Статья (взгляд AI)](Article/ARTICLE_AI_VIEW.md)
