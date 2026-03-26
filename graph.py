@@ -269,11 +269,17 @@ def _embedding_sim(i: int, j: int, thoughts: list[str]) -> float:
 def _compute_edges(thoughts: list[str], threshold: float, sim_mode: str = "embedding") -> list[dict]:
     """Compute similarity edges between thoughts.
 
-    sim_mode: "embedding" (cosine on model embeddings) or "jaccard" (token overlap).
+    sim_mode: "embedding" (cosine on model embeddings), "jaccard" (token overlap), or "off" (no edges).
     """
+    if sim_mode == "off":
+        return []
     if sim_mode == "embedding":
-        _ensure_embeddings(thoughts)
-        sim_fn = _embedding_sim
+        try:
+            _ensure_embeddings(thoughts)
+            sim_fn = _embedding_sim
+        except Exception as e:
+            print(f"[graph] Embedding failed, falling back to Jaccard: {e}")
+            sim_fn = _jaccard
     else:
         sim_fn = _jaccard
 

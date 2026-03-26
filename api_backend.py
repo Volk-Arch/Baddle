@@ -89,7 +89,10 @@ def use_api_for(component: str) -> bool:
 
 def fetch_models(api_url: str, api_key: str) -> dict:
     """Fetch available models from OpenAI-compatible /v1/models endpoint."""
-    url = api_url.rstrip("/") + "/models"
+    base = api_url.rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    url = base + "/models"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -113,7 +116,10 @@ def api_chat_completion(messages: list, max_tokens: int = 200, temperature: floa
     Returns (text, entropy_avg, uncertainty_pct, token_entropies, token_texts)
     where entropy/token data may be empty if API doesn't support logprobs.
     """
-    url = _settings["api_url"].rstrip("/") + "/chat/completions"
+    base = _settings["api_url"].rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    url = base + "/chat/completions"
 
     body = {
         "model": _settings["api_model"],
@@ -176,7 +182,10 @@ def api_get_embedding(text: str) -> list:
 
     Returns embedding vector as list of floats, or empty list if not available.
     """
-    url = _settings["api_url"].rstrip("/") + "/embeddings"
+    base = _settings["api_url"].rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    url = base + "/embeddings"
 
     body = {
         "model": _settings["api_model"],

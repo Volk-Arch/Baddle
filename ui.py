@@ -202,7 +202,16 @@ def main():
                 print(f"  Server at {args.server} not reachable, loading model locally...")
 
     if server_url is None:
-        if load_model is None:
+        # Check if API mode is configured — skip local model loading
+        from api_backend import get_settings
+        saved_settings = get_settings()
+        skip_local = saved_settings.get("mode") == "api" and saved_settings.get("api_url")
+
+        if skip_local:
+            model_name = f"API: {saved_settings.get('api_model', 'configured')}"
+            print(f"  API mode configured — skipping local model load.")
+            print(f"  API URL: {saved_settings.get('api_url')}")
+        elif load_model is None:
             model_name = "(no local engine)"
             print("  llama-cpp-python not found — local modes unavailable.")
             print("  Configure API in Settings, or run: python setup.py")

@@ -134,3 +134,8 @@ text and KV cache. In-process mode only.
   - **Hybrid** — per-component routing (e.g. graph via API, embeddings locally)
   - Auto-load model list from API, hot-swap local models without restart
   - Settings persist in `settings.json`
+- **Similarity mode** — Embedding / Jaccard / Off. Auto-fallback to Jaccard on API error
+
+> ⚠️ **LM Studio**: set **"Only Keep Last JIT Loaded Model"** to OFF,
+> otherwise the model unloads between chat and embedding requests. Or use
+> Jaccard similarity instead of Embedding — it requires no separate API call.
