@@ -1,7 +1,10 @@
 """baddle — graph thinking mode (Blueprint)"""
 
 import re
+import logging
 import numpy as np
+
+log = logging.getLogger(__name__)
 from flask import Blueprint, request, jsonify
 
 from main import _sample, _get_logits, _entropy, format_chat, get_embedding, cosine_similarity
@@ -77,24 +80,56 @@ def init_graph(llm):
 
 
 # ── state ────────────────────────────────────────────────────────────────────
-_GRAPH_EMPTY = {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [], "embeddings": [], "entropies": [], "depths": [], "topics": [], "directed_edges": [], "hub_nodes": set()}
-_graph = dict(_GRAPH_EMPTY)
+def _fresh_graph():
+    return {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [],
+            "embeddings": [], "entropies": [], "depths": [], "topics": [],
+            "directed_edges": [], "hub_nodes": set()}
+
+_graph = _fresh_graph()
 
 
 @graph_bp.route("/graph/reset", methods=["POST"])
 def graph_reset():
     """Reset all graph state."""
     global _graph
-    _graph = dict(_GRAPH_EMPTY)
-    _graph["hub_nodes"] = set()  # fresh set, not shared reference
+    _graph = _fresh_graph()
     return jsonify({"ok": True})
 
 
 # ── generation helpers ───────────────────────────────────────────────────────
 
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, dict]:
-    """Generate text from chat messages using create_chat_completion. Returns (text, entropy_info)."""
-    use_logprobs = getattr(_graph_generate, '_logprobs_ok', True)
+    """Generate text from chat messages. Uses API or local model based on settings.
+    Returns (text, entropy_info)."""
+    from api_backend import use_api_for
+
+    if use_api_for("graph"):
+        return _graph_generate_api(messages, max_tokens, temp, top_k)
+    return _graph_generate_local(messages, max_tokens, temp, top_k, seed)
+
+
+def _graph_generate_api(messages: list[dict], max_tokens: int, temp: float, top_k: int) -> tuple[str, dict]:
+    """Generate via OpenAI-compatible API."""
+    from api_backend import api_chat_completion
+
+    text, avg_ent, unc_pct, token_ents_raw, token_texts = api_chat_completion(
+        messages, max_tokens=max_tokens, temperature=temp, top_k=top_k,
+    )
+    # Clean thinking blocks
+    text = _clean_thinking(text)
+    # Build token entropy info
+    token_ents = []
+    for i, e in enumerate(token_ents_raw):
+        tok = token_texts[i] if i < len(token_texts) else ""
+        token_ents.append({"token": tok, "ent": round(float(e), 3)})
+    return text, {"avg": round(float(avg_ent), 3), "unc": round(float(unc_pct), 3), "tokens": token_ents}
+
+
+def _graph_generate_local(messages: list[dict], max_tokens: int, temp: float, top_k: int, seed: int) -> tuple[str, dict]:
+    """Generate via local llama.cpp model."""
+    use_logprobs = getattr(_graph_generate_local, '_logprobs_ok', True)
+    # Reset KV cache before each generation to avoid stale state
+    _llm.reset()
     try:
         kwargs = dict(
             messages=messages,
@@ -110,9 +145,9 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
             kwargs["logprobs"] = True
             kwargs["top_logprobs"] = 1
         result = _llm.create_chat_completion(**kwargs)
-    except (ValueError, RuntimeError):
-        # logprobs not supported — disable permanently and retry
-        _graph_generate._logprobs_ok = False
+    except (ValueError, RuntimeError) as e:
+        log.warning(f"[graph_generate_local] logprobs failed: {e}, retrying without")
+        _graph_generate_local._logprobs_ok = False
         _llm.reset()
         result = _llm.create_chat_completion(
             messages=messages,
@@ -123,23 +158,12 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
             repeat_penalty=1.1,
         )
     raw = result["choices"][0]["message"]["content"] or ""
-    # Remove <think>...</think> blocks
-    low = raw.lower()
-    if "</think>" in low:
-        text = raw[low.index("</think>") + 8:]
-    else:
-        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE)
-        text = text if text.strip() else raw
-    # Clean residual tags
-    text = re.sub(r"<[^>]*>", "", text)
-    text = text.strip()
+    text = _clean_thinking(raw)
     # Extract per-token entropy from logprobs
     logprobs_data = result["choices"][0].get("logprobs")
     avg_ent = 0.0
     unc = 0.0
-    token_ents = []  # per-token: [{token, ent}, ...]
-    if not logprobs_data:
-        print(f"[graph_generate] logprobs missing (use_logprobs={use_logprobs}, _logprobs_ok={getattr(_graph_generate, '_logprobs_ok', True)})")
+    token_ents = []
     if logprobs_data and logprobs_data.get("content"):
         for lp in logprobs_data["content"]:
             if "logprob" in lp:
@@ -150,6 +174,18 @@ def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.
             avg_ent = sum(lps) / len(lps)
             unc = sum(1 for lp in lps if lp > 2.0) / len(lps)
     return text, {"avg": round(float(avg_ent), 3), "unc": round(float(unc), 3), "tokens": token_ents}
+
+
+def _clean_thinking(raw: str) -> str:
+    """Remove <think>...</think> blocks and residual tags from generated text."""
+    low = raw.lower()
+    if "</think>" in low:
+        text = raw[low.index("</think>") + 8:]
+    else:
+        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE)
+        text = text if text.strip() else raw
+    text = re.sub(r"<[^>]*>", "", text)
+    return text.strip()
 
 
 def _clean_thought(text: str, topic: str) -> str:
@@ -171,7 +207,7 @@ def _clean_thought(text: str, topic: str) -> str:
     return best.strip()
 
 
-def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, float]:
+def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: float = 0.9, top_k: int = 40, seed: int = -1, max_tokens: int = 60) -> tuple[str, float]:
     """Generate one short thought about the topic via chat. Returns (text, mean_entropy)."""
     system = _p(lang, "think")
     user = f"{_p(lang, 'topic')}: {topic}"
@@ -182,7 +218,7 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
         user += f"\n{_p(lang, 'one_idea')}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    text, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k, seed=seed)
+    text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
     return _clean_thought(text, topic), ent
 
 
@@ -190,19 +226,30 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
 
 def _ensure_embeddings(thoughts: list[str]):
     """Compute and cache embeddings for all thoughts."""
+    from api_backend import use_api_for, api_get_embedding
+
     cache = _graph.setdefault("embeddings", [])
     while len(cache) < len(thoughts):
         idx = len(cache)
-        emb = get_embedding(_llm, thoughts[idx])
-        cache.append(emb.tolist() if len(emb) > 0 else None)
+        if use_api_for("embeddings"):
+            emb = api_get_embedding(thoughts[idx])
+            cache.append(emb if emb else None)
+        else:
+            emb = get_embedding(_llm, thoughts[idx])
+            cache.append(emb.tolist() if len(emb) > 0 else None)
     while len(cache) > len(thoughts):
         cache.pop()
 
 
 def _jaccard(i: int, j: int, thoughts: list[str]) -> float:
     """Jaccard similarity on token sets."""
-    toks_i = set(_llm.tokenize(thoughts[i].encode(), add_bos=False))
-    toks_j = set(_llm.tokenize(thoughts[j].encode(), add_bos=False))
+    if _llm is None:
+        # Fallback: word-level jaccard when no local model
+        toks_i = set(thoughts[i].lower().split())
+        toks_j = set(thoughts[j].lower().split())
+    else:
+        toks_i = set(_llm.tokenize(thoughts[i].encode(), add_bos=False))
+        toks_j = set(_llm.tokenize(thoughts[j].encode(), add_bos=False))
     if not toks_i or not toks_j:
         return 0.0
     return len(toks_i & toks_j) / len(toks_i | toks_j)
@@ -222,11 +269,17 @@ def _embedding_sim(i: int, j: int, thoughts: list[str]) -> float:
 def _compute_edges(thoughts: list[str], threshold: float, sim_mode: str = "embedding") -> list[dict]:
     """Compute similarity edges between thoughts.
 
-    sim_mode: "embedding" (cosine on model embeddings) or "jaccard" (token overlap).
+    sim_mode: "embedding" (cosine on model embeddings), "jaccard" (token overlap), or "off" (no edges).
     """
+    if sim_mode == "off":
+        return []
     if sim_mode == "embedding":
-        _ensure_embeddings(thoughts)
-        sim_fn = _embedding_sim
+        try:
+            _ensure_embeddings(thoughts)
+            sim_fn = _embedding_sim
+        except Exception as e:
+            print(f"[graph] Embedding failed, falling back to Jaccard: {e}")
+            sim_fn = _jaccard
     else:
         sim_fn = _jaccard
 
@@ -343,6 +396,7 @@ def graph_think():
     temp = float(data.get("temp", 0.9))
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
+    maxtok_think = int(data.get("maxtok_think", 60))
     existing = data.get("existing", [])
 
     if not topic:
@@ -381,7 +435,7 @@ def graph_think():
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        t, ent = _generate_thought(topic, new_thoughts, lang, temp, top_k, seed)
+        t, ent = _generate_thought(topic, new_thoughts, lang, temp, top_k, seed, maxtok_think)
         if not t or len(t) < 10:
             continue
         if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
@@ -511,6 +565,9 @@ def graph_collapse():
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
     collapse_mode = data.get("collapse_mode", "short")
+    custom_max_tokens = data.get("max_tokens")
+    user_prompt = data.get("collapse_prompt", "").strip()
+    no_merge = data.get("no_merge", False)
     thoughts = _graph["thoughts"]
     topic = _graph["topic"]
 
@@ -526,9 +583,14 @@ def graph_collapse():
         system = _p(lang, "collapse")
         instruction = _p(lang, "write_para")
         max_tokens = 800
+    if custom_max_tokens:
+        max_tokens = int(custom_max_tokens)
     user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
     user += "\n".join(f"- {t}" for t in cluster_texts)
-    user += f"\n\n{instruction}"
+    if user_prompt:
+        user += f"\n\n{user_prompt}"
+    else:
+        user += f"\n\n{instruction}"
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
@@ -547,35 +609,55 @@ def graph_collapse():
     valid_indices = [i for i in indices if i < len(thoughts)]
     ent_list = _graph.setdefault("entropies", [])
     depth_list = _graph.setdefault("depths", [])
-    # Collapsed node inherits minimum depth from cluster (it replaces the group)
-    min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
     topics_list = _graph.setdefault("topics", [])
-    collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
-    for i in sorted(valid_indices, reverse=True):
-        thoughts.pop(i)
-        if i < len(ent_list):
-            ent_list.pop(i)
-        if i < len(depth_list):
-            depth_list.pop(i)
-        if i < len(topics_list):
-            topics_list.pop(i)
-    _remap_manual_edges(valid_indices)
-    thoughts.append(text)
-    ent_list.append(ent)
-    depth_list.append(min_depth)
-    topics_list.append(collapsed_topic)
-    new_idx = len(thoughts) - 1
 
-    # Link collapsed node to its topic root (find topic node with depth=-1)
-    directed = _graph.setdefault("directed_edges", [])
-    manual_links = _graph.setdefault("manual_links", [])
-    for i, t in enumerate(thoughts):
-        if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
-            directed.append([i, new_idx])
-            pair = [min(i, new_idx), max(i, new_idx)]
-            if pair not in manual_links:
-                manual_links.append(pair)
-            break
+    if no_merge:
+        # Test mode: add collapsed text as new node but keep originals
+        collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
+        min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
+        thoughts.append(text)
+        ent_list.append(ent)
+        depth_list.append(min_depth)
+        topics_list.append(collapsed_topic)
+        new_idx = len(thoughts) - 1
+        # Link to topic root
+        directed = _graph.setdefault("directed_edges", [])
+        manual_links = _graph.setdefault("manual_links", [])
+        for i, t in enumerate(thoughts):
+            if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
+                directed.append([i, new_idx])
+                pair = [min(i, new_idx), max(i, new_idx)]
+                if pair not in manual_links:
+                    manual_links.append(pair)
+                break
+    else:
+        # Normal mode: remove source nodes, add collapsed result
+        min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
+        collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
+        for i in sorted(valid_indices, reverse=True):
+            thoughts.pop(i)
+            if i < len(ent_list):
+                ent_list.pop(i)
+            if i < len(depth_list):
+                depth_list.pop(i)
+            if i < len(topics_list):
+                topics_list.pop(i)
+        _remap_manual_edges(valid_indices)
+        thoughts.append(text)
+        ent_list.append(ent)
+        depth_list.append(min_depth)
+        topics_list.append(collapsed_topic)
+        new_idx = len(thoughts) - 1
+        # Link collapsed node to its topic root
+        directed = _graph.setdefault("directed_edges", [])
+        manual_links = _graph.setdefault("manual_links", [])
+        for i, t in enumerate(thoughts):
+            if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
+                directed.append([i, new_idx])
+                pair = [min(i, new_idx), max(i, new_idx)]
+                if pair not in manual_links:
+                    manual_links.append(pair)
+                break
 
     _graph["thoughts"] = thoughts
 
@@ -630,6 +712,7 @@ def graph_expand():
     temp = float(data.get("temp", 0.9))
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
+    maxtok_expand = int(data.get("maxtok_expand", 120))
     thoughts = _graph["thoughts"]
 
     if idx < 0 or idx >= len(thoughts):
@@ -653,7 +736,7 @@ def graph_expand():
         user += f"\n{_p(lang, 'branch')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k, seed=seed)
+        t, ent = _graph_generate(messages, max_tokens=maxtok_expand, temp=temp, top_k=top_k, seed=seed)
         t = _clean_thought(t, topic)
 
         if not t or len(t) < 10:
@@ -698,6 +781,7 @@ def graph_elaborate():
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
     direction = data.get("direction", "").strip()
+    maxtok_elaborate = int(data.get("maxtok_elaborate", 120))
     thoughts = _graph["thoughts"]
 
     if idx < 0 or idx >= len(thoughts):
@@ -723,7 +807,7 @@ def graph_elaborate():
         user += f"\n{_p(lang, 'deeper')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t, ent = _graph_generate(messages, max_tokens=120, temp=temp, top_k=top_k, seed=seed)
+        t, ent = _graph_generate(messages, max_tokens=maxtok_elaborate, temp=temp, top_k=top_k, seed=seed)
         t = _clean_thought(t, topic)
 
         if not t or len(t) < 10:

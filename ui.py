@@ -3,31 +3,38 @@
 
 import sys
 import json
-import re
 import argparse
 import threading
 import webbrowser
-import numpy as np
 from pathlib import Path
 
 try:
-    from flask import Flask, Response, request, render_template, stream_with_context, jsonify
+    from flask import Flask, request, render_template, jsonify
 except ImportError:
     sys.exit("[error] flask not found.  pip install flask")
 
 sys.path.insert(0, str(Path(__file__).parent))
-from main import pick_model, StreamCfg
+from main import pick_model
 
 # These need llama-cpp-python — may be None in server-only mode
 try:
-    from main import load_model, _batch_generate_iter, _interleaved_generate_iter, _sample, _get_logits, _entropy, format_chat
+    from main import (load_model, _batch_generate_iter, _interleaved_generate_iter,
+                      _sample, _get_logits, _entropy, format_chat)
 except ImportError:
-    load_model = _batch_generate_iter = _interleaved_generate_iter = _sample = _get_logits = _entropy = format_chat = None
+    load_model = _batch_generate_iter = _interleaved_generate_iter = None
+    _sample = _get_logits = _entropy = format_chat = None
 
 from graph import graph_bp, init_graph
+from step import step_bp, init_step, get_step_state
+from chat import chat_bp, init_chat
+from parallel import parallel_bp, init_parallel, get_dual_result
 
 app = Flask(__name__)
 app.register_blueprint(graph_bp)
+app.register_blueprint(step_bp)
+app.register_blueprint(chat_bp)
+app.register_blueprint(parallel_bp)
+
 llm        = None
 model_name = ""
 server_url = None
@@ -52,243 +59,11 @@ def _load_templates():
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 
-# ── Step mode server state ─────────────────────────────────────────────────────
+# ── Common routes ─────────────────────────────────────────────────────────────
 
-_step = {
-    "tokens":        [],   # all tokens (prompt + generated)
-    "prompt_tokens": [],   # prompt-only tokens (for reset)
-    "temp":          0.0,
-    "top_k":         40,
-    "ready":         False,
-    "ents":          [],   # entropy per generated token
-    "tok_texts":     [],   # text of each generated token
-}
-
-_dual_result = {"text_a": "", "text_b": ""}
-
-
-def _step_top_tokens(n: int = 10):
-    if llm.n_tokens == 0:
-        return []
-    logits = _get_logits(llm)
-    logits -= logits.max()
-    probs = np.exp(logits)
-    probs /= probs.sum()
-    top = np.argsort(-probs)[:n]
-    return [
-        {
-            "id":   int(tid),
-            "text": llm.detokenize([int(tid)]).decode("utf-8", errors="replace"),
-            "prob": float(probs[tid]),
-        }
-        for tid in top
-    ]
-
-
-def _step_full_text():
-    return llm.detokenize(_step["tokens"]).decode("utf-8", errors="replace")
-
-
-def _step_reset_to_prompt():
-    llm.reset()
-    llm.eval(_step["prompt_tokens"])
-    _step["tokens"] = list(_step["prompt_tokens"])
-    _step["ents"] = []
-    _step["tok_texts"] = []
-
-
-# ── Step endpoints ─────────────────────────────────────────────────────────────
-
-@app.route("/step/init", methods=["POST"])
-def step_init():
-    if llm is None:
-        return jsonify({"error": "Step mode requires in-process model (no --server)"})
-    data   = request.get_json(force=True)
-    prompt = data.get("prompt", "").strip()
-    temp   = float(data.get("temp", 0.0))
-    top_k  = int(data.get("top_k", 40))
-    if not prompt:
-        return jsonify({"error": "empty prompt"})
-    try:
-        tokens = llm.tokenize(prompt.encode())
-        llm.reset()
-        llm.eval(tokens)
-        _step["prompt_tokens"] = list(tokens)
-        _step["tokens"]        = list(tokens)
-        _step["temp"]          = temp
-        _step["top_k"]         = top_k
-        _step["ready"]         = True
-        _step["ents"]          = []
-        _step["tok_texts"]     = []
-        return jsonify({
-            "text":        prompt,
-            "token_count": len(tokens),
-            "top_tokens":  _step_top_tokens(10),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route("/step/next", methods=["POST"])
-def step_next():
-    if not _step["ready"]:
-        return jsonify({"error": "not initialized"})
-    try:
-        logits = _get_logits(llm)
-        ent = float(_entropy(logits))
-        tok    = _sample(llm, _step["temp"], _step["top_k"])
-        piece  = llm.detokenize([tok]).decode("utf-8", errors="replace")
-        llm.eval([tok])
-        _step["tokens"].append(tok)
-        _step["ents"].append(ent)
-        _step["tok_texts"].append(piece)
-        is_eos = tok == llm.token_eos()
-        if is_eos:
-            _step["ready"] = False
-        return jsonify({
-            "token_text": piece,
-            "full_text":  _step_full_text(),
-            "top_tokens": _step_top_tokens(10),
-            "step":         len(_step["tokens"]) - len(_step["prompt_tokens"]),
-            "total_tokens": len(_step["tokens"]),
-            "is_eos":       is_eos,
-            "ents":       [round(e, 3) for e in _step["ents"]],
-            "tok_texts":  _step["tok_texts"],
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route("/step/auto")
-def step_auto():
-    if not _step["ready"]:
-        return jsonify({"error": "not initialized"})
-    n = int(request.args.get("n", 10))
-
-    def generate():
-        try:
-            for i in range(n):
-                logits = _get_logits(llm)
-                ent = float(_entropy(logits))
-                tok = _sample(llm, _step["temp"], _step["top_k"])
-                piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
-                llm.eval([tok])
-                _step["tokens"].append(tok)
-                _step["ents"].append(ent)
-                _step["tok_texts"].append(piece)
-                is_eos = tok == llm.token_eos()
-                payload = {
-                    "full_text":    _step_full_text(),
-                    "step":         len(_step["tokens"]) - len(_step["prompt_tokens"]),
-                    "total_tokens": len(_step["tokens"]),
-                    "top_tokens":   _step_top_tokens(5),
-                    "eos":          is_eos,
-                    "ents":       [round(e, 3) for e in _step["ents"]],
-                    "tok_texts":  _step["tok_texts"],
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-                if is_eos:
-                    _step["ready"] = False
-                    return
-        except GeneratorExit:
-            return
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            return
-        yield f"data: {json.dumps({'done': True})}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.route("/step/reset", methods=["POST"])
-def step_reset():
-    if not _step["prompt_tokens"]:
-        return jsonify({"error": "not initialized"})
-    try:
-        _step_reset_to_prompt()
-        _step["ready"] = True
-        return jsonify({
-            "full_text":  _step_full_text(),
-            "top_tokens": _step_top_tokens(10),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route("/step/edit", methods=["POST"])
-def step_edit():
-    """Sync model state with edited text from contenteditable output."""
-    if llm is None:
-        return jsonify({"error": "Step mode requires in-process model"})
-    data = request.get_json(force=True)
-    new_text = data.get("text", "")
-    if not new_text:
-        return jsonify({"error": "empty text"})
-    try:
-        _step["ents"] = []
-        _step["tok_texts"] = []
-        cur_text = _step_full_text()
-
-        if new_text == cur_text:
-            # No change
-            return jsonify({"full_text": cur_text, "top_tokens": _step_top_tokens(10), "action": "none"})
-
-        if cur_text.startswith(new_text):
-            # Text was trimmed — cut
-            new_tokens = llm.tokenize(new_text.encode())
-            _step["tokens"] = list(new_tokens)
-            llm.reset()
-            llm.eval(new_tokens)
-            _step["ready"] = True
-            return jsonify({
-                "full_text": _step_full_text(),
-                "top_tokens": _step_top_tokens(10),
-                "action": "cut",
-                "token_count": len(new_tokens),
-            })
-
-        if new_text.startswith(cur_text):
-            # Text was appended — inject the tail
-            tail = new_text[len(cur_text):]
-            toks = llm.tokenize(tail.encode(), add_bos=False)
-            for t in toks:
-                llm.eval([t])
-                _step["tokens"].append(t)
-            _step["ready"] = True
-            return jsonify({
-                "full_text": _step_full_text(),
-                "top_tokens": _step_top_tokens(10),
-                "action": "inject",
-                "injected_tokens": len(toks),
-            })
-
-        # Text was changed in the middle — full re-eval
-        new_tokens = llm.tokenize(new_text.encode())
-        _step["tokens"] = list(new_tokens)
-        llm.reset()
-        llm.eval(new_tokens)
-        _step["ready"] = True
-        return jsonify({
-            "full_text": _step_full_text(),
-            "top_tokens": _step_top_tokens(10),
-            "action": "re-eval",
-            "token_count": len(new_tokens),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route("/step/temp", methods=["POST"])
-def step_temp():
-    data = request.get_json(force=True)
-    _step["temp"] = float(data.get("temp", 0.0))
-    if "top_k" in data:
-        _step["top_k"] = int(data["top_k"])
-    return jsonify({"temp": _step["temp"], "top_k": _step["top_k"]})
+@app.route("/")
+def index():
+    return render_template("index.html", model=model_name)
 
 
 @app.route("/roles")
@@ -305,221 +80,61 @@ def model_info():
     return jsonify({"n_ctx": ctx})
 
 
-# ── Chat mode state ───────────────────────────────────────────────────────────
+# ── Settings (local/API) ─────────────────────────────────────────────────────
 
-_chat = {
-    "messages": [],     # [{"role": ..., "content": ...}]
-    "tokens":   [],     # all tokens in current context
-    "temp":     0.7,
-    "top_k":    40,
-    "ready":    False,
-}
+from api_backend import get_settings, update_settings, fetch_models, list_local_models
 
+@app.route("/settings", methods=["GET"])
+def settings_get():
+    s = get_settings()
+    # Add current model name
+    s["current_model"] = model_name
+    return jsonify(s)
 
-@app.route("/chat/send", methods=["POST"])
-def chat_send():
-    """Add user message, generate assistant response via SSE."""
-    if llm is None:
-        return jsonify({"error": "Chat mode requires in-process model (no --server)"})
+@app.route("/settings", methods=["POST"])
+def settings_post():
     data = request.get_json(force=True)
-    text = data.get("text", "").strip()
-    system = data.get("system", "")
-    temp = float(data.get("temp", 0.7))
-    top_k = int(data.get("top_k", 40))
-    if not text:
-        return jsonify({"error": "empty message"})
+    update_settings(data)
+    return jsonify(get_settings())
 
-    _chat["temp"] = temp
-    _chat["top_k"] = top_k
+@app.route("/settings/models", methods=["POST"])
+def settings_models():
+    data = request.get_json(force=True)
+    models = fetch_models(data.get("api_url", ""), data.get("api_key", ""))
+    return jsonify(models)
 
-    # Build messages list
-    if not _chat["messages"] and system:
-        _chat["messages"].append({"role": "system", "content": system})
-    if _chat["messages"] and _chat["messages"][0]["role"] == "system":
-        _chat["messages"][0]["content"] = system
+@app.route("/settings/local-models")
+def settings_local_models():
+    return jsonify({"models": list_local_models()})
 
-    _chat["messages"].append({"role": "user", "content": text})
-
-    # Format with chat template, tokenize and eval — keeps KV cache for fast continue
-    prompt_str = format_chat(llm, _chat["messages"])
-    tokens = llm.tokenize(prompt_str.encode())
-    llm.reset()
-    llm.eval(tokens)
-    _chat["tokens"] = list(tokens)
-    _chat["ready"] = True
-
-    return jsonify({"ok": True, "token_count": len(tokens)})
-
-
-def _chat_stream_impl(max_tokens: int, initial_text: str = ""):
-    """Shared streaming generator for chat stream and continue."""
-    response_text = initial_text
-    eos = llm.token_eos()
-    tok_texts = []
-    ents = []
-
-    # Build stop token set
-    stop_ids = {eos}
+@app.route("/settings/reload-model", methods=["POST"])
+def settings_reload_model():
+    """Reload local model with new settings. Requires restart-like reinit."""
+    global llm, model_name
+    if load_model is None:
+        return jsonify({"error": "llama-cpp-python not available"}), 400
+    data = request.get_json(force=True)
+    new_model = data.get("model", "")
+    gpu_layers = int(data.get("gpu_layers", -1))
+    ctx = int(data.get("ctx", 4096))
+    if not new_model:
+        return jsonify({"error": "no model specified"}), 400
     try:
-        im_end = llm.tokenize("<|im_end|>".encode(), add_bos=False)
-        if im_end:
-            stop_ids.add(im_end[-1])
-    except Exception:
-        pass
-
-    for step in range(max_tokens):
-        logits = _get_logits(llm)
-        ent = float(_entropy(logits))
-        tok = _sample(llm, _chat["temp"], _chat["top_k"])
-        llm.eval([tok])
-        _chat["tokens"].append(tok)
-
-        if tok in stop_ids:
-            yield f"data: {json.dumps({'done': True, 'reason': 'eos', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-            break
-
-        piece = llm.detokenize([tok]).decode("utf-8", errors="replace")
-        response_text += piece
-        tok_texts.append(piece)
-        ents.append(ent)
-
-        yield f"data: {json.dumps({'text': response_text, 'step': step, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-    else:
-        yield f"data: {json.dumps({'done': True, 'reason': 'limit', 'text': response_text, 'total_tokens': len(_chat['tokens']), 'toks': tok_texts, 'ents': [round(e,3) for e in ents]})}\n\n"
-
-    # Save/update assistant message
-    if _chat["messages"] and _chat["messages"][-1]["role"] == "assistant":
-        _chat["messages"][-1]["content"] = response_text
-    else:
-        _chat["messages"].append({"role": "assistant", "content": response_text})
-    _chat["ready"] = True
+        model_path = pick_model(new_model)
+        model_name = model_path.name
+        llm = load_model(model_path, gpu_layers, ctx)
+        # Re-init all modules
+        init_graph(llm)
+        init_step(llm, _sample, _get_logits, _entropy)
+        init_chat(llm, _sample, _get_logits, _entropy, format_chat)
+        init_parallel(llm, _batch_generate_iter, _interleaved_generate_iter,
+                      lambda: server_url)
+        return jsonify({"ok": True, "model": model_name})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-@app.route("/chat/stream")
-def chat_stream():
-    """Stream assistant response token by token."""
-    if not _chat["ready"]:
-        def err():
-            yield f"data: {json.dumps({'error': 'not ready'})}\n\n"
-        return Response(err(), mimetype="text/event-stream")
-
-    max_tokens = int(request.args.get("n", 200))
-    return Response(
-        stream_with_context(_chat_stream_impl(max_tokens)),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.route("/chat/continue")
-def chat_continue():
-    """Continue generating from where the last response was truncated."""
-    if not _chat["ready"] or not _chat["messages"] or _chat["messages"][-1]["role"] != "assistant":
-        def err():
-            yield f"data: {json.dumps({'error': 'nothing to continue'})}\n\n"
-        return Response(err(), mimetype="text/event-stream")
-
-    max_tokens = int(request.args.get("n", 200))
-    prev_text = _chat["messages"][-1]["content"]
-    return Response(
-        stream_with_context(_chat_stream_impl(max_tokens, initial_text=prev_text)),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.route("/chat/reset", methods=["POST"])
-def chat_reset():
-    _chat["messages"] = []
-    _chat["tokens"] = []
-    _chat["ready"] = False
-    if llm:
-        llm.reset()
-    return jsonify({"ok": True})
-
-
-@app.route("/chat/history")
-def chat_history():
-    return jsonify(_chat["messages"])
-
-
-# ── SSE endpoint (parallel / compare) ─────────────────────────────────────────
-
-@app.route("/")
-def index():
-    return render_template("index.html", model=model_name)
-
-
-@app.route("/stream")
-def stream():
-    pa      = request.args.get("pa", "")
-    pb      = request.args.get("pb", pa)
-    n       = int(request.args.get("n",       50))
-    temp_a  = float(request.args.get("temp_a",  0.7))
-    temp_b  = float(request.args.get("temp_b",  0.7))
-    top_k_a = int(request.args.get("top_k_a", 40))
-    top_k_b = int(request.args.get("top_k_b", 40))
-    seed    = int(request.args.get("seed",    -1))
-
-    cfg_a = StreamCfg(label="A", temp=temp_a, top_k=top_k_a, color="cyan", seed=seed)
-    cfg_b = StreamCfg(label="B", temp=temp_b, top_k=top_k_b, color="magenta", seed=seed)
-
-    if seed >= 0:
-        np.random.seed(seed)
-
-    # Estimate prompt token counts for token counter
-    prompt_toks = len(llm.tokenize(pa.encode())) if llm else 0
-
-    def generate():
-        def _iter():
-            """Try server, then batch, then interleaved."""
-            if server_url:
-                from server_backend import _server_generate_iter, is_native_server
-                native = is_native_server(server_url)
-                yield "tag", "llama-server (parallel)" if native else "llama-server (sequential)"
-                for item in _server_generate_iter(server_url, pa, pb, n, cfg_a, cfg_b):
-                    yield "data", item
-                return
-            try:
-                yield "tag", "kv-shared (2 decodes/step)"
-                for item in _batch_generate_iter(llm, pa, pb, n, cfg_a, cfg_b):
-                    yield "data", item
-                return
-            except Exception:
-                pass
-            tag = "1-prefill interleaved" if pa == pb else "interleaved"
-            yield "tag", tag
-            for item in _interleaved_generate_iter(llm, pa, pb, n, cfg_a, cfg_b):
-                yield "data", item
-
-        try:
-            for kind, val in _iter():
-                if kind == "tag":
-                    yield f"data: {json.dumps({'mode_tag': val})}\n\n"
-                else:
-                    text_a, text_b, step, done_a, done_b, ents_a, ents_b, toks_a, toks_b = val
-                    total_tokens = prompt_toks + step + 1
-                    payload = {'a': text_a, 'b': text_b, 'step': step, 'done_a': done_a, 'done_b': done_b, 'total_tokens': total_tokens}
-                    if toks_a:
-                        payload['toks_a'] = toks_a
-                        payload['toks_b'] = toks_b
-                        payload['ents_a'] = [round(e, 3) for e in ents_a]
-                        payload['ents_b'] = [round(e, 3) for e in ents_b]
-                    _dual_result["text_a"] = text_a
-                    _dual_result["text_b"] = text_b
-                    yield f"data: {json.dumps(payload)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            return
-
-        yield f"data: {json.dumps({'done': True})}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
+# ── Hybrid: dual → step ──────────────────────────────────────────────────────
 
 @app.route("/dual/to-step", methods=["POST"])
 def dual_to_step():
@@ -527,20 +142,23 @@ def dual_to_step():
     if not llm:
         return jsonify({"error": "no local model (server mode)"}), 400
     data = request.json or {}
-    stream = data.get("stream", "a")
+    stream_name = data.get("stream", "a")
     temp = float(data.get("temp", 0.0))
     top_k = int(data.get("top_k", 40))
-    text = _dual_result["text_a"] if stream == "a" else _dual_result["text_b"]
+    dual = get_dual_result()
+    text = dual["text_a"] if stream_name == "a" else dual["text_b"]
     if not text:
         return jsonify({"error": "no dual result"}), 400
     tokens = llm.tokenize(text.encode())
     llm.reset()
     llm.eval(tokens)
-    _step["tokens"] = list(tokens)
-    _step["prompt_tokens"] = list(tokens)
-    _step["temp"] = temp
-    _step["top_k"] = top_k
-    _step["ready"] = True
+    step_state = get_step_state()
+    step_state["tokens"] = list(tokens)
+    step_state["prompt_tokens"] = list(tokens)
+    step_state["temp"] = temp
+    step_state["top_k"] = top_k
+    step_state["ready"] = True
+    from step import _step_top_tokens
     return jsonify({
         "text": text,
         "top": _step_top_tokens(),
@@ -584,14 +202,38 @@ def main():
                 print(f"  Server at {args.server} not reachable, loading model locally...")
 
     if server_url is None:
-        if load_model is None:
-            sys.exit("[error] llama-cpp-python not found and no llama-server available.\n"
-                     "Run: python setup.py")
-        model_path = pick_model(args.model)
-        model_name = model_path.name
-        gpu_layers = 0 if args.no_gpu else args.gpu_layers
-        llm        = load_model(model_path, gpu_layers, args.ctx)
-        init_graph(llm)
+        # Check if API mode is configured — skip local model loading
+        from api_backend import get_settings
+        saved_settings = get_settings()
+        skip_local = saved_settings.get("mode") == "api" and saved_settings.get("api_url")
+
+        if skip_local:
+            model_name = f"API: {saved_settings.get('api_model', 'configured')}"
+            print(f"  API mode configured — skipping local model load.")
+            print(f"  API URL: {saved_settings.get('api_url')}")
+        elif load_model is None:
+            model_name = "(no local engine)"
+            print("  llama-cpp-python not found — local modes unavailable.")
+            print("  Configure API in Settings, or run: python setup.py")
+        else:
+            try:
+                model_path = pick_model(args.model)
+                model_name = model_path.name
+                gpu_layers = 0 if args.no_gpu else args.gpu_layers
+                llm        = load_model(model_path, gpu_layers, args.ctx)
+            except (SystemExit, FileNotFoundError, Exception):
+                # No model found — start without local model
+                model_name = "(no model loaded)"
+                print("  No local model found — starting without model.")
+                print("  Configure API or load a model via Settings.")
+
+        if llm is not None:
+            # Initialize all modules with model reference
+            init_graph(llm)
+            init_step(llm, _sample, _get_logits, _entropy)
+            init_chat(llm, _sample, _get_logits, _entropy, format_chat)
+            init_parallel(llm, _batch_generate_iter, _interleaved_generate_iter,
+                          lambda: server_url)
 
     url = f"http://localhost:{args.port}"
     print(f"\n  Open: {url}\n")

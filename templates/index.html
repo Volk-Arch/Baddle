@@ -5,101 +5,234 @@
   <title>baddle</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body { background: #0f172a; font-family: 'Courier New', monospace; }
-    .stream-content { white-space: pre-wrap; word-break: break-word; min-height: 200px; line-height: 1.6; }
+    body { background: #1e1e1e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+           color: #cccccc; margin: 0; padding: 0; font-size: 13px; }
+    .stream-content { white-space: pre-wrap; word-break: break-word; min-height: 200px; line-height: 1.6;
+                      font-family: 'Consolas', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
     input[type=text], input[type=number], textarea.auto-grow {
-      background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
-      padding: 6px 10px; border-radius: 6px; outline: none;
+      background: #3c3c3c; border: 1px solid #3c3c3c; color: #cccccc;
+      padding: 4px 8px; border-radius: 2px; outline: none; font-size: 13px;
+      transition: border-color 0.15s;
     }
     textarea.auto-grow {
-      resize: none; overflow: hidden; min-height: 34px; line-height: 1.4;
-      font-family: inherit; font-size: 0.875rem; display: block;
+      resize: none; overflow: hidden; min-height: 28px; line-height: 1.4;
+      font-family: inherit; font-size: 13px; display: block;
     }
-    input:focus, textarea.auto-grow:focus { border-color: #38bdf8; }
-    .tab-active   { background: #0369a1; color: #fff; }
-    .tab-inactive { background: #1e293b; color: #94a3b8; }
-    .tab-inactive:hover { background: #273549; color: #e2e8f0; }
-    .cfg-box { background: #1e293b; border-radius: 8px; padding: 14px; }
+    input:focus, textarea.auto-grow:focus { border-color: #007acc; }
+    select {
+      background: #3c3c3c; border: 1px solid #3c3c3c; color: #cccccc;
+      padding: 4px 8px; border-radius: 2px; outline: none; font-size: 13px;
+    }
+    /* IDE-style tabs: flat with bottom accent border */
+    .tab-active   { background: #1e1e1e; color: #ffffff; border-bottom: 2px solid #007acc;
+                    border-radius: 0; font-weight: normal; }
+    .tab-inactive { background: #2d2d2d; color: #969696; border-bottom: 2px solid transparent;
+                    border-radius: 0; border: none; }
+    .tab-inactive:hover { color: #cccccc; background: #2d2d2d; }
+    .cfg-box { background: #252526; border-radius: 0; padding: 12px; border: 1px solid #3c3c3c; }
     .scroll-panel { max-height: 380px; overflow-y: auto; }
-    .btn-action { padding: 6px 16px; border-radius: 6px; font-size: 0.875rem;
-                  color: #fff; transition: background 0.15s; }
-    .btn-action:disabled { opacity: 0.35; cursor: not-allowed; }
-    .prob-bar { display: inline-block; background: #065f46; height: 10px; border-radius: 2px; }
-    #step-output[contenteditable="true"] { outline: 2px solid #0ea5e9; cursor: text; }
+    .btn-action { padding: 4px 12px; border-radius: 2px; font-size: 12px;
+                  color: #cccccc; border: 1px solid #3c3c3c; background: #3c3c3c;
+                  transition: all 0.1s; font-weight: normal; }
+    .btn-action:hover { background: #4c4c4c; color: #fff; }
+    .btn-action:disabled { opacity: 0.3; cursor: not-allowed; }
+    .prob-bar { display: inline-block; background: #2d6a4f; height: 10px; border-radius: 1px; }
+    #step-output[contenteditable="true"] { outline: 2px solid #007acc; cursor: text; }
     #step-output[contenteditable="true"]::after {
       content: '  Ctrl+Enter to sync';
-      color: #475569; font-size: 0.7rem;
+      color: #5a5a5a; font-size: 11px;
     }
-    .editing-badge { background: #0ea5e9; color: #0f172a; font-size: 0.65rem;
-                     padding: 1px 8px; border-radius: 4px; font-weight: bold; }
-    .chat-msg { padding: 10px 14px; border-radius: 8px; margin-bottom: 8px; max-width: 85%; }
-    .chat-user { background: #1e3a5f; margin-left: auto; }
-    .chat-assistant { background: #1e293b; margin-right: auto; }
-    .chat-system { background: #1a1a2e; color: #94a3b8; font-size: 0.75rem; margin: 0 auto 8px; text-align: center; max-width: 100%; }
+    .editing-badge { background: #007acc; color: #fff; font-size: 11px;
+                     padding: 1px 6px; border-radius: 2px; font-weight: normal; }
+    .chat-msg { padding: 8px 12px; border-radius: 4px; margin-bottom: 6px; max-width: 85%;
+                font-family: 'Consolas', 'Fira Code', monospace; font-size: 13px; }
+    .chat-user { background: #264f78; margin-left: auto; }
+    .chat-assistant { background: #252526; margin-right: auto; }
+    .chat-system { background: #252526; color: #5a5a5a; font-size: 12px; margin: 0 auto 6px; text-align: center; max-width: 100%; }
+    ::selection { background: #264f78; }
+    ::-webkit-scrollbar { width: 10px; }
+    ::-webkit-scrollbar-track { background: #1e1e1e; }
+    ::-webkit-scrollbar-thumb { background: #424242; border-radius: 0; }
+    ::-webkit-scrollbar-thumb:hover { background: #4f4f4f; }
+    /* Status bar */
+    #statusbar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px;
+                 background: #007acc; color: #fff; font-size: 12px;
+                 display: flex; align-items: center; padding: 0 10px; gap: 16px; z-index: 200; }
+    #statusbar .sb-item { opacity: 0.9; }
+    /* Panel headers */
+    .panel-header { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 4px 12px;
+                    font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #969696; }
   </style>
 </head>
-<body class="text-slate-200 min-h-screen p-6">
-<div class="max-w-6xl mx-auto">
+<body class="min-h-screen" style="padding:0 12px 30px 12px">
+<div class="mx-auto" style="max-width:1500px">
 
-  <!-- Header -->
-  <div class="flex items-baseline gap-4 mb-6">
-    <h1 class="text-2xl font-bold text-sky-400">baddle</h1>
-    <span class="text-slate-500 text-sm">{{ model }}</span>
-    <span id="token-counter" class="text-xs text-slate-600"></span>
-    <label class="ml-auto flex items-center gap-1 text-xs text-slate-500 cursor-pointer select-none">
-      <input id="heatmap-toggle" type="checkbox" checked class="accent-sky-500"> heatmap
-      <span class="text-slate-500 text-xs" style="margin-left:6px">scale</span>
-      <input id="heatmap-scale" type="number" value="3" min="0.5" max="10" step="0.5"
-        style="width:45px;margin-left:2px" title="Entropy scale: tokens with entropy >= this value are fully red"
-        onchange="heatmapRescale()" onblur="heatmapRescale()">
-    </label>
-    <span id="batch-tag" class="text-xs text-slate-600"></span>
+  <!-- Title bar -->
+  <div class="flex items-center gap-3" style="background:#3c3c3c;margin:0 -12px 0 -12px;padding:4px 12px;">
+    <span style="color:#007acc;font-weight:600;font-size:14px;letter-spacing:-0.02em">baddle</span>
+    <span style="color:#969696;font-size:12px">{{ model }}</span>
+    <span id="token-counter" style="color:#5a5a5a;font-size:11px"></span>
+    <span class="flex-1"></span>
+    <span id="batch-tag" style="color:#5a5a5a;font-size:11px"></span>
   </div>
 
-  <!-- Mode tabs -->
-  <div class="flex gap-2 mb-5">
+  <!-- Status bar (fixed bottom) -->
+  <div id="statusbar">
+    <span class="sb-item" id="sb-model">{{ model }}</span>
+    <span class="sb-item" id="sb-mode">step</span>
+    <span class="sb-item" id="sb-api-mode" style="color:#4ec36e"></span>
+    <span class="sb-item" id="sb-tokens"></span>
+    <button onclick="openSettings()" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:2px 10px;border-radius:2px;font-size:11px;cursor:pointer;margin-left:8px" title="Settings">&#9881; Settings</button>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;justify-content:center;align-items:center">
+    <div style="background:#252526;border:1px solid #3c3c3c;border-radius:4px;padding:20px;width:420px;max-width:90%">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <span style="color:#cccccc;font-size:14px;font-weight:600">Settings</span>
+        <button onclick="closeSettings()" style="background:none;border:none;color:#969696;font-size:18px;cursor:pointer">&times;</button>
+      </div>
+      <div style="margin-bottom:12px">
+        <label style="color:#969696;font-size:12px;display:block;margin-bottom:4px">Mode</label>
+        <select id="settings-mode" onchange="onSettingsModeChange()" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;width:100%;font-size:13px">
+          <option value="local">Local (llama.cpp)</option>
+          <option value="api">API (OpenAI-compatible)</option>
+          <option value="hybrid">Hybrid (API + Local)</option>
+        </select>
+      </div>
+      <div id="settings-api-fields" style="display:none">
+        <div style="margin-bottom:10px">
+          <label style="color:#969696;font-size:12px;display:block;margin-bottom:4px">API URL</label>
+          <input id="settings-api-url" type="text" placeholder="https://api.openai.com/v1"
+            style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;width:100%;font-size:13px;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="color:#969696;font-size:12px;display:block;margin-bottom:4px">API Key</label>
+          <input id="settings-api-key" type="password" placeholder="sk-..."
+            style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;width:100%;font-size:13px;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="color:#969696;font-size:12px;display:block;margin-bottom:4px">Model</label>
+          <div style="display:flex;gap:6px">
+            <select id="settings-api-model-select" onchange="document.getElementById('settings-api-model').value=this.value"
+              style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;flex:1;font-size:13px">
+              <option value="">-- select --</option>
+            </select>
+            <button onclick="fetchApiModels()" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;cursor:pointer;font-size:12px;white-space:nowrap" title="Fetch models from API">&#8635; Load</button>
+          </div>
+          <input id="settings-api-model" type="text" placeholder="or type model name manually"
+            style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;width:100%;font-size:13px;box-sizing:border-box;margin-top:4px">
+        </div>
+        <div id="settings-hybrid-fields" style="display:none;margin-bottom:10px;padding:10px;background:#2d2d2d;border-radius:3px">
+          <label style="color:#969696;font-size:12px;display:block;margin-bottom:8px">Hybrid routing</label>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <label style="color:#cccccc;font-size:12px;display:flex;align-items:center;gap:4px">
+              Graph gen:
+              <select id="settings-hybrid-graph" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:2px 6px;border-radius:2px;font-size:12px">
+                <option value="api">API</option><option value="local">Local</option>
+              </select>
+            </label>
+            <label style="color:#cccccc;font-size:12px;display:flex;align-items:center;gap:4px">
+              Embeddings:
+              <select id="settings-hybrid-embeddings" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:2px 6px;border-radius:2px;font-size:12px">
+                <option value="local">Local</option><option value="api">API</option>
+              </select>
+            </label>
+            <label style="color:#cccccc;font-size:12px;display:flex;align-items:center;gap:4px">
+              Chat:
+              <select id="settings-hybrid-chat" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:2px 6px;border-radius:2px;font-size:12px">
+                <option value="api">API</option><option value="local">Local</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div style="color:#5a5a5a;font-size:11px;margin-bottom:10px">
+          Step &amp; Parallel modes always use local model.
+        </div>
+      </div>
+      <div style="border-top:1px solid #3c3c3c;margin-top:12px;padding-top:12px">
+        <label style="color:#969696;font-size:12px;display:block;margin-bottom:4px">Local model</label>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <select id="settings-local-model" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;flex:1;font-size:13px">
+            <option value="">-- select --</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:6px">
+          <label style="color:#969696;font-size:12px;display:flex;align-items:center;gap:4px">
+            GPU layers:
+            <input id="settings-gpu-layers" type="number" value="-1" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:4px 8px;border-radius:2px;width:60px;font-size:12px" title="-1 = all layers on GPU">
+          </label>
+          <label style="color:#969696;font-size:12px;display:flex;align-items:center;gap:4px">
+            Context:
+            <input id="settings-ctx" type="number" value="4096" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:4px 8px;border-radius:2px;width:70px;font-size:12px">
+          </label>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span id="settings-current-model" style="color:#5a5a5a;font-size:11px;flex:1"></span>
+          <button onclick="reloadModel()" style="background:#b45309;border:none;color:#fff;padding:6px 12px;border-radius:2px;cursor:pointer;font-size:12px" title="Reload model (takes a few seconds)">&#8635; Reload model</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button onclick="closeSettings()" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 16px;border-radius:2px;cursor:pointer;font-size:13px">Cancel</button>
+        <button onclick="saveSettings()" style="background:#007acc;border:none;color:#fff;padding:6px 16px;border-radius:2px;cursor:pointer;font-size:13px">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mode tabs (IDE-style) -->
+  <div class="flex" style="background:#2d2d2d;margin:0 -12px;padding:0 12px;border-bottom:1px solid #3c3c3c;">
     <button id="tab-step"     onclick="setMode('step')"
-      class="tab-active px-4 py-1.5 rounded text-sm transition-colors">step</button>
+      class="tab-active px-4 py-2 text-sm">step</button>
     <button id="tab-parallel" onclick="setMode('parallel')"
-      class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">parallel</button>
-    <button id="tab-compare"  onclick="setMode('compare')"
-      class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">compare</button>
+      class="tab-inactive px-4 py-2 text-sm">parallel</button>
     <button id="tab-chat"    onclick="setMode('chat')"
-      class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">chat</button>
+      class="tab-inactive px-4 py-2 text-sm">chat</button>
     <button id="tab-graph"   onclick="setMode('graph')"
-      class="tab-inactive px-4 py-1.5 rounded text-sm transition-colors">graph</button>
+      class="tab-inactive px-4 py-2 text-sm">graph</button>
   </div>
 
   <!-- ══ Role (shared) ══ -->
-  <div class="flex flex-wrap gap-3 items-start mb-4">
-    <span class="text-slate-400 text-sm w-16 shrink-0" style="margin-top:7px">Role</span>
+  <div class="flex flex-wrap gap-3 items-start mb-3 mt-3">
+    <span class="text-neutral-500 text-sm w-16 shrink-0" style="margin-top:7px">Role</span>
     <select id="lang-select" onchange="onLangChange()"
-      style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; font-size:0.875rem; width:56px;">
+      style="background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; font-size:0.875rem; width:80px;">
       <option value="en">EN</option>
       <option value="ru">RU</option>
     </select>
     <select id="role-select" onchange="onRoleSelect()"
-      style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:6px 10px; border-radius:6px; min-width:140px; font-size:0.875rem;">
+      style="background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; min-width:140px; font-size:0.875rem;">
     </select>
     <textarea id="role-text" class="auto-grow" placeholder="Role / system prompt…"
       style="flex:1; min-width:200px; max-width:400px;" rows="1"></textarea>
+    <span class="flex-1"></span>
+    <label class="flex items-center gap-1 cursor-pointer select-none" style="color:#969696;font-size:12px;margin-top:4px"
+      title="Heatmap: color tokens by model confidence. Red = uncertain, green = confident.">
+      <input id="heatmap-toggle" type="checkbox" checked style="accent-color:#007acc"> heatmap
+      <span style="margin-left:6px;color:#4ec36e;font-size:10px">&#9632;</span>
+      <input id="heatmap-scale" type="range" min="0.5" max="10" step="0.5" value="3"
+        style="width:60px;margin:0 2px;accent-color:#007acc;vertical-align:middle"
+        oninput="document.getElementById('heatmap-scale-val').textContent=this.value;heatmapRescale()"
+        title="Sensitivity: lower = more red tokens shown">
+      <span style="color:#ef4444;font-size:10px">&#9632;</span>
+      <span id="heatmap-scale-val" style="color:#5a5a5a;font-size:10px;margin-left:2px;min-width:16px">3</span>
+    </label>
   </div>
 
   <!-- ══ STEP mode ══ -->
   <div id="cfg-step">
     <!-- Config row -->
     <div class="flex flex-wrap gap-3 items-center mb-4">
-      <span class="text-slate-400 text-sm w-16 shrink-0">Prompt</span>
+      <span class="text-neutral-500 text-sm w-16 shrink-0">Prompt</span>
       <textarea id="step-prompt" class="auto-grow" placeholder="Enter prompt…" style="width:380px" rows="1"></textarea>
-      <span class="text-slate-400 text-sm">temp</span>
+      <span class="text-neutral-500 text-sm">temp</span>
       <input id="step-temp" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px"
              onchange="stepUpdateParams()" onblur="stepUpdateParams()">
-      <span class="text-slate-400 text-sm">top_k</span>
+      <span class="text-neutral-500 text-sm">top_k</span>
       <input id="step-topk" type="number" value="40" min="1" max="100" style="width:70px"
              onchange="stepUpdateParams()" onblur="stepUpdateParams()">
       <button onclick="stepInit()"
-        class="btn-action" style="background:#0369a1"
-        onmouseover="this.style.background='#0284c7'" onmouseout="this.style.background='#0369a1'">
+        class="btn-action" style="background:#007acc;color:#fff;border-color:#007acc"
+        onmouseover="this.style.background='#1a8ad4'" onmouseout="this.style.background='#007acc'">
         Init
       </button>
     </div>
@@ -107,23 +240,23 @@
     <!-- Output + top tokens -->
     <div class="grid gap-4 mb-4" style="grid-template-columns: 2fr 1fr">
       <!-- Generated text -->
-      <div class="rounded-lg border border-slate-700 overflow-hidden">
-        <div class="bg-slate-900 px-4 py-2 flex items-center border-b border-slate-700">
-          <span class="text-slate-400 text-sm font-bold">Generated</span>
-          <span id="step-status" class="ml-auto text-slate-500 text-xs"></span>
+      <div class="border border-neutral-800 overflow-hidden">
+        <div class="panel-header px-3 py-1 flex items-center border-b border-neutral-800">
+          <span class="text-neutral-500 text-sm font-bold">Generated</span>
+          <span id="step-status" class="ml-auto text-neutral-500 text-xs"></span>
         </div>
-        <div class="bg-slate-800 scroll-panel">
-          <div id="step-output" class="stream-content p-4 text-sm text-slate-200"
+        <div class="bg-neutral-900 scroll-panel">
+          <div id="step-output" class="stream-content p-4 text-sm text-neutral-200"
                contenteditable="false" spellcheck="false"></div>
         </div>
       </div>
       <!-- Top tokens -->
-      <div class="rounded-lg border border-slate-700 overflow-hidden">
-        <div class="bg-slate-900 px-4 py-2 border-b border-slate-700">
-          <span class="text-slate-400 text-sm font-bold">Next token probs</span>
+      <div class="border border-neutral-800 overflow-hidden">
+        <div class="panel-header px-3 py-1 border-b border-neutral-800">
+          <span class="text-neutral-500 text-sm font-bold">Next token probs</span>
         </div>
-        <div class="bg-slate-800 scroll-panel p-3">
-          <div id="step-top" class="text-xs text-slate-300 font-mono"></div>
+        <div class="bg-neutral-900 scroll-panel p-3">
+          <div id="step-top" class="text-xs text-neutral-300 font-mono"></div>
         </div>
       </div>
     </div>
@@ -131,41 +264,41 @@
     <!-- Action bar -->
     <div class="flex flex-wrap items-center gap-3">
       <button id="step-btn-next" onclick="stepNext()" disabled
-        class="btn-action" style="background:#065f46"
-        onmouseover="this.style.background='#047857'" onmouseout="this.style.background='#065f46'">
+        class="btn-action" style="background:#2d6a4f;color:#fff;border-color:#2d6a4f"
+        onmouseover="this.style.background='#3a8a63'" onmouseout="this.style.background='#2d6a4f'">
         Next Token
       </button>
 
       <div class="flex items-center gap-2">
         <button id="step-btn-auto" onclick="stepAuto()" disabled
-          class="btn-action" style="background:#3730a3"
-          onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#3730a3'">
+          class="btn-action" style="background:#4b45a3;color:#fff;border-color:#4b45a3"
+          onmouseover="this.style.background='#5b55b3'" onmouseout="this.style.background='#4b45a3'">
           Auto
         </button>
         <input id="step-auto-n" type="number" value="20" min="1" max="500" style="width:60px">
-        <span class="text-slate-500 text-xs">tokens</span>
+        <span class="text-neutral-500 text-xs">tokens</span>
       </div>
 
       <button id="step-btn-edit" onclick="stepToggleEdit()" disabled
-        class="btn-action" style="background:#0c4a6e"
-        onmouseover="this.style.background='#075985'" onmouseout="this.style.background='#0c4a6e'">
+        class="btn-action"
+        onmouseover="this.style.background='#1e1e1e'" onmouseout="this.style.background='transparent'">
         Edit
       </button>
 
       <button id="step-btn-sync" onclick="stepSync()" style="display:none"
-        class="btn-action" style="background:#0369a1"
-        onmouseover="this.style.background='#0284c7'" onmouseout="this.style.background='#0369a1'">
+        class="btn-action" style="background:#007acc;color:#fff;border-color:#007acc"
+        onmouseover="this.style.background='#1a8ad4'" onmouseout="this.style.background='#007acc'">
         Sync (Ctrl+Enter)
       </button>
 
       <button id="step-btn-reset" onclick="stepReset()" disabled
-        class="btn-action" style="background:#7f1d1d"
-        onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
+        class="btn-action" style="border-color:#7f1d1d;color:#fca5a5"
+        onmouseover="this.style.background='#1e1e1e'" onmouseout="this.style.background='transparent'">
         Reset
       </button>
 
       <button id="step-btn-stop" onclick="stepStopAuto()" style="display:none"
-        class="btn-action" style="background:#b91c1c"
+        class="btn-action" style="background:#b91c1c;color:#fff;border-color:#b91c1c"
         onmouseover="this.style.background='#dc2626'" onmouseout="this.style.background='#b91c1c'">
         Stop Auto
       </button>
@@ -174,75 +307,52 @@
 
   <!-- ══ PARALLEL mode ══ -->
   <div id="cfg-parallel" class="hidden">
-    <div class="grid grid-cols-1 gap-3 mb-4 max-w-2xl">
+    <div class="flex flex-col gap-3 mb-4 max-w-2xl">
       <div class="flex gap-3 items-center">
-        <span class="text-sky-400 text-sm w-20 shrink-0">Prompt A</span>
+        <span class="text-blue-400 text-sm w-20 shrink-0">Prompt A</span>
         <textarea id="pa" class="auto-grow" placeholder="First prompt…" style="flex:1" rows="1"></textarea>
       </div>
-      <div class="flex gap-3 items-center">
-        <span class="text-sky-400 text-sm w-20 shrink-0">temp A</span>
-        <input id="temp-pa" type="number" value="0.7" step="0.1" min="0" max="2" style="width:80px">
-      </div>
-      <div class="flex gap-3 items-center">
+      <div id="parallel-prompt-b" class="flex gap-3 items-center">
         <span class="text-purple-400 text-sm w-20 shrink-0">Prompt B</span>
         <textarea id="pb" class="auto-grow" placeholder="Second prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="flex gap-3 items-center">
-        <span class="text-purple-400 text-sm w-20 shrink-0">temp B</span>
-        <input id="temp-pb" type="number" value="0.7" step="0.1" min="0" max="2" style="width:80px">
-      </div>
-      <div class="flex gap-6 items-center mt-1">
-        <label class="text-slate-400 text-sm flex items-center gap-2">
-          max tokens
-          <input id="n-p" type="number" value="50" min="1" max="500" style="width:70px">
+        <label style="color:#60a5fa;font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer" title="Same prompt, different parameters">
+          <input type="checkbox" id="parallel-compare-mode" onchange="toggleCompareMode()"> compare
         </label>
-        <label class="text-slate-400 text-sm flex items-center gap-2">
-          seed
-          <input id="seed-p" type="number" value="-1" min="-1" style="width:80px">
-        </label>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══ COMPARE mode ══ -->
-  <div id="cfg-compare" class="hidden">
-    <div class="flex flex-col gap-3 mb-4 max-w-2xl">
-      <div class="flex gap-3 items-center">
-        <span class="text-slate-400 text-sm w-20 shrink-0">Prompt</span>
-        <textarea id="pc" class="auto-grow" placeholder="Shared prompt…" style="flex:1" rows="1"></textarea>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div class="cfg-box border border-sky-900">
-          <div class="text-sky-400 text-sm font-bold mb-3">Config A</div>
-          <label class="text-slate-400 text-sm flex items-center gap-2 mb-2">
-            temperature
-            <input id="temp-a" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px">
+          <div class="text-blue-400 text-sm font-bold mb-2">Config A</div>
+          <label class="text-neutral-500 text-sm flex items-center gap-2 mb-2">
+            temp
+            <input id="temp-pa" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
           </label>
-          <label class="text-slate-400 text-sm flex items-center gap-2">
+          <label class="text-neutral-500 text-sm flex items-center gap-2">
             top_k
-            <input id="topk-a" type="number" value="1" min="1" max="100" style="width:70px">
+            <input id="topk-a" type="number" value="40" min="1" max="100" style="width:70px">
           </label>
         </div>
         <div class="cfg-box border border-purple-900">
-          <div class="text-purple-400 text-sm font-bold mb-3">Config B</div>
-          <label class="text-slate-400 text-sm flex items-center gap-2 mb-2">
-            temperature
-            <input id="temp-b" type="number" value="1.0" step="0.1" min="0" max="2" style="width:70px">
+          <div class="text-purple-400 text-sm font-bold mb-2">Config B</div>
+          <label class="text-neutral-500 text-sm flex items-center gap-2 mb-2">
+            temp
+            <input id="temp-pb" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
           </label>
-          <label class="text-slate-400 text-sm flex items-center gap-2">
+          <label class="text-neutral-500 text-sm flex items-center gap-2">
             top_k
             <input id="topk-b" type="number" value="40" min="1" max="100" style="width:70px">
           </label>
         </div>
       </div>
       <div class="flex gap-6 items-center">
-        <label class="text-slate-400 text-sm flex items-center gap-2">
+        <label class="text-neutral-500 text-sm flex items-center gap-2">
           max tokens
-          <input id="n-c" type="number" value="60" min="1" max="500" style="width:70px">
+          <input id="n-p" type="number" value="60" min="1" max="500" style="width:70px">
         </label>
-        <label class="text-slate-400 text-sm flex items-center gap-2">
+        <label class="text-neutral-500 text-sm flex items-center gap-2">
           seed
-          <input id="seed-c" type="number" value="-1" min="-1" style="width:80px">
+          <input id="seed-p" type="number" value="-1" min="-1" style="width:80px">
         </label>
       </div>
     </div>
@@ -251,41 +361,41 @@
   <!-- Generate button (parallel / compare only) -->
   <div id="dual-controls" class="hidden flex items-center gap-4 mb-5">
     <button id="btn-gen" onclick="generate()"
-      class="px-6 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
+      class="px-6 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-sm transition-colors">
       Generate
     </button>
     <button id="btn-stop" onclick="stopDual()" style="display:none"
-      class="px-6 py-2 bg-red-700 hover:bg-red-600 text-white rounded text-sm transition-colors">
+      class="px-6 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-sm transition-colors">
       Stop
     </button>
-    <span id="status" class="text-slate-500 text-sm"></span>
+    <span id="status" class="text-neutral-500 text-sm"></span>
   </div>
 
   <!-- Stream panels (parallel / compare) -->
   <div id="dual-panels" class="hidden grid grid-cols-2 gap-4">
     <div class="rounded-lg overflow-hidden border border-sky-800">
-      <div class="bg-slate-900 px-4 py-2 flex items-center gap-2 border-b border-sky-900">
-        <span id="title-a" class="text-sky-400 text-sm font-bold">Stream A</span>
-        <span id="step-a" class="text-slate-500 text-xs ml-auto"></span>
+      <div class="panel-header px-3 py-1 flex items-center gap-2 border-b border-sky-900">
+        <span id="title-a" class="text-blue-400 text-sm font-bold">Stream A</span>
+        <span id="step-a" class="text-neutral-500 text-xs ml-auto"></span>
         <button id="btn-to-step-a" onclick="dualToStep('a')" style="display:none"
-          class="text-xs px-2 py-0.5 bg-sky-700 hover:bg-sky-600 text-white rounded transition-colors">→ Step</button>
+          class="text-xs px-2 py-0.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded transition-colors">→ Step</button>
       </div>
-      <div class="bg-slate-800 scroll-panel">
-        <div id="output-a" class="stream-content p-4 text-sm text-slate-200"></div>
+      <div class="bg-neutral-900 scroll-panel">
+        <div id="output-a" class="stream-content p-4 text-sm text-neutral-200"></div>
       </div>
     </div>
     <div class="rounded-lg overflow-hidden border border-purple-800">
-      <div class="bg-slate-900 px-4 py-2 flex items-center gap-2 border-b border-purple-900">
+      <div class="panel-header px-3 py-1 flex items-center gap-2 border-b border-purple-900">
         <span id="title-b" class="text-purple-400 text-sm font-bold">Stream B</span>
-        <span id="step-b" class="text-slate-500 text-xs"></span>
+        <span id="step-b" class="text-neutral-500 text-xs"></span>
         <button id="btn-to-step-b" onclick="dualToStep('b')" style="display:none"
           class="text-xs px-2 py-0.5 bg-purple-700 hover:bg-purple-600 text-white rounded transition-colors">→ Step</button>
         <span id="diverge-badge"
           class="hidden ml-auto text-xs bg-amber-500 text-slate-900 px-2 py-0.5 rounded-full">
         </span>
       </div>
-      <div class="bg-slate-800 scroll-panel">
-        <div id="output-b" class="stream-content p-4 text-sm text-slate-200"></div>
+      <div class="bg-neutral-900 scroll-panel">
+        <div id="output-b" class="stream-content p-4 text-sm text-neutral-200"></div>
       </div>
     </div>
   </div>
@@ -293,13 +403,13 @@
   <!-- ══ CHAT mode ══ -->
   <div id="cfg-chat" class="hidden">
     <div class="flex flex-wrap gap-3 items-center mb-4">
-      <span class="text-slate-400 text-sm">temp</span>
+      <span class="text-neutral-500 text-sm">temp</span>
       <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
-      <span class="text-slate-400 text-sm">top_k</span>
+      <span class="text-neutral-500 text-sm">top_k</span>
       <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:70px">
-      <span class="text-slate-400 text-sm">max</span>
+      <span class="text-neutral-500 text-sm">max</span>
       <input id="chat-max" type="number" value="200" min="1" max="2000" style="width:80px">
-      <select id="tpl-select" onchange="onTplSelect()" style="display:none;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:0.875rem;">
+      <select id="tpl-select" onchange="onTplSelect()" style="display:none;background:#1e1e1e;border:1px solid #2a2a2a;color:#d4d4d4;padding:8px 12px;border-radius:8px;font-size:0.875rem;">
       </select>
       <button onclick="chatReset()"
         class="btn-action ml-auto" style="background:#7f1d1d"
@@ -308,163 +418,230 @@
       </button>
     </div>
     <div id="tpl-vars" class="flex flex-wrap gap-3 items-center mb-4" style="display:none;"></div>
-    <div id="chat-messages" class="rounded-lg border border-slate-700 bg-slate-800 p-4 mb-4"
-         style="min-height:300px; max-height:500px; overflow-y:auto; display:flex; flex-direction:column;">
-    </div>
-    <div class="flex gap-3">
-      <textarea id="chat-input" class="auto-grow" placeholder="Type a message…"
-        style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
-      <button id="chat-btn-send" onclick="chatSend()"
-        class="px-6 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm transition-colors">
-        Send
-      </button>
-      <button id="chat-btn-continue" onclick="chatContinue()" style="display:none"
-        class="px-6 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm transition-colors">
-        Continue
-      </button>
-      <button id="chat-btn-stop" onclick="chatStop()" style="display:none"
-        class="px-6 py-2 bg-red-700 hover:bg-red-600 text-white rounded text-sm transition-colors">
+    <div style="display:flex;gap:8px;">
+      <!-- Left: chat messages + input -->
+      <div style="flex:1;min-width:0;">
+        <div id="chat-messages" class="border border-neutral-800 bg-neutral-900 p-4 mb-4"
+             style="min-height:300px; max-height:500px; overflow-y:auto; display:flex; flex-direction:column;">
+        </div>
+        <div class="flex gap-3">
+          <textarea id="chat-input" class="auto-grow" placeholder="Type a message…"
+            style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
+          <button id="chat-btn-send" onclick="chatSend()"
+            class="px-6 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-sm transition-colors">
+            Send
+          </button>
+          <button id="chat-btn-continue" onclick="chatContinue()" style="display:none"
+            class="px-6 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm transition-colors">
+            Continue
+          </button>
+          <button id="chat-btn-stop" onclick="chatStop()" style="display:none"
+        class="px-6 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-sm transition-colors">
         Stop
       </button>
+        </div>
+      </div>
+      <!-- Right sidebar: context buffer -->
+      <div id="chat-context-sidebar" style="width:300px;flex-shrink:0;">
+        <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Context</span>
+          <span class="flex gap-2 items-center">
+            <label style="color:#60a5fa;font-size:10px;display:flex;align-items:center;gap:3px" title="Include graph structure (clusters, edges, weights)">
+              <input type="checkbox" id="chat-graph-structure"> structure
+            </label>
+            <button onclick="chatContextClear()" style="color:#5a5a5a;font-size:10px;" class="hover:text-white" title="Clear all context">✕ clear</button>
+          </span>
+        </div>
+        <div id="chat-context-items" style="max-height:400px;overflow-y:auto;background:#252526;border:1px solid #3c3c3c;border-top:none;padding:6px;font-size:12px;">
+          <span style="color:#5a5a5a;font-size:11px;">Add context: graph nodes, text, or chat responses</span>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:end;">
+          <textarea id="chat-context-input" placeholder="Add text to context…" rows="1"
+            style="flex:1;font-size:11px;padding:4px 6px;resize:vertical;min-height:26px;max-height:120px;" class="auto-grow bg-neutral-800 border border-neutral-700 text-neutral-200"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatContextAddManual();}"></textarea>
+          <button onclick="chatContextAddManual()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs border border-neutral-700" style="flex-shrink:0;">+ ctx</button>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:end;">
+          <textarea id="chat-to-graph-input" placeholder="Send text to graph…" rows="1"
+            style="flex:1;font-size:11px;padding:4px 6px;resize:vertical;min-height:26px;max-height:120px;" class="auto-grow bg-neutral-800 border border-neutral-700 text-neutral-200"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatToGraphFromInput();}"></textarea>
+          <button onclick="chatToGraphFromInput()" class="px-2 py-1 text-xs border border-emerald-800 text-emerald-400" style="background:#064e3b55;flex-shrink:0;">→ graph</button>
+        </div>
+      </div>
     </div>
   </div>
 
   <!-- ══ GRAPH mode ══ -->
   <div id="cfg-graph" class="hidden">
-    <!-- Generate block -->
-    <div class="rounded-lg border border-slate-700 bg-slate-800/50 p-3 mb-3">
-      <div class="flex flex-wrap gap-3 items-center mb-2">
-        <span class="text-slate-400 text-sm">Topic</span>
-        <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
-          style="flex:1;" rows="1"></textarea>
-      </div>
-      <div class="flex flex-wrap gap-2 items-center">
-        <span class="text-slate-400 text-sm">thoughts</span>
-        <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
-        <span class="text-slate-400 text-sm">similarity</span>
-        <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:4px 8px; border-radius:6px; font-size:0.8rem;">
-          <option value="embedding">Embedding</option>
-          <option value="jaccard">Jaccard</option>
-        </select>
-        <span class="text-slate-400 text-sm">threshold</span>
-        <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
-          onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
-        <span class="text-slate-400 text-sm">temp</span>
-        <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
-        <span class="text-slate-400 text-sm">top_k</span>
-        <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
-        <span class="text-slate-400 text-sm">seed</span>
-        <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
-        <button id="graph-btn-think" onclick="graphThink()"
-          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors">
-          Think
-        </button>
-      </div>
-    </div>
-    <!-- Add single thought -->
-    <div class="flex gap-2 mb-3 items-center flex-wrap">
-      <input id="graph-add-input" type="text" placeholder="Add your own thought..."
-        class="flex-1 text-sm" style="min-width:200px"
-        onkeydown="if(event.key==='Enter'){graphAddThought();}">
-      <button onclick="graphAddThought()"
-        class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white rounded text-sm transition-colors">
-        + Add
-      </button>
-    </div>
     <!-- Actions bar: collapse + undo/layout/reset -->
     <div id="graph-actions-bar" class="flex gap-2 mb-3 items-center flex-wrap" style="display:none;">
       <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
-      <button onclick="graphToggleManualCollapse()" id="graph-btn-manual-collapse"
-        class="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs transition-colors"
-        title="Select nodes manually then collapse them">
-        ✂ Select &amp; Collapse
+      <button onclick="graphToggleManualSelect()" id="graph-btn-manual-select"
+        class="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs transition-colors"
+        title="Select nodes manually for collapse or chat">
+        ✂ Select
       </button>
-      <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse" style="display:none"
-        class="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs transition-colors">
-        Collapse selected (<span id="graph-collapse-count">0</span>)
+      <button onclick="graphSelectAll()" id="graph-btn-select-all"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
+        title="Select all nodes">
+        ☐ All
       </button>
+      <span id="graph-selection-actions" style="display:none" class="flex gap-1 items-center">
+        <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse"
+          class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-xs transition-colors">
+          Collapse (<span id="graph-collapse-count">0</span>)
+        </button>
+        <button onclick="graphSendToChat()" id="graph-btn-to-chat"
+          class="px-3 py-1.5 bg-blue-900/50 hover:bg-blue-800/50 border border-blue-800 text-white text-xs transition-colors">
+          → Chat
+        </button>
+        <label style="color:#969696;font-size:11px;display:flex;align-items:center;gap:3px" title="Keep original nodes after collapse">
+          <input type="checkbox" id="graph-no-merge"> keep
+        </label>
+      </span>
       <span class="flex-1"></span>
       <button onclick="graphToggleLinkMode()" id="graph-btn-link"
-        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
         title="Toggle link mode: click two nodes to connect/disconnect">
         🔗 Link
       </button>
       <button onclick="graphUndo()" id="graph-btn-undo" style="display:none"
-        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors">
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors">
         ↩ Undo
       </button>
       <button onclick="graphToggleFlow()" id="graph-btn-flow"
-        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
         title="Toggle directed flow layout (left-to-right by depth)">
         → Flow
       </button>
       <button onclick="graphRecalcLayout()"
-        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
         title="Recalculate node positions">
         ⟳ Layout
       </button>
       <button onclick="graphExport()"
-        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
         title="Save graph to JSON file">
         ↓ Save
       </button>
       <button onclick="document.getElementById('graph-import-file').click()"
-        class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded text-xs transition-colors"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
         title="Load graph from JSON file">
         ↑ Load
       </button>
       <input type="file" id="graph-import-file" accept=".json" style="display:none" onchange="graphImport(event)">
       <button onclick="graphReset()"
-        class="px-3 py-1.5 text-white rounded text-xs transition-colors" style="background:#7f1d1d"
+        class="px-3 py-1.5 text-white text-xs transition-colors" style="background:#7f1d1d"
         onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
         Reset
       </button>
     </div>
-    <div id="graph-main" style="transition: all 0.3s ease;">
-      <div id="graph-svg-wrap" style="position:relative;">
-        <svg id="graph-svg" width="100%" height="520"
-          style="background:#0f172a; border:1px solid #334155; border-radius:8px; user-select:none;"></svg>
-        <div class="flex items-center mt-1">
-          <span class="text-slate-500 text-xs">Drag nodes &middot; Click node to select &middot; Enable Link mode to connect/disconnect nodes</span>
+    <div id="graph-main" style="display:flex;gap:8px;transition:all 0.3s ease;">
+      <!-- Left: graph + detail -->
+      <div style="flex:1;min-width:0;">
+        <div id="graph-svg-wrap" style="position:relative;">
+          <svg id="graph-svg" width="100%" height="520"
+            style="background:#1e1e1e; border:1px solid #3c3c3c; user-select:none;"></svg>
+          <div class="flex items-center mt-1">
+            <span style="color:#5a5a5a;font-size:11px;">Drag nodes &middot; Click to select &middot; Link mode to connect</span>
+          </div>
+        </div>
+        <!-- Detail panel: appears when a node is selected -->
+        <div id="graph-detail" class="mt-2 border border-neutral-800 bg-neutral-900 p-3" style="display:none;">
+          <div class="flex items-center gap-2 mb-2">
+            <span id="graph-detail-dot" style="font-size:16px;">&#9679;</span>
+            <span class="text-neutral-300 text-sm font-bold flex-1">Selected thought</span>
+            <button onclick="graphDetailExpand()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate child ideas branching from this thought">&#9758; Expand</button>
+            <button onclick="graphDetailElaborate()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
+            <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs">Edit</button>
+            <button onclick="graphDetailToChat()" class="px-2 py-1 text-blue-400 hover:text-blue-300 text-xs border border-blue-800" title="Send this thought to chat as context">&rarr; Chat</button>
+            <button onclick="graphDetailClose()" class="px-2 py-1 text-neutral-500 hover:text-white text-xs">&times; Close</button>
+          </div>
+          <div id="graph-detail-source" class="text-xs mb-2" style="display:none;">
+            <span class="text-violet-400">↳ from:</span> <span id="graph-detail-source-text" class="text-violet-300"></span>
+          </div>
+          <div id="graph-detail-view" class="text-neutral-200 text-sm whitespace-pre-wrap"></div>
+          <div id="graph-detail-edit-wrap" style="display:none;" class="flex gap-2">
+            <textarea id="graph-detail-textarea" class="flex-1 text-sm" rows="5"
+              style="min-height:120px; background:#252526; border:1px solid #3c3c3c; color:#cccccc; padding:8px; border-radius:2px; font-family:Consolas,monospace; font-size:13px;"></textarea>
+            <button onclick="graphDetailSave()" class="px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-sm self-end">Save</button>
+          </div>
+          <div id="graph-detail-elaborate-wrap" style="display:none;" class="flex gap-2 mt-2">
+            <input id="graph-detail-elaborate-input" type="text" placeholder="Direction to elaborate (optional)..."
+              class="flex-1 text-sm" onkeydown="if(event.key==='Enter'){graphDetailElaborateSend();}">
+            <button onclick="graphDetailElaborateSend()" class="px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-sm">Go</button>
+            <button onclick="document.getElementById('graph-detail-elaborate-wrap').style.display='none'" class="px-2 py-1 text-neutral-500 hover:text-white text-xs">&times;</button>
+          </div>
         </div>
       </div>
-      <!-- Detail panel: appears when a node is selected -->
-      <div id="graph-detail" class="mt-3 rounded-lg border border-slate-600 bg-slate-800 p-4" style="display:none;">
-        <div class="flex items-center gap-2 mb-2">
-          <span id="graph-detail-dot" style="font-size:18px;">&#9679;</span>
-          <span class="text-slate-300 text-sm font-bold flex-1">Selected thought</span>
-          <button onclick="graphDetailExpand()" class="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs" title="Generate child ideas branching from this thought">&#9758; Expand</button>
-          <button onclick="graphDetailElaborate()" class="px-2 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
-          <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white rounded text-xs">Edit</button>
-          <button onclick="graphDetailClose()" class="px-2 py-1 text-slate-400 hover:text-white text-xs">&times; Close</button>
-        </div>
-        <div id="graph-detail-source" class="text-xs mb-2" style="display:none;">
-          <span class="text-violet-400">↳ from:</span> <span id="graph-detail-source-text" class="text-violet-300"></span>
-        </div>
-        <div id="graph-detail-view" class="text-slate-200 text-sm whitespace-pre-wrap"></div>
-        <div id="graph-detail-edit-wrap" style="display:none;" class="flex gap-2">
-          <textarea id="graph-detail-textarea" class="flex-1 text-sm" rows="5"
-            style="min-height:120px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:8px; border-radius:6px;"></textarea>
-          <button onclick="graphDetailSave()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm self-end">Save</button>
-        </div>
-        <div id="graph-detail-elaborate-wrap" style="display:none;" class="flex gap-2 mt-2">
-          <input id="graph-detail-elaborate-input" type="text" placeholder="Direction to elaborate (optional)..."
-            class="flex-1 text-sm" onkeydown="if(event.key==='Enter'){graphDetailElaborateSend();}">
-          <button onclick="graphDetailElaborateSend()" class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-sm">Go</button>
-          <button onclick="document.getElementById('graph-detail-elaborate-wrap').style.display='none'" class="px-2 py-1 text-slate-400 hover:text-white text-xs">&times;</button>
-        </div>
-      </div>
-      <!-- Thoughts list below graph -->
-      <div id="graph-thoughts-wrap" class="mt-3">
-        <div id="graph-thoughts" class="scroll-panel rounded-lg border border-slate-700 bg-slate-800 p-4"
-          style="max-height:300px; overflow-y:auto;">
-          <span class="text-slate-500 text-sm">Thoughts will appear here…</span>
+      <!-- Right sidebar: thoughts list -->
+      <div id="graph-thoughts-wrap" style="width:320px;flex-shrink:0;">
+        <div class="panel-header">Thoughts</div>
+        <div id="graph-thoughts" style="max-height:560px;overflow-y:auto;background:#252526;border:1px solid #3c3c3c;border-top:none;padding:8px;">
+          <span style="color:#5a5a5a;font-size:12px;">Thoughts will appear here…</span>
         </div>
       </div>
     </div>
-    <div id="graph-result" class="mt-4 rounded-lg border border-emerald-900 bg-slate-800 p-4" style="display:none;">
-      <div class="text-emerald-400 text-sm font-bold mb-2">Collapsed result</div>
-      <div id="graph-result-text" class="text-slate-200 text-sm whitespace-pre-wrap max-h-96 overflow-y-auto"></div>
+    <!-- Collapse prompt -->
+    <div id="graph-collapse-prompt-wrap" class="mt-2" style="display:none;">
+      <div class="flex gap-2 items-center">
+        <span style="color:#969696;font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Collapse prompt</span>
+        <input id="graph-collapse-prompt" type="text" placeholder="Custom instruction for collapse (e.g. compare, find contradictions)…"
+          style="flex:1;font-size:12px;" class="bg-neutral-800 border border-neutral-700 text-neutral-200 px-2 py-1">
+      </div>
+    </div>
+    <!-- Collapsed result (hidden — now shown in detail panel) -->
+    <div id="graph-result" style="display:none;"></div>
+    <!-- Input panel (below graph) -->
+    <div class="mt-3 border border-neutral-800 bg-neutral-900/50 p-3">
+      <div class="flex flex-wrap gap-3 items-center mb-2">
+        <span style="color:#969696;font-size:12px;text-transform:uppercase;letter-spacing:0.05em">Topic</span>
+        <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
+          style="flex:1;" rows="1"></textarea>
+        <button id="graph-btn-think" onclick="graphThink()"
+          class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#007acc;border:none;border-radius:2px;">
+          Think
+        </button>
+        <button onclick="graphAddThought()"
+          class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#3c3c3c;border:1px solid #3c3c3c;border-radius:2px;">
+          + Add
+        </button>
+      </div>
+      <!-- Collapsible params -->
+      <details id="graph-params-details" style="margin-top:4px;">
+        <summary style="color:#969696;font-size:11px;cursor:pointer;user-select:none;letter-spacing:0.03em">
+          Parameters
+        </summary>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:#5a5a5a;font-size:12px">thoughts</span>
+          <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
+          <span style="color:#5a5a5a;font-size:12px">similarity</span>
+          <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; font-size:12px;">
+            <option value="embedding">Embedding</option>
+            <option value="jaccard">Jaccard</option>
+            <option value="off">Off</option>
+          </select>
+          <span style="color:#5a5a5a;font-size:12px">threshold</span>
+          <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
+            onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
+          <span style="color:#5a5a5a;font-size:12px">temp</span>
+          <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
+          <span style="color:#5a5a5a;font-size:12px">top_k</span>
+          <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
+          <span style="color:#5a5a5a;font-size:12px">seed</span>
+          <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
+        </div>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:#5a5a5a;font-size:12px">max tokens:</span>
+          <span style="color:#5a5a5a;font-size:11px">think</span>
+          <input id="graph-maxtok-think" type="number" value="60" min="10" max="500" style="width:60px" title="Max tokens for Think">
+          <span style="color:#5a5a5a;font-size:11px">expand</span>
+          <input id="graph-maxtok-expand" type="number" value="120" min="10" max="500" style="width:60px" title="Max tokens for Expand">
+          <span style="color:#5a5a5a;font-size:11px">elaborate</span>
+          <input id="graph-maxtok-elaborate" type="number" value="120" min="10" max="1000" style="width:60px" title="Max tokens for Elaborate">
+        </div>
+      </details>
+      </div>
     </div>
   </div>
 
@@ -474,6 +651,125 @@
   let dualEs = null;
   let roles = [];
   let modelCtx = 0;
+
+  // ── Settings ─────────────────────────────────────────────────────────────
+  function openSettings() {
+    Promise.all([
+      fetch('/settings').then(r => r.json()),
+      fetch('/settings/local-models').then(r => r.json())
+    ]).then(([s, lm]) => {
+      document.getElementById('settings-mode').value = s.mode || 'local';
+      document.getElementById('settings-api-url').value = s.api_url || '';
+      document.getElementById('settings-api-key').value = s.api_key || '';
+      document.getElementById('settings-api-model').value = s.api_model || '';
+      document.getElementById('settings-hybrid-graph').value = s.hybrid_graph || 'api';
+      document.getElementById('settings-hybrid-embeddings').value = s.hybrid_embeddings || 'local';
+      document.getElementById('settings-hybrid-chat').value = s.hybrid_chat || 'api';
+      document.getElementById('settings-gpu-layers').value = s.local_gpu_layers ?? -1;
+      document.getElementById('settings-ctx').value = s.local_ctx || 4096;
+      // Populate local models dropdown
+      const sel = document.getElementById('settings-local-model');
+      sel.innerHTML = '<option value="">-- select --</option>';
+      (lm.models || []).forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        sel.appendChild(opt);
+      });
+      sel.value = s.local_model || s.current_model || '';
+      document.getElementById('settings-current-model').textContent = `Current: ${s.current_model || 'none'}`;
+      onSettingsModeChange();
+      document.getElementById('settings-modal').style.display = 'flex';
+    });
+  }
+  function closeSettings() {
+    document.getElementById('settings-modal').style.display = 'none';
+  }
+  function onSettingsModeChange() {
+    const m = document.getElementById('settings-mode').value;
+    const showApi = m === 'api' || m === 'hybrid';
+    document.getElementById('settings-api-fields').style.display = showApi ? 'block' : 'none';
+    document.getElementById('settings-hybrid-fields').style.display = m === 'hybrid' ? 'block' : 'none';
+  }
+  function reloadModel() {
+    const model = document.getElementById('settings-local-model').value;
+    const gpu = parseInt(document.getElementById('settings-gpu-layers').value) || -1;
+    const ctx = parseInt(document.getElementById('settings-ctx').value) || 4096;
+    if (!model) { alert('Select a model first'); return; }
+    const btn = event.target;
+    btn.textContent = 'Loading...';
+    btn.disabled = true;
+    fetch('/settings/reload-model', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model, gpu_layers: gpu, ctx})
+    }).then(r => r.json()).then(d => {
+      btn.textContent = '↻ Reload model';
+      btn.disabled = false;
+      if (d.error) { alert('Error: ' + d.error); return; }
+      document.getElementById('settings-current-model').textContent = `Current: ${d.model}`;
+      document.getElementById('sb-model').textContent = d.model;
+      // Update settings
+      update_settings({local_model: model, local_gpu_layers: gpu, local_ctx: ctx});
+    }).catch(e => {
+      btn.textContent = '↻ Reload model';
+      btn.disabled = false;
+      alert('Error: ' + e.message);
+    });
+  }
+
+  function saveSettings() {
+    const body = {
+      mode: document.getElementById('settings-mode').value,
+      api_url: document.getElementById('settings-api-url').value,
+      api_key: document.getElementById('settings-api-key').value,
+      api_model: document.getElementById('settings-api-model').value,
+      hybrid_graph: document.getElementById('settings-hybrid-graph').value,
+      hybrid_embeddings: document.getElementById('settings-hybrid-embeddings').value,
+      hybrid_chat: document.getElementById('settings-hybrid-chat').value,
+      local_model: document.getElementById('settings-local-model').value,
+      local_gpu_layers: parseInt(document.getElementById('settings-gpu-layers').value) || -1,
+      local_ctx: parseInt(document.getElementById('settings-ctx').value) || 4096,
+    };
+    fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+      .then(r => r.json()).then(s => {
+        closeSettings();
+        // Update status bar to show mode
+        const apiEl = document.getElementById('sb-api-mode');
+        if (s.mode === 'api') apiEl.textContent = `API: ${s.api_model}`;
+        else if (s.mode === 'hybrid') apiEl.textContent = `hybrid: ${s.api_model}`;
+        else apiEl.textContent = 'local';
+      });
+  }
+  function fetchApiModels() {
+    const url = document.getElementById('settings-api-url').value.trim();
+    const key = document.getElementById('settings-api-key').value.trim();
+    if (!url) { alert('Enter API URL first'); return; }
+    const sel = document.getElementById('settings-api-model-select');
+    sel.innerHTML = '<option value="">loading...</option>';
+    fetch('/settings/models', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({api_url: url, api_key: key})
+    }).then(r => r.json()).then(d => {
+      sel.innerHTML = '<option value="">-- select --</option>';
+      if (d.error) { sel.innerHTML = `<option value="">${d.error}</option>`; return; }
+      (d.models || []).forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        sel.appendChild(opt);
+      });
+      // Pre-select current model
+      const cur = document.getElementById('settings-api-model').value;
+      if (cur) sel.value = cur;
+    }).catch(e => {
+      sel.innerHTML = `<option value="">Error: ${e.message}</option>`;
+    });
+  }
+
+  // Close modal on Escape
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('settings-modal').style.display === 'flex') closeSettings();
+  });
 
   // ── Auto-grow textareas ────────────────────────────────────────────────────
   function autoGrow(el) {
@@ -485,6 +781,16 @@
   });
 
   fetch('/model/info').then(r => r.json()).then(d => { modelCtx = d.n_ctx; });
+  fetch('/settings').then(r => r.json()).then(s => {
+    const apiEl = document.getElementById('sb-api-mode');
+    if (s.mode === 'api') apiEl.textContent = `API: ${s.api_model}`;
+    else if (s.mode === 'hybrid') apiEl.textContent = `hybrid: ${s.api_model}`;
+    else apiEl.textContent = 'local';
+    // Auto-open settings if no model configured
+    if (s.current_model && (s.current_model.startsWith('(no ') || s.current_model === '')) {
+      setTimeout(() => openSettings(), 500);
+    }
+  });
 
   function updateTokenCounter(used) {
     const el = document.getElementById('token-counter');
@@ -597,7 +903,7 @@
     const vars = [...new Set((tpl.text.match(/[{][{]([a-zA-Z0-9_]+)[}][}]/g) || []).map(m => m.slice(2, -2)))];
     vars.forEach(v => {
       const label = document.createElement('span');
-      label.className = 'text-slate-400 text-sm';
+      label.className = 'text-neutral-500 text-sm';
       label.textContent = v;
       const inp = document.createElement('input');
       inp.type = 'text';
@@ -656,14 +962,30 @@
   }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
+  function toggleCompareMode() {
+    const isCompare = document.getElementById('parallel-compare-mode').checked;
+    document.getElementById('parallel-prompt-b').style.display = isCompare ? 'none' : '';
+    if (isCompare) {
+      document.getElementById('temp-pa').value = '0.0';
+      document.getElementById('temp-pb').value = '1.0';
+      document.getElementById('topk-a').value = '1';
+      document.getElementById('topk-b').value = '40';
+    }
+  }
+
   function setMode(m) {
+    // Map old 'compare' to 'parallel' with compare checkbox
+    if (m === 'compare') { m = 'parallel'; document.getElementById('parallel-compare-mode').checked = true; toggleCompareMode(); }
     mode = m;
-    ['step','parallel','compare','chat','graph'].forEach(t => {
-      document.getElementById('cfg-' + t).classList.toggle('hidden', t !== m);
-      document.getElementById('tab-' + t).className =
-        (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-1.5 rounded text-sm transition-colors';
+    ['step','parallel','chat','graph'].forEach(t => {
+      const el = document.getElementById('cfg-' + t);
+      if (el) el.classList.toggle('hidden', t !== m);
+      const tab = document.getElementById('tab-' + t);
+      if (tab) tab.className = (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-2 text-sm';
     });
-    const isDual = m === 'parallel' || m === 'compare';
+    const sbMode = document.getElementById('sb-mode');
+    if (sbMode) sbMode.textContent = m + (m === 'parallel' && document.getElementById('parallel-compare-mode').checked ? ' (compare)' : '');
+    const isDual = m === 'parallel';
     document.getElementById('dual-controls').classList.toggle('hidden', !isDual);
     document.getElementById('dual-panels').classList.toggle('hidden', !isDual);
     // Clear dual panels and stop stream on tab switch
@@ -682,15 +1004,15 @@
 
   function renderTop(tokens) {
     const el = document.getElementById('step-top');
-    if (!tokens || !tokens.length) { el.innerHTML = '<span class="text-slate-600">—</span>'; return; }
+    if (!tokens || !tokens.length) { el.innerHTML = '<span class="text-neutral-600">—</span>'; return; }
     el.innerHTML = tokens.map((t, i) => {
       const bar  = Math.round(t.prob * 28);
       const pct  = (t.prob * 100).toFixed(1).padStart(5);
       const txt  = JSON.stringify(t.text);
       return `<div class="flex items-center gap-1 mb-1">
-        <span class="text-slate-600 w-4 text-right shrink-0">${i+1}</span>
-        <span class="text-sky-300 w-28 truncate shrink-0">${txt}</span>
-        <span class="text-slate-400 w-12 text-right shrink-0">${pct}%</span>
+        <span class="text-neutral-600 w-4 text-right shrink-0">${i+1}</span>
+        <span class="text-blue-300 w-28 truncate shrink-0">${txt}</span>
+        <span class="text-neutral-500 w-12 text-right shrink-0">${pct}%</span>
         <div class="prob-bar ml-1" style="width:${bar*4}px"></div>
       </div>`;
     }).join('');
@@ -886,36 +1208,31 @@
     document.getElementById('btn-gen').style.display  = 'none';
     document.getElementById('btn-stop').style.display = '';
 
-    const params = new URLSearchParams({ mode });
+    const isCompare = document.getElementById('parallel-compare-mode').checked;
+    const params = new URLSearchParams({ mode: isCompare ? 'compare' : 'parallel' });
     const pfx = getRole();
     let promptA, promptB;
 
-    if (mode === 'parallel') {
-      promptA = pfx + document.getElementById('pa').value;
-      promptB = pfx + document.getElementById('pb').value;
-      const ta = document.getElementById('temp-pa').value;
-      const tb = document.getElementById('temp-pb').value;
-      params.set('pa', promptA); params.set('pb', promptB);
-      params.set('n',  document.getElementById('n-p').value);
-      params.set('temp_a', ta); params.set('temp_b', tb);
-      params.set('top_k_a', 40); params.set('top_k_b', 40);
-      params.set('seed', document.getElementById('seed-p').value);
-      document.getElementById('title-a').textContent = 'Stream A';
-      document.getElementById('title-b').textContent = 'Stream B';
-    } else {
-      promptA = promptB = pfx + document.getElementById('pc').value;
-      const ta = document.getElementById('temp-a').value;
-      const tb = document.getElementById('temp-b').value;
-      const ka = document.getElementById('topk-a').value;
-      const kb = document.getElementById('topk-b').value;
-      params.set('pa', promptA); params.set('pb', promptA);
-      params.set('n',  document.getElementById('n-c').value);
-      params.set('temp_a', ta); params.set('temp_b', tb);
-      params.set('top_k_a', ka); params.set('top_k_b', kb);
-      params.set('seed', document.getElementById('seed-c').value);
+    const ta = document.getElementById('temp-pa').value;
+    const tb = document.getElementById('temp-pb').value;
+    const ka = document.getElementById('topk-a').value;
+    const kb = document.getElementById('topk-b').value;
+
+    if (isCompare) {
+      promptA = promptB = pfx + document.getElementById('pa').value;
       document.getElementById('title-a').textContent = `temp=${ta}  top_k=${ka}`;
       document.getElementById('title-b').textContent = `temp=${tb}  top_k=${kb}`;
+    } else {
+      promptA = pfx + document.getElementById('pa').value;
+      promptB = pfx + document.getElementById('pb').value;
+      document.getElementById('title-a').textContent = 'Stream A';
+      document.getElementById('title-b').textContent = 'Stream B';
     }
+    params.set('pa', promptA); params.set('pb', isCompare ? promptA : promptB);
+    params.set('n', document.getElementById('n-p').value);
+    params.set('temp_a', ta); params.set('temp_b', tb);
+    params.set('top_k_a', ka); params.set('top_k_b', kb);
+    params.set('seed', document.getElementById('seed-p').value);
 
     let diverged = false;
     dualEs = new EventSource('/stream?' + params.toString());
@@ -958,7 +1275,7 @@
       document.getElementById('step-b').textContent = d.done_b ? 'EOS' : 'step ' + d.step;
       if (d.total_tokens) updateTokenCounter(d.total_tokens);
 
-      if (mode === 'compare' && !diverged) {
+      if (isCompare && !diverged) {
         const ga = d.toks_a ? d.toks_a.join('') : d.a.slice(promptA.length);
         const gb = d.toks_b ? d.toks_b.join('') : d.b.slice(promptB.length);
         if (ga !== gb && (ga || gb)) {
@@ -1014,10 +1331,32 @@
     div.style.wordBreak = 'break-word';
     div.textContent = content;
     if (role !== 'system') {
-      const label = document.createElement('div');
-      label.className = 'text-xs mb-1 ' + (role === 'user' ? 'text-sky-400' : 'text-emerald-400');
+      const header = document.createElement('div');
+      header.className = 'text-xs mb-1 flex justify-between items-center';
+      const label = document.createElement('span');
+      label.className = role === 'user' ? 'text-blue-400' : 'text-emerald-400';
       label.textContent = role;
-      div.prepend(label);
+      header.appendChild(label);
+      if (role === 'assistant') {
+        const btnWrap = document.createElement('span');
+        btnWrap.style.cssText = 'display:flex;gap:6px;';
+        const ctxBtn = document.createElement('button');
+        ctxBtn.textContent = '→ ctx';
+        ctxBtn.style.cssText = 'color:#5a5a5a;font-size:10px;cursor:pointer;';
+        ctxBtn.onmouseover = function() { this.style.color = '#60a5fa'; };
+        ctxBtn.onmouseout = function() { this.style.color = '#5a5a5a'; };
+        ctxBtn.onclick = function() { chatContextAddFromChat(div.textContent.replace(/^assistant/, '').trim()); };
+        btnWrap.appendChild(ctxBtn);
+        const graphBtn = document.createElement('button');
+        graphBtn.textContent = '→ graph';
+        graphBtn.style.cssText = 'color:#5a5a5a;font-size:10px;cursor:pointer;';
+        graphBtn.onmouseover = function() { this.style.color = '#10b981'; };
+        graphBtn.onmouseout = function() { this.style.color = '#5a5a5a'; };
+        graphBtn.onclick = function() { chatSendToGraph(div.textContent.replace(/^assistant/, '').trim()); };
+        btnWrap.appendChild(graphBtn);
+        header.appendChild(btnWrap);
+      }
+      div.prepend(header);
     }
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
@@ -1076,7 +1415,13 @@
 
     const temp = parseFloat(document.getElementById('chat-temp').value) || 0.7;
     const top_k = parseInt(document.getElementById('chat-topk').value) || 40;
-    const system = getRole();
+    let system = getRole();
+
+    // Prepend context sidebar items if available
+    const ctxText = chatContextGetText();
+    if (ctxText) {
+      system = system ? system + '\n\n' + ctxText : ctxText;
+    }
 
     chatShowButtons('streaming');
 
@@ -1678,7 +2023,7 @@
     if (!tooltip) {
       tooltip = document.createElement('div');
       tooltip.id = 'graph-tooltip';
-      tooltip.style.cssText = 'position:absolute;background:#1e293b;border:1px solid #475569;color:#e2e8f0;padding:8px 12px;border-radius:6px;font-size:12px;max-width:300px;pointer-events:none;display:none;z-index:50;white-space:pre-wrap;word-wrap:break-word;';
+      tooltip.style.cssText = 'position:absolute;background:#252526;border:1px solid #3c3c3c;color:#cccccc;padding:6px 10px;border-radius:2px;font-size:12px;max-width:300px;pointer-events:none;display:none;z-index:50;white-space:pre-wrap;word-wrap:break-word;box-shadow:0 2px 8px rgba(0,0,0,0.4);';
       document.getElementById('graph-svg-wrap').appendChild(tooltip);
     }
   }
@@ -1850,7 +2195,7 @@
     if (!menu) {
       menu = document.createElement('div');
       menu.id = 'graph-context-menu';
-      menu.style.cssText = 'position:fixed;background:#1e293b;border:1px solid #475569;border-radius:6px;padding:4px 0;z-index:100;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+      menu.style.cssText = 'position:fixed;background:#252526;border:1px solid #3c3c3c;border-radius:2px;padding:4px 0;z-index:100;min-width:140px;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
       document.body.appendChild(menu);
     }
     menu.innerHTML = [
@@ -1859,7 +2204,7 @@
       { label: '✏ Edit', action: 'graphDetailEdit()' },
       { label: '✕ Delete', action: 'graphRemoveThought(' + idx + ')' },
     ].map(item =>
-      '<div onclick="' + item.action + ';graphHideContextMenu()" style="padding:6px 16px;cursor:pointer;color:#e2e8f0;font-size:13px;" onmouseover="this.style.background=\'#334155\'" onmouseout="this.style.background=\'\'">' + item.label + '</div>'
+      '<div onclick="' + item.action + ';graphHideContextMenu()" style="padding:4px 16px;cursor:pointer;color:#cccccc;font-size:13px;" onmouseover="this.style.background=\'#094771\'" onmouseout="this.style.background=\'\'">' + item.label + '</div>'
     ).join('');
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
@@ -1899,7 +2244,7 @@
     const div = document.getElementById('graph-thoughts');
     const thoughts = graphData.thoughts;
     if (!thoughts.length) {
-      div.innerHTML = '<span class="text-slate-500 text-sm">Thoughts will appear here...</span>';
+      div.innerHTML = '<span style="color:#5a5a5a;font-size:12px;">Thoughts will appear here...</span>';
       return;
     }
     const nodeCluster = new Array(thoughts.length).fill(-1);
@@ -1923,10 +2268,20 @@
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
         : '<span style="color:#64748b">&#9675;</span> ';
       const entData = (graphData.entropies && graphData.entropies[i]) || {};
-      const entBadge = entData.avg ? '<span style="color:#64748b;font-size:11px;white-space:nowrap;margin-left:8px">' + (entData.avg || 0).toFixed(2) + ' / ' + ((entData.unc || 0) * 100).toFixed(0) + '%</span>' : '';
+      let entBadge = '';
+      if (entData.avg) {
+        const unc = entData.unc || 0;
+        // Color: green (0%) → yellow (5%) → red (15%+)
+        const t = Math.min(unc / 0.15, 1);
+        const r = Math.round(t < 0.5 ? t * 2 * 255 : 255);
+        const g = Math.round(t < 0.5 ? 255 : (1 - (t - 0.5) * 2) * 255);
+        const entColor = 'rgb(' + r + ',' + g + ',60)';
+        entBadge = '<span style="color:' + entColor + ';font-size:11px;white-space:nowrap;margin-left:8px;font-family:Consolas,monospace">'
+          + (entData.avg || 0).toFixed(2) + ' / ' + (unc * 100).toFixed(0) + '%</span>';
+      }
       const del = '<span onclick="event.stopPropagation();graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
       return '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
-        + 'class="mb-2 text-sm text-slate-200" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px" '
+        + 'class="mb-2 text-sm text-neutral-200" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px" '
         + 'onmouseover="this.style.background=\'#1e3a5f\'" onmouseout="graphHighlightListItem(this,' + i + ')">'
         + '<span style="flex:1">' + dot + t + '</span>' + entBadge + del + '</div>';
     }).join('');
@@ -1950,9 +2305,9 @@
     div.querySelectorAll('[data-thought-idx]').forEach(el => {
       const i = parseInt(el.dataset.thoughtIdx);
       if (i === idx) {
-        el.style.background = '#334155';
+        el.style.background = '#094771';
       } else if (cl && cl.includes(i)) {
-        el.style.background = '#1e293b';
+        el.style.background = '';
       } else {
         el.style.background = '';
       }
@@ -1975,71 +2330,307 @@
     const temp = parseFloat(document.getElementById('graph-temp').value);
     const top_k = parseInt(document.getElementById('graph-topk').value) || 40;
     const seed = parseInt(document.getElementById('graph-seed').value);
-    return { sim_mode, threshold, lang, temp, top_k, seed };
+    const maxtok_think = parseInt(document.getElementById('graph-maxtok-think').value) || 60;
+    const maxtok_expand = parseInt(document.getElementById('graph-maxtok-expand').value) || 120;
+    const maxtok_elaborate = parseInt(document.getElementById('graph-maxtok-elaborate').value) || 120;
+    return { sim_mode, threshold, lang, temp, top_k, seed, maxtok_think, maxtok_expand, maxtok_elaborate };
   }
 
-  function graphToggleManualCollapse() {
+  function graphToggleManualSelect() {
     graphManualCollapseMode = !graphManualCollapseMode;
     graphManualCollapseSet.clear();
-    const btn = document.getElementById('graph-btn-manual-collapse');
-    const doBtn = document.getElementById('graph-btn-do-collapse');
+    const btn = document.getElementById('graph-btn-manual-select');
+    const actions = document.getElementById('graph-selection-actions');
+    const promptWrap = document.getElementById('graph-collapse-prompt-wrap');
     if (graphManualCollapseMode) {
       btn.style.background = '#b45309';
       btn.textContent = '✂ Cancel';
-      doBtn.style.display = '';
+      actions.style.display = '';
+      promptWrap.style.display = '';
       document.getElementById('graph-collapse-count').textContent = '0';
     } else {
       btn.style.background = '';
-      btn.textContent = '✂ Select & Collapse';
-      doBtn.style.display = 'none';
+      btn.textContent = '✂ Select';
+      actions.style.display = 'none';
+      promptWrap.style.display = 'none';
     }
     graphRenderSvg();
+  }
+
+  function graphSelectAll() {
+    graphManualCollapseMode = true;
+    graphManualCollapseSet.clear();
+    const depths = graphData.depths || [];
+    (graphData.thoughts || []).forEach((_, i) => {
+      if (i < depths.length && depths[i] === -1) return; // skip topic roots
+      graphManualCollapseSet.add(i);
+    });
+    const btn = document.getElementById('graph-btn-manual-select');
+    btn.style.background = '#b45309';
+    btn.textContent = '✂ Cancel';
+    document.getElementById('graph-selection-actions').style.display = '';
+    document.getElementById('graph-collapse-prompt-wrap').style.display = '';
+    document.getElementById('graph-collapse-count').textContent = graphManualCollapseSet.size;
+    graphRenderSvg();
+  }
+
+  function graphSendToChat() {
+    if (graphManualCollapseSet.size === 0) { alert('Select at least 1 node'); return; }
+    const thoughts = graphData.thoughts || [];
+    const edges = graphData.edges || [];
+    const clusters = graphData.clusters || [];
+    const topics = graphData.topics || [];
+    const depths = graphData.depths || [];
+    const selected = [...graphManualCollapseSet].sort((a, b) => a - b);
+    const texts = selected.map(i => thoughts[i]).filter(Boolean);
+
+    // Store structure for structured context mode
+    window._graphChatContext = texts;
+    window._graphChatIndices = selected;
+    window._graphChatStructure = { thoughts, edges, clusters, topics, depths, directed: graphDirectedEdges };
+
+    // Add each node to context sidebar
+    texts.forEach(t => chatContextAdd(t, 'graph'));
+
+    // Switch to chat mode
+    setMode('chat');
+
+    // Exit selection mode
+    graphManualCollapseMode = false;
+    graphManualCollapseSet.clear();
+    document.getElementById('graph-btn-manual-select').style.background = '';
+    document.getElementById('graph-btn-manual-select').textContent = '✂ Select';
+    document.getElementById('graph-selection-actions').style.display = 'none';
+    document.getElementById('graph-collapse-prompt-wrap').style.display = 'none';
+  }
+
+  // ── Chat context sidebar ──────────────────────────────────────────────
+  let chatContextItems = []; // [{text, source, enabled}]
+
+  function chatContextRender() {
+    const el = document.getElementById('chat-context-items');
+    if (!chatContextItems.length) {
+      el.innerHTML = '<span style="color:#5a5a5a;font-size:11px;">Add context: graph nodes, text, or chat responses</span>';
+      return;
+    }
+    el.innerHTML = chatContextItems.map((item, i) => {
+      const srcColor = item.source === 'graph' ? '#60a5fa' : item.source === 'chat' ? '#34d399' : '#a78bfa';
+      const srcLabel = item.source === 'graph' ? 'graph' : item.source === 'chat' ? 'chat' : 'manual';
+      const opacity = item.enabled ? '1' : '0.4';
+      return '<div style="padding:3px 4px;border-bottom:1px solid #333;opacity:' + opacity + ';display:flex;align-items:start;gap:4px;" data-ctx-idx="' + i + '">'
+        + '<input type="checkbox" ' + (item.enabled ? 'checked' : '') + ' onchange="chatContextToggle(' + i + ')" style="margin-top:2px;flex-shrink:0">'
+        + '<span style="color:' + srcColor + ';font-size:9px;text-transform:uppercase;flex-shrink:0;margin-top:1px;">' + srcLabel + '</span>'
+        + '<span style="color:#cccccc;flex:1;word-break:break-word;">' + item.text.replace(/</g, '&lt;').substring(0, 150)
+        + (item.text.length > 150 ? '…' : '') + '</span>'
+        + '<button onclick="chatContextRemove(' + i + ')" style="color:#5a5a5a;flex-shrink:0;font-size:10px;" class="hover:text-white">✕</button>'
+        + '</div>';
+    }).join('');
+  }
+
+  function chatContextAdd(text, source) {
+    chatContextItems.push({ text: text.trim(), source: source || 'manual', enabled: true });
+    chatContextRender();
+  }
+
+  function chatContextAddManual() {
+    const input = document.getElementById('chat-context-input');
+    const text = input.value.trim();
+    if (!text) return;
+    chatContextAdd(text, 'manual');
+    input.value = '';
+  }
+
+  function chatContextRemove(i) {
+    chatContextItems.splice(i, 1);
+    chatContextRender();
+  }
+
+  function chatContextToggle(i) {
+    chatContextItems[i].enabled = !chatContextItems[i].enabled;
+    chatContextRender();
+  }
+
+  function chatContextClear() {
+    chatContextItems = [];
+    window._graphChatContext = null;
+    window._graphChatIndices = null;
+    window._graphChatStructure = null;
+    chatContextRender();
+  }
+
+  function chatContextGetText() {
+    const enabled = chatContextItems.filter(i => i.enabled);
+    if (!enabled.length) return '';
+    const useStructure = document.getElementById('chat-graph-structure') && document.getElementById('chat-graph-structure').checked;
+    if (useStructure && window._graphChatStructure) {
+      return _buildGraphStructureContext();
+    }
+    return 'Context:\n' + enabled.map((item, i) => (i + 1) + '. ' + item.text).join('\n');
+  }
+
+  // Add chat response to context sidebar
+  function chatContextAddFromChat(text) {
+    chatContextAdd(text.substring(0, 500), 'chat');
+  }
+
+  async function chatSendToGraph(text) {
+    if (!text) return;
+    const r = await fetch('/graph/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: text.substring(0, 500), ...graphGetParams() })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
+    graphUpdateView(d);
+  }
+
+  function chatToGraphFromInput() {
+    const input = document.getElementById('chat-to-graph-input');
+    const text = input.value.trim();
+    if (!text) return;
+    chatSendToGraph(text);
+    input.value = '';
+  }
+
+  function chatClearGraphContext() {
+    chatContextClear();
+  }
+
+  function _buildGraphStructureContext() {
+    const s = window._graphChatStructure;
+    const indices = window._graphChatIndices || [];
+    const selectedSet = new Set(indices);
+    if (!s) return '';
+
+    const lines = ['=== Graph Context ==='];
+
+    // Group selected nodes by cluster
+    const clusterMap = new Map(); // clusterIdx → [nodeIdx]
+    const nodeCluster = new Map(); // nodeIdx → clusterIdx
+    (s.clusters || []).forEach((cl, ci) => {
+      cl.forEach(ni => { nodeCluster.set(ni, ci); });
+    });
+    indices.forEach(ni => {
+      const ci = nodeCluster.has(ni) ? nodeCluster.get(ni) : -1;
+      if (!clusterMap.has(ci)) clusterMap.set(ci, []);
+      clusterMap.get(ci).push(ni);
+    });
+
+    // Group by topic
+    const topicGroups = new Map(); // topic → [clusterIdx]
+    clusterMap.forEach((nodes, ci) => {
+      const topic = nodes.length > 0 && nodes[0] < s.topics.length ? s.topics[nodes[0]] : '?';
+      if (!topicGroups.has(topic)) topicGroups.set(topic, []);
+      topicGroups.get(topic).push(ci);
+    });
+
+    topicGroups.forEach((clusterIdxList, topic) => {
+      if (topic) lines.push('\nTopic: ' + topic);
+      clusterIdxList.forEach(ci => {
+        const nodes = clusterMap.get(ci);
+        if (ci >= 0) lines.push('\nCluster ' + (ci + 1) + ':');
+        nodes.forEach(ni => {
+          const depth = ni < s.depths.length ? s.depths[ni] : 0;
+          const depthLabel = depth === -1 ? ' [root]' : depth > 0 ? ' [d' + depth + ']' : '';
+          lines.push('  [' + ni + '] ' + (s.thoughts[ni] || '?') + depthLabel);
+        });
+        // Edges within this cluster between selected nodes
+        const clEdges = (s.edges || []).filter(e =>
+          selectedSet.has(e[0]) && selectedSet.has(e[1]) &&
+          nodes.includes(e[0]) && nodes.includes(e[1])
+        );
+        if (clEdges.length > 0) {
+          lines.push('  Edges: ' + clEdges.map(e => e[0] + '↔' + e[1] + ' (' + (e[2] || 0).toFixed(2) + ')').join(', '));
+        }
+      });
+    });
+
+    // Cross-cluster edges
+    const crossEdges = (s.edges || []).filter(e => {
+      if (!selectedSet.has(e[0]) || !selectedSet.has(e[1])) return false;
+      return nodeCluster.get(e[0]) !== nodeCluster.get(e[1]);
+    });
+    if (crossEdges.length > 0) {
+      lines.push('\nCross-cluster edges: ' + crossEdges.map(e => e[0] + '↔' + e[1] + ' (' + (e[2] || 0).toFixed(2) + ')').join(', '));
+    }
+
+    // Directed edges between selected
+    const dirEdges = (s.directed || []).filter(e => selectedSet.has(e[0]) && selectedSet.has(e[1]));
+    if (dirEdges.length > 0) {
+      lines.push('\nDirected edges: ' + dirEdges.map(e => e[0] + '→' + e[1]).join(', '));
+    }
+
+    lines.push('\n===');
+    return lines.join('\n');
   }
 
   async function graphDoManualCollapse() {
     if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
     const cluster = [...graphManualCollapseSet];
+    const no_merge = document.getElementById('graph-no-merge').checked;
+    const collapse_prompt = document.getElementById('graph-collapse-prompt').value.trim();
+
     graphManualCollapseMode = false;
     graphManualCollapseSet.clear();
-    document.getElementById('graph-btn-manual-collapse').style.background = '';
-    document.getElementById('graph-btn-manual-collapse').textContent = '✂ Select & Collapse';
-    document.getElementById('graph-btn-do-collapse').style.display = 'none';
+    document.getElementById('graph-btn-manual-select').style.background = '';
+    document.getElementById('graph-btn-manual-select').textContent = '✂ Select';
+    document.getElementById('graph-selection-actions').style.display = 'none';
+    document.getElementById('graph-collapse-prompt-wrap').style.display = 'none';
 
     document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; });
 
+    const body = { cluster, collapse_mode: 'short', no_merge, ...graphGetParams() };
+    if (collapse_prompt) body.collapse_prompt = collapse_prompt;
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ cluster, collapse_mode: 'short', ...graphGetParams() })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
 
     graphSaveUndo();
-    // Remove collapsed positions, add new at centroid
-    const removedSet = new Set(cluster);
-    let cx = 0, cy = 0, cnt = 0;
-    cluster.forEach(idx => {
-      if (idx < graphNodePositions.length) {
-        cx += graphNodePositions[idx].x;
-        cy += graphNodePositions[idx].y;
-        cnt++;
-      }
-    });
-    if (cnt) { cx /= cnt; cy /= cnt; }
-    [...removedSet].sort((a, b) => b - a).forEach(idx => {
-      if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
-    });
-    graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
 
-    const newCollapsed = new Set();
-    graphCollapsedNodes.forEach(ci => {
-      if (removedSet.has(ci)) return;
-      let newIdx = ci;
-      for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
-      newCollapsed.add(newIdx);
-    });
-    newCollapsed.add(d.thoughts.length - 1);
-    graphCollapsedNodes = newCollapsed;
+    if (!no_merge) {
+      // Remove collapsed positions, add new at centroid
+      const removedSet = new Set(cluster);
+      let cx = 0, cy = 0, cnt = 0;
+      cluster.forEach(idx => {
+        if (idx < graphNodePositions.length) {
+          cx += graphNodePositions[idx].x;
+          cy += graphNodePositions[idx].y;
+          cnt++;
+        }
+      });
+      if (cnt) { cx /= cnt; cy /= cnt; }
+      [...removedSet].sort((a, b) => b - a).forEach(idx => {
+        if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
+      });
+      graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
+
+      const newCollapsed = new Set();
+      graphCollapsedNodes.forEach(ci => {
+        if (removedSet.has(ci)) return;
+        let newIdx = ci;
+        for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
+        newCollapsed.add(newIdx);
+      });
+      newCollapsed.add(d.thoughts.length - 1);
+      graphCollapsedNodes = newCollapsed;
+    } else {
+      // No merge — just add new node position near centroid
+      let cx = 0, cy = 0, cnt = 0;
+      cluster.forEach(idx => {
+        if (idx < graphNodePositions.length) {
+          cx += graphNodePositions[idx].x;
+          cy += graphNodePositions[idx].y;
+          cnt++;
+        }
+      });
+      if (cnt) { cx /= cnt; cy /= cnt; }
+      graphNodePositions.push({ x: (cx || 250) + 30, y: (cy || 225) + 30, vx: 0, vy: 0, fixed: false });
+      graphCollapsedNodes.add(d.thoughts.length - 1);
+    }
 
     graphData = d;
     if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
@@ -2048,9 +2639,9 @@
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
 
-    const resultDiv = document.getElementById('graph-result');
-    resultDiv.style.display = '';
-    document.getElementById('graph-result-text').textContent = d.text;
+    // Auto-select the new collapsed node in detail panel
+    const newIdx = d.thoughts.length - 1;
+    if (newIdx >= 0) graphSelectFromList(newIdx);
   }
 
   function graphToggleFlow() {
@@ -2162,7 +2753,8 @@
     const text = graphData.thoughts[idx];
     const entData = (graphData.entropies && graphData.entropies[idx]) || {};
     const detailView = document.getElementById('graph-detail-view');
-    if (entData.tokens && entData.tokens.length) {
+    const heatmapOn = document.getElementById('heatmap-toggle').checked;
+    if (heatmapOn && entData.tokens && entData.tokens.length) {
       // Filter out <think>, </think>, control tokens
       const visibleTokens = entData.tokens.filter(t =>
         !t.token.match(/^<\/?think>$|^<\|.*\|>$/) && t.token.trim() !== ''
@@ -2171,10 +2763,10 @@
       let start = 0;
       while (start < visibleTokens.length && visibleTokens[start].token.match(/^\s+$/)) start++;
       const tokens = visibleTokens.slice(start);
-      // Render heatmap — color each token by entropy
-      const maxEnt = Math.max(0.5, ...tokens.map(t => t.ent));
+      // Render heatmap — color each token by entropy, using global scale
+      const scale = parseFloat(document.getElementById('heatmap-scale').value) || 3;
       detailView.innerHTML = tokens.map(t => {
-        const norm = Math.min(1, t.ent / maxEnt);
+        const norm = Math.min(1, t.ent / scale);
         const r = Math.round(norm < 0.5 ? norm * 2 * 255 : 255);
         const g = Math.round(norm < 0.5 ? 255 : (1 - (norm - 0.5) * 2) * 200);
         const escaped = t.token.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -2204,6 +2796,22 @@
     } else {
       sourceDiv.style.display = 'none';
     }
+  }
+
+  function graphDetailToChat() {
+    const idx = graphSelectedNode;
+    if (idx < 0 || idx >= graphData.thoughts.length) return;
+    const text = graphData.thoughts[idx];
+    // Store structure for structured mode
+    window._graphChatStructure = window._graphChatStructure || {
+      thoughts: graphData.thoughts, edges: graphData.edges,
+      clusters: graphData.clusters, topics: graphData.topics,
+      depths: graphData.depths, directed: graphDirectedEdges
+    };
+    window._graphChatIndices = [idx];
+    window._graphChatContext = [text];
+    chatContextAdd(text, 'graph');
+    setMode('chat');
   }
 
   function graphDetailClose() {
@@ -2342,19 +2950,27 @@
       return '<span class="inline-flex mr-1">'
         + '<button onclick="graphCollapse(' + ci + ',\'short\')" '
         + 'class="px-3 py-2 text-white text-sm transition-opacity hover:opacity-80" '
-        + 'style="background:' + color + ';border-radius:6px 0 0 6px">'
+        + 'style="background:' + color + '22;border:1px solid ' + color + ';color:' + color + ';border-radius:8px 0 0 8px">'
         + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>'
         + '<select onchange="graphCollapse(' + ci + ',this.value);this.value=\'\'" '
-        + 'style="background:' + color + ';filter:brightness(0.85);color:#fff;border:none;border-radius:0 6px 6px 0;padding:0 4px;cursor:pointer;font-size:12px;width:24px;appearance:none;text-align:center;" title="Collapse mode">'
+        + 'style="background:' + color + '33;border:1px solid ' + color + ';border-left:none;color:' + color + ';border-radius:0 8px 8px 0;padding:0 4px;cursor:pointer;font-size:12px;width:24px;appearance:none;text-align:center;" title="Collapse mode">'
         + '<option value="">▾</option>'
-        + '<option value="short">Short</option>'
-        + '<option value="long">Long</option>'
+        + '<option value="short">Short (400)</option>'
+        + '<option value="long">Long (1500)</option>'
+        + '<option value="custom">Custom...</option>'
         + '</select></span>';
     }).join('');
   }
 
   async function graphCollapse(clusterIdx, collapse_mode) {
     collapse_mode = collapse_mode || 'short';
+    let custom_tokens = 0;
+    if (collapse_mode === 'custom') {
+      const val = prompt('Max tokens for collapse:', '800');
+      if (!val) return;
+      custom_tokens = parseInt(val);
+      if (isNaN(custom_tokens) || custom_tokens < 50) return;
+    }
     const clusters = graphData.clusters || [];
     if (clusterIdx >= clusters.length) return;
     const cluster = clusters[clusterIdx];
@@ -2363,9 +2979,13 @@
     document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; b.textContent = 'Collapsing...'; });
     document.querySelectorAll('#graph-collapse-btns select').forEach(s => { s.disabled = true; });
 
+    const body = { cluster, collapse_mode, ...graphGetParams() };
+    if (custom_tokens > 0) body.max_tokens = custom_tokens;
+    const collapsePrompt = document.getElementById('graph-collapse-prompt');
+    if (collapsePrompt && collapsePrompt.value.trim()) body.collapse_prompt = collapsePrompt.value.trim();
     const r = await fetch('/graph/collapse', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ cluster, collapse_mode, ...graphGetParams() })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
 
@@ -2405,13 +3025,28 @@
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
 
-    const resultDiv = document.getElementById('graph-result');
-    resultDiv.style.display = '';
-    document.getElementById('graph-result-text').textContent = d.text;
+    // Auto-select the new collapsed node in detail panel
+    const newIdx = d.thoughts.length - 1;
+    if (newIdx >= 0) graphSelectFromList(newIdx);
   }
 
   async function graphAddThought() {
-    const input = document.getElementById('graph-add-input');
+    const input = document.getElementById('graph-topic');
+    const text = input.value.trim();
+    if (!text) return;
+    const r = await fetch('/graph/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, ...graphGetParams() })
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    graphSaveUndo();
+    input.value = '';
+    graphUpdateView(d);
+  }
+
+  async function graphToGraphAdd() {
+    const input = document.getElementById('graph-to-graph-input');
     const text = input.value.trim();
     if (!text) return;
     const r = await fetch('/graph/add', {
@@ -2550,9 +3185,7 @@
     if (graphSimTimer) { cancelAnimationFrame(graphSimTimer); graphSimTimer = null; }
     document.getElementById('graph-svg').innerHTML = '';
     document.getElementById('graph-thoughts').innerHTML =
-      '<span class="text-slate-500 text-sm">Thoughts will appear here...</span>';
-    document.getElementById('graph-result').style.display = 'none';
-    document.getElementById('graph-result-text').textContent = '';
+      '<span style="color:#5a5a5a;font-size:12px;">Thoughts will appear here...</span>';
     document.getElementById('graph-collapse-btns').innerHTML = '';
     document.getElementById('graph-detail').style.display = 'none';
     document.getElementById('graph-btn-undo').style.display = 'none';

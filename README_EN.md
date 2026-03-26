@@ -48,14 +48,19 @@ Two modes of thinking, implemented literally:
 - **↓ Save / ↑ Load** — export/import graph as JSON (thoughts, edges, positions, clusters)
 - **temp / top_k** — tune generation parameters directly in the graph interface
 - **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
-- **Collapse ▾** — short (paragraph) or long (detailed essay)
-- **Node entropy** — borders colored by confidence (green → red), per-token heatmap in detail panel on click
-- **→ Flow** — directed flow layout: nodes in columns by depth (Topic→Think→Expand→Elaborate). Dead-end branches fade out. Toggle free graph / flow
+- **Collapse ▾** — short (paragraph), long (detailed essay), or custom token limit
+- **Collapse prompt** — custom instruction for collapse ("compare", "find contradictions", "write a plan")
+- **Collapse without merging** — "keep" checkbox: generates text but keeps original nodes (for testing different collapses)
+- **Node entropy** — per-token heatmap in detail panel on click
+- **→ Flow** — directed flow layout: nodes in columns by depth (Topic→Think→Expand→Elaborate). Toggle free graph / flow
 - **Source tracking** — selecting a node shows which thought it originated from (purple "↳ from:")
 - **Thought list** — sorted by cluster, click text to select node on graph, click node to highlight cluster in list
 - **Topic nodes** — root topics as full diamond-shaped nodes (depth=-1), multiple topics in one graph, directed edges to children
 - **Fan layout** — in free mode clusters occupy sectors, nodes don't overlap
-- **✂ Select & Collapse** — manual collapse: select arbitrary nodes by clicking, then collapse into one
+- **✂ Select → Collapse / → Chat** — manual selection of arbitrary nodes, then Collapse or send to chat as context
+- **☐ All** — select all nodes with one button
+- **→ Chat with graph context** — selected nodes are sent to chat as context (option "structure" includes full graph: clusters, edges, weights)
+- **To Graph** — manually add text to graph without links, or send collapse result back to graph
 - **seed** — reproducible generation in graph mode
 - **Heatmap scale** — adjustable entropy scale next to the heatmap checkbox
 
@@ -84,19 +89,13 @@ yellow, red (high entropy, guessing).
 ![Parallel mode](images/parallel.jpg)
 
 Two different prompts generate in parallel. Live split-screen,
-both streams updating in real time.
+both streams updating in real time. Each stream has its own **temp** and **top_k**.
 
-With the `--server` flag, both prompts are processed simultaneously on GPU.
-
----
-
-### `compare` — one prompt, two parameter sets
-
-![Compare mode](images/compare.jpg)
-
-One prompt, **two configs** (temperature, top_k, seed). Both streams start
+**compare** checkbox — one prompt, two parameter sets. Both streams start
 from identical tokens and diverge when parameters produce different samples.
 A badge shows the exact divergence step.
+
+With the `--server` flag, both prompts are processed simultaneously on GPU.
 
 ---
 
@@ -106,6 +105,12 @@ A badge shows the exact divergence step.
 
 Chat via chat template (ChatML / Jinja2). Roles, temperature, token limit.
 **Continue** resumes truncated responses. Heatmap shows confidence.
+
+**Context sidebar** — right panel with a persistent context buffer:
+- Add context from graph (→ Chat), from model responses (→ ctx), or manually
+- Toggle or remove individual items
+- **structure** checkbox — passes full graph structure (clusters, edges, weights)
+- **→ graph** — send text from chat to graph without switching tabs
 
 ---
 
@@ -123,3 +128,14 @@ text and KV cache. In-process mode only.
 - **Language** — EN/RU switcher: roles, system prompts (including graph mode) in the selected language
 - **Seed** — reproducible results (parallel, compare)
 - **Token counter** — used / available context tokens
+- **Settings** — choose how the app runs:
+  - **Local** — everything on local model (llama.cpp)
+  - **API** — OpenAI-compatible API (GPT-4, Claude, etc.) for graph and chat
+  - **Hybrid** — per-component routing (e.g. graph via API, embeddings locally)
+  - Auto-load model list from API, hot-swap local models without restart
+  - Settings persist in `settings.json`
+- **Similarity mode** — Embedding / Jaccard / Off. Auto-fallback to Jaccard on API error
+
+> ⚠️ **LM Studio**: set **"Only Keep Last JIT Loaded Model"** to OFF,
+> otherwise the model unloads between chat and embedding requests. Or use
+> Jaccard similarity instead of Embedding — it requires no separate API call.
