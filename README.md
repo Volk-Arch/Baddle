@@ -134,3 +134,8 @@ Badge показывает точный шаг расхождения.
   - **Hybrid** — роутинг по компонентам (например: graph через API, embeddings локально)
   - Подгрузка списка моделей из API, горячая смена локальной модели без перезапуска
   - Настройки сохраняются в `settings.json`
+- **Similarity mode** — Embedding / Jaccard / Off. Auto-fallback на Jaccard при ошибке API
+
+> ⚠️ **LM Studio**: включите опцию **"Only Keep Last JIT Loaded Model"** = OFF,
+> иначе модель выгружается между chat и embedding запросами. Или используйте
+> Jaccard similarity вместо Embedding — он не требует отдельного API-вызова.
