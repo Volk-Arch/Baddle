@@ -100,14 +100,16 @@
 ### Камень 7: Storage layer
 *Переход от "граф в памяти" к "граф как файловая БД с lazy load". Своя графовая БД на файлах.*
 
-**Фаза 0 — Файловая графовая структура (первый шаг):**
-- [ ] Узел = отдельный JSON файл (`nodes/0.json`): text, confidence, depth, topic, entropy, tags, created_at
-- [ ] Связи отдельно (`edges.json`): from, to, weight, type, transition_prob
-- [ ] Мета отдельно (`meta.json`): topic, settings, позиции узлов
-- [ ] Lazy load: рендер графа по edges.json + тексты для лейблов, полный узел по клику
+**Фаза 0b — JSONL файловое хранение (следующий шаг):**
+- [ ] `nodes.jsonl` — одна строка на узел, append-only. Streaming read, частичная загрузка
+- [ ] `edges.jsonl` — одна строка на связь. Отдельно similarity, manual, directed
+- [ ] `meta.json` — topic, settings, позиции узлов
+- [ ] Папка `graphs/` — каждый граф в своей подпапке
+- [ ] Endpoints `/graph/save-file`, `/graph/load-file` — серверный save/load
+- [ ] Lazy load: рендер графа по edges + тексты для лейблов, полный узел по клику
 - [ ] Теги/слои вместо папок — узел может быть в нескольких слоях (Знания, Идеи, Действия)
-- [ ] Git-friendly: каждый узел версионируется отдельно, diff читаем
-- [ ] Obsidian-совместимо: конвертация node.json ↔ .md
+- [ ] Git-friendly: diff читаем, каждая строка = один узел
+- [ ] Obsidian-совместимо: конвертация node.jsonl ↔ .md
 
 **Фаза 1 — SQLite (когда файлов станет >1000):**
 - [ ] Миграция из файлов в SQLite (один файл БД, zero dependencies)
@@ -199,3 +201,5 @@
 - [x] Collapse через Studio — все collapse через Studio с collapse_override
 - [x] Переключатель mode в Studio — dropdown с фильтрацией по контексту
 - [x] Пакетная генерация — поле count, N вариантов последовательно с прогрессом
+- [x] Камень 1: confidence на узле — слайдер 0-100%, цвет обводки, усреднение при collapse
+- [x] Камень 7 фаза 0a: структура данных — node objects `{id, text, entropy, depth, topic, confidence}`, связи и мета отдельно, backward compatibility
