@@ -57,17 +57,20 @@ def _p(lang: str, key: str) -> str:
     return _PROMPTS.get(lang, _PROMPTS["en"]).get(key, _PROMPTS["en"][key])
 
 def _ensure_lists(thoughts: list, topic: str = ""):
-    """Ensure entropies/depths/topics lists are synced with thoughts length."""
+    """Ensure entropies/depths/topics/confidences lists are synced with thoughts length."""
     ent_list = _graph.setdefault("entropies", [])
     depth_list = _graph.setdefault("depths", [])
     topics_list = _graph.setdefault("topics", [])
+    conf_list = _graph.setdefault("confidences", [])
     while len(ent_list) < len(thoughts):
         ent_list.append({"avg": 0.0, "unc": 0.0})
     while len(depth_list) < len(thoughts):
         depth_list.append(0)
     while len(topics_list) < len(thoughts):
         topics_list.append(topic)
-    return ent_list, depth_list, topics_list
+    while len(conf_list) < len(thoughts):
+        conf_list.append(0.5)
+    return ent_list, depth_list, topics_list, conf_list
 
 # ── module-level model reference (set by init_graph) ─────────────────────────
 _llm = None
@@ -83,6 +86,7 @@ def init_graph(llm):
 def _fresh_graph():
     return {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [],
             "embeddings": [], "entropies": [], "depths": [], "topics": [],
+            "confidences": [],
             "directed_edges": [], "hub_nodes": set()}
 
 _graph = _fresh_graph()
@@ -381,6 +385,7 @@ def _graph_response(thoughts, edges, clusters, **extra):
         "entropies": _graph.get("entropies", []),
         "depths": _graph.get("depths", []),
         "topics": _graph.get("topics", []),
+        "confidences": _graph.get("confidences", []),
     }
     resp.update(extra)
     return jsonify(resp)
@@ -419,7 +424,7 @@ def graph_think():
         _graph["directed_edges"] = []
         _graph["hub_nodes"] = set()
     thoughts = list(existing)
-    ent_list, depth_list, topics_list = _ensure_lists(thoughts, topic)
+    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
 
     # Add topic as root node (depth=-1) if not already present
     topic_idx = -1
@@ -520,10 +525,30 @@ def graph_remove():
     topics_list = _graph.get("topics", [])
     if idx < len(topics_list):
         topics_list.pop(idx)
+    conf_list = _graph.get("confidences", [])
+    if idx < len(conf_list):
+        conf_list.pop(idx)
     _remap_manual_edges([idx])
     edges = _compute_edges(thoughts, threshold, sim_mode)
     clusters = _find_clusters(len(thoughts), edges, threshold)
     return _graph_response(thoughts, edges, clusters)
+
+
+@graph_bp.route("/graph/confidence", methods=["POST"])
+def graph_confidence():
+    """Update confidence of a thought."""
+    data = request.get_json(force=True)
+    idx = int(data.get("index", -1))
+    value = float(data.get("value", 0.5))
+    value = max(0.0, min(1.0, value))
+    thoughts = _graph["thoughts"]
+    if idx < 0 or idx >= len(thoughts):
+        return jsonify({"error": "invalid index"})
+    conf_list = _graph.setdefault("confidences", [])
+    while len(conf_list) < len(thoughts):
+        conf_list.append(0.5)
+    conf_list[idx] = round(value, 2)
+    return jsonify({"ok": True, "index": idx, "confidence": value})
 
 
 @graph_bp.route("/graph/link", methods=["POST"])
@@ -648,6 +673,9 @@ def graph_collapse():
         # Normal mode: remove source nodes, add collapsed result
         min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
         collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
+        conf_list = _graph.get("confidences", [])
+        # Average confidence of collapsed nodes
+        collapsed_conf = sum(conf_list[i] for i in valid_indices if i < len(conf_list)) / max(len(valid_indices), 1)
         for i in sorted(valid_indices, reverse=True):
             thoughts.pop(i)
             if i < len(ent_list):
@@ -656,11 +684,14 @@ def graph_collapse():
                 depth_list.pop(i)
             if i < len(topics_list):
                 topics_list.pop(i)
+            if i < len(conf_list):
+                conf_list.pop(i)
         _remap_manual_edges(valid_indices)
         thoughts.append(text)
         ent_list.append(ent)
         depth_list.append(min_depth)
         topics_list.append(collapsed_topic)
+        conf_list.append(round(collapsed_conf, 2))
         new_idx = len(thoughts) - 1
         # Link collapsed node to its topic root
         directed = _graph.setdefault("directed_edges", [])
@@ -699,6 +730,8 @@ def graph_sync():
         _graph["depths"] = data["depths"]
     if "topics" in data:
         _graph["topics"] = data["topics"]
+    if "confidences" in data:
+        _graph["confidences"] = data["confidences"]
     if "topic" in data:
         _graph["topic"] = data["topic"]
     # If saved edges/clusters provided, use them directly (undo restore)
@@ -735,7 +768,7 @@ def graph_expand():
     source = thoughts[idx]
     topic = _graph.get("topic", "")
     new_thoughts = []
-    ent_list, depth_list, topics_list = _ensure_lists(thoughts, topic)
+    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
     parent_depth = depth_list[idx] if idx < len(depth_list) else 0
     parent_topic = topics_list[idx] if idx < len(topics_list) else topic
 
@@ -804,7 +837,7 @@ def graph_elaborate():
     source = thoughts[idx]
     topic = _graph.get("topic", "")
     new_thoughts = []
-    ent_list, depth_list, topics_list = _ensure_lists(thoughts, topic)
+    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
     parent_depth = depth_list[idx] if idx < len(depth_list) else 0
     parent_topic = topics_list[idx] if idx < len(topics_list) else topic
 
@@ -967,7 +1000,7 @@ def graph_studio_apply_child():
     new_idx = len(thoughts) - 1
 
     # Set up metadata
-    ent_list, depth_list, topics_list = _ensure_lists(thoughts, topic)
+    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
     parent_depth = depth_list[parent_idx] if parent_idx < len(depth_list) else 0
     parent_topic = topics_list[parent_idx] if parent_idx < len(topics_list) else topic
     if new_idx < len(depth_list):
