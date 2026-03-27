@@ -155,6 +155,9 @@ def api_chat_completion(messages: list, max_tokens: int = 200, temperature: floa
     choice = result.get("choices", [{}])[0]
     message = choice.get("message", {})
     text = message.get("content", "")
+    # Fallback: if content is empty but reasoning_content has text (Qwen3 thinking mode)
+    if not text and message.get("reasoning_content"):
+        text = message["reasoning_content"]
 
     # Extract logprobs if available
     token_ents = []

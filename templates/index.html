@@ -551,9 +551,10 @@
           <div class="flex items-center gap-2 mb-2">
             <span id="graph-detail-dot" style="font-size:16px;">&#9679;</span>
             <span class="text-neutral-300 text-sm font-bold flex-1">Selected thought</span>
-            <button onclick="graphDetailExpand()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate child ideas branching from this thought">&#9758; Expand</button>
-            <button onclick="graphDetailElaborate()" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
+            <button onclick="openStudio('expand_preview')" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate child ideas branching from this thought">&#9758; Expand</button>
+            <button onclick="openStudio('elaborate_preview')" class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Generate deeper ideas on this specific thought">&#9998; Elaborate</button>
             <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs">Edit</button>
+            <button onclick="openStudio('rephrase')" class="px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white text-xs" title="Rephrase with Generation Studio">&#x270E; Rephrase</button>
             <button onclick="graphDetailToChat()" class="px-2 py-1 text-blue-400 hover:text-blue-300 text-xs border border-blue-800" title="Send this thought to chat as context">&rarr; Chat</button>
             <button onclick="graphDetailClose()" class="px-2 py-1 text-neutral-500 hover:text-white text-xs">&times; Close</button>
           </div>
@@ -582,14 +583,7 @@
         </div>
       </div>
     </div>
-    <!-- Collapse prompt -->
-    <div id="graph-collapse-prompt-wrap" class="mt-2" style="display:none;">
-      <div class="flex gap-2 items-center">
-        <span style="color:#969696;font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Collapse prompt</span>
-        <input id="graph-collapse-prompt" type="text" placeholder="Custom instruction for collapse (e.g. compare, find contradictions)…"
-          style="flex:1;font-size:12px;" class="bg-neutral-800 border border-neutral-700 text-neutral-200 px-2 py-1">
-      </div>
-    </div>
+    <!-- Collapse prompt removed — now in Generation Studio -->
     <!-- Collapsed result (hidden — now shown in detail panel) -->
     <div id="graph-result" style="display:none;"></div>
     <!-- Input panel (below graph) -->
@@ -2341,12 +2335,10 @@
     graphManualCollapseSet.clear();
     const btn = document.getElementById('graph-btn-manual-select');
     const actions = document.getElementById('graph-selection-actions');
-    const promptWrap = document.getElementById('graph-collapse-prompt-wrap');
     if (graphManualCollapseMode) {
       btn.style.background = '#b45309';
       btn.textContent = '✂ Cancel';
       actions.style.display = '';
-      promptWrap.style.display = '';
       document.getElementById('graph-collapse-count').textContent = '0';
     } else {
       btn.style.background = '';
@@ -2369,7 +2361,6 @@
     btn.style.background = '#b45309';
     btn.textContent = '✂ Cancel';
     document.getElementById('graph-selection-actions').style.display = '';
-    document.getElementById('graph-collapse-prompt-wrap').style.display = '';
     document.getElementById('graph-collapse-count').textContent = graphManualCollapseSet.size;
     graphRenderSvg();
   }
@@ -2401,7 +2392,6 @@
     document.getElementById('graph-btn-manual-select').style.background = '';
     document.getElementById('graph-btn-manual-select').textContent = '✂ Select';
     document.getElementById('graph-selection-actions').style.display = 'none';
-    document.getElementById('graph-collapse-prompt-wrap').style.display = 'none';
   }
 
   // ── Chat context sidebar ──────────────────────────────────────────────
@@ -2568,80 +2558,14 @@
   async function graphDoManualCollapse() {
     if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
     const cluster = [...graphManualCollapseSet];
-    const no_merge = document.getElementById('graph-no-merge').checked;
-    const collapse_prompt = document.getElementById('graph-collapse-prompt').value.trim();
-
+    const ideas = cluster.map(i => graphData.thoughts[i]);
     graphManualCollapseMode = false;
     graphManualCollapseSet.clear();
     document.getElementById('graph-btn-manual-select').style.background = '';
     document.getElementById('graph-btn-manual-select').textContent = '✂ Select';
     document.getElementById('graph-selection-actions').style.display = 'none';
-    document.getElementById('graph-collapse-prompt-wrap').style.display = 'none';
 
-    document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; });
-
-    const body = { cluster, collapse_mode: 'short', no_merge, ...graphGetParams() };
-    if (collapse_prompt) body.collapse_prompt = collapse_prompt;
-    const r = await fetch('/graph/collapse', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body)
-    });
-    const d = await r.json();
-    if (d.error) { alert(d.error); return; }
-
-    graphSaveUndo();
-
-    if (!no_merge) {
-      // Remove collapsed positions, add new at centroid
-      const removedSet = new Set(cluster);
-      let cx = 0, cy = 0, cnt = 0;
-      cluster.forEach(idx => {
-        if (idx < graphNodePositions.length) {
-          cx += graphNodePositions[idx].x;
-          cy += graphNodePositions[idx].y;
-          cnt++;
-        }
-      });
-      if (cnt) { cx /= cnt; cy /= cnt; }
-      [...removedSet].sort((a, b) => b - a).forEach(idx => {
-        if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
-      });
-      graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
-
-      const newCollapsed = new Set();
-      graphCollapsedNodes.forEach(ci => {
-        if (removedSet.has(ci)) return;
-        let newIdx = ci;
-        for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
-        newCollapsed.add(newIdx);
-      });
-      newCollapsed.add(d.thoughts.length - 1);
-      graphCollapsedNodes = newCollapsed;
-    } else {
-      // No merge — just add new node position near centroid
-      let cx = 0, cy = 0, cnt = 0;
-      cluster.forEach(idx => {
-        if (idx < graphNodePositions.length) {
-          cx += graphNodePositions[idx].x;
-          cy += graphNodePositions[idx].y;
-          cnt++;
-        }
-      });
-      if (cnt) { cx /= cnt; cy /= cnt; }
-      graphNodePositions.push({ x: (cx || 250) + 30, y: (cy || 225) + 30, vx: 0, vy: 0, fixed: false });
-      graphCollapsedNodes.add(d.thoughts.length - 1);
-    }
-
-    graphData = d;
-    if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
-    if (d.directed_edges) graphDirectedEdges = d.directed_edges;
-    graphRenderSvg();
-    graphUpdateThoughtsList();
-    graphUpdateCollapseButtons();
-
-    // Auto-select the new collapsed node in detail panel
-    const newIdx = d.thoughts.length - 1;
-    if (newIdx >= 0) graphSelectFromList(newIdx);
+    openStudio('collapse_preview', { ideas, cluster });
   }
 
   function graphToggleFlow() {
@@ -2947,87 +2871,19 @@
     if (!clusters.length) { span.innerHTML = ''; return; }
     span.innerHTML = clusters.map((cl, ci) => {
       const color = graphClusterColors[ci % graphClusterColors.length];
-      return '<span class="inline-flex mr-1">'
-        + '<button onclick="graphCollapse(' + ci + ',\'short\')" '
-        + 'class="px-3 py-2 text-white text-sm transition-opacity hover:opacity-80" '
-        + 'style="background:' + color + '22;border:1px solid ' + color + ';color:' + color + ';border-radius:8px 0 0 8px">'
-        + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>'
-        + '<select onchange="graphCollapse(' + ci + ',this.value);this.value=\'\'" '
-        + 'style="background:' + color + '33;border:1px solid ' + color + ';border-left:none;color:' + color + ';border-radius:0 8px 8px 0;padding:0 4px;cursor:pointer;font-size:12px;width:24px;appearance:none;text-align:center;" title="Collapse mode">'
-        + '<option value="">▾</option>'
-        + '<option value="short">Short (400)</option>'
-        + '<option value="long">Long (1500)</option>'
-        + '<option value="custom">Custom...</option>'
-        + '</select></span>';
+      return '<button onclick="graphCollapse(' + ci + ',\'studio\')" '
+        + 'class="px-3 py-2 text-white text-sm transition-opacity hover:opacity-80 mr-1" '
+        + 'style="background:' + color + '22;border:1px solid ' + color + ';color:' + color + ';border-radius:8px">'
+        + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>';
     }).join('');
   }
 
-  async function graphCollapse(clusterIdx, collapse_mode) {
-    collapse_mode = collapse_mode || 'short';
-    let custom_tokens = 0;
-    if (collapse_mode === 'custom') {
-      const val = prompt('Max tokens for collapse:', '800');
-      if (!val) return;
-      custom_tokens = parseInt(val);
-      if (isNaN(custom_tokens) || custom_tokens < 50) return;
-    }
+  function graphCollapse(clusterIdx) {
     const clusters = graphData.clusters || [];
     if (clusterIdx >= clusters.length) return;
     const cluster = clusters[clusterIdx];
-
-    // Disable all collapse buttons
-    document.querySelectorAll('#graph-collapse-btns button').forEach(b => { b.disabled = true; b.textContent = 'Collapsing...'; });
-    document.querySelectorAll('#graph-collapse-btns select').forEach(s => { s.disabled = true; });
-
-    const body = { cluster, collapse_mode, ...graphGetParams() };
-    if (custom_tokens > 0) body.max_tokens = custom_tokens;
-    const collapsePrompt = document.getElementById('graph-collapse-prompt');
-    if (collapsePrompt && collapsePrompt.value.trim()) body.collapse_prompt = collapsePrompt.value.trim();
-    const r = await fetch('/graph/collapse', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body)
-    });
-    const d = await r.json();
-
-    if (d.error) { alert(d.error); return; }
-
-    graphSaveUndo();
-    // Remove collapsed node positions, add new one at centroid
-    const removedSet = new Set(cluster);
-    let cx = 0, cy = 0, cnt = 0;
-    cluster.forEach(idx => {
-      if (idx < graphNodePositions.length) {
-        cx += graphNodePositions[idx].x;
-        cy += graphNodePositions[idx].y;
-        cnt++;
-      }
-    });
-    if (cnt) { cx /= cnt; cy /= cnt; }
-    [...removedSet].sort((a, b) => b - a).forEach(idx => {
-      if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
-    });
-    graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
-    // Remap collapsed indices and mark new node as collapsed
-    const newCollapsed = new Set();
-    graphCollapsedNodes.forEach(ci => {
-      if (removedSet.has(ci)) return;
-      let newIdx = ci;
-      for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
-      newCollapsed.add(newIdx);
-    });
-    newCollapsed.add(d.thoughts.length - 1);  // the new summary node
-    graphCollapsedNodes = newCollapsed;
-
-    graphData = d;
-    if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
-    if (d.directed_edges) graphDirectedEdges = d.directed_edges;
-    graphRenderSvg();
-    graphUpdateThoughtsList();
-    graphUpdateCollapseButtons();
-
-    // Auto-select the new collapsed node in detail panel
-    const newIdx = d.thoughts.length - 1;
-    if (newIdx >= 0) graphSelectFromList(newIdx);
+    const ideas = cluster.map(i => graphData.thoughts[i]);
+    openStudio('collapse_preview', { ideas, cluster });
   }
 
   async function graphAddThought() {
@@ -3192,8 +3048,317 @@
     document.getElementById('graph-actions-bar').style.display = 'none';
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Generation Studio — universal modal for rephrase/elaborate/expand/collapse
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let studioMode = 'rephrase';
+  let studioNodeIdx = -1;
+  let studioVariants = [];
+  let studioCollapseData = null;
+
+  function openStudio(mode, opts) {
+    opts = opts || {};
+    studioMode = mode;
+    studioNodeIdx = (typeof opts.index === 'number') ? opts.index : graphSelectedNode;
+    studioVariants = [];
+    studioCollapseData = opts.cluster ? opts : null;
+
+    document.getElementById('studio-variants').innerHTML = '<span class="text-neutral-500 text-sm">Click Generate to create variants...</span>';
+    document.getElementById('studio-apply-btn').disabled = true;
+    document.getElementById('studio-apply-btn').style.opacity = '0.5';
+
+    // For collapse, set source before _studioUpdatePlaceholder
+    if (mode === 'collapse_preview' && opts.ideas) {
+      document.getElementById('studio-source').textContent = opts.ideas.map((t, i) => `${i + 1}. ${t}`).join('\n');
+    }
+
+    // Filter available modes based on context
+    const sel = document.getElementById('studio-mode-select');
+    const isCollapse = (mode === 'collapse_preview');
+    sel.querySelectorAll('option').forEach(opt => {
+      if (isCollapse) {
+        opt.hidden = (opt.value !== 'collapse_preview' && opt.value !== 'freeform');
+      } else {
+        opt.hidden = (opt.value === 'collapse_preview');
+      }
+    });
+    sel.value = mode;
+    _studioUpdatePlaceholder(mode);
+
+    document.getElementById('studio-instruction').value = opts.instruction || '';
+    document.getElementById('studio-modal').style.display = 'flex';
+    document.getElementById('studio-instruction').focus();
+  }
+
+  function _studioUpdatePlaceholder(mode) {
+    const source = document.getElementById('studio-source');
+    const instruction = document.getElementById('studio-instruction');
+
+    if (mode === 'rephrase') {
+      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      instruction.placeholder = 'Instruction: "make shorter", "translate to English", "add specifics"...';
+    } else if (mode === 'elaborate_preview') {
+      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      instruction.placeholder = 'Direction to elaborate...';
+    } else if (mode === 'expand_preview') {
+      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      instruction.placeholder = 'Focus for branching...';
+    } else if (mode === 'collapse_preview') {
+      // source already set by openStudio for collapse
+      instruction.placeholder = 'Collapse instruction...';
+    } else {
+      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      instruction.placeholder = 'Instruction...';
+    }
+    studioMode = mode;
+  }
+
+  function studioSwitchMode(newMode) {
+    studioVariants = [];
+    _studioUpdatePlaceholder(newMode);
+    document.getElementById('studio-variants').innerHTML = '<span class="text-neutral-500 text-sm">Click Generate to create variants...</span>';
+    document.getElementById('studio-apply-btn').disabled = true;
+    document.getElementById('studio-apply-btn').style.opacity = '0.5';
+  }
+
+
+  function closeStudio() {
+    document.getElementById('studio-modal').style.display = 'none';
+    studioVariants = [];
+  }
+
+  async function studioGenerate() {
+    const instruction = document.getElementById('studio-instruction').value.trim();
+    const temp = parseFloat(document.getElementById('studio-temp').value) || 0.9;
+    const topK = parseInt(document.getElementById('studio-topk').value) || 40;
+    const maxTok = parseInt(document.getElementById('studio-maxtok').value) || 1000;
+    const count = parseInt(document.getElementById('studio-count').value) || 1;
+    const genBtn = document.getElementById('studio-gen-btn');
+
+    const body = {
+      mode: studioMode,
+      source_text: graphData.thoughts[studioNodeIdx] || '',
+      instruction,
+      temp, top_k: topK, max_tokens: maxTok,
+      lang: document.getElementById('lang-select') ? document.getElementById('lang-select').value : 'en',
+    };
+
+    // For collapse, pass ideas
+    if (studioMode === 'collapse_preview') {
+      body.ideas = document.getElementById('studio-source').textContent.split('\n').map(l => l.replace(/^\d+\.\s*/, ''));
+    }
+
+    genBtn.disabled = true;
+
+    try {
+      for (let i = 0; i < count; i++) {
+        genBtn.textContent = count > 1 ? `Generating ${i + 1}/${count}...` : 'Generating...';
+        const r = await fetch('/graph/studio/generate', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        console.log('[studio] response:', d);
+        if (d.error) { alert(d.error); break; }
+        if (!d.text || !d.text.trim()) { continue; }  // skip empty, try next
+
+        studioVariants.push(d);
+        renderStudioVariants();
+      }
+    } finally {
+      genBtn.disabled = false;
+      genBtn.textContent = '+ Generate';
+    }
+  }
+
+  function renderStudioVariants() {
+    const div = document.getElementById('studio-variants');
+    const applyBtn = document.getElementById('studio-apply-btn');
+    if (!studioVariants.length) {
+      div.innerHTML = '<span class="text-neutral-500 text-sm">No variants yet...</span>';
+      applyBtn.disabled = true;
+      return;
+    }
+
+    div.innerHTML = studioVariants.map((v, i) => {
+      const selected = (v._selected) ? 'border-amber-500' : 'border-neutral-700';
+      const entStr = v.entropy ? ` <span class="text-neutral-500">(ent: ${(v.entropy.avg || 0).toFixed(2)})</span>` : '';
+      return `<div class="p-3 border ${selected} rounded cursor-pointer hover:border-neutral-500 transition-colors"
+                   onclick="studioSelectVariant(${i})" style="background:#1e1e1e;">
+                <div class="text-neutral-200 text-sm whitespace-pre-wrap">${v.text}</div>
+                <div class="text-xs text-neutral-500 mt-1">Variant ${i + 1}${entStr}</div>
+              </div>`;
+    }).join('');
+
+    const hasSelected = studioVariants.some(v => v._selected);
+    applyBtn.disabled = !hasSelected;
+    applyBtn.style.opacity = hasSelected ? '1' : '0.5';
+  }
+
+  function studioSelectVariant(idx) {
+    studioVariants.forEach((v, i) => v._selected = (i === idx));
+    renderStudioVariants();
+  }
+
+  async function studioApply() {
+    const selected = studioVariants.find(v => v._selected);
+    if (!selected) return;
+
+    if (studioMode === 'rephrase') {
+      // Apply rephrase: replace node text
+      const r = await fetch('/graph/studio/apply-rephrase', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index: studioNodeIdx, text: selected.text, ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      graphSaveUndo();
+      graphData = d;
+      if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+      if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+      graphRenderSvg();
+      graphUpdateThoughtsList();
+      graphShowDetail(studioNodeIdx);
+    } else if (studioMode === 'collapse_preview' && studioCollapseData) {
+      // Apply collapse: use the existing collapse endpoint with the selected text as override
+      const cluster = studioCollapseData.cluster || [];
+      const body = { cluster, collapse_mode: 'short', ...graphGetParams() };
+      body.collapse_override = selected.text;  // pre-generated text
+      const r = await fetch('/graph/collapse', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      graphSaveUndo();
+      // Update positions: remove collapsed, add new at centroid
+      const removedSet = new Set(cluster);
+      let cx = 0, cy = 0, cnt = 0;
+      cluster.forEach(idx => {
+        if (idx < graphNodePositions.length) {
+          cx += graphNodePositions[idx].x;
+          cy += graphNodePositions[idx].y;
+          cnt++;
+        }
+      });
+      if (cnt) { cx /= cnt; cy /= cnt; }
+      [...removedSet].sort((a, b) => b - a).forEach(idx => {
+        if (idx < graphNodePositions.length) graphNodePositions.splice(idx, 1);
+      });
+      graphNodePositions.push({ x: cx || 250, y: cy || 225, vx: 0, vy: 0, fixed: false });
+      // Remap collapsed node markers
+      const newCollapsed = new Set();
+      graphCollapsedNodes.forEach(ci => {
+        if (removedSet.has(ci)) return;
+        let newIdx = ci;
+        for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
+        newCollapsed.add(newIdx);
+      });
+      newCollapsed.add(d.thoughts.length - 1);
+      graphCollapsedNodes = newCollapsed;
+      graphData = d;
+      if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+      if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+      graphRenderSvg();
+      graphUpdateThoughtsList();
+      graphUpdateCollapseButtons();
+      const newIdx = d.thoughts.length - 1;
+      if (newIdx >= 0) graphSelectFromList(newIdx);
+    } else if (studioMode === 'elaborate_preview' && studioNodeIdx >= 0) {
+      // Add as elaboration — linked to parent with directed edge
+      const r = await fetch('/graph/studio/apply-child', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index: studioNodeIdx, text: selected.text, type: 'elaborate', ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      graphSaveUndo();
+      graphUpdateView(d);
+    } else if (studioMode === 'expand_preview' && studioNodeIdx >= 0) {
+      // Add as expansion — linked to parent with directed edge
+      const r = await fetch('/graph/studio/apply-child', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index: studioNodeIdx, text: selected.text, type: 'expand', ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      graphSaveUndo();
+      graphUpdateView(d);
+    } else {
+      // Freeform and others: add as unlinked thought
+      const r = await fetch('/graph/add', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text: selected.text, ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      graphSaveUndo();
+      graphUpdateView(d);
+    }
+    closeStudio();
+  }
+
   // Init UI state
   setMode('step');
 </script>
+
+<!-- Generation Studio Modal -->
+<div id="studio-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#1e1e1e; border:1px solid #3c3c3c; border-radius:4px; width:800px; max-width:90vw; max-height:85vh; display:flex; flex-direction:column; overflow:hidden;">
+    <!-- Header -->
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #3c3c3c; background:#252526;">
+      <span style="color:#cccccc; font-weight:bold; font-size:14px;">Generation Studio —</span>
+      <select id="studio-mode-select" onchange="studioSwitchMode(this.value)" style="background:#3c3c3c; border:1px solid #4a4a4a; color:#cccccc; padding:2px 8px; border-radius:2px; font-size:13px; margin-left:4px;">
+        <option value="rephrase">Rephrase</option>
+        <option value="elaborate_preview">Elaborate</option>
+        <option value="expand_preview">Expand</option>
+        <option value="collapse_preview">Collapse</option>
+        <option value="freeform">Freeform</option>
+      </select>
+      <button onclick="closeStudio()" style="background:none; border:none; color:#888; font-size:18px; cursor:pointer;">&times;</button>
+    </div>
+    <!-- Body -->
+    <div style="display:flex; flex:1; overflow:hidden;">
+      <!-- Left: source + variants -->
+      <div style="flex:1; display:flex; flex-direction:column; overflow:hidden; padding:12px;">
+        <div style="margin-bottom:8px;">
+          <span style="color:#5a5a5a; font-size:11px;">SOURCE</span>
+          <div id="studio-source" style="color:#999; font-size:13px; max-height:80px; overflow-y:auto; padding:6px; background:#252526; border-radius:2px; white-space:pre-wrap; margin-top:4px;"></div>
+        </div>
+        <div style="margin-bottom:8px;">
+          <span style="color:#5a5a5a; font-size:11px;">INSTRUCTION</span>
+          <textarea id="studio-instruction" rows="2" placeholder="Instructions..."
+            style="width:100%; background:#252526; border:1px solid #3c3c3c; color:#cccccc; padding:6px; border-radius:2px; font-size:13px; resize:vertical; margin-top:4px;"
+            onkeydown="if(event.key==='Enter'&&event.ctrlKey){studioGenerate();}"></textarea>
+        </div>
+        <div style="flex:1; overflow-y:auto;">
+          <span style="color:#5a5a5a; font-size:11px;">VARIANTS</span>
+          <div id="studio-variants" style="display:flex; flex-direction:column; gap:8px; margin-top:4px;"></div>
+        </div>
+      </div>
+      <!-- Right: settings -->
+      <div style="width:160px; border-left:1px solid #3c3c3c; padding:12px; display:flex; flex-direction:column; gap:8px;">
+        <span style="color:#5a5a5a; font-size:11px;">SETTINGS</span>
+        <label style="color:#888; font-size:12px;">temp
+          <input id="studio-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:100%; background:#252526; border:1px solid #3c3c3c; color:#cccccc; padding:4px; border-radius:2px; font-size:12px;">
+        </label>
+        <label style="color:#888; font-size:12px;">top_k
+          <input id="studio-topk" type="number" value="40" min="1" max="200" style="width:100%; background:#252526; border:1px solid #3c3c3c; color:#cccccc; padding:4px; border-radius:2px; font-size:12px;">
+        </label>
+        <label style="color:#888; font-size:12px;">max tokens
+          <input id="studio-maxtok" type="number" value="1000" min="10" max="4000" style="width:100%; background:#252526; border:1px solid #3c3c3c; color:#cccccc; padding:4px; border-radius:2px; font-size:12px;">
+        </label>
+        <label style="color:#888; font-size:12px;">count
+          <input id="studio-count" type="number" value="1" min="1" max="10" style="width:100%; background:#252526; border:1px solid #3c3c3c; color:#cccccc; padding:4px; border-radius:2px; font-size:12px;">
+        </label>
+        <div style="flex:1;"></div>
+        <button id="studio-gen-btn" onclick="studioGenerate()" style="background:#0e639c; border:none; color:#fff; padding:8px; border-radius:2px; cursor:pointer; font-size:13px; width:100%;">+ Generate</button>
+        <button id="studio-apply-btn" onclick="studioApply()" disabled style="background:#2ea043; border:none; color:#fff; padding:8px; border-radius:2px; cursor:pointer; font-size:13px; width:100%; opacity:0.5;">Accept</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

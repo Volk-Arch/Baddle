@@ -139,3 +139,9 @@ text and KV cache. In-process mode only.
 > ⚠️ **LM Studio**: set **"Only Keep Last JIT Loaded Model"** to OFF,
 > otherwise the model unloads between chat and embedding requests. Or use
 > Jaccard similarity instead of Embedding — it requires no separate API call.
+
+- **Generation Studio** — universal modal for generating with variant selection. Rephrase, Elaborate, Expand, Collapse — all through Studio with temp/top_k/max_tokens settings, batch generation of N variants, compare and apply the best
+
+---
+
+📄 [Vision & Architecture](VISION.md) · 📋 [TODO](TODO.md) · 📝 [Article (AI perspective)](Article/ARTICLE_AI_VIEW.md)
