@@ -558,6 +558,12 @@
             <button onclick="graphDetailToChat()" class="px-2 py-1 text-blue-400 hover:text-blue-300 text-xs border border-blue-800" title="Send this thought to chat as context">&rarr; Chat</button>
             <button onclick="graphDetailClose()" class="px-2 py-1 text-neutral-500 hover:text-white text-xs">&times; Close</button>
           </div>
+          <div id="graph-detail-confidence" class="flex items-center gap-2 mb-2">
+            <span class="text-neutral-400 text-xs">Confidence:</span>
+            <input id="graph-detail-conf-slider" type="range" min="0" max="100" value="50" step="1"
+              class="w-24 h-1 accent-blue-500" oninput="graphConfidencePreview(this.value)">
+            <span id="graph-detail-conf-value" class="text-xs text-neutral-300 w-8">50%</span>
+          </div>
           <div id="graph-detail-source" class="text-xs mb-2" style="display:none;">
             <span class="text-violet-400">↳ from:</span> <span id="graph-detail-source-text" class="text-violet-300"></span>
           </div>
@@ -1909,13 +1915,26 @@
         svg.appendChild(halo);
       }
 
-      // Entropy border (green=confident, yellow=medium, red=uncertain)
-      const nodeEntData = (graphData.entropies && graphData.entropies[i]) || {};
-      const nodeUnc = nodeEntData.unc || 0;
-      const entNorm = Math.min(1, nodeUnc * 3);
-      const entR = Math.round(entNorm < 0.5 ? entNorm * 2 * 255 : 255);
-      const entG = Math.round(entNorm < 0.5 ? 255 : (1 - (entNorm - 0.5) * 2) * 255);
-      const entColor = isCollapseSelected ? '#f43f5e' : (isTopicRoot || nodeUnc === 0) ? '#e2e8f0' : `rgb(${entR},${entG},50)`;
+      // Confidence border (grey=low → blue=medium → green=high)
+      const nodeConf = (graphData.confidences && graphData.confidences[i] != null) ? graphData.confidences[i] : 0.5;
+      let confColor;
+      if (isCollapseSelected) {
+        confColor = '#f43f5e';
+      } else if (isTopicRoot) {
+        confColor = '#e2e8f0';
+      } else if (nodeConf < 0.33) {
+        // Low: grey → blue
+        const t = nodeConf / 0.33;
+        confColor = `rgb(${Math.round(148 - t * 88)},${Math.round(163 - t * 33)},${Math.round(184 + t * 71)})`;
+      } else if (nodeConf < 0.66) {
+        // Medium: blue → teal
+        const t = (nodeConf - 0.33) / 0.33;
+        confColor = `rgb(${Math.round(60 - t * 44)},${Math.round(130 + t * 53)},${Math.round(255 - t * 124)})`;
+      } else {
+        // High: teal → green
+        const t = (nodeConf - 0.66) / 0.34;
+        confColor = `rgb(${Math.round(16 + t * 0)},${Math.round(183 + t * 2)},${Math.round(131 - t * 2)})`;
+      }
 
       if (isTopicRoot) {
         // Topic root: diamond shape
@@ -1937,7 +1956,7 @@
         rect.setAttribute('width', size * 2); rect.setAttribute('height', size * 2);
         rect.setAttribute('rx', 4); rect.setAttribute('ry', 4);
         rect.setAttribute('fill', color);
-        rect.setAttribute('stroke', isSelected ? '#facc15' : entColor);
+        rect.setAttribute('stroke', isSelected ? '#facc15' : confColor);
         rect.setAttribute('stroke-width', isSelected ? 3 : (isCollapseSelected ? 3 : 1.5));
         rect.style.cursor = 'pointer';
         if (isDeadEnd) rect.setAttribute('opacity', 0.45);
@@ -1949,7 +1968,7 @@
         circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
         circle.setAttribute('r', isSelected ? 14 : (ci >= 0 ? 11 : 8));
         circle.setAttribute('fill', color);
-        circle.setAttribute('stroke', isSelected ? '#facc15' : entColor);
+        circle.setAttribute('stroke', isSelected ? '#facc15' : confColor);
         circle.setAttribute('stroke-width', isSelected ? 3 : (isCollapseSelected ? 3 : 1.5));
         circle.style.cursor = 'pointer';
         if (isDeadEnd) circle.setAttribute('opacity', 0.45);
@@ -2702,6 +2721,12 @@
     document.getElementById('graph-detail-edit-wrap').style.display = 'none';
     document.getElementById('graph-detail-view').style.display = '';
     document.getElementById('graph-detail-edit-btn').textContent = 'Edit';
+    // Confidence slider
+    const conf = (graphData.confidences && graphData.confidences[idx] != null) ? graphData.confidences[idx] : 0.5;
+    const slider = document.getElementById('graph-detail-conf-slider');
+    slider.value = Math.round(conf * 100);
+    document.getElementById('graph-detail-conf-value').textContent = Math.round(conf * 100) + '%';
+    slider.dataset.nodeIdx = idx;
     // Color dot by cluster
     const nodeCluster = new Array(graphData.thoughts.length).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(j => { nodeCluster[j] = ci; }));
@@ -2737,6 +2762,33 @@
     chatContextAdd(text, 'graph');
     setMode('chat');
   }
+
+  function graphConfidencePreview(val) {
+    document.getElementById('graph-detail-conf-value').textContent = val + '%';
+  }
+  // Save confidence on slider change (fires when slider is released with new value)
+  document.addEventListener('DOMContentLoaded', () => {
+    const slider = document.getElementById('graph-detail-conf-slider');
+    if (slider) {
+      slider.addEventListener('change', async () => {
+        const idx = parseInt(slider.dataset.nodeIdx);
+        const value = parseInt(slider.value) / 100;
+        if (isNaN(idx) || idx < 0) return;
+        // Update local data immediately
+        if (!graphData.confidences) graphData.confidences = [];
+        while (graphData.confidences.length < graphData.thoughts.length) graphData.confidences.push(0.5);
+        graphData.confidences[idx] = value;
+        // Send to backend
+        await fetch('/graph/confidence', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({index: idx, value: value})
+        });
+        // Re-render to update node color
+        graphRenderSvg();
+      });
+    }
+  });
 
   function graphDetailClose() {
     graphSelectedNode = -1;
