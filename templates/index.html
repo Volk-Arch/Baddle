@@ -1461,7 +1461,7 @@
 
   // ── Graph thinking ────────────────────────────────────────────────────────
   const graphClusterColors = ['#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316'];
-  let graphData = { thoughts: [], edges: [], clusters: [] };
+  let graphData = { nodes: [], edges: [], clusters: [] };
   let graphSelectedNode = -1;
   let graphLinkMode = false;  // toggle for manual linking
   let graphManualCollapseMode = false;
@@ -1503,16 +1503,13 @@
     graphSelectedNode = -1;
     // Sync backend state with full undo data
     const syncData = {
-      thoughts: state.data.thoughts,
+      nodes: state.data.nodes,
       edges: state.data.edges || [],
       clusters: state.data.clusters || [],
       manual_links: state.data.manual_links || [],
       manual_unlinks: state.data.manual_unlinks || [],
       directed_edges: state.directed || [],
       hub_nodes: [...(state.hubs || [])],
-      entropies: state.data.entropies || [],
-      depths: state.data.depths || [],
-      topics: state.data.topics || [],
       ...graphGetParams()
     };
     const r = await fetch('/graph/sync', {
@@ -1549,7 +1546,7 @@
     graphRenderSvg();
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
-    document.getElementById('graph-actions-bar').style.display = graphData.thoughts.length ? '' : 'none';
+    document.getElementById('graph-actions-bar').style.display = graphData.nodes.length ? '' : 'none';
   }
 
   function graphGetDimensions() {
@@ -1559,7 +1556,7 @@
 
   function graphInitPositions() {
     const { W, H } = graphGetDimensions();
-    const n = graphData.thoughts.length;
+    const n = graphData.nodes.length;
     const old = graphNodePositions;
     const positions = [];
 
@@ -1569,7 +1566,7 @@
       } else {
         let nx, ny;
         if (graphFlowMode) {
-          const d = (graphData.depths || [])[i] || 0;
+          const d = (graphData.nodes[i] && graphData.nodes[i].depth) || 0;
           nx = _flowColX(d);
           ny = H / 2 + (Math.random() - 0.5) * H * 0.5;
         } else {
@@ -1611,13 +1608,13 @@
     const nodes = graphNodePositions;
     const n = nodes.length;
     if (n === 0) return;
-    const depths = graphData.depths || [];
     const pad = 25;
 
     // 1. Set X to column, keep existing Y for fixed nodes
     for (let i = 0; i < n; i++) {
       if (!nodes[i].fixed) {
-        nodes[i].x = _flowColX(depths[i] || 0);
+        const nodeDepth = (graphData.nodes[i] && graphData.nodes[i].depth) || 0;
+        nodes[i].x = _flowColX(nodeDepth);
       }
     }
 
@@ -1628,7 +1625,7 @@
     // 3. Group by depth column
     const byDepth = {};
     for (let i = 0; i < n; i++) {
-      const d = depths[i] || 0;
+      const d = (graphData.nodes[i] && graphData.nodes[i].depth) || 0;
       if (!byDepth[d]) byDepth[d] = [];
       byDepth[d].push(i);
     }
@@ -1772,14 +1769,14 @@
     const svg = document.getElementById('graph-svg');
     svg.innerHTML = '';
     graphApplyViewBox();
-    const thoughts = graphData.thoughts;
+    const nodes = graphData.nodes;
     const positions = graphNodePositions;
-    if (!thoughts.length || !positions.length) return;
+    if (!nodes.length || !positions.length) return;
 
-    const nodeCluster = new Array(thoughts.length).fill(-1);
+    const nodeCluster = new Array(nodes.length).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
     const clusterColors = graphClusterColors;
-    const depths = graphData.depths || [];
+    const depths = nodes.map(n => n.depth || 0);
     const maxDepth = Math.max(0, ...depths);
 
     // Draw cluster hulls
@@ -1896,7 +1893,7 @@
       const isSelected = i === graphSelectedNode;
       const isCollapsed = graphCollapsedNodes.has(i);
       const isHub = graphHubNodes.has(i);
-      const nodeDepth = (graphData.depths || [])[i];
+      const nodeDepth = (graphData.nodes[i] && graphData.nodes[i].depth);
       const isTopicRoot = nodeDepth === -1;
       const isDeadEnd = graphFlowMode && !hasChildren.has(i) && nodeDepth > 0;
       const isCollapseSelected = graphManualCollapseMode && graphManualCollapseSet.has(i);
@@ -1916,7 +1913,7 @@
       }
 
       // Confidence border (grey=low → blue=medium → green=high)
-      const nodeConf = (graphData.confidences && graphData.confidences[i] != null) ? graphData.confidences[i] : 0.5;
+      const nodeConf = (graphData.nodes[i] && graphData.nodes[i].confidence != null) ? graphData.nodes[i].confidence : 0.5;
       let confColor;
       if (isCollapseSelected) {
         confColor = '#f43f5e';
@@ -1991,7 +1988,7 @@
         const lx = p.x + nodeR + 6;
         label.setAttribute('text-anchor', 'start');
         const maxChars = 35;
-        const text = thoughts[i];
+        const text = nodes[i].text;
         if (text.length <= maxChars) {
           label.setAttribute('x', lx);
           label.setAttribute('y', p.y + 4);
@@ -2023,7 +2020,7 @@
         label.setAttribute('y', p.y - (isCollapsed ? 20 : 16));
         label.setAttribute('text-anchor', 'middle');
         const maxLen = 25;
-        const short = thoughts[i].length > maxLen ? thoughts[i].slice(0, maxLen - 1) + '...' : thoughts[i];
+        const short = nodes[i].text.length > maxLen ? nodes[i].text.slice(0, maxLen - 1) + '...' : nodes[i].text;
         label.textContent = short;
       }
       svg.appendChild(label);
@@ -2169,11 +2166,12 @@
       if (!tooltip) return;
       if (target && graphDragIdx < 0 && !graphPanning) {
         const idx = parseInt(target.dataset.nodeIdx);
-        if (idx >= 0 && idx < graphData.thoughts.length) {
-          const entData = (graphData.entropies && graphData.entropies[idx]) || {};
+        if (idx >= 0 && idx < graphData.nodes.length) {
+          const node = graphData.nodes[idx];
+          const entData = (node && node.entropy) || {};
           const avg = (entData.avg || 0).toFixed(2);
           const unc = ((entData.unc || 0) * 100).toFixed(0);
-          tooltip.textContent = graphData.thoughts[idx] + (entData.avg ? '\n[ent: ' + avg + '  unc: ' + unc + '%]' : '');
+          tooltip.textContent = node.text + (entData.avg ? '\n[ent: ' + avg + '  unc: ' + unc + '%]' : '');
           const rect = svg.getBoundingClientRect();
           tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
           tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
@@ -2194,7 +2192,7 @@
       if (!target) return;
       e.preventDefault();
       const idx = parseInt(target.dataset.nodeIdx);
-      if (isNaN(idx) || idx < 0 || idx >= graphData.thoughts.length) return;
+      if (isNaN(idx) || idx < 0 || idx >= graphData.nodes.length) return;
       graphSelectedNode = idx;
       graphRenderSvg();
       graphShowDetail(idx);
@@ -2255,17 +2253,17 @@
 
   function graphUpdateThoughtsList() {
     const div = document.getElementById('graph-thoughts');
-    const thoughts = graphData.thoughts;
-    if (!thoughts.length) {
+    const nodes = graphData.nodes;
+    if (!nodes.length) {
       div.innerHTML = '<span style="color:#5a5a5a;font-size:12px;">Thoughts will appear here...</span>';
       return;
     }
-    const nodeCluster = new Array(thoughts.length).fill(-1);
+    const nodeCluster = new Array(nodes.length).fill(-1);
     const clusterColors = graphClusterColors;
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
 
     // Sort indices by cluster (clustered first, then unclustered)
-    const sorted = thoughts.map((_, i) => i);
+    const sorted = nodes.map((_, i) => i);
     sorted.sort((a, b) => {
       const ca = nodeCluster[a], cb = nodeCluster[b];
       if (ca === cb) return a - b;
@@ -2275,12 +2273,12 @@
     });
 
     div.innerHTML = sorted.map(i => {
-      const t = thoughts[i];
+      const t = nodes[i].text;
       const ci = nodeCluster[i];
       const dot = ci >= 0
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
         : '<span style="color:#64748b">&#9675;</span> ';
-      const entData = (graphData.entropies && graphData.entropies[i]) || {};
+      const entData = (nodes[i] && nodes[i].entropy) || {};
       let entBadge = '';
       if (entData.avg) {
         const unc = entData.unc || 0;
@@ -2371,9 +2369,8 @@
   function graphSelectAll() {
     graphManualCollapseMode = true;
     graphManualCollapseSet.clear();
-    const depths = graphData.depths || [];
-    (graphData.thoughts || []).forEach((_, i) => {
-      if (i < depths.length && depths[i] === -1) return; // skip topic roots
+    (graphData.nodes || []).forEach((node, i) => {
+      if (node.depth === -1) return; // skip topic roots
       graphManualCollapseSet.add(i);
     });
     const btn = document.getElementById('graph-btn-manual-select');
@@ -2386,18 +2383,16 @@
 
   function graphSendToChat() {
     if (graphManualCollapseSet.size === 0) { alert('Select at least 1 node'); return; }
-    const thoughts = graphData.thoughts || [];
+    const nodes = graphData.nodes || [];
     const edges = graphData.edges || [];
     const clusters = graphData.clusters || [];
-    const topics = graphData.topics || [];
-    const depths = graphData.depths || [];
     const selected = [...graphManualCollapseSet].sort((a, b) => a - b);
-    const texts = selected.map(i => thoughts[i]).filter(Boolean);
+    const texts = selected.map(i => nodes[i] && nodes[i].text).filter(Boolean);
 
     // Store structure for structured context mode
     window._graphChatContext = texts;
     window._graphChatIndices = selected;
-    window._graphChatStructure = { thoughts, edges, clusters, topics, depths, directed: graphDirectedEdges };
+    window._graphChatStructure = { nodes, edges, clusters, directed: graphDirectedEdges };
 
     // Add each node to context sidebar
     texts.forEach(t => chatContextAdd(t, 'graph'));
@@ -2529,7 +2524,7 @@
     // Group by topic
     const topicGroups = new Map(); // topic → [clusterIdx]
     clusterMap.forEach((nodes, ci) => {
-      const topic = nodes.length > 0 && nodes[0] < s.topics.length ? s.topics[nodes[0]] : '?';
+      const topic = nodes.length > 0 && nodes[0] < s.nodes.length ? s.nodes[nodes[0]].topic : '?';
       if (!topicGroups.has(topic)) topicGroups.set(topic, []);
       topicGroups.get(topic).push(ci);
     });
@@ -2540,9 +2535,10 @@
         const nodes = clusterMap.get(ci);
         if (ci >= 0) lines.push('\nCluster ' + (ci + 1) + ':');
         nodes.forEach(ni => {
-          const depth = ni < s.depths.length ? s.depths[ni] : 0;
+          const nodeData = ni < s.nodes.length ? s.nodes[ni] : null;
+          const depth = nodeData ? (nodeData.depth || 0) : 0;
           const depthLabel = depth === -1 ? ' [root]' : depth > 0 ? ' [d' + depth + ']' : '';
-          lines.push('  [' + ni + '] ' + (s.thoughts[ni] || '?') + depthLabel);
+          lines.push('  [' + ni + '] ' + (nodeData ? nodeData.text : '?') + depthLabel);
         });
         // Edges within this cluster between selected nodes
         const clEdges = (s.edges || []).filter(e =>
@@ -2577,7 +2573,7 @@
   async function graphDoManualCollapse() {
     if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
     const cluster = [...graphManualCollapseSet];
-    const ideas = cluster.map(i => graphData.thoughts[i]);
+    const ideas = cluster.map(i => graphData.nodes[i].text);
     graphManualCollapseMode = false;
     graphManualCollapseSet.clear();
     document.getElementById('graph-btn-manual-select').style.background = '';
@@ -2635,7 +2631,7 @@
 
   let _recalcTimer = null;
   async function graphRecalcEdges() {
-    if (!graphData.thoughts.length) return;
+    if (!graphData.nodes.length) return;
     clearTimeout(_recalcTimer);
     _recalcTimer = setTimeout(async () => {
       const r = await fetch('/graph/recalc', {
@@ -2652,7 +2648,7 @@
   async function graphNodeClick(i) {
     // Manual collapse mode — toggle selection
     if (graphManualCollapseMode) {
-      const nodeDepth = (graphData.depths || [])[i];
+      const nodeDepth = (graphData.nodes[i] && graphData.nodes[i].depth);
       if (nodeDepth === -1) return;  // can't collapse topic root
       if (graphManualCollapseSet.has(i)) {
         graphManualCollapseSet.delete(i);
@@ -2688,13 +2684,14 @@
 
   function graphShowDetail(idx) {
     const panel = document.getElementById('graph-detail');
-    if (idx < 0 || idx >= graphData.thoughts.length) {
+    if (idx < 0 || idx >= graphData.nodes.length) {
       panel.style.display = 'none';
       return;
     }
     panel.style.display = '';
-    const text = graphData.thoughts[idx];
-    const entData = (graphData.entropies && graphData.entropies[idx]) || {};
+    const node = graphData.nodes[idx];
+    const text = node.text;
+    const entData = (node && node.entropy) || {};
     const detailView = document.getElementById('graph-detail-view');
     const heatmapOn = document.getElementById('heatmap-toggle').checked;
     if (heatmapOn && entData.tokens && entData.tokens.length) {
@@ -2722,15 +2719,15 @@
     document.getElementById('graph-detail-view').style.display = '';
     document.getElementById('graph-detail-edit-btn').textContent = 'Edit';
     // Confidence slider
-    const conf = (graphData.confidences && graphData.confidences[idx] != null) ? graphData.confidences[idx] : 0.5;
+    const conf = (node && node.confidence != null) ? node.confidence : 0.5;
     const slider = document.getElementById('graph-detail-conf-slider');
     slider.value = Math.round(conf * 100);
     document.getElementById('graph-detail-conf-value').textContent = Math.round(conf * 100) + '%';
     slider.dataset.nodeIdx = idx;
     // Color dot by cluster
-    const nodeCluster = new Array(graphData.thoughts.length).fill(-1);
-    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(j => { nodeCluster[j] = ci; }));
-    const ci = nodeCluster[idx];
+    const nodeClusterArr = new Array(graphData.nodes.length).fill(-1);
+    (graphData.clusters || []).forEach((cl, ci) => cl.forEach(j => { nodeClusterArr[j] = ci; }));
+    const ci = nodeClusterArr[idx];
     const color = ci >= 0 ? graphClusterColors[ci % graphClusterColors.length] : '#64748b';
     document.getElementById('graph-detail-dot').style.color = color;
     // Show source (parent) if this node was created via expand/elaborate
@@ -2738,8 +2735,8 @@
     const sourceText = document.getElementById('graph-detail-source-text');
     let parentIdx = -1;
     graphDirectedEdges.forEach(([from, to]) => { if (to === idx) parentIdx = from; });
-    if (parentIdx >= 0 && parentIdx < graphData.thoughts.length) {
-      const pt = graphData.thoughts[parentIdx];
+    if (parentIdx >= 0 && parentIdx < graphData.nodes.length) {
+      const pt = graphData.nodes[parentIdx].text;
       sourceText.textContent = pt;
       sourceDiv.style.display = '';
     } else {
@@ -2749,13 +2746,12 @@
 
   function graphDetailToChat() {
     const idx = graphSelectedNode;
-    if (idx < 0 || idx >= graphData.thoughts.length) return;
-    const text = graphData.thoughts[idx];
+    if (idx < 0 || idx >= graphData.nodes.length) return;
+    const text = graphData.nodes[idx].text;
     // Store structure for structured mode
     window._graphChatStructure = window._graphChatStructure || {
-      thoughts: graphData.thoughts, edges: graphData.edges,
-      clusters: graphData.clusters, topics: graphData.topics,
-      depths: graphData.depths, directed: graphDirectedEdges
+      nodes: graphData.nodes, edges: graphData.edges,
+      clusters: graphData.clusters, directed: graphDirectedEdges
     };
     window._graphChatIndices = [idx];
     window._graphChatContext = [text];
@@ -2775,9 +2771,7 @@
         const value = parseInt(slider.value) / 100;
         if (isNaN(idx) || idx < 0) return;
         // Update local data immediately
-        if (!graphData.confidences) graphData.confidences = [];
-        while (graphData.confidences.length < graphData.thoughts.length) graphData.confidences.push(0.5);
-        graphData.confidences[idx] = value;
+        if (graphData.nodes[idx]) graphData.nodes[idx].confidence = value;
         // Send to backend
         await fetch('/graph/confidence', {
           method: 'POST',
@@ -2805,7 +2799,7 @@
     const wrap = document.getElementById('graph-detail-edit-wrap');
     const btn = document.getElementById('graph-detail-edit-btn');
     if (wrap.style.display === 'none') {
-      document.getElementById('graph-detail-textarea').value = graphData.thoughts[idx];
+      document.getElementById('graph-detail-textarea').value = graphData.nodes[idx].text;
       wrap.style.display = 'flex';
       view.style.display = 'none';
       btn.textContent = 'Cancel';
@@ -2837,7 +2831,7 @@
     });
     const d2 = await r2.json();
     if (d2.error) { alert(d2.error); return; }
-    graphSelectedNode = d2.thoughts.length - 1;
+    graphSelectedNode = d2.nodes.length - 1;
     graphUpdateView(d2);
     graphShowDetail(graphSelectedNode);
   }
@@ -2846,7 +2840,7 @@
     // Generate child ideas branching from this thought
     const idx = graphSelectedNode;
     if (idx < 0) return;
-    const thought = graphData.thoughts[idx];
+    const thought = graphData.nodes[idx].text;
     const btn = event.target;
     btn.disabled = true; btn.textContent = '...';
     const r = await fetch('/graph/expand', {
@@ -2898,7 +2892,7 @@
 
     const r = await fetch('/graph/think', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic, n, existing: graphData.thoughts, ...graphGetParams() })
+      body: JSON.stringify({ topic, n, existing: graphData.nodes.map(nd => nd.text), ...graphGetParams() })
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
@@ -2934,7 +2928,7 @@
     const clusters = graphData.clusters || [];
     if (clusterIdx >= clusters.length) return;
     const cluster = clusters[clusterIdx];
-    const ideas = cluster.map(i => graphData.thoughts[i]);
+    const ideas = cluster.map(i => graphData.nodes[i].text);
     openStudio('collapse_preview', { ideas, cluster });
   }
 
@@ -2985,7 +2979,7 @@
   function graphExport() {
     const state = {
       topic: document.getElementById('graph-topic').value,
-      thoughts: graphData.thoughts,
+      nodes: graphData.nodes,
       edges: graphData.edges,
       clusters: graphData.clusters,
       positions: graphNodePositions,
@@ -2994,9 +2988,6 @@
       directed: graphDirectedEdges,
       manual_links: graphData.manual_links || [],
       manual_unlinks: graphData.manual_unlinks || [],
-      entropies: graphData.entropies || [],
-      depths: graphData.depths || [],
-      topics: graphData.topics || [],
       threshold: parseFloat(document.getElementById('graph-threshold').value),
       sim_mode: document.getElementById('graph-sim-mode').value,
     };
@@ -3016,7 +3007,7 @@
     reader.onload = async function(e) {
       try {
         const state = JSON.parse(e.target.result);
-        if (!state.thoughts || !Array.isArray(state.thoughts)) {
+        if (!state.nodes || !Array.isArray(state.nodes)) {
           alert('Invalid graph file'); return;
         }
         // Restore topic and settings
@@ -3028,7 +3019,7 @@
         const r = await fetch('/graph/sync', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            thoughts: state.thoughts,
+            nodes: state.nodes,
             edges: state.edges || [],
             clusters: state.clusters || [],
             topic: state.topic || '',
@@ -3038,9 +3029,6 @@
             manual_unlinks: state.manual_unlinks || [],
             directed_edges: state.directed || [],
             hub_nodes: state.hubs || [],
-            entropies: state.entropies || [],
-            depths: state.depths || [],
-            topics: state.topics || [],
           })
         });
         const d = await r.json();
@@ -3055,7 +3043,7 @@
         graphUndoStack = [];
 
         // Ensure positions exist for all nodes
-        while (graphNodePositions.length < graphData.thoughts.length) {
+        while (graphNodePositions.length < graphData.nodes.length) {
           graphNodePositions.push({x: Math.random() * 600 + 50, y: Math.random() * 400 + 50, vx: 0, vy: 0});
         }
 
@@ -3074,7 +3062,7 @@
 
   function graphReset() {
     fetch('/graph/reset', { method: 'POST' });
-    graphData = { thoughts: [], edges: [], clusters: [] };
+    graphData = { nodes: [], edges: [], clusters: [] };
     graphSelectedNode = -1;
     graphLinkMode = false;
     graphFlowMode = false;
@@ -3148,19 +3136,19 @@
     const instruction = document.getElementById('studio-instruction');
 
     if (mode === 'rephrase') {
-      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      source.textContent = (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '';
       instruction.placeholder = 'Instruction: "make shorter", "translate to English", "add specifics"...';
     } else if (mode === 'elaborate_preview') {
-      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      source.textContent = (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '';
       instruction.placeholder = 'Direction to elaborate...';
     } else if (mode === 'expand_preview') {
-      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      source.textContent = (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '';
       instruction.placeholder = 'Focus for branching...';
     } else if (mode === 'collapse_preview') {
       // source already set by openStudio for collapse
       instruction.placeholder = 'Collapse instruction...';
     } else {
-      source.textContent = graphData.thoughts[studioNodeIdx] || '';
+      source.textContent = (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '';
       instruction.placeholder = 'Instruction...';
     }
     studioMode = mode;
@@ -3190,7 +3178,7 @@
 
     const body = {
       mode: studioMode,
-      source_text: graphData.thoughts[studioNodeIdx] || '',
+      source_text: (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '',
       instruction,
       temp, top_k: topK, max_tokens: maxTok,
       lang: document.getElementById('lang-select') ? document.getElementById('lang-select').value : 'en',
@@ -3243,21 +3231,29 @@
               </div>`;
     }).join('');
 
-    const hasSelected = studioVariants.some(v => v._selected);
-    applyBtn.disabled = !hasSelected;
-    applyBtn.style.opacity = hasSelected ? '1' : '0.5';
+    const selectedCount = studioVariants.filter(v => v._selected).length;
+    applyBtn.disabled = !selectedCount;
+    applyBtn.style.opacity = selectedCount ? '1' : '0.5';
+    applyBtn.textContent = selectedCount > 1 ? `Accept (${selectedCount})` : 'Accept';
   }
 
   function studioSelectVariant(idx) {
-    studioVariants.forEach((v, i) => v._selected = (i === idx));
+    // Rephrase: single select (radio). Others: multi-select (toggle).
+    if (studioMode === 'rephrase') {
+      studioVariants.forEach((v, i) => v._selected = (i === idx));
+    } else {
+      studioVariants[idx]._selected = !studioVariants[idx]._selected;
+    }
     renderStudioVariants();
   }
 
   async function studioApply() {
     const selected = studioVariants.find(v => v._selected);
-    if (!selected) return;
+    const anySelected = studioVariants.some(v => v._selected);
+    if (!anySelected) return;
 
     if (studioMode === 'rephrase') {
+      if (!selected) return;
       // Apply rephrase: replace node text
       const r = await fetch('/graph/studio/apply-rephrase', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -3307,7 +3303,7 @@
         for (const r of [...removedSet].sort((a,b) => a-b)) { if (r < ci) newIdx--; }
         newCollapsed.add(newIdx);
       });
-      newCollapsed.add(d.thoughts.length - 1);
+      newCollapsed.add(d.nodes.length - 1);
       graphCollapsedNodes = newCollapsed;
       graphData = d;
       if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
@@ -3315,38 +3311,59 @@
       graphRenderSvg();
       graphUpdateThoughtsList();
       graphUpdateCollapseButtons();
-      const newIdx = d.thoughts.length - 1;
+      const newIdx = d.nodes.length - 1;
       if (newIdx >= 0) graphSelectFromList(newIdx);
     } else if (studioMode === 'elaborate_preview' && studioNodeIdx >= 0) {
-      // Add as elaboration — linked to parent with directed edge
-      const r = await fetch('/graph/studio/apply-child', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ index: studioNodeIdx, text: selected.text, type: 'elaborate', ...graphGetParams() })
-      });
-      const d = await r.json();
-      if (d.error) { alert(d.error); return; }
+      // Add all selected as elaborations — linked to parent with directed edge
+      const allSelected = studioVariants.filter(v => v._selected);
       graphSaveUndo();
-      graphUpdateView(d);
+      for (const sel of allSelected) {
+        const r = await fetch('/graph/studio/apply-child', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ index: studioNodeIdx, text: sel.text, type: 'elaborate', ...graphGetParams() })
+        });
+        const d = await r.json();
+        if (d.error) { alert(d.error); continue; }
+        graphData = d;
+        if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+        if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+      }
+      graphDrawSvg(true);
+      graphUpdateThoughtsList();
     } else if (studioMode === 'expand_preview' && studioNodeIdx >= 0) {
-      // Add as expansion — linked to parent with directed edge
-      const r = await fetch('/graph/studio/apply-child', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ index: studioNodeIdx, text: selected.text, type: 'expand', ...graphGetParams() })
-      });
-      const d = await r.json();
-      if (d.error) { alert(d.error); return; }
+      // Add all selected as expansions — linked to parent with directed edge
+      const allSelected = studioVariants.filter(v => v._selected);
       graphSaveUndo();
-      graphUpdateView(d);
+      for (const sel of allSelected) {
+        const r = await fetch('/graph/studio/apply-child', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ index: studioNodeIdx, text: sel.text, type: 'expand', ...graphGetParams() })
+        });
+        const d = await r.json();
+        if (d.error) { alert(d.error); continue; }
+        graphData = d;
+        if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+        if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+      }
+      graphDrawSvg(true);
+      graphUpdateThoughtsList();
     } else {
-      // Freeform and others: add as unlinked thought
-      const r = await fetch('/graph/add', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ text: selected.text, ...graphGetParams() })
-      });
-      const d = await r.json();
-      if (d.error) { alert(d.error); return; }
+      // Freeform and others: add all selected as unlinked thoughts
+      const allSelected = studioVariants.filter(v => v._selected);
       graphSaveUndo();
-      graphUpdateView(d);
+      for (const sel of allSelected) {
+        const r = await fetch('/graph/add', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ text: sel.text, ...graphGetParams() })
+        });
+        const d = await r.json();
+        if (d.error) { alert(d.error); continue; }
+        graphData = d;
+        if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+        if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+      }
+      graphDrawSvg(true);
+      graphUpdateThoughtsList();
     }
     closeStudio();
   }

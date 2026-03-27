@@ -45,7 +45,8 @@ Two modes of thinking, implemented literally:
 - **Scroll wheel** — zoom graph, **drag background** — pan
 - **Ctrl+Z** — undo, **Delete** — remove node, **Esc** — deselect
 - **⟳ Layout** — recalculate node positions
-- **↓ Save / ↑ Load** — export/import graph as JSON (thoughts, edges, positions, clusters)
+- **↓ Save / ↑ Load** — export/import graph as JSON (nodes as objects, edges, positions, clusters)
+- **Confidence** — 0-100% confidence slider on each node, border color reflects certainty
 - **temp / top_k** — tune generation parameters directly in the graph interface
 - **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
 - **Collapse ▾** — short (paragraph), long (detailed essay), or custom token limit

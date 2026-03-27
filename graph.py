@@ -56,21 +56,61 @@ _PROMPTS = {
 def _p(lang: str, key: str) -> str:
     return _PROMPTS.get(lang, _PROMPTS["en"]).get(key, _PROMPTS["en"][key])
 
-def _ensure_lists(thoughts: list, topic: str = ""):
-    """Ensure entropies/depths/topics/confidences lists are synced with thoughts length."""
-    ent_list = _graph.setdefault("entropies", [])
-    depth_list = _graph.setdefault("depths", [])
-    topics_list = _graph.setdefault("topics", [])
-    conf_list = _graph.setdefault("confidences", [])
-    while len(ent_list) < len(thoughts):
-        ent_list.append({"avg": 0.0, "unc": 0.0})
-    while len(depth_list) < len(thoughts):
-        depth_list.append(0)
-    while len(topics_list) < len(thoughts):
-        topics_list.append(topic)
-    while len(conf_list) < len(thoughts):
-        conf_list.append(0.5)
-    return ent_list, depth_list, topics_list, conf_list
+
+# ── node helpers ─────────────────────────────────────────────────────────────
+
+def _make_node(id: int, text: str, depth: int = 0, topic: str = "",
+               entropy: dict | None = None, confidence: float = 0.5) -> dict:
+    """Create a node dict with all required fields."""
+    return {
+        "id": id,
+        "text": text,
+        "entropy": entropy or {"avg": 0.0, "unc": 0.0},
+        "depth": depth,
+        "topic": topic,
+        "confidence": round(confidence, 2),
+    }
+
+
+def _ensure_node_fields(nodes: list[dict]):
+    """Ensure each node dict has all required fields."""
+    for i, node in enumerate(nodes):
+        node.setdefault("id", i)
+        node.setdefault("text", "")
+        node.setdefault("entropy", {"avg": 0.0, "unc": 0.0})
+        node.setdefault("depth", 0)
+        node.setdefault("topic", "")
+        node.setdefault("confidence", 0.5)
+
+
+def _get_texts(nodes: list[dict] | None = None) -> list[str]:
+    """Return list of texts from nodes (for similarity, prompts)."""
+    if nodes is None:
+        nodes = _graph["nodes"]
+    return [n["text"] for n in nodes]
+
+
+def _add_node(text: str, depth: int = 0, topic: str = "",
+              entropy: dict | None = None, confidence: float = 0.5) -> int:
+    """Create node with next id, append to graph, return new index."""
+    nodes = _graph["nodes"]
+    new_id = len(nodes)
+    nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence))
+    return new_id
+
+
+def _remove_node(idx: int):
+    """Remove node at idx, remap all edge indices and embeddings."""
+    nodes = _graph["nodes"]
+    if idx < 0 or idx >= len(nodes):
+        return
+    nodes.pop(idx)
+    # Reassign sequential ids
+    for i, node in enumerate(nodes):
+        node["id"] = i
+    # Remap edges and embeddings
+    _remap_edges([idx])
+
 
 # ── module-level model reference (set by init_graph) ─────────────────────────
 _llm = None
@@ -84,10 +124,19 @@ def init_graph(llm):
 
 # ── state ────────────────────────────────────────────────────────────────────
 def _fresh_graph():
-    return {"thoughts": [], "topic": "", "manual_links": [], "manual_unlinks": [],
-            "embeddings": [], "entropies": [], "depths": [], "topics": [],
-            "confidences": [],
-            "directed_edges": [], "hub_nodes": set()}
+    return {
+        "nodes": [],
+        "edges": {
+            "manual_links": [],
+            "manual_unlinks": [],
+            "directed": [],
+        },
+        "meta": {
+            "topic": "",
+            "hub_nodes": set(),
+        },
+        "embeddings": [],  # cache, not persisted
+    }
 
 _graph = _fresh_graph()
 
@@ -234,38 +283,38 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
 
 # ── similarity & clustering ──────────────────────────────────────────────────
 
-def _ensure_embeddings(thoughts: list[str]):
-    """Compute and cache embeddings for all thoughts."""
+def _ensure_embeddings(texts: list[str]):
+    """Compute and cache embeddings for all texts."""
     from api_backend import use_api_for, api_get_embedding
 
     cache = _graph.setdefault("embeddings", [])
-    while len(cache) < len(thoughts):
+    while len(cache) < len(texts):
         idx = len(cache)
         if use_api_for("embeddings"):
-            emb = api_get_embedding(thoughts[idx])
+            emb = api_get_embedding(texts[idx])
             cache.append(emb if emb else None)
         else:
-            emb = get_embedding(_llm, thoughts[idx])
+            emb = get_embedding(_llm, texts[idx])
             cache.append(emb.tolist() if len(emb) > 0 else None)
-    while len(cache) > len(thoughts):
+    while len(cache) > len(texts):
         cache.pop()
 
 
-def _jaccard(i: int, j: int, thoughts: list[str]) -> float:
+def _jaccard(i: int, j: int, texts: list[str]) -> float:
     """Jaccard similarity on token sets."""
     if _llm is None:
         # Fallback: word-level jaccard when no local model
-        toks_i = set(thoughts[i].lower().split())
-        toks_j = set(thoughts[j].lower().split())
+        toks_i = set(texts[i].lower().split())
+        toks_j = set(texts[j].lower().split())
     else:
-        toks_i = set(_llm.tokenize(thoughts[i].encode(), add_bos=False))
-        toks_j = set(_llm.tokenize(thoughts[j].encode(), add_bos=False))
+        toks_i = set(_llm.tokenize(texts[i].encode(), add_bos=False))
+        toks_j = set(_llm.tokenize(texts[j].encode(), add_bos=False))
     if not toks_i or not toks_j:
         return 0.0
     return len(toks_i & toks_j) / len(toks_i | toks_j)
 
 
-def _embedding_sim(i: int, j: int, thoughts: list[str]) -> float:
+def _embedding_sim(i: int, j: int, texts: list[str]) -> float:
     """Cosine similarity on embeddings."""
     cache = _graph.get("embeddings", [])
     emb_i = cache[i] if i < len(cache) else None
@@ -273,19 +322,20 @@ def _embedding_sim(i: int, j: int, thoughts: list[str]) -> float:
     if emb_i is not None and emb_j is not None:
         return cosine_similarity(np.array(emb_i, dtype=np.float32),
                                  np.array(emb_j, dtype=np.float32))
-    return _jaccard(i, j, thoughts)  # fallback
+    return _jaccard(i, j, texts)  # fallback
 
 
-def _compute_edges(thoughts: list[str], threshold: float, sim_mode: str = "embedding") -> list[dict]:
-    """Compute similarity edges between thoughts.
+def _compute_edges(nodes: list[dict], threshold: float, sim_mode: str = "embedding") -> list[dict]:
+    """Compute similarity edges between nodes.
 
     sim_mode: "embedding" (cosine on model embeddings), "jaccard" (token overlap), or "off" (no edges).
     """
+    texts = _get_texts(nodes)
     if sim_mode == "off":
         return []
     if sim_mode == "embedding":
         try:
-            _ensure_embeddings(thoughts)
+            _ensure_embeddings(texts)
             sim_fn = _embedding_sim
         except Exception as e:
             print(f"[graph] Embedding failed, falling back to Jaccard: {e}")
@@ -293,21 +343,20 @@ def _compute_edges(thoughts: list[str], threshold: float, sim_mode: str = "embed
     else:
         sim_fn = _jaccard
 
-    n = len(thoughts)
-    depth_list = _graph.get("depths", [])
-    manual_links = {(a, b) for a, b in _graph.get("manual_links", [])}
-    manual_unlinks = {(a, b) for a, b in _graph.get("manual_unlinks", [])}
+    n = len(nodes)
+    manual_links = {(a, b) for a, b in _graph["edges"].get("manual_links", [])}
+    manual_unlinks = {(a, b) for a, b in _graph["edges"].get("manual_unlinks", [])}
     edges = []
     for i in range(n):
-        if i < len(depth_list) and depth_list[i] == -1:
+        if nodes[i]["depth"] == -1:
             continue  # skip topic root nodes from similarity
         for j in range(i + 1, n):
-            if j < len(depth_list) and depth_list[j] == -1:
+            if nodes[j]["depth"] == -1:
                 continue
             pair = (i, j)
             if pair in manual_unlinks:
                 continue
-            sim = sim_fn(i, j, thoughts)
+            sim = sim_fn(i, j, texts)
             manual = pair in manual_links
             if sim >= threshold or manual:
                 edges.append({
@@ -343,13 +392,15 @@ def _find_clusters(n: int, edges: list[dict], threshold: float) -> list[list[int
     return clusters
 
 
-def _remap_manual_edges(removed_indices: list[int]):
-    """Remap manual link/unlink indices and embedding cache after nodes are removed."""
+def _remap_edges(removed_indices: list[int]):
+    """Remap all edge indices and embedding cache after nodes are removed."""
     removed = set(removed_indices)
     def remap(idx):
         return idx - sum(1 for r in removed if r < idx)
+
+    edges_dict = _graph["edges"]
     for key in ("manual_links", "manual_unlinks"):
-        old = _graph.get(key, [])
+        old = edges_dict.get(key, [])
         new = []
         for pair in old:
             a, b = pair
@@ -357,35 +408,38 @@ def _remap_manual_edges(removed_indices: list[int]):
                 continue
             a2, b2 = remap(a), remap(b)
             new.append([min(a2, b2), max(a2, b2)])
-        _graph[key] = new
+        edges_dict[key] = new
+
     # Remap directed edges (ordered: [from, to])
-    old_dir = _graph.get("directed_edges", [])
+    old_dir = edges_dict.get("directed", [])
     new_dir = []
     for pair in old_dir:
         a, b = pair
         if a in removed or b in removed:
             continue
         new_dir.append([remap(a), remap(b)])
-    _graph["directed_edges"] = new_dir
+    edges_dict["directed"] = new_dir
+
     # Remap hub nodes
-    old_hubs = _graph.get("hub_nodes", set())
-    _graph["hub_nodes"] = {remap(h) for h in old_hubs if h not in removed}
+    meta = _graph["meta"]
+    old_hubs = meta.get("hub_nodes", set())
+    meta["hub_nodes"] = {remap(h) for h in old_hubs if h not in removed}
+
+    # Remap embedding cache
     cache = _graph.get("embeddings", [])
     for i in sorted(removed, reverse=True):
         if i < len(cache):
             cache.pop(i)
 
 
-def _graph_response(thoughts, edges, clusters, **extra):
-    """Build standard graph response with directed edges and hub nodes."""
+def _graph_response(nodes, edges, clusters, **extra):
+    """Build standard graph response with node objects."""
     resp = {
-        "thoughts": thoughts, "edges": edges, "clusters": clusters,
-        "directed_edges": _graph.get("directed_edges", []),
-        "hub_nodes": list(_graph.get("hub_nodes", set())),
-        "entropies": _graph.get("entropies", []),
-        "depths": _graph.get("depths", []),
-        "topics": _graph.get("topics", []),
-        "confidences": _graph.get("confidences", []),
+        "nodes": nodes,
+        "edges": edges,
+        "clusters": clusters,
+        "directed_edges": _graph["edges"].get("directed", []),
+        "hub_nodes": list(_graph["meta"].get("hub_nodes", set())),
     }
     resp.update(extra)
     return jsonify(resp)
@@ -413,35 +467,37 @@ def graph_think():
     if not topic:
         return jsonify({"error": "empty topic"})
 
-    _graph["topic"] = topic
+    _graph["meta"]["topic"] = topic
     if not existing:
-        _graph["manual_links"] = []
-        _graph["manual_unlinks"] = []
+        _graph["nodes"] = []
+        _graph["edges"] = {"manual_links": [], "manual_unlinks": [], "directed": []}
+        _graph["meta"]["hub_nodes"] = set()
         _graph["embeddings"] = []
-        _graph["entropies"] = []
-        _graph["depths"] = []
-        _graph["topics"] = []
-        _graph["directed_edges"] = []
-        _graph["hub_nodes"] = set()
-    thoughts = list(existing)
-    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
+
+    nodes = _graph["nodes"]
+
+    # Restore nodes from existing data (sync from frontend)
+    if existing:
+        # Support both node dicts and legacy string lists
+        if existing and isinstance(existing[0], str):
+            _graph["nodes"] = [_make_node(i, t, topic=topic) for i, t in enumerate(existing)]
+        else:
+            _graph["nodes"] = list(existing)
+        nodes = _graph["nodes"]
+        _ensure_node_fields(nodes)
 
     # Add topic as root node (depth=-1) if not already present
     topic_idx = -1
-    for i, t in enumerate(thoughts):
-        if (depth_list[i] if i < len(depth_list) else 0) == -1 and t == topic:
+    for i, nd in enumerate(nodes):
+        if nd["depth"] == -1 and nd["text"] == topic:
             topic_idx = i
             break
     if topic_idx < 0:
-        thoughts.append(topic)
-        ent_list.append({"avg": 0.0, "unc": 0.0})
-        depth_list.append(-1)
-        topics_list.append(topic)
-        topic_idx = len(thoughts) - 1
+        topic_idx = _add_node(topic, depth=-1, topic=topic)
 
     new_thoughts = []
-    directed = _graph.setdefault("directed_edges", [])
-    manual_links = _graph.setdefault("manual_links", [])
+    directed = _graph["edges"]["directed"]
+    manual_links = _graph["edges"]["manual_links"]
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
@@ -451,13 +507,9 @@ def graph_think():
             continue
         if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
             continue
-        if any(t.lower() == ex.lower() for ex in thoughts):
+        if any(t.lower() == nd["text"].lower() for nd in nodes):
             continue
-        thoughts.append(t)
-        ent_list.append(ent)
-        depth_list.append(0)
-        topics_list.append(topic)
-        new_idx = len(thoughts) - 1
+        new_idx = _add_node(t, depth=0, topic=topic, entropy=ent)
         # Link topic root → new thought
         directed.append([topic_idx, new_idx])
         pair = [min(topic_idx, new_idx), max(topic_idx, new_idx)]
@@ -465,11 +517,10 @@ def graph_think():
             manual_links.append(pair)
         new_thoughts.append(t)
 
-    _graph["thoughts"] = thoughts
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
 
-    return _graph_response(thoughts, edges, clusters)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/recalc", methods=["POST"])
@@ -478,12 +529,12 @@ def graph_recalc():
     data = request.get_json(force=True)
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
-    thoughts = _graph["thoughts"]
-    if not thoughts:
+    nodes = _graph["nodes"]
+    if not nodes:
         return jsonify({"error": "no thoughts"})
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/add", methods=["POST"])
@@ -495,14 +546,11 @@ def graph_add():
     sim_mode = data.get("sim_mode", "embedding")
     if not text:
         return jsonify({"error": "empty thought"})
-    _graph["thoughts"].append(text)
-    _graph.setdefault("entropies", []).append({"avg": 0.0, "unc": 0.0})
-    _graph.setdefault("depths", []).append(0)
-    _graph.setdefault("topics", []).append("")
-    thoughts = _graph["thoughts"]
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    _add_node(text, depth=0, topic="")
+    nodes = _graph["nodes"]
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/remove", methods=["POST"])
@@ -512,26 +560,14 @@ def graph_remove():
     idx = int(data.get("index", -1))
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
-    thoughts = _graph["thoughts"]
-    if idx < 0 or idx >= len(thoughts):
+    nodes = _graph["nodes"]
+    if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
-    thoughts.pop(idx)
-    ent_list = _graph.get("entropies", [])
-    if idx < len(ent_list):
-        ent_list.pop(idx)
-    depth_list = _graph.get("depths", [])
-    if idx < len(depth_list):
-        depth_list.pop(idx)
-    topics_list = _graph.get("topics", [])
-    if idx < len(topics_list):
-        topics_list.pop(idx)
-    conf_list = _graph.get("confidences", [])
-    if idx < len(conf_list):
-        conf_list.pop(idx)
-    _remap_manual_edges([idx])
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    _remove_node(idx)
+    nodes = _graph["nodes"]
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/confidence", methods=["POST"])
@@ -541,13 +577,10 @@ def graph_confidence():
     idx = int(data.get("index", -1))
     value = float(data.get("value", 0.5))
     value = max(0.0, min(1.0, value))
-    thoughts = _graph["thoughts"]
-    if idx < 0 or idx >= len(thoughts):
+    nodes = _graph["nodes"]
+    if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
-    conf_list = _graph.setdefault("confidences", [])
-    while len(conf_list) < len(thoughts):
-        conf_list.append(0.5)
-    conf_list[idx] = round(value, 2)
+    nodes[idx]["confidence"] = round(value, 2)
     return jsonify({"ok": True, "index": idx, "confidence": value})
 
 
@@ -559,13 +592,13 @@ def graph_link():
     b = int(data.get("b", -1))
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
-    thoughts = _graph["thoughts"]
-    if a < 0 or b < 0 or a >= len(thoughts) or b >= len(thoughts) or a == b:
+    nodes = _graph["nodes"]
+    if a < 0 or b < 0 or a >= len(nodes) or b >= len(nodes) or a == b:
         return jsonify({"error": "invalid indices"})
     pair = (min(a, b), max(a, b))
-    manual_links = _graph.setdefault("manual_links", [])
-    manual_unlinks = _graph.setdefault("manual_unlinks", [])
-    edges_before = _compute_edges(thoughts, threshold, sim_mode)
+    manual_links = _graph["edges"]["manual_links"]
+    manual_unlinks = _graph["edges"]["manual_unlinks"]
+    edges_before = _compute_edges(nodes, threshold, sim_mode)
     has_edge = any(e["from"] == pair[0] and e["to"] == pair[1] for e in edges_before)
     if has_edge:
         if list(pair) in manual_links:
@@ -577,9 +610,9 @@ def graph_link():
             manual_unlinks.remove(list(pair))
         else:
             manual_links.append(list(pair))
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/collapse", methods=["POST"])
@@ -603,10 +636,10 @@ def graph_collapse():
     user_prompt = data.get("collapse_prompt", "").strip()
     no_merge = data.get("no_merge", False)
     collapse_override = data.get("collapse_override", "").strip()
-    thoughts = _graph["thoughts"]
-    topic = _graph["topic"]
+    nodes = _graph["nodes"]
+    topic = _graph["meta"]["topic"]
 
-    if not indices or not thoughts:
+    if not indices or not nodes:
         return jsonify({"error": "no cluster to collapse"})
 
     if collapse_override:
@@ -614,7 +647,7 @@ def graph_collapse():
         text = collapse_override
         ent = {"avg": 0, "unc": 0, "tokens": []}
     else:
-        cluster_texts = [thoughts[i] for i in indices if i < len(thoughts)]
+        cluster_texts = [nodes[i]["text"] for i in indices if i < len(nodes)]
         if collapse_mode == "long":
             system = _p(lang, "collapse_long")
             instruction = _p(lang, "write_long")
@@ -645,25 +678,18 @@ def graph_collapse():
                 ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
                 ent["unc"] = max(ent["unc"], ent2["unc"])
 
-    valid_indices = [i for i in indices if i < len(thoughts)]
-    ent_list = _graph.setdefault("entropies", [])
-    depth_list = _graph.setdefault("depths", [])
-    topics_list = _graph.setdefault("topics", [])
+    valid_indices = [i for i in indices if i < len(nodes)]
 
     if no_merge:
         # Test mode: add collapsed text as new node but keep originals
-        collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
-        min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
-        thoughts.append(text)
-        ent_list.append(ent)
-        depth_list.append(min_depth)
-        topics_list.append(collapsed_topic)
-        new_idx = len(thoughts) - 1
+        collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
+        min_depth = min((nodes[i]["depth"] for i in valid_indices), default=0)
+        new_idx = _add_node(text, depth=min_depth, topic=collapsed_topic, entropy=ent)
         # Link to topic root
-        directed = _graph.setdefault("directed_edges", [])
-        manual_links = _graph.setdefault("manual_links", [])
-        for i, t in enumerate(thoughts):
-            if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
+        directed = _graph["edges"]["directed"]
+        manual_links = _graph["edges"]["manual_links"]
+        for i, nd in enumerate(nodes):
+            if nd["depth"] == -1 and nd["topic"] == collapsed_topic:
                 directed.append([i, new_idx])
                 pair = [min(i, new_idx), max(i, new_idx)]
                 if pair not in manual_links:
@@ -671,78 +697,96 @@ def graph_collapse():
                 break
     else:
         # Normal mode: remove source nodes, add collapsed result
-        min_depth = min((depth_list[i] for i in valid_indices if i < len(depth_list)), default=0)
-        collapsed_topic = next((topics_list[i] for i in valid_indices if i < len(topics_list) and topics_list[i]), topic)
-        conf_list = _graph.get("confidences", [])
+        min_depth = min((nodes[i]["depth"] for i in valid_indices), default=0)
+        collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
         # Average confidence of collapsed nodes
-        collapsed_conf = sum(conf_list[i] for i in valid_indices if i < len(conf_list)) / max(len(valid_indices), 1)
+        collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
         for i in sorted(valid_indices, reverse=True):
-            thoughts.pop(i)
-            if i < len(ent_list):
-                ent_list.pop(i)
-            if i < len(depth_list):
-                depth_list.pop(i)
-            if i < len(topics_list):
-                topics_list.pop(i)
-            if i < len(conf_list):
-                conf_list.pop(i)
-        _remap_manual_edges(valid_indices)
-        thoughts.append(text)
-        ent_list.append(ent)
-        depth_list.append(min_depth)
-        topics_list.append(collapsed_topic)
-        conf_list.append(round(collapsed_conf, 2))
-        new_idx = len(thoughts) - 1
+            nodes.pop(i)
+        # Reassign ids after removal
+        for k, nd in enumerate(nodes):
+            nd["id"] = k
+        _remap_edges(valid_indices)
+        new_idx = _add_node(text, depth=min_depth, topic=collapsed_topic,
+                            entropy=ent, confidence=collapsed_conf)
         # Link collapsed node to its topic root
-        directed = _graph.setdefault("directed_edges", [])
-        manual_links = _graph.setdefault("manual_links", [])
-        for i, t in enumerate(thoughts):
-            if i < len(depth_list) and depth_list[i] == -1 and i < len(topics_list) and topics_list[i] == collapsed_topic:
+        directed = _graph["edges"]["directed"]
+        manual_links = _graph["edges"]["manual_links"]
+        for i, nd in enumerate(nodes):
+            if nd["depth"] == -1 and nd["topic"] == collapsed_topic:
                 directed.append([i, new_idx])
                 pair = [min(i, new_idx), max(i, new_idx)]
                 if pair not in manual_links:
                     manual_links.append(pair)
                 break
 
-    _graph["thoughts"] = thoughts
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
 
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-
-    return _graph_response(thoughts, edges, clusters, text=text)
+    return _graph_response(nodes, edges, clusters, text=text)
 
 
 @graph_bp.route("/graph/sync", methods=["POST"])
 def graph_sync():
     """Restore graph state (used by undo)."""
     data = request.get_json(force=True)
-    thoughts = data.get("thoughts", [])
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
-    _graph["thoughts"] = thoughts
-    _graph["manual_links"] = data.get("manual_links", [])
-    _graph["manual_unlinks"] = data.get("manual_unlinks", [])
-    _graph["directed_edges"] = data.get("directed_edges", _graph.get("directed_edges", []))
-    _graph["hub_nodes"] = set(data.get("hub_nodes", _graph.get("hub_nodes", set())))
-    if "entropies" in data:
-        _graph["entropies"] = data["entropies"]
-    if "depths" in data:
-        _graph["depths"] = data["depths"]
-    if "topics" in data:
-        _graph["topics"] = data["topics"]
-    if "confidences" in data:
-        _graph["confidences"] = data["confidences"]
+
+    # Support both new node-object format and legacy parallel-array format
+    if "nodes" in data:
+        incoming_nodes = data["nodes"]
+        if incoming_nodes and isinstance(incoming_nodes[0], str):
+            # Legacy: list of strings
+            topic = data.get("topic", _graph["meta"].get("topic", ""))
+            incoming_nodes = [_make_node(i, t, topic=topic) for i, t in enumerate(incoming_nodes)]
+        _graph["nodes"] = incoming_nodes
+    elif "thoughts" in data:
+        # Legacy parallel-array format
+        thoughts = data["thoughts"]
+        topic = data.get("topic", _graph["meta"].get("topic", ""))
+        ents = data.get("entropies", [])
+        depths = data.get("depths", [])
+        topics = data.get("topics", [])
+        confs = data.get("confidences", [])
+        _graph["nodes"] = []
+        for i, t in enumerate(thoughts):
+            _graph["nodes"].append(_make_node(
+                i, t,
+                depth=depths[i] if i < len(depths) else 0,
+                topic=topics[i] if i < len(topics) else topic,
+                entropy=ents[i] if i < len(ents) else None,
+                confidence=confs[i] if i < len(confs) else 0.5,
+            ))
+    _ensure_node_fields(_graph["nodes"])
+
+    # Restore edges
+    if "edges" in data and isinstance(data["edges"], dict) and "manual_links" in data["edges"]:
+        # New format: edges is the edges dict
+        _graph["edges"]["manual_links"] = data["edges"].get("manual_links", [])
+        _graph["edges"]["manual_unlinks"] = data["edges"].get("manual_unlinks", [])
+        _graph["edges"]["directed"] = data["edges"].get("directed", [])
+    else:
+        # Compat: directed_edges / manual_links at top level
+        _graph["edges"]["manual_links"] = data.get("manual_links", [])
+        _graph["edges"]["manual_unlinks"] = data.get("manual_unlinks", [])
+        _graph["edges"]["directed"] = data.get("directed_edges", _graph["edges"].get("directed", []))
+
+    _graph["meta"]["hub_nodes"] = set(data.get("hub_nodes", list(_graph["meta"].get("hub_nodes", set()))))
     if "topic" in data:
-        _graph["topic"] = data["topic"]
-    # If saved edges/clusters provided, use them directly (undo restore)
-    if "edges" in data and "clusters" in data:
+        _graph["meta"]["topic"] = data["topic"]
+
+    # If saved computed edges/clusters provided, use them directly (undo restore)
+    if "edges" in data and isinstance(data["edges"], list) and "clusters" in data:
         _graph["embeddings"] = []
-        return _graph_response(thoughts, data["edges"], data["clusters"])
+        return _graph_response(_graph["nodes"], data["edges"], data["clusters"])
+
     # Otherwise recompute
     _graph["embeddings"] = []
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    nodes = _graph["nodes"]
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/expand", methods=["POST"])
@@ -760,17 +804,16 @@ def graph_expand():
     top_k = int(data.get("top_k", 40))
     seed = int(data.get("seed", -1))
     maxtok_expand = int(data.get("maxtok_expand", 120))
-    thoughts = _graph["thoughts"]
+    nodes = _graph["nodes"]
 
-    if idx < 0 or idx >= len(thoughts):
+    if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
 
-    source = thoughts[idx]
-    topic = _graph.get("topic", "")
+    source = nodes[idx]["text"]
+    topic = _graph["meta"].get("topic", "")
     new_thoughts = []
-    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
-    parent_depth = depth_list[idx] if idx < len(depth_list) else 0
-    parent_topic = topics_list[idx] if idx < len(topics_list) else topic
+    parent_depth = nodes[idx]["depth"]
+    parent_topic = nodes[idx]["topic"] or topic
 
     system = _p(lang, "think")
 
@@ -788,18 +831,15 @@ def graph_expand():
 
         if not t or len(t) < 10:
             continue
-        if any(t.lower() == ex.lower() for ex in thoughts):
+        if any(t.lower() == nd["text"].lower() for nd in nodes):
             continue
-        thoughts.append(t)
-        ent_list.append(ent)
-        depth_list.append(parent_depth + 1)
-        topics_list.append(parent_topic)
+        _add_node(t, depth=parent_depth + 1, topic=parent_topic, entropy=ent)
         new_thoughts.append(t)
 
     # Track directed edges for expand (parent → child)
-    manual_links = _graph.setdefault("manual_links", [])
-    directed = _graph.setdefault("directed_edges", [])
-    base_idx = len(thoughts) - len(new_thoughts)
+    manual_links = _graph["edges"]["manual_links"]
+    directed = _graph["edges"]["directed"]
+    base_idx = len(nodes) - len(new_thoughts)
     for j in range(len(new_thoughts)):
         new_idx = base_idx + j
         pair = [min(idx, new_idx), max(idx, new_idx)]
@@ -807,10 +847,9 @@ def graph_expand():
             manual_links.append(pair)
         directed.append([idx, new_idx])
 
-    _graph["thoughts"] = thoughts
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/elaborate", methods=["POST"])
@@ -829,17 +868,16 @@ def graph_elaborate():
     seed = int(data.get("seed", -1))
     direction = data.get("direction", "").strip()
     maxtok_elaborate = int(data.get("maxtok_elaborate", 120))
-    thoughts = _graph["thoughts"]
+    nodes = _graph["nodes"]
 
-    if idx < 0 or idx >= len(thoughts):
+    if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
 
-    source = thoughts[idx]
-    topic = _graph.get("topic", "")
+    source = nodes[idx]["text"]
+    topic = _graph["meta"].get("topic", "")
     new_thoughts = []
-    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
-    parent_depth = depth_list[idx] if idx < len(depth_list) else 0
-    parent_topic = topics_list[idx] if idx < len(topics_list) else topic
+    parent_depth = nodes[idx]["depth"]
+    parent_topic = nodes[idx]["topic"] or topic
 
     system = _p(lang, "think")
 
@@ -859,21 +897,18 @@ def graph_elaborate():
 
         if not t or len(t) < 10:
             continue
-        if any(t.lower() == ex.lower() for ex in thoughts):
+        if any(t.lower() == nd["text"].lower() for nd in nodes):
             continue
-        thoughts.append(t)
-        ent_list.append(ent)
-        depth_list.append(parent_depth + 1)
-        topics_list.append(parent_topic)
+        _add_node(t, depth=parent_depth + 1, topic=parent_topic, entropy=ent)
         new_thoughts.append(t)
 
     # Force-link new thoughts to source and track directed edges
-    manual_links = _graph.setdefault("manual_links", [])
-    directed = _graph.setdefault("directed_edges", [])
-    hubs = _graph.setdefault("hub_nodes", set())
+    manual_links = _graph["edges"]["manual_links"]
+    directed = _graph["edges"]["directed"]
+    hubs = _graph["meta"].setdefault("hub_nodes", set())
     source_idx = idx
     hubs.add(source_idx)
-    base_idx = len(thoughts) - len(new_thoughts)
+    base_idx = len(nodes) - len(new_thoughts)
     for j in range(len(new_thoughts)):
         new_idx = base_idx + j
         pair = [min(source_idx, new_idx), max(source_idx, new_idx)]
@@ -881,10 +916,9 @@ def graph_elaborate():
             manual_links.append(pair)
         directed.append([source_idx, new_idx])
 
-    _graph["thoughts"] = thoughts
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 # ── Generation Studio ────────────────────────────────────────────────────────
@@ -905,7 +939,7 @@ def graph_studio_generate():
     max_tokens = int(data.get("max_tokens", 1000))
     seed = int(data.get("seed", -1))
     lang = data.get("lang", "en")
-    topic = _graph.get("topic", "")
+    topic = _graph["meta"].get("topic", "")
 
     if mode == "rephrase":
         system = "You rephrase the given text. Keep the core meaning. Answer with ONLY the rephrased text, nothing else."
@@ -961,21 +995,21 @@ def graph_studio_apply_rephrase():
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
 
-    thoughts = _graph["thoughts"]
-    if idx < 0 or idx >= len(thoughts):
+    nodes = _graph["nodes"]
+    if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
     if not new_text:
         return jsonify({"error": "empty text"})
 
-    thoughts[idx] = new_text
+    nodes[idx]["text"] = new_text
     # Invalidate embedding cache for this node
     cache = _graph.get("embeddings", [])
     if idx < len(cache):
         cache[idx] = None
 
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)  # apply-rephrase
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
 
 
 @graph_bp.route("/graph/studio/apply-child", methods=["POST"])
@@ -988,36 +1022,22 @@ def graph_studio_apply_child():
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
 
-    thoughts = _graph["thoughts"]
-    topic = _graph.get("topic", "")
-    if parent_idx < 0 or parent_idx >= len(thoughts):
+    nodes = _graph["nodes"]
+    topic = _graph["meta"].get("topic", "")
+    if parent_idx < 0 or parent_idx >= len(nodes):
         return jsonify({"error": "invalid parent index"})
     if not new_text:
         return jsonify({"error": "empty text"})
 
     # Add the new thought
-    thoughts.append(new_text)
-    new_idx = len(thoughts) - 1
-
-    # Set up metadata
-    ent_list, depth_list, topics_list, conf_list = _ensure_lists(thoughts, topic)
-    parent_depth = depth_list[parent_idx] if parent_idx < len(depth_list) else 0
-    parent_topic = topics_list[parent_idx] if parent_idx < len(topics_list) else topic
-    if new_idx < len(depth_list):
-        depth_list[new_idx] = parent_depth + 1
-    else:
-        depth_list.append(parent_depth + 1)
-    if new_idx < len(topics_list):
-        topics_list[new_idx] = parent_topic
-    else:
-        topics_list.append(parent_topic)
-    if new_idx >= len(ent_list):
-        ent_list.append({"avg": 0, "unc": 0, "tokens": []})
+    parent_depth = nodes[parent_idx]["depth"]
+    parent_topic = nodes[parent_idx]["topic"] or topic
+    new_idx = _add_node(new_text, depth=parent_depth + 1, topic=parent_topic)
 
     # Create directed edge and manual link
-    manual_links = _graph.setdefault("manual_links", [])
-    directed = _graph.setdefault("directed_edges", [])
-    hubs = _graph.setdefault("hub_nodes", set())
+    manual_links = _graph["edges"]["manual_links"]
+    directed = _graph["edges"]["directed"]
+    hubs = _graph["meta"].setdefault("hub_nodes", set())
 
     pair = [min(parent_idx, new_idx), max(parent_idx, new_idx)]
     if pair not in manual_links:
@@ -1027,7 +1047,6 @@ def graph_studio_apply_child():
     if child_type == "elaborate":
         hubs.add(parent_idx)
 
-    _graph["thoughts"] = thoughts
-    edges = _compute_edges(thoughts, threshold, sim_mode)
-    clusters = _find_clusters(len(thoughts), edges, threshold)
-    return _graph_response(thoughts, edges, clusters)  # apply-child
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
+    return _graph_response(nodes, edges, clusters)
