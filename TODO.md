@@ -51,6 +51,9 @@
 
 - [ ] Quick add от выделенного узла (дочерний с типом)
 - [ ] Вынести tick()/thinking в отдельный `thinking.py`
+- [ ] Увеличить context window (n_ctx=8192/16384) — финальный summary обрезается на 4096
+- [ ] Умный промпт для summary — top-N по confidence вместо всех узлов
+- [ ] Chunked summary — collapse по частям → collapse коллапсов
 - [ ] **Auto-save** — автосохранение после каждого действия
 - [ ] **Compare hypotheses** — 2 hypothesis рядом, α/β, Марков
 
