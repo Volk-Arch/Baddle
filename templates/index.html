@@ -171,6 +171,12 @@
           <span id="settings-current-model" style="color:#5a5a5a;font-size:11px;flex:1"></span>
           <button onclick="reloadModel()" style="background:#b45309;border:none;color:#fff;padding:6px 12px;border-radius:2px;cursor:pointer;font-size:12px" title="Reload model (takes a few seconds)">&#8635; Reload model</button>
         </div>
+        <label style="color:#969696;font-size:12px;display:block;margin-top:8px;margin-bottom:4px">Embedding model (for similarity & Smart DC centroid)</label>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <select id="settings-embedding-model" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 10px;border-radius:2px;flex:1;font-size:12px">
+            <option value="">(same as main model)</option>
+          </select>
+        </div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button onclick="closeSettings()" style="background:#3c3c3c;border:1px solid #4a4a4a;color:#cccccc;padding:6px 16px;border-radius:2px;cursor:pointer;font-size:13px">Cancel</button>
@@ -514,6 +520,33 @@
         title="Toggle directed flow layout (left-to-right by depth)">
         → Flow
       </button>
+      <button onclick="graphToggleTemporal()" id="graph-btn-temporal"
+        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
+        title="Show/hide temporal links (nodes created close in time)">
+        ⏰ Time
+      </button>
+      <button onclick="graphTick()" id="graph-btn-tick"
+        class="px-3 py-1.5 bg-violet-800 hover:bg-violet-700 text-white text-xs transition-colors"
+        title="Auto-think: analyze graph and suggest next action">
+        🧠 Auto
+      </button>
+      <input id="graph-autorun-steps" type="number" value="20" min="1" max="100" style="width:40px;background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Max auto-run steps">
+      <input id="graph-stable-threshold" type="number" value="0.8" min="0.5" max="0.99" step="0.05" style="width:45px;background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Stable threshold — stop when all nodes above this confidence">
+      <select id="graph-run-mode" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Thinking mode">
+        <option value="deep">deep</option>
+        <option value="fast">fast</option>
+      </select>
+      <select id="graph-output-format" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Final output format">
+        <option value="essay">essay</option>
+        <option value="brief">brief</option>
+        <option value="list">list</option>
+        <option value="none">no summary</option>
+      </select>
+      <button onclick="graphAutoRun()" id="graph-btn-autorun"
+        class="px-3 py-1.5 bg-violet-900 hover:bg-violet-800 text-white text-xs transition-colors"
+        title="Full auto: run tick→action loop until stable (click again to stop)">
+        🔄 Run
+      </button>
       <button onclick="graphRecalcLayout()"
         class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
         title="Recalculate node positions">
@@ -556,6 +589,8 @@
             <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="px-2 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs">Edit</button>
             <button onclick="openStudio('rephrase')" class="px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white text-xs" title="Rephrase with Generation Studio">&#x270E; Rephrase</button>
             <button onclick="graphDetailToChat()" class="px-2 py-1 text-blue-400 hover:text-blue-300 text-xs border border-blue-800" title="Send this thought to chat as context">&rarr; Chat</button>
+            <button onclick="graphWalk()" id="graph-walk-btn" class="px-2 py-1 text-emerald-400 hover:text-emerald-300 text-xs border border-emerald-800" title="Random Walk: where does this thought lead?">&#x1F6B6; Walk</button>
+            <button onclick="graphSmartDC()" id="graph-dc-btn" class="px-2 py-1 text-yellow-400 hover:text-yellow-300 text-xs border border-yellow-800" title="Smart DC: thesis/antithesis/synthesis verification">&#9889; Verify</button>
             <button onclick="graphDetailClose()" class="px-2 py-1 text-neutral-500 hover:text-white text-xs">&times; Close</button>
           </div>
           <div id="graph-detail-confidence" class="flex items-center gap-2 mb-2">
@@ -563,6 +598,19 @@
             <input id="graph-detail-conf-slider" type="range" min="0" max="100" value="50" step="1"
               class="w-24 h-1 accent-blue-500" oninput="graphConfidencePreview(this.value)">
             <span id="graph-detail-conf-value" class="text-xs text-neutral-300 w-8">50%</span>
+            <select id="graph-detail-type" onchange="graphSetNodeType(this.value)"
+              class="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-1 py-0.5 ml-2">
+              <option value="thought">thought</option>
+              <option value="hypothesis">hypothesis</option>
+              <option value="fact">fact</option>
+              <option value="evidence">evidence</option>
+              <option value="question">question</option>
+              <option value="goal">goal</option>
+              <option value="action">action</option>
+            </select>
+            <button onclick="graphShowAddEvidence()" id="graph-add-evidence-btn"
+              class="px-2 py-0.5 text-cyan-400 hover:text-cyan-300 text-xs border border-cyan-800 ml-2"
+              title="Add supporting or contradicting evidence (Bayesian update)" style="display:none">+ Evidence</button>
           </div>
           <div id="graph-detail-source" class="text-xs mb-2" style="display:none;">
             <span class="text-violet-400">↳ from:</span> <span id="graph-detail-source-text" class="text-violet-300"></span>
@@ -606,6 +654,17 @@
           class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#3c3c3c;border:1px solid #3c3c3c;border-radius:2px;">
           + Add
         </button>
+        <select id="graph-add-type" class="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-1 py-1"
+          title="Type for manually added nodes (auto = LLM determines)">
+          <option value="auto">auto</option>
+          <option value="thought">thought</option>
+          <option value="hypothesis">hypothesis</option>
+          <option value="fact">fact</option>
+          <option value="evidence">evidence</option>
+          <option value="question">question</option>
+          <option value="goal">goal</option>
+          <option value="action">action</option>
+        </select>
       </div>
       <!-- Collapsible params -->
       <details id="graph-params-details" style="margin-top:4px;">
@@ -657,16 +716,57 @@
     Promise.all([
       fetch('/settings').then(r => r.json()),
       fetch('/settings/local-models').then(r => r.json())
-    ]).then(([s, lm]) => {
+    ]).then(async ([s, lm]) => {
+      // Try to fetch API models if URL is set
+      let apiModels = [];
+      if (s.api_url) {
+        try {
+          const mr = await fetch('/settings/models', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({api_url: s.api_url, api_key: s.api_key || ''})
+          });
+          const md = await mr.json();
+          apiModels = md.models || [];
+        } catch(e) {}
+      }
       document.getElementById('settings-mode').value = s.mode || 'local';
       document.getElementById('settings-api-url').value = s.api_url || '';
       document.getElementById('settings-api-key').value = s.api_key || '';
+      // Populate API model select dropdown
+      const apiModelSel = document.getElementById('settings-api-model-select');
+      if (apiModels.length) {
+        apiModelSel.innerHTML = '<option value="">-- select --</option>';
+        apiModels.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          apiModelSel.appendChild(opt);
+        });
+        apiModelSel.value = s.api_model || '';
+      }
       document.getElementById('settings-api-model').value = s.api_model || '';
       document.getElementById('settings-hybrid-graph').value = s.hybrid_graph || 'api';
       document.getElementById('settings-hybrid-embeddings').value = s.hybrid_embeddings || 'local';
       document.getElementById('settings-hybrid-chat').value = s.hybrid_chat || 'api';
       document.getElementById('settings-gpu-layers').value = s.local_gpu_layers ?? -1;
       document.getElementById('settings-ctx').value = s.local_ctx || 4096;
+      // Populate embedding model dropdown from API models
+      const embSel = document.getElementById('settings-embedding-model');
+      embSel.innerHTML = '<option value="">(same as main model)</option>';
+      (apiModels || []).forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        embSel.appendChild(opt);
+      });
+      // Also add local GGUF models
+      (lm.models || []).forEach(m => {
+        if (!apiModels || !apiModels.includes(m)) {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = '(local) ' + m;
+          embSel.appendChild(opt);
+        }
+      });
+      embSel.value = s.embedding_model || '';
       // Populate local models dropdown
       const sel = document.getElementById('settings-local-model');
       sel.innerHTML = '<option value="">-- select --</option>';
@@ -679,7 +779,7 @@
       document.getElementById('settings-current-model').textContent = `Current: ${s.current_model || 'none'}`;
       onSettingsModeChange();
       document.getElementById('settings-modal').style.display = 'flex';
-    });
+    }).catch(e => console.error('openSettings error:', e));
   }
   function closeSettings() {
     document.getElementById('settings-modal').style.display = 'none';
@@ -695,7 +795,7 @@
     const gpu = parseInt(document.getElementById('settings-gpu-layers').value) || -1;
     const ctx = parseInt(document.getElementById('settings-ctx').value) || 4096;
     if (!model) { alert('Select a model first'); return; }
-    const btn = event.target;
+    const btn = document.querySelector('[onclick*="reloadModel"]');
     btn.textContent = 'Loading...';
     btn.disabled = true;
     fetch('/settings/reload-model', {
@@ -709,7 +809,11 @@
       document.getElementById('settings-current-model').textContent = `Current: ${d.model}`;
       document.getElementById('sb-model').textContent = d.model;
       // Update settings
-      update_settings({local_model: model, local_gpu_layers: gpu, local_ctx: ctx});
+      fetch('/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({local_model: model, local_gpu_layers: gpu, local_ctx: ctx})
+      }).catch(e => console.error('Failed to save settings:', e));
     }).catch(e => {
       btn.textContent = '↻ Reload model';
       btn.disabled = false;
@@ -729,6 +833,7 @@
       local_model: document.getElementById('settings-local-model').value,
       local_gpu_layers: parseInt(document.getElementById('settings-gpu-layers').value) || -1,
       local_ctx: parseInt(document.getElementById('settings-ctx').value) || 4096,
+      embedding_model: document.getElementById('settings-embedding-model').value,
     };
     fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
       .then(r => r.json()).then(s => {
@@ -738,7 +843,7 @@
         if (s.mode === 'api') apiEl.textContent = `API: ${s.api_model}`;
         else if (s.mode === 'hybrid') apiEl.textContent = `hybrid: ${s.api_model}`;
         else apiEl.textContent = 'local';
-      });
+      }).catch(e => console.error('saveSettings error:', e));
   }
   function fetchApiModels() {
     const url = document.getElementById('settings-api-url').value.trim();
@@ -780,7 +885,7 @@
     el.addEventListener('input', () => autoGrow(el));
   });
 
-  fetch('/model/info').then(r => r.json()).then(d => { modelCtx = d.n_ctx; });
+  fetch('/model/info').then(r => r.json()).then(d => { modelCtx = d.n_ctx; }).catch(e => console.error('model/info error:', e));
   fetch('/settings').then(r => r.json()).then(s => {
     const apiEl = document.getElementById('sb-api-mode');
     if (s.mode === 'api') apiEl.textContent = `API: ${s.api_model}`;
@@ -790,7 +895,7 @@
     if (s.current_model && (s.current_model.startsWith('(no ') || s.current_model === '')) {
       setTimeout(() => openSettings(), 500);
     }
-  });
+  }).catch(e => console.error('settings init error:', e));
 
   function updateTokenCounter(used) {
     const el = document.getElementById('token-counter');
@@ -805,7 +910,7 @@
   fetch('/roles').then(r => r.json()).then(data => {
     allRoles = data;
     populateRoles();
-  });
+  }).catch(e => console.error('roles fetch error:', e));
 
   function populateRoles() {
     const lang = document.getElementById('lang-select').value;
@@ -885,7 +990,7 @@
       opt.textContent = t.name;
       sel.appendChild(opt);
     });
-  });
+  }).catch(e => console.error('templates fetch error:', e));
 
   function onTplSelect() {
     const sel = document.getElementById('tpl-select');
@@ -1467,6 +1572,7 @@
   let graphManualCollapseMode = false;
   let graphManualCollapseSet = new Set();
   let graphFlowMode = false;  // directed flow layout
+  let graphShowTemporal = false;  // show temporal edges (hidden by default)
   let graphZoom = 1;
   let graphPanX = 0, graphPanY = 0;
   let graphNodePositions = [];  // {x, y, vx, vy, fixed} per node
@@ -1539,14 +1645,44 @@
   // Update graph data + render without moving nodes (just redraw edges/clusters)
   function graphUpdateView(d) {
     graphData = d;
-    // Track hub nodes from backend
+    // Track hub nodes and traps from backend
     if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
     if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+    _graphTraps = d.traps || [];
+    graphData._alpha_beta = d.alpha_beta || {};
     graphInitPositions();  // add positions for new nodes only
     graphRenderSvg();
     graphUpdateThoughtsList();
     graphUpdateCollapseButtons();
     document.getElementById('graph-actions-bar').style.display = graphData.nodes.length ? '' : 'none';
+    // Check for weak hypotheses (confidence < 0.4) — suggest verification
+    const weakNodes = (d.nodes || []).filter(n => n.depth >= 0 && n.confidence < 0.4);
+    if (weakNodes.length > 0) {
+      const names = weakNodes.map(n => '#' + n.id + ' "' + n.text.slice(0, 30) + '..."').join(', ');
+      console.log('[smartdc trigger] Weak nodes detected:', names);
+      // Show subtle notification
+      const bar = document.getElementById('graph-actions-bar');
+      let hint = document.getElementById('graph-weak-hint');
+      if (!hint) {
+        hint = document.createElement('div');
+        hint.id = 'graph-weak-hint';
+        hint.style.cssText = 'color:#facc15;font-size:11px;padding:4px 8px;cursor:pointer;';
+        hint.onclick = function() {
+          // Select first weak node
+          const idx = weakNodes[0].id;
+          graphSelectedNode = idx;
+          graphRenderSvg();
+          graphShowDetail(idx);
+          this.style.display = 'none';
+        };
+        bar.appendChild(hint);
+      }
+      hint.textContent = '⚠ ' + weakNodes.length + ' weak hypothesis' + (weakNodes.length > 1 ? 'es' : '') + ' — click to verify';
+      hint.style.display = '';
+    } else {
+      const hint = document.getElementById('graph-weak-hint');
+      if (hint) hint.style.display = 'none';
+    }
   }
 
   function graphGetDimensions() {
@@ -1818,6 +1954,15 @@
     const directedSet = new Set();
     graphDirectedEdges.forEach(([a, b]) => directedSet.add(a + ',' + b));
 
+    // Walk path edge set for highlighting
+    const walkEdgeSet = new Set();
+    if (_graphWalkPath && _graphWalkPath.length > 1) {
+      for (let wi = 0; wi < _graphWalkPath.length - 1; wi++) {
+        walkEdgeSet.add(_graphWalkPath[wi] + ',' + _graphWalkPath[wi+1]);
+        walkEdgeSet.add(_graphWalkPath[wi+1] + ',' + _graphWalkPath[wi]);
+      }
+    }
+
     // Draw edges — color by similarity strength
     graphData.edges.forEach(e => {
       const a = positions[e.from], b = positions[e.to];
@@ -1840,22 +1985,55 @@
       line.setAttribute('x1', x1); line.setAttribute('y1', y1);
       line.setAttribute('x2', x2); line.setAttribute('y2', y2);
 
-      if (isDirected) {
+      if (e.relation === 'supports') {
+        line.setAttribute('stroke', '#10b981');
+        line.setAttribute('stroke-width', 2);
+        line.setAttribute('stroke-opacity', 0.7);
+        line.setAttribute('marker-end', 'url(#arrowhead)');
+      } else if (e.relation === 'contradicts') {
+        line.setAttribute('stroke', '#ef4444');
+        line.setAttribute('stroke-width', 2);
+        line.setAttribute('stroke-opacity', 0.7);
+        line.setAttribute('stroke-dasharray', '6,3');
+        line.setAttribute('marker-end', 'url(#arrowhead)');
+      } else if (isDirected) {
         line.setAttribute('stroke', '#c4b5fd');
         line.setAttribute('stroke-width', 2);
         line.setAttribute('stroke-opacity', 0.7);
         line.setAttribute('marker-end', 'url(#arrowhead)');
+      } else if (e.temporal) {
+        if (!graphShowTemporal) { return; }  // skip if hidden
+        line.setAttribute('stroke', '#06b6d4');
+        line.setAttribute('stroke-width', 1.5);
+        line.setAttribute('stroke-opacity', 0.5);
+        line.setAttribute('stroke-dasharray', '2,4');
       } else if (e.manual) {
         line.setAttribute('stroke', '#a78bfa');
         line.setAttribute('stroke-width', 2);
         line.setAttribute('stroke-opacity', 0.8);
         line.setAttribute('stroke-dasharray', '6,3');
       } else {
-        const w = Math.max(0, Math.min(1, e.weight || 0));
+        const tp = Math.max(0, Math.min(1, e.tp || e.weight || 0));
         line.setAttribute('stroke', '#94a3b8');
-        line.setAttribute('stroke-width', 1 + w * 3);
-        line.setAttribute('stroke-opacity', 0.3 + w * 0.5);
+        line.setAttribute('stroke-width', 1 + tp * 5);
+        line.setAttribute('stroke-opacity', 0.3 + tp * 0.6);
       }
+      // Walk path override: bright green
+      const isWalkEdge = walkEdgeSet.has(e.from + ',' + e.to);
+      if (isWalkEdge) {
+        line.setAttribute('stroke', '#10b981');
+        line.setAttribute('stroke-width', 4);
+        line.setAttribute('stroke-opacity', 0.9);
+      }
+      // Edge title for native browser tooltip on hover
+      const tpVal = (e.tp || 0).toFixed(2);
+      const tpRev = (e.tp_rev || 0).toFixed(2);
+      const wVal = (e.weight || 0).toFixed(2);
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      const rel = e.relation || 'similarity';
+      title.textContent = '#' + e.from + '\u2192#' + e.to + ': P=' + tpVal + '  |  #' + e.to + '\u2192#' + e.from + ': P=' + tpRev + '  |  sim=' + wVal + '  |  ' + rel;
+      line.appendChild(title);
+      line.style.pointerEvents = 'stroke';
       svg.appendChild(line);
     });
 
@@ -1912,6 +2090,24 @@
         svg.appendChild(halo);
       }
 
+      // Trap indicator (red dashed ring)
+      const isTrap = _graphTraps && _graphTraps.includes(i);
+      if (isTrap && !isCollapsed && !isTopicRoot) {
+        const trap = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        trap.setAttribute('cx', p.x); trap.setAttribute('cy', p.y);
+        trap.setAttribute('r', 16);
+        trap.setAttribute('fill', 'none');
+        trap.setAttribute('stroke', '#ef4444');
+        trap.setAttribute('stroke-width', 2);
+        trap.setAttribute('stroke-opacity', 0.7);
+        trap.setAttribute('stroke-dasharray', '3,3');
+        trap.style.pointerEvents = 'none';
+        svg.appendChild(trap);
+      }
+
+      // Walk path highlight
+      const isOnWalkPath = _graphWalkPath && _graphWalkPath.includes(i);
+
       // Confidence border (grey=low → blue=medium → green=high)
       const nodeConf = (graphData.nodes[i] && graphData.nodes[i].confidence != null) ? graphData.nodes[i].confidence : 0.5;
       let confColor;
@@ -1960,13 +2156,37 @@
         rect.dataset.nodeIdx = i;
         svg.appendChild(rect);
       } else {
-        // Normal nodes: circle
+        // Normal nodes: circle (with type-specific styling)
+        const nodeType = (graphData.nodes[i] && graphData.nodes[i].type) || 'thought';
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
         circle.setAttribute('r', isSelected ? 14 : (ci >= 0 ? 11 : 8));
         circle.setAttribute('fill', color);
-        circle.setAttribute('stroke', isSelected ? '#facc15' : confColor);
-        circle.setAttribute('stroke-width', isSelected ? 3 : (isCollapseSelected ? 3 : 1.5));
+        let strokeColor = isSelected ? '#facc15' : (isOnWalkPath ? '#10b981' : confColor);
+        let strokeWidth = isSelected ? 3 : (isOnWalkPath ? 3 : (isCollapseSelected ? 3 : 1.5));
+        // Type-specific visuals
+        if (nodeType === 'hypothesis') {
+          circle.setAttribute('stroke-dasharray', '4,2');
+          if (!isSelected) strokeColor = '#a78bfa'; // purple dashed for hypothesis
+        } else if (nodeType === 'evidence') {
+          if (!isSelected) strokeColor = '#06b6d4'; // cyan for evidence
+          strokeWidth = isSelected ? 3 : 2.5;
+        } else if (nodeType === 'fact') {
+          if (!isSelected) strokeColor = '#10b981'; // green solid for fact
+          strokeWidth = isSelected ? 3 : 2.5;
+        } else if (nodeType === 'question') {
+          circle.setAttribute('stroke-dasharray', '6,3');
+          if (!isSelected) strokeColor = '#f59e0b'; // amber dashed for question
+        } else if (nodeType === 'goal') {
+          if (!isSelected) strokeColor = '#f43f5e'; // rose for goal (point B)
+          strokeWidth = isSelected ? 3 : 3;
+          circle.setAttribute('stroke-dasharray', '8,2');
+        } else if (nodeType === 'action') {
+          if (!isSelected) strokeColor = '#8b5cf6'; // violet for action
+          strokeWidth = isSelected ? 3 : 2.5;
+        }
+        circle.setAttribute('stroke', strokeColor);
+        circle.setAttribute('stroke-width', strokeWidth);
         circle.style.cursor = 'pointer';
         if (isDeadEnd) circle.setAttribute('opacity', 0.45);
         circle.dataset.nodeIdx = i;
@@ -2209,14 +2429,30 @@
       menu.style.cssText = 'position:fixed;background:#252526;border:1px solid #3c3c3c;border-radius:2px;padding:4px 0;z-index:100;min-width:140px;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
       document.body.appendChild(menu);
     }
-    menu.innerHTML = [
-      { label: '☞ Expand', action: 'graphDetailExpand()' },
-      { label: '✎ Elaborate', action: 'graphDetailElaborate()' },
+    const node = graphData.nodes[idx] || {};
+    const nodeType = node.type || 'thought';
+    const items = [
+      { label: '☞ Expand', action: 'openStudio("expand_preview")' },
+      { label: '✎ Elaborate', action: 'openStudio("elaborate_preview")' },
+      { label: '✐ Rephrase', action: 'openStudio("rephrase")' },
+      { label: '⚡ Verify (Smart DC)', action: 'graphSmartDC()' },
+      { label: '🚶 Walk', action: 'graphWalk()' },
+      null, // separator
+      { label: '+ Evidence', action: 'graphShowAddEvidence()', show: nodeType === 'hypothesis' || nodeType === 'thought' },
+      { label: '→ Chat', action: 'graphDetailToChat()' },
       { label: '✏ Edit', action: 'graphDetailEdit()' },
+      null, // separator
+      { label: 'Type: hypothesis', action: 'graphSetNodeType("hypothesis")', show: nodeType !== 'hypothesis' },
+      { label: 'Type: fact', action: 'graphSetNodeType("fact")', show: nodeType !== 'fact' },
+      { label: 'Type: question', action: 'graphSetNodeType("question")', show: nodeType !== 'question' },
+      null,
       { label: '✕ Delete', action: 'graphRemoveThought(' + idx + ')' },
-    ].map(item =>
-      '<div onclick="' + item.action + ';graphHideContextMenu()" style="padding:4px 16px;cursor:pointer;color:#cccccc;font-size:13px;" onmouseover="this.style.background=\'#094771\'" onmouseout="this.style.background=\'\'">' + item.label + '</div>'
-    ).join('');
+    ];
+    menu.innerHTML = items.map(item => {
+      if (item === null) return '<div style="border-top:1px solid #3c3c3c;margin:2px 0"></div>';
+      if (item.show === false) return '';
+      return '<div onclick="' + item.action + ';graphHideContextMenu()" style="padding:4px 16px;cursor:pointer;color:#cccccc;font-size:13px;" onmouseover="this.style.background=\'#094771\'" onmouseout="this.style.background=\'\'">' + item.label + '</div>';
+    }).join('');
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
     menu.style.display = '';
@@ -2274,6 +2510,7 @@
 
     div.innerHTML = sorted.map(i => {
       const t = nodes[i].text;
+      const nodeType = nodes[i].type || 'thought';
       const ci = nodeCluster[i];
       const dot = ci >= 0
         ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
@@ -2294,7 +2531,9 @@
       return '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
         + 'class="mb-2 text-sm text-neutral-200" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px" '
         + 'onmouseover="this.style.background=\'#1e3a5f\'" onmouseout="graphHighlightListItem(this,' + i + ')">'
-        + '<span style="flex:1">' + dot + t + '</span>' + entBadge + del + '</div>';
+        + '<span style="flex:1">' + dot + '<span style="color:#64748b;font-size:10px;margin-right:4px">#' + i + '</span>'
+        + (nodeType !== 'thought' ? '<span style="color:' + ({hypothesis:'#a78bfa',evidence:'#06b6d4',fact:'#10b981',question:'#f59e0b',goal:'#f43f5e',action:'#8b5cf6'}[nodeType]||'#64748b') + ';font-size:9px;margin-right:3px">[' + nodeType[0].toUpperCase() + ']</span>' : '')
+        + t + '</span>' + entBadge + del + '</div>';
     }).join('');
   }
 
@@ -2361,7 +2600,6 @@
       btn.style.background = '';
       btn.textContent = '✂ Select';
       actions.style.display = 'none';
-      promptWrap.style.display = 'none';
     }
     graphRenderSvg();
   }
@@ -2573,7 +2811,7 @@
   async function graphDoManualCollapse() {
     if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
     const cluster = [...graphManualCollapseSet];
-    const ideas = cluster.map(i => graphData.nodes[i].text);
+    const ideas = cluster.map(i => graphData.nodes[i]?.text).filter(Boolean);
     graphManualCollapseMode = false;
     graphManualCollapseSet.clear();
     document.getElementById('graph-btn-manual-select').style.background = '';
@@ -2598,6 +2836,21 @@
     // Reset positions so layout recalculates from scratch
     graphNodePositions = [];
     graphDrawSvg();
+  }
+
+  function graphToggleTemporal() {
+    graphShowTemporal = !graphShowTemporal;
+    const btn = document.getElementById('graph-btn-temporal');
+    if (graphShowTemporal) {
+      btn.style.background = '#0e7490';
+      btn.onmouseover = function() { this.style.background='#06b6d4'; };
+      btn.onmouseout = function() { this.style.background='#0e7490'; };
+    } else {
+      btn.style.background = '';
+      btn.onmouseover = null;
+      btn.onmouseout = null;
+    }
+    graphRenderSvg();
   }
 
   function graphToggleLinkMode() {
@@ -2682,12 +2935,23 @@
     graphUpdateView(d);
   }
 
+  let _graphPrevSelected = -1;
   function graphShowDetail(idx) {
     const panel = document.getElementById('graph-detail');
     if (idx < 0 || idx >= graphData.nodes.length) {
       panel.style.display = 'none';
+      _graphPrevSelected = -1;
       return;
     }
+    // Hebb: strengthen edge between previous and current selection
+    if (_graphPrevSelected >= 0 && _graphPrevSelected !== idx) {
+      fetch('/graph/navigate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({from: _graphPrevSelected, to: idx})
+      }).catch(() => {});
+    }
+    _graphPrevSelected = idx;
     panel.style.display = '';
     const node = graphData.nodes[idx];
     const text = node.text;
@@ -2724,6 +2988,52 @@
     slider.value = Math.round(conf * 100);
     document.getElementById('graph-detail-conf-value').textContent = Math.round(conf * 100) + '%';
     slider.dataset.nodeIdx = idx;
+    // Node type selector
+    const typeSelect = document.getElementById('graph-detail-type');
+    typeSelect.value = node.type || 'thought';
+    // Show "+ Evidence" for hypothesis and thought types (auto-converts to hypothesis)
+    const canAddEvidence = (node.type === 'hypothesis' || node.type === 'thought');
+    document.getElementById('graph-add-evidence-btn').style.display = canAddEvidence ? '' : 'none';
+    // Show α/β for hypothesis nodes
+    let abDiv = document.getElementById('graph-detail-ab');
+    if (!abDiv) {
+      abDiv = document.createElement('div');
+      abDiv.id = 'graph-detail-ab';
+      abDiv.style.cssText = 'font-size:11px;margin-bottom:4px;';
+      document.getElementById('graph-detail-confidence').after(abDiv);
+    }
+    const ab = (graphData._alpha_beta || {})[String(idx)];
+    if (node.type === 'hypothesis' && ab) {
+      const total = ab.alpha + ab.beta;
+      const aPct = total > 0 ? Math.round(ab.alpha / total * 100) : 50;
+      const bPct = 100 - aPct;
+      abDiv.innerHTML = '<span style="color:#10b981">α=' + ab.alpha.toFixed(1) + ' (' + aPct + '%)</span>'
+        + ' <span style="color:#64748b">|</span> '
+        + '<span style="color:#ef4444">β=' + ab.beta.toFixed(1) + ' (' + bPct + '%)</span>'
+        + ' <span style="color:#64748b">| evidence: ' + ab.evidence.length + '</span>'
+        + '<div style="height:4px;background:#1e293b;border-radius:2px;margin-top:2px;display:flex">'
+        + '<div style="height:4px;background:#10b981;width:' + aPct + '%;border-radius:2px 0 0 2px"></div>'
+        + '<div style="height:4px;background:#ef4444;width:' + bPct + '%;border-radius:0 2px 2px 0"></div>'
+        + '</div>';
+      // "What changes the mind?" — list evidence sorted by strength
+      if (ab.evidence.length > 0) {
+        const sorted = [...ab.evidence].sort((a, b) => b.strength - a.strength);
+        abDiv.innerHTML += '<div style="margin-top:4px;color:#64748b;font-size:10px">Evidence (strongest first):</div>';
+        sorted.forEach(ev => {
+          const evNode = graphData.nodes[ev.idx];
+          const evText = evNode ? evNode.text.slice(0, 60) : '?';
+          const evColor = ev.relation === 'supports' ? '#10b981' : '#ef4444';
+          const evSign = ev.relation === 'supports' ? '✓' : '✗';
+          abDiv.innerHTML += '<div onclick="graphSelectFromList(' + ev.idx + ')" style="cursor:pointer;font-size:10px;color:#9ca3af;padding:1px 0" '
+            + 'onmouseover="this.style.color=\'#e2e8f0\'" onmouseout="this.style.color=\'#9ca3af\'">'
+            + '<span style="color:' + evColor + '">' + evSign + ' ' + ev.strength.toFixed(1) + '</span> '
+            + '#' + ev.idx + ' ' + evText + '...</div>';
+        });
+      }
+      abDiv.style.display = '';
+    } else {
+      abDiv.style.display = 'none';
+    }
     // Color dot by cluster
     const nodeClusterArr = new Array(graphData.nodes.length).fill(-1);
     (graphData.clusters || []).forEach((cl, ci) => cl.forEach(j => { nodeClusterArr[j] = ci; }));
@@ -2742,6 +3052,46 @@
     } else {
       sourceDiv.style.display = 'none';
     }
+    // Show connected edges with tp values
+    let edgesHtml = '';
+    const edges = graphData.edges || [];
+    const connEdges = edges.filter(e => e.from === idx || e.to === idx);
+    if (connEdges.length) {
+      edgesHtml = '<div style="margin-top:8px;border-top:1px solid #333;padding-top:6px">'
+        + '<span style="color:#64748b;font-size:11px">Edges (' + connEdges.length + '):</span>';
+      connEdges.forEach(e => {
+        const other = e.from === idx ? e.to : e.from;
+        const tp = e.from === idx ? (e.tp || 0) : (e.tp_rev || 0);
+        const tpBack = e.from === idx ? (e.tp_rev || 0) : (e.tp || 0);
+        const otherText = (graphData.nodes[other] && graphData.nodes[other].text || '').slice(0, 50);
+        const barWidth = Math.round(tp * 100);
+        edgesHtml += '<div onclick="graphSelectFromList(' + other + ')" style="font-size:11px;color:#9ca3af;padding:2px 0;cursor:pointer" '
+          + 'onmouseover="this.style.color=\'#e2e8f0\'" onmouseout="this.style.color=\'#9ca3af\'">'
+          + '<span style="color:#10b981;font-weight:bold;width:35px;display:inline-block">P=' + tp.toFixed(2) + '</span> '
+          + '<span style="color:#64748b">#' + other + '</span> ' + otherText + '...'
+          + '<div style="height:2px;background:#1e293b;margin-top:1px;border-radius:1px">'
+          + '<div style="height:2px;background:#10b981;width:' + barWidth + '%;border-radius:1px"></div></div>'
+          + '</div>';
+      });
+      edgesHtml += '</div>';
+    }
+    // Timestamp info
+    let timeHtml = '';
+    const created = node.created_at;
+    const accessed = node.last_accessed;
+    if (created) {
+      const fmt = (iso) => {
+        try { const d = new Date(iso); return d.toLocaleString(); } catch(e) { return iso; }
+      };
+      timeHtml = '<div style="margin-top:6px;font-size:10px;color:#64748b">'
+        + 'Created: ' + fmt(created);
+      if (accessed && accessed !== created) {
+        timeHtml += ' | Last: ' + fmt(accessed);
+      }
+      timeHtml += '</div>';
+    }
+    // Append timestamp + edges to detail view
+    document.getElementById('graph-detail-view').insertAdjacentHTML('beforeend', timeHtml + edgesHtml);
   }
 
   function graphDetailToChat() {
@@ -2764,6 +3114,37 @@
   }
   // Save confidence on slider change (fires when slider is released with new value)
   document.addEventListener('DOMContentLoaded', () => {
+    // Check model availability on startup
+    fetch('/settings').then(r => r.json()).then(async s => {
+      if (s.mode === 'local' && !s.local_model) return; // handled by auto-open settings
+      if (s.mode !== 'local' && s.api_url) {
+        try {
+          const mr = await fetch('/settings/models', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({api_url: s.api_url, api_key: s.api_key || ''})
+          });
+          const md = await mr.json();
+          const available = md.models || [];
+          const warnings = [];
+          if (s.api_model && !available.includes(s.api_model)) {
+            warnings.push('Main model "' + s.api_model + '" not available');
+          }
+          if (s.embedding_model && !available.includes(s.embedding_model)) {
+            warnings.push('Embedding model "' + s.embedding_model + '" not available');
+          }
+          if (warnings.length) {
+            const bar = document.getElementById('graph-actions-bar') || document.body;
+            const warn = document.createElement('div');
+            warn.style.cssText = 'color:#facc15;font-size:12px;padding:6px 12px;background:#1e1e1e;border:1px solid #facc15;border-radius:2px;margin:4px;cursor:pointer;';
+            warn.textContent = '⚠ ' + warnings.join('. ') + ' — click to open Settings';
+            warn.onclick = function() { openSettings(); this.remove(); };
+            bar.prepend(warn);
+          }
+        } catch(e) {}
+      }
+    }).catch(e => console.error('startup settings check error:', e));
+
     const slider = document.getElementById('graph-detail-conf-slider');
     if (slider) {
       slider.addEventListener('change', async () => {
@@ -2784,12 +3165,643 @@
     }
   });
 
+  // ── Smart DC ──
+  async function graphSmartDC() {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const btn = document.getElementById('graph-dc-btn');
+    btn.disabled = true; btn.textContent = '⏳ Verifying...';
+    try {
+      const res = await fetch('/graph/smartdc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          index: idx,
+          lang: document.getElementById('lang-select').value,
+          temp: parseFloat(document.getElementById('graph-temp').value) || 0.9,
+          top_k: parseInt(document.getElementById('graph-topk').value) || 40,
+          seed: parseInt(document.getElementById('graph-seed').value) || -1,
+          threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+          sim_mode: document.getElementById('graph-sim-mode').value
+        })
+      });
+      const d = await res.json();
+      if (d.error) { alert(d.error); return; }
+
+      const detailView = document.getElementById('graph-detail-view');
+      let html = '<div style="border-top:1px solid #333;margin-top:8px;padding-top:8px">';
+      html += '<div style="color:#facc15;font-weight:bold;margin-bottom:6px">⚡ Smart DC — Dialectical Verification</div>';
+
+      // Three poles
+      const poleColors = {thesis: '#10b981', antithesis: '#ef4444', neutral: '#64748b'};
+      const poleLabels = {thesis: '✓ Thesis (FOR)', antithesis: '✗ Antithesis (AGAINST)', neutral: '○ Neutral'};
+      d.poles.forEach(p => {
+        html += '<div style="margin-bottom:6px;padding:6px;background:#1e293b;border-radius:4px;border-left:3px solid ' + poleColors[p.role] + '">'
+          + '<div style="font-size:10px;color:' + poleColors[p.role] + ';font-weight:bold;margin-bottom:2px">' + poleLabels[p.role] + '</div>'
+          + '<div style="font-size:12px;color:#d1d5db">' + p.text + '</div>'
+          + '</div>';
+      });
+
+      // Synthesis
+      html += '<div style="margin-top:8px;padding:8px;background:#1a2332;border-radius:4px;border:1px solid #facc15">'
+        + '<div style="font-size:10px;color:#facc15;font-weight:bold;margin-bottom:2px">⊕ SYNTHESIS (confidence: ' + (d.confidence * 100).toFixed(0) + '%' + (d.centroid_distance >= 0 ? ', centroid: ' + d.centroid_distance : '') + ')</div>'
+        + '<div style="font-size:12px;color:#e2e8f0">' + d.synthesis + '</div>'
+        + '</div>';
+
+      // Action buttons
+      html += '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'
+        + '<button onclick="graphSmartDCApply(' + d.original_idx + ',\'' + d.synthesis.replace(/'/g, "\\'").replace(/\n/g, "\\n") + '\',' + d.confidence + ')" '
+        + 'class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">✓ Accept (replace node)</button>'
+        + '<button onclick="graphSmartDCAdd(\'' + d.synthesis.replace(/'/g, "\\'").replace(/\n/g, "\\n") + '\',' + d.confidence + ',' + d.original_idx + ')" '
+        + 'class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">+ Add as new node</button>';
+      // Recursion: if confidence < 0.8, offer to deepen
+      if (d.confidence < 0.8) {
+        html += '<button onclick="graphSmartDCDeepen(' + d.original_idx + ',\'' + d.synthesis.replace(/'/g, "\\'").replace(/\n/g, "\\n") + '\')" '
+          + 'class="px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-white text-xs rounded" '
+          + 'title="Confidence ' + (d.confidence * 100).toFixed(0) + '% < 80% — run another Smart DC cycle on the synthesis">'
+          + '↻ Deepen (' + (d.confidence * 100).toFixed(0) + '% < 80%)</button>';
+      }
+      html += '</div>';
+
+      html += '</div>';
+      detailView.insertAdjacentHTML('beforeend', html);
+    } catch(e) {
+      console.error('SmartDC error:', e);
+    }
+    btn.disabled = false; btn.textContent = '⚡ Verify';
+  }
+
+  // ── Auto-think (tick) ──
+  let _autoRunning = false;
+  let _autoRunLog = [];
+
+  async function graphAutoRun() {
+    if (_autoRunning) {
+      _autoRunning = false;
+      document.getElementById('graph-btn-autorun').textContent = '🔄 Run';
+      return;
+    }
+    // Check if goal exists
+    const hasGoal = graphData.nodes && graphData.nodes.some(n => n.type === 'goal');
+    if (!hasGoal) {
+      const goalText = prompt('Set a goal (point B) before running:\nWhat do you want to achieve?');
+      if (!goalText || !goalText.trim()) return;
+      // Add goal node
+      const r = await fetch('/graph/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text: goalText.trim(), node_type: 'goal', ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (!d.error) {
+        graphSaveUndo();
+        graphUpdateView(d);
+      }
+    }
+
+    _autoRunning = true;
+    _autoRunLog = [];
+    const btn = document.getElementById('graph-btn-autorun');
+    btn.textContent = '⏹ Stop';
+    btn.style.background = '#991b1b';
+
+    const maxSteps = parseInt(document.getElementById('graph-autorun-steps').value) || 20;
+    for (let step = 0; step < maxSteps && _autoRunning; step++) {
+      // 1. Get tick suggestion
+      const res = await fetch('/graph/tick', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+          sim_mode: document.getElementById('graph-sim-mode').value,
+          stable_threshold: parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8,
+          run_mode: document.getElementById('graph-run-mode').value,
+        })
+      });
+      const d = await res.json();
+      _autoRunLog.push({step: step + 1, action: d.action, reason: d.reason});
+
+      if (d.action === 'none' || d.action === 'stable') {
+        _autoRunLog.push({step: step + 1, action: 'STABLE', reason: d.reason});
+        break;
+      }
+
+      // 2. Execute action automatically
+      const targetIdx = Array.isArray(d.target) ? d.target[0] : d.target;
+      if (targetIdx !== undefined) {
+        graphSelectedNode = targetIdx;
+      }
+
+      try {
+        if (d.action === 'smartdc') {
+          await _autoRunSmartDC(targetIdx);
+        } else if (d.action === 'elaborate' || d.action === 'elaborate_toward') {
+          await _autoRunElaborate(targetIdx);
+        } else if (d.action === 'think_toward') {
+          await _autoRunThink();
+        } else if (d.action === 'expand') {
+          await _autoRunExpand(targetIdx);
+        } else if (d.action === 'collapse') {
+          await _autoRunCollapse(d.target);
+        } else if (d.action === 'ask') {
+          await _autoRunAsk(targetIdx);
+        } else if (d.action === 'rephrase') {
+          await _autoRunRephrase(targetIdx);
+        }
+      } catch(e) {
+        console.error('AutoRun action error:', e);
+        _autoRunLog.push({step: step + 1, action: 'ERROR', reason: e.message});
+        break;
+      }
+
+      // 3. Update UI
+      graphRenderSvg();
+      graphUpdateThoughtsList();
+
+      // 4. Small delay for visibility
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    _autoRunning = false;
+    btn.textContent = '🔄 Run';
+    btn.style.background = '';
+
+    // Final summary after cycle ends
+    try {
+      const outputFormat = document.getElementById('graph-output-format').value;
+      if (outputFormat !== 'none') {
+        const allNodes = graphData.nodes.filter(n => n.depth >= 0 && n.type !== 'goal');
+        const indices = allNodes.map(n => n.id);
+        if (indices.length >= 2) {
+          const goalNode = graphData.nodes.find(n => n.type === 'goal');
+          const goalText = goalNode ? goalNode.text : '';
+          _autoRunLog.push({step: _autoRunLog.length + 1, action: 'FINAL_SUMMARY', reason: outputFormat + ' from ' + indices.length + ' nodes'});
+
+          const formatPrompts = {
+            essay: 'Write a comprehensive essay. Include ALL ideas as sections with reasoning. Add conclusions.',
+            brief: 'Write a brief summary in 3-5 sentences capturing the key findings.',
+            list: 'Write a structured list of key points with brief explanations for each.',
+          };
+          const params = graphGetParams();
+          const colRes = await fetch('/graph/collapse', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              cluster: indices,
+              mode: outputFormat === 'essay' ? 'long' : 'short',
+              no_merge: true,
+              custom_max_tokens: outputFormat === 'essay' ? 4000 : 1000,
+              collapse_prompt: (goalText ? 'Goal: ' + goalText + '\n\n' : '') + formatPrompts[outputFormat],
+              ...params
+            })
+          });
+          const d2 = await colRes.json();
+          if (!d2.error) {
+            graphUpdateView(d2);
+            const goalNode2 = graphData.nodes.find(n => n.type === 'goal');
+            const summaryIdx = graphData.nodes.length - 1;
+            if (goalNode2) {
+              await fetch('/graph/link', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ a: summaryIdx, b: goalNode2.id, ...params })
+              }).then(r => r.json()).then(d3 => { if (!d3.error) graphUpdateView(d3); }).catch(e => console.error(e));
+            }
+          }
+        }
+      }
+    } catch(e) { console.error('Final summary error:', e); }
+
+    // Show log
+    const panel = document.getElementById('graph-detail');
+    panel.style.display = '';
+    document.getElementById('graph-detail-view').innerHTML =
+      '<div style="color:#a78bfa;font-weight:bold;margin-bottom:6px">🔄 Auto-run complete (' + _autoRunLog.length + ' steps)</div>'
+      + _autoRunLog.map(l =>
+        '<div style="font-size:11px;color:#9ca3af">'
+        + '<span style="color:#64748b">#' + l.step + '</span> '
+        + '<span style="color:' + ({smartdc:'#facc15',elaborate:'#a78bfa',expand:'#3b82f6',collapse:'#10b981',think_toward:'#3b82f6',elaborate_toward:'#a78bfa',STABLE:'#10b981',ERROR:'#ef4444'}[l.action]||'#64748b') + '">' + l.action + '</span> '
+        + l.reason
+        + '</div>'
+      ).join('');
+  }
+
+  async function _autoRunSmartDC(idx) {
+    const res = await fetch('/graph/smartdc', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        index: idx,
+        lang: document.getElementById('lang-select').value,
+        temp: parseFloat(document.getElementById('graph-temp').value) || 0.9,
+        top_k: parseInt(document.getElementById('graph-topk').value) || 40,
+        seed: parseInt(document.getElementById('graph-seed').value) || -1,
+        threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+        sim_mode: document.getElementById('graph-sim-mode').value
+      })
+    });
+    const d = await res.json();
+    if (d.synthesis) {
+      // Auto-accept: replace node with synthesis
+      graphData.nodes[idx].text = d.synthesis;
+      graphData.nodes[idx].confidence = d.confidence;
+      await fetch('/graph/sync', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          nodes: graphData.nodes,
+          edges_data: { manual_links: [], manual_unlinks: [], directed: graphDirectedEdges }
+        })
+      });
+    }
+  }
+
+  async function _autoRunElaborate(idx) {
+    const params = graphGetParams();
+    const res = await fetch('/graph/elaborate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: idx, n: 2, ...params })
+    });
+    const d = await res.json();
+    if (!d.error) graphUpdateView(d);
+  }
+
+  async function _autoRunExpand(idx) {
+    const params = graphGetParams();
+    const res = await fetch('/graph/expand', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: idx, n: 2, ...params })
+    });
+    const d = await res.json();
+    if (!d.error) graphUpdateView(d);
+  }
+
+  async function _autoRunThink() {
+    const params = graphGetParams();
+    // Build topic: goal text first, then input field, then any existing node
+    const goalNode = graphData.nodes.find(n => n.type === 'goal');
+    let topic = '';
+    if (goalNode) {
+      topic = goalNode.text;
+    }
+    if (!topic) {
+      topic = document.getElementById('graph-topic').value;
+    }
+    if (!topic) {
+      const anyNode = graphData.nodes.find(n => n.depth >= 0 && n.type !== 'evidence');
+      if (anyNode) topic = anyNode.text;
+    }
+    if (!topic) { console.log('[autorun] No topic for Think'); return; }
+    const res = await fetch('/graph/think', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ topic, n: 10, ...params })
+    });
+    const d = await res.json();
+    if (!d.error) graphUpdateView(d);
+  }
+
+  async function _autoRunCollapse(indices) {
+    const params = graphGetParams();
+    const res = await fetch('/graph/collapse', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cluster: indices, mode: 'short', ...params })
+    });
+    const d = await res.json();
+    if (!d.error) graphUpdateView(d);
+  }
+
+  async function _autoRunAsk(idx) {
+    // Generate a probing question about this node via LLM
+    const node = graphData.nodes[idx];
+    if (!node) return;
+    const res = await fetch('/graph/studio/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mode: 'freeform',
+        index: idx,
+        text: node.text,
+        instruction: 'Generate ONE probing question that challenges this idea or reveals a hidden assumption. Just the question, nothing else.',
+        temp: 0.9,
+        top_k: 40,
+        max_tokens: 60,
+        lang: document.getElementById('lang-select').value,
+      })
+    });
+    const d = await res.json();
+    if (d.variants && d.variants.length > 0) {
+      const questionText = d.variants[0].text;
+      // Add as question node linked to parent
+      await fetch('/graph/studio/apply-child', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          index: idx,
+          text: questionText,
+          type: 'elaborate',
+          threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+          sim_mode: document.getElementById('graph-sim-mode').value
+        })
+      }).then(r => r.json()).then(d2 => {
+        if (!d2.error) {
+          graphUpdateView(d2);
+          // Set type to question
+          const newIdx = graphData.nodes.length - 1;
+          fetch('/graph/set-type', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({index: newIdx, type: 'question'})
+          }).catch(e => console.error('set-type error:', e));
+          if (graphData.nodes[newIdx]) graphData.nodes[newIdx].type = 'question';
+        }
+      }).catch(e => console.error('apply-child error:', e));
+    }
+  }
+
+  async function _autoRunRephrase(idx) {
+    // Auto-rephrase: ask LLM to make hypothesis more specific and testable
+    const node = graphData.nodes[idx];
+    if (!node) return;
+    const res = await fetch('/graph/studio/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mode: 'rephrase',
+        index: idx,
+        text: node.text,
+        instruction: 'Make this hypothesis more specific, concrete and testable. Keep the core meaning.',
+        temp: parseFloat(document.getElementById('graph-temp').value) || 0.7,
+        top_k: parseInt(document.getElementById('graph-topk').value) || 40,
+        max_tokens: 200,
+        lang: document.getElementById('lang-select').value,
+      })
+    });
+    const d = await res.json();
+    if (d.variants && d.variants.length > 0) {
+      // Auto-apply first variant
+      const newText = d.variants[0].text;
+      await fetch('/graph/studio/apply-rephrase', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index: idx, text: newText })
+      });
+      graphData.nodes[idx].text = newText;
+      graphRenderSvg();
+      graphUpdateThoughtsList();
+    }
+  }
+
+  async function graphTick() {
+    const btn = document.getElementById('graph-btn-tick');
+    btn.disabled = true; btn.textContent = '🧠 Thinking...';
+    try {
+      const res = await fetch('/graph/tick', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+          sim_mode: document.getElementById('graph-sim-mode').value
+        })
+      });
+      const d = await res.json();
+
+      if (d.action === 'none' || d.action === 'stable') {
+        // Show message in detail view area
+        const panel = document.getElementById('graph-detail');
+        panel.style.display = '';
+        document.getElementById('graph-detail-view').innerHTML =
+          '<div style="color:#10b981;font-weight:bold;margin-bottom:4px">🧠 Auto-think</div>'
+          + '<div style="color:#d1d5db;font-size:12px">' + d.reason + '</div>';
+      } else {
+        // Select target node and show suggestion
+        if (d.target !== undefined) {
+          const targetIdx = Array.isArray(d.target) ? d.target[0] : d.target;
+          graphSelectedNode = targetIdx;
+          graphRenderSvg();
+          graphShowDetail(targetIdx);
+        }
+        // Show action suggestion
+        const detailView = document.getElementById('graph-detail-view');
+        const actionColors = {smartdc: '#facc15', elaborate: '#a78bfa', collapse: '#10b981', expand: '#3b82f6'};
+        const actionLabels = {smartdc: '⚡ Verify', elaborate: '✎ Elaborate', collapse: '⊕ Collapse', expand: '☞ Expand'};
+        let html = '<div style="border-top:1px solid #7c3aed;margin-top:8px;padding-top:8px">'
+          + '<div style="color:#a78bfa;font-weight:bold;font-size:12px;margin-bottom:4px">🧠 Auto-think suggests:</div>'
+          + '<div style="color:' + (actionColors[d.action] || '#d1d5db') + ';font-size:12px;margin-bottom:4px">'
+          + (actionLabels[d.action] || d.action) + '</div>'
+          + '<div style="color:#9ca3af;font-size:11px;margin-bottom:6px">' + d.reason + '</div>';
+
+        // Action button
+        if (d.action === 'smartdc') {
+          html += '<button onclick="graphSmartDC()" class="px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-white text-xs rounded">⚡ Run Verify</button>';
+        } else if (d.action === 'elaborate') {
+          html += '<button onclick="graphShowAddEvidence()" class="px-3 py-1 bg-cyan-700 hover:bg-cyan-600 text-white text-xs rounded">+ Add evidence</button>';
+          html += ' <button onclick="openStudio(\'elaborate_preview\')" class="px-3 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded">✎ AI generate</button>';
+        } else if (d.action === 'expand') {
+          html += '<button onclick="openStudio(\'expand_preview\')" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">☞ Run Expand</button>';
+        } else if (d.action === 'collapse') {
+          html += '<button onclick="graphCollapseViaStudio()" class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">⊕ Run Collapse</button>';
+        } else if (d.action === 'ask') {
+          html += '<button onclick="_autoRunAsk(' + d.target + ')" class="px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white text-xs rounded">❓ Ask</button>';
+        } else if (d.action === 'rephrase') {
+          html += '<button onclick="openStudio(\'rephrase\')" class="px-3 py-1 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded">✐ Rephrase</button>';
+        } else if (d.action === 'think_toward') {
+          html += '<button onclick="graphThink()" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">💭 Think toward goal</button>';
+        } else if (d.action === 'elaborate_toward') {
+          html += '<button onclick="openStudio(\'elaborate_preview\')" class="px-3 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded">✎ Elaborate toward goal</button>';
+          html += ' <button onclick="graphShowAddEvidence()" class="px-3 py-1 bg-cyan-700 hover:bg-cyan-600 text-white text-xs rounded">+ Evidence</button>';
+        }
+        // "Next" button — run tick again after action
+        html += ' <button onclick="graphTick()" class="px-3 py-1 bg-neutral-700 hover:bg-neutral-600 text-white text-xs rounded ml-2">🧠 Next</button>';
+        html += '</div>';
+        detailView.insertAdjacentHTML('beforeend', html);
+      }
+    } catch(e) {
+      console.error('Tick error:', e);
+    }
+    btn.disabled = false; btn.textContent = '🧠 Auto';
+  }
+
+  function graphSetNodeType(nodeType) {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    fetch('/graph/set-type', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({index: idx, type: nodeType})
+    }).then(r => r.json()).then(d => {
+      if (d.ok) {
+        graphData.nodes[idx].type = nodeType;
+        document.getElementById('graph-add-evidence-btn').style.display =
+          (nodeType === 'hypothesis') ? '' : 'none';
+        graphRenderSvg();
+        graphUpdateThoughtsList();
+      }
+    }).catch(e => console.error('set-type error:', e));
+  }
+
+  function graphShowAddEvidence() {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const detailView = document.getElementById('graph-detail-view');
+    // Check if evidence form already shown
+    if (document.getElementById('graph-evidence-form')) return;
+    const html = '<div id="graph-evidence-form" style="margin-top:8px;border-top:1px solid #0e7490;padding-top:8px">'
+      + '<div style="color:#06b6d4;font-weight:bold;font-size:11px;margin-bottom:4px">+ Add Evidence (Bayesian update)</div>'
+      + '<input id="graph-evidence-text" type="text" placeholder="Evidence text..." '
+      + 'class="w-full px-2 py-1 bg-neutral-800 text-white text-xs rounded border border-neutral-700 mb-2">'
+      + '<div class="flex items-center gap-3 mb-2">'
+      + '<label class="text-xs text-neutral-400">Relation:</label>'
+      + '<select id="graph-evidence-relation" class="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-1">'
+      + '<option value="supports">Supports ✓</option>'
+      + '<option value="contradicts">Contradicts ✗</option>'
+      + '</select>'
+      + '<label class="text-xs text-neutral-400">Strength:</label>'
+      + '<input id="graph-evidence-strength" type="range" min="10" max="99" value="70" step="1" '
+      + 'class="w-16 h-1 accent-cyan-500" oninput="document.getElementById(\'graph-evidence-str-val\').textContent=this.value+\'%\'">'
+      + '<span id="graph-evidence-str-val" class="text-xs text-neutral-300">70%</span>'
+      + '</div>'
+      + '<button onclick="graphSubmitEvidence(' + idx + ')" class="px-3 py-1 bg-cyan-700 hover:bg-cyan-600 text-white text-xs rounded">Apply Evidence</button>'
+      + '</div>';
+    detailView.insertAdjacentHTML('beforeend', html);
+  }
+
+  function graphSubmitEvidence(hypIdx) {
+    const text = document.getElementById('graph-evidence-text').value.trim();
+    if (!text) return;
+    const relation = document.getElementById('graph-evidence-relation').value;
+    const strength = parseInt(document.getElementById('graph-evidence-strength').value) / 100;
+    fetch('/graph/add-evidence', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        hypothesis: hypIdx,
+        text: text,
+        relation: relation,
+        strength: strength,
+        threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+        sim_mode: document.getElementById('graph-sim-mode').value
+      })
+    }).then(r => r.json()).then(d => {
+      if (d.error) { alert(d.error); return; }
+      graphUpdateView(d);
+      // Show Bayes update result
+      if (d.bayes_update) {
+        const bu = d.bayes_update;
+        const detailView = document.getElementById('graph-detail-view');
+        const resultHtml = '<div style="color:#06b6d4;font-size:11px;margin-top:4px">'
+          + 'Bayes: ' + (bu.prior * 100).toFixed(0) + '% → ' + (bu.posterior * 100).toFixed(0) + '% '
+          + '(' + bu.relation + ')</div>';
+        detailView.insertAdjacentHTML('beforeend', resultHtml);
+      }
+      graphShowDetail(hypIdx);
+    }).catch(e => console.error('add-evidence error:', e));
+  }
+
+  function graphSmartDCDeepen(originalIdx, synthesisText) {
+    // Replace node text with current synthesis, then run Smart DC again
+    const node = graphData.nodes[originalIdx];
+    if (!node) return;
+    node.text = synthesisText;
+    // Run Smart DC on the updated node
+    graphSelectedNode = originalIdx;
+    graphSmartDC();
+  }
+
+  function graphSmartDCApply(idx, synthesis, confidence) {
+    // Replace node text and update confidence
+    const node = graphData.nodes[idx];
+    if (!node) return;
+    node.text = synthesis;
+    node.confidence = confidence;
+    // Sync to backend
+    fetch('/graph/sync', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        nodes: graphData.nodes,
+        edges_data: {
+          manual_links: [],
+          manual_unlinks: [],
+          directed: graphDirectedEdges,
+        }
+      })
+    }).then(() => {
+      graphRenderSvg();
+      graphUpdateThoughtsList();
+      graphShowDetail(idx);
+    }).catch(e => console.error('smartdc accept error:', e));
+  }
+
+  function graphSmartDCAdd(synthesis, confidence, parentIdx) {
+    // Add synthesis as new child node
+    fetch('/graph/studio/apply-child', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        index: parentIdx,
+        text: synthesis,
+        type: 'elaborate',
+        threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+        sim_mode: document.getElementById('graph-sim-mode').value
+      })
+    }).then(r => r.json()).then(d => {
+      graphUpdateView(d);
+      graphShowDetail(d.nodes.length - 1);
+    }).catch(e => console.error('smartdc add error:', e));
+  }
+
   function graphDetailClose() {
     graphSelectedNode = -1;
+    _graphWalkPath = null;
     document.getElementById('graph-detail').style.display = 'none';
     graphRenderSvg();
-    // Clear highlights
     document.getElementById('graph-thoughts').querySelectorAll('div').forEach(d => { d.style.background = ''; });
+  }
+
+  // ── Random Walk ──
+  let _graphWalkPath = null;
+  let _graphTraps = [];
+
+  async function graphWalk() {
+    const idx = graphSelectedNode;
+    if (idx < 0) return;
+    const btn = document.getElementById('graph-walk-btn');
+    btn.disabled = true; btn.textContent = '...';
+    try {
+      const res = await fetch('/graph/walk', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          start: idx, steps: 5, runs: 50,
+          threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+          sim_mode: document.getElementById('graph-sim-mode').value
+        })
+      });
+      const d = await res.json();
+      _graphWalkPath = d.path || [];
+      graphRenderSvg();
+      // Show endpoints in detail view
+      const detailView = document.getElementById('graph-detail-view');
+      let html = '<div style="color:#10b981;font-weight:bold;margin-bottom:4px">Walk: ' + d.steps + ' steps, ' + d.runs + ' runs</div>';
+      html += '<div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Most likely path: ' + _graphWalkPath.map(i => '#' + i).join(' → ') + '</div>';
+      if (d.endpoints && d.endpoints.length) {
+        html += '<div style="font-size:12px;color:#d1d5db;margin-bottom:4px">Top endpoints:</div>';
+        d.endpoints.forEach(ep => {
+          html += '<div style="font-size:11px;color:#9ca3af;padding:2px 0">'
+            + '<span style="color:#10b981;font-weight:bold">' + ep.pct + '%</span> → '
+            + '<span style="cursor:pointer;text-decoration:underline" onclick="graphSelectFromList(' + ep.idx + ')">#' + ep.idx + '</span> '
+            + ep.text + '</div>';
+        });
+      }
+      detailView.innerHTML = html;
+    } catch(e) {
+      console.error('Walk error:', e);
+    }
+    btn.disabled = false; btn.textContent = '\u{1F6B6} Walk';
   }
 
   function graphDetailEdit() {
@@ -2841,7 +3853,7 @@
     const idx = graphSelectedNode;
     if (idx < 0) return;
     const thought = graphData.nodes[idx].text;
-    const btn = event.target;
+    const btn = document.querySelector('[onclick*="graphDetailExpand"]');
     btn.disabled = true; btn.textContent = '...';
     const r = await fetch('/graph/expand', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2928,7 +3940,7 @@
     const clusters = graphData.clusters || [];
     if (clusterIdx >= clusters.length) return;
     const cluster = clusters[clusterIdx];
-    const ideas = cluster.map(i => graphData.nodes[i].text);
+    const ideas = cluster.map(i => graphData.nodes[i]?.text).filter(Boolean);
     openStudio('collapse_preview', { ideas, cluster });
   }
 
@@ -2936,9 +3948,10 @@
     const input = document.getElementById('graph-topic');
     const text = input.value.trim();
     if (!text) return;
+    const addType = document.getElementById('graph-add-type').value;
     const r = await fetch('/graph/add', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ text, ...graphGetParams() })
+      body: JSON.stringify({ text, node_type: addType, ...graphGetParams() })
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
