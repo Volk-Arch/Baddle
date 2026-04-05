@@ -23,6 +23,9 @@ _settings = {
     "local_model": "",          # filename in models/
     "local_gpu_layers": -1,
     "local_ctx": 4096,
+    # Embedding model (separate from main model)
+    "embedding_model": "",      # API: model name for /v1/embeddings. Local: GGUF filename
+    "local_embedding_path": "", # full path to local embedding GGUF (e.g. nomic-embed-text.gguf)
 }
 
 
@@ -56,7 +59,8 @@ def get_settings():
 def update_settings(new: dict):
     for k in ("mode", "api_url", "api_key", "api_model",
               "hybrid_graph", "hybrid_embeddings", "hybrid_chat",
-              "local_model", "local_gpu_layers", "local_ctx"):
+              "local_model", "local_gpu_layers", "local_ctx",
+              "embedding_model", "local_embedding_path"):
         if k in new:
             _settings[k] = new[k]
     _save_settings()
@@ -190,8 +194,9 @@ def api_get_embedding(text: str) -> list:
         base = base + "/v1"
     url = base + "/embeddings"
 
+    emb_model = _settings.get("embedding_model") or _settings["api_model"]
     body = {
-        "model": _settings["api_model"],
+        "model": emb_model,
         "input": text,
     }
 

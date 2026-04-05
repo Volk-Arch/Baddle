@@ -1,147 +1,114 @@
 # baddle
 
-> Don't ask AI for an answer — watch how it builds one, and take control of the process.
+> AHI Protocol — Augmented Human Intelligence. Don't ask AI for an answer — control the thinking process.
 
 **[Русская версия →](README.md)**
 
-Humans don't think linearly. We throw out points — facts, hypotheses, associations —
-check if they connect, and if they do — go deeper. If not — gather more points
-or restructure the links.
-
-Baddle reproduces this process through LLMs. Not a chatbot — here you branch ideas,
-collapse clusters, intervene in generation at the individual token level.
-Everything runs locally via llama.cpp, no cloud required.
+A thought graph with Bayesian confidence, Markov transitions and dialectical synthesis. Runs locally via llama.cpp or through API. Not a chatbot — here you branch ideas, verify hypotheses, and the system learns with you.
 
 **[Installation & Setup →](SETUP_EN.md)**
 
 ---
 
-## Modes
+## Graph Thinking
 
-### `graph` — graph thinking
+The key mode. Enter a topic → model generates thoughts → connections form → clusters → collapse → repeat.
 
-![Graph mode](images/graph1.jpg)
-![Graph mode](images/graph2.jpg)
+**Two modes of thinking:**
+- **Divergent** — Think generates ideas, Expand branches
+- **Convergent** — Collapse synthesizes a cluster, Elaborate deepens
 
-The key mode. Enter a topic — the model generates a batch of short thoughts.
-Connections are built between them using **cosine similarity on model embeddings**.
-Similar thoughts connect, forming clusters.
+### Bayesian Confidence (Stone 1)
 
-Two modes of thinking, implemented literally:
+Every node has **confidence** (0–1). Everything is determined automatically via LLM:
 
-- **Divergent** — Think generates a batch of ideas, Expand branches from a specific node
-- **Convergent** — Collapse merges a cluster into a coherent paragraph, Elaborate deepens a specific thought
+- **Auto-type + auto-confidence** — LLM classifies text (hypothesis/fact/question/evidence) and rates initial confidence in one call. "Ants are better than sparrows" → hypothesis 35%. "Earth is round" → fact 95%
+- **Auto-evidence** — Expand/Elaborate children automatically become evidence. LLM determines supports/contradicts and strength. Parent confidence updates via Bayes
+- **α/β model** — for hypotheses: α = sum of supports, β = sum of contradicts. Progress bar + evidence list sorted by strength ("What changes the mind?")
+- **Manual evidence** — "+ Evidence" button, supports/contradicts, strength slider
+- **Edge types** — similarity (grey), supports (green →), contradicts (red ⇢), temporal (cyan), directed (purple →)
 
-**Cycle: generate thoughts → build connections → cluster → collapse → repeat.** Each collapse raises the level of abstraction.
+### Markov Transitions (Stone 2)
 
-**Interface:**
-- **Right-click** on a node → context menu (Expand / Elaborate / Edit / Delete)
-- **Hover** → full thought text
-- **Drag** → reposition nodes
-- **Link mode** → toggle button enables linking, click two nodes → connect/disconnect (dashed lines)
-- **Convex hull** — semi-transparent boundary around clusters
-- **Collapsed nodes** — square shape, larger (visually distinct from regular thoughts)
-- **Edges** — thickness and opacity by connection strength
-- **Scroll wheel** — zoom graph, **drag background** — pan
-- **Ctrl+Z** — undo, **Delete** — remove node, **Esc** — deselect
-- **⟳ Layout** — recalculate node positions
-- **↓ Save / ↑ Load** — export/import graph as JSON (nodes as objects, edges, positions, clusters)
-- **Confidence** — 0-100% confidence slider on each node, border color reflects certainty
-- **temp / top_k** — tune generation parameters directly in the graph interface
-- **threshold** — live recalculation of edges and clusters when adjusting the similarity threshold
-- **Collapse ▾** — short (paragraph), long (detailed essay), or custom token limit
-- **Collapse prompt** — custom instruction for collapse ("compare", "find contradictions", "write a plan")
-- **Collapse without merging** — "keep" checkbox: generates text but keeps original nodes (for testing different collapses)
-- **Node entropy** — per-token heatmap in detail panel on click
-- **→ Flow** — directed flow layout: nodes in columns by depth (Topic→Think→Expand→Elaborate). Toggle free graph / flow
-- **Source tracking** — selecting a node shows which thought it originated from (purple "↳ from:")
-- **Thought list** — sorted by cluster, click text to select node on graph, click node to highlight cluster in list
-- **Topic nodes** — root topics as full diamond-shaped nodes (depth=-1), multiple topics in one graph, directed edges to children
-- **Fan layout** — in free mode clusters occupy sectors, nodes don't overlap
-- **✂ Select → Collapse / → Chat** — manual selection of arbitrary nodes, then Collapse or send to chat as context
-- **☐ All** — select all nodes with one button
-- **→ Chat with graph context** — selected nodes are sent to chat as context (option "structure" includes full graph: clusters, edges, weights)
-- **To Graph** — manually add text to graph without links, or send collapse result back to graph
-- **seed** — reproducible generation in graph mode
-- **Heatmap scale** — adjustable entropy scale next to the heatmap checkbox
+Every edge has **transition_prob** — probability of traversal. Normalized, directed edges get a bonus.
 
-Works only in in-process mode (without `--server`).
+- **Random Walk** — 🚶 Walk button: "where does this thought lead?" 50 simulations, top-3 endpoints
+- **Trap detector** — nodes with high inflow, low outflow → red outline
+- **Hebb learning** — navigating between nodes strengthens transition_prob. "Neurons that fire together, wire together"
+- **Edge tooltip** — P-values, similarity, relation type
+
+### Temporal Links (Stone 3)
+
+Every node stores `created_at` and `last_accessed`.
+
+- **Temporal links** — auto-connections between nodes created within 5 min. Cyan, hidden by default (⏰ Time button)
+- **Timestamps** in detail panel
+
+### Smart DC — Dialectical Synthesis (Stone 4)
+
+**Two automatic thinking modes (🔄 Run):**
+
+**Fast** — priority-based. Fixes weakest problem first, converges when possible.
+
+**Deep** — phase-based. Processes ALL nodes through ALL phases. Doesn't stop until everything is examined.
+
+Both use the same tools:
+1. **Think** — generate ideas (10 at a time)
+2. **Elaborate** — add evidence (α/β without changing confidence)
+3. **Smart DC (Verify)** — dialectical check: thesis/antithesis/neutral → synthesis → confidence from centroid distance (embeddings)
+4. **Ask** — "why do I think this?" (question-node, reveals assumptions)
+5. **Rephrase** — reformulate if evidence doesn't help (max 1 per node)
+6. **Expand** — branch isolated nodes
+7. **Collapse** — synthesize verified clusters
+8. **META** — "what did I miss?" (another Think round after verification)
+9. **Summary** — final text → linked to goal (essay/brief/list/none)
+
+Common mechanisms: BFS to goal (shortest path), exploration (if obvious fails → try less obvious), trap avoidance (bypass dead ends)
+- **🔄 Run** — full automatic cycle: tick → action → ... until stable. Configurable steps, stable threshold, output format (essay/brief/list/none). Prompts for goal if none exists. At stable — final document (join all thoughts + conclusions) → linked to goal. Exploration: if best path fails — tries less obvious route
+- **Types: goal / action** — goal = target state (point B), action = completed action. A→B navigation: system guides from current state to goal. Goal auto-links to all hypotheses
+- **Context menu** — right-click: Expand, Elaborate, Rephrase, Verify, Walk, Evidence, Chat, Edit, node type, Delete
+
+### Generation Studio
+
+Universal modal: Rephrase, Elaborate, Expand, Collapse, Freeform. Batch generation of N variants, compare, Apply.
+
+### Graph Interface
+
+- Right-click → context menu, drag → reposition, scroll → zoom, drag background → pan
+- Link mode, Undo (Ctrl+Z), Delete, Esc
+- → Flow / free graph, ⟳ Layout, ↓ Save / ↑ Load
+- threshold — live edge recalculation
+- Thought list with numbers, types [H][E][F][Q], sorted by cluster
+- Detail panel: per-token heatmap, confidence slider, source tracking, connected edges with P-values
 
 ---
+
+## Other Modes
 
 ### `step` — token-by-token generation
 
-![Step mode](images/step.jpg)
+One token at a time. Probability distribution (top-10), editable text, heatmap.
 
-The model generates **one token at a time**. After each token you see
-the probability distribution (top-10), can change temperature and top_k,
-and continue generating.
+### `parallel` — two prompts / compare
 
-Text is **editable** — `Edit` enables editing, `Sync` applies changes.
-The model picks up from there.
-
-Tokens are highlighted with a **confidence heatmap** — green (confident),
-yellow, red (high entropy, guessing).
-
----
-
-### `parallel` — two prompts at once
-
-![Parallel mode](images/parallel.jpg)
-
-Two different prompts generate in parallel. Live split-screen,
-both streams updating in real time. Each stream has its own **temp** and **top_k**.
-
-**compare** checkbox — one prompt, two parameter sets. Both streams start
-from identical tokens and diverge when parameters produce different samples.
-A badge shows the exact divergence step.
-
-With the `--server` flag, both prompts are processed simultaneously on GPU.
-
----
+Two prompts in parallel, each with temp/top_k. **compare** checkbox — one prompt, two configs, divergence badge.
 
 ### `chat` — conversation with the model
 
-![Chat mode](images/chat.jpg)
-
-Chat via chat template (ChatML / Jinja2). Roles, temperature, token limit.
-**Continue** resumes truncated responses. Heatmap shows confidence.
-
-**Context sidebar** — right panel with a persistent context buffer:
-- Add context from graph (→ Chat), from model responses (→ ctx), or manually
-- Toggle or remove individual items
-- **structure** checkbox — passes full graph structure (clusters, edges, weights)
-- **→ graph** — send text from chat to graph without switching tabs
+Chat template (ChatML / Jinja2). Continue, heatmap.
+**Context sidebar** — context from graph (→ Chat), from responses (→ ctx), manual. **→ graph** — send chat text to graph.
 
 ---
 
-### Hybrid mode: parallel/compare → step
+## Common Features
 
-The **→ Step** button on each stream switches to step mode preserving
-text and KV cache. In-process mode only.
+- **Confidence heatmap** — tokens colored by entropy, adjustable scale
+- **Roles** — presets from `roles.json`, EN/RU switcher
+- **Settings** — Local / API / Hybrid, auto-load models from API, hot-swap, `settings.json`
+- **Embedding model** — separate model for embeddings (similarity + Smart DC centroid). Dropdown in Settings from available API/local models
+- **Similarity** — Embedding / Jaccard / Off, auto-fallback
 
----
-
-### Common features
-
-- **Confidence heatmap** — across all modes, tokens colored by entropy
-- **Roles** — presets from `roles.json` (prefix in step/parallel/compare, system message in chat)
-- **Language** — EN/RU switcher: roles, system prompts (including graph mode) in the selected language
-- **Seed** — reproducible results (parallel, compare)
-- **Token counter** — used / available context tokens
-- **Settings** — choose how the app runs:
-  - **Local** — everything on local model (llama.cpp)
-  - **API** — OpenAI-compatible API (GPT-4, Claude, etc.) for graph and chat
-  - **Hybrid** — per-component routing (e.g. graph via API, embeddings locally)
-  - Auto-load model list from API, hot-swap local models without restart
-  - Settings persist in `settings.json`
-- **Similarity mode** — Embedding / Jaccard / Off. Auto-fallback to Jaccard on API error
-
-> ⚠️ **LM Studio**: set **"Only Keep Last JIT Loaded Model"** to OFF,
-> otherwise the model unloads between chat and embedding requests. Or use
-> Jaccard similarity instead of Embedding — it requires no separate API call.
-
-- **Generation Studio** — universal modal for generating with variant selection. Rephrase, Elaborate, Expand, Collapse — all through Studio with temp/top_k/max_tokens settings, batch generation of N variants, compare and apply the best
+> 💡 **Recommended**: main model (Qwen3-8B) for generation + separate embedding model (nomic-embed-text) for similarity and Smart DC centroid. Both run in parallel via LM Studio without conflicts.
 
 ---
 
