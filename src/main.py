@@ -22,7 +22,7 @@ except ImportError:
     _HAS_LLAMA_CPP = False
 
 console = Console()
-MODELS_DIR = Path(__file__).parent / "models"
+MODELS_DIR = Path(__file__).parent.parent / "models"
 
 
 # ── config dataclass ──────────────────────────────────────────────────────────
@@ -162,7 +162,8 @@ def get_embedding(llm: Llama, text: str) -> np.ndarray:
         if data.ndim == 2:
             data = data.mean(axis=0)
         return data
-    except Exception:
+    except Exception as e:
+        print(f"[embedding] error: {e}")
         return np.array([], dtype=np.float32)
     finally:
         if not was_embedding:

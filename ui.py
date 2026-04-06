@@ -13,21 +13,21 @@ try:
 except ImportError:
     sys.exit("[error] flask not found.  pip install flask")
 
-sys.path.insert(0, str(Path(__file__).parent))
-from main import pick_model
+from src.main import pick_model
 
 # These need llama-cpp-python — may be None in server-only mode
 try:
-    from main import (load_model, _batch_generate_iter, _interleaved_generate_iter,
-                      _sample, _get_logits, _entropy, format_chat)
+    from src.main import (load_model, _batch_generate_iter, _interleaved_generate_iter,
+                          _sample, _get_logits, _entropy, format_chat)
 except ImportError:
     load_model = _batch_generate_iter = _interleaved_generate_iter = None
     _sample = _get_logits = _entropy = format_chat = None
 
-from graph import graph_bp, init_graph
-from step import step_bp, init_step, get_step_state
-from chat import chat_bp, init_chat
-from parallel import parallel_bp, init_parallel, get_dual_result
+from src.graph_routes import graph_bp
+from src.graph_logic import init_graph
+from src.step import step_bp, init_step, get_step_state
+from src.chat import chat_bp, init_chat
+from src.parallel import parallel_bp, init_parallel, get_dual_result
 
 app = Flask(__name__)
 app.register_blueprint(graph_bp)
@@ -82,7 +82,7 @@ def model_info():
 
 # ── Settings (local/API) ─────────────────────────────────────────────────────
 
-from api_backend import get_settings, update_settings, fetch_models, list_local_models
+from src.api_backend import get_settings, update_settings, fetch_models, list_local_models
 
 @app.route("/settings", methods=["GET"])
 def settings_get():
@@ -158,7 +158,7 @@ def dual_to_step():
     step_state["temp"] = temp
     step_state["top_k"] = top_k
     step_state["ready"] = True
-    from step import _step_top_tokens
+    from src.step import _step_top_tokens
     return jsonify({
         "text": text,
         "top": _step_top_tokens(),
@@ -185,7 +185,7 @@ def main():
         if args.server == "auto" or not args.server.startswith("http"):
             model_path = pick_model(args.model)
             gpu_layers = 0 if args.no_gpu else args.gpu_layers
-            from server_backend import launch_server
+            from src.server_backend import launch_server
             print("  Starting llama-server...")
             server_url = launch_server(
                 str(model_path), n_ctx=args.ctx, gpu_layers=gpu_layers,
@@ -193,7 +193,7 @@ def main():
             model_name = f"server: {server_url}"
             print(f"  Server ready: {server_url}")
         else:
-            from server_backend import server_available
+            from src.server_backend import server_available
             if server_available(args.server):
                 server_url = args.server.rstrip("/")
                 model_name = f"server: {server_url}"
@@ -203,7 +203,7 @@ def main():
 
     if server_url is None:
         # Check if API mode is configured — skip local model loading
-        from api_backend import get_settings
+        from src.api_backend import get_settings
         saved_settings = get_settings()
         skip_local = saved_settings.get("mode") == "api" and saved_settings.get("api_url")
 

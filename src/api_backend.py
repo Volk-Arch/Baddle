@@ -8,7 +8,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_SETTINGS_FILE = Path(__file__).parent / "settings.json"
+_SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
 
 _settings = {
     "mode": "local",        # "local" | "api" | "hybrid"
@@ -23,6 +23,9 @@ _settings = {
     "local_model": "",          # filename in models/
     "local_gpu_layers": -1,
     "local_ctx": 4096,
+    # Embedding model (separate from main model)
+    "embedding_model": "",      # API: model name for /v1/embeddings. Local: GGUF filename
+    "local_embedding_path": "", # full path to local embedding GGUF (e.g. nomic-embed-text.gguf)
 }
 
 
@@ -56,7 +59,8 @@ def get_settings():
 def update_settings(new: dict):
     for k in ("mode", "api_url", "api_key", "api_model",
               "hybrid_graph", "hybrid_embeddings", "hybrid_chat",
-              "local_model", "local_gpu_layers", "local_ctx"):
+              "local_model", "local_gpu_layers", "local_ctx",
+              "embedding_model", "local_embedding_path"):
         if k in new:
             _settings[k] = new[k]
     _save_settings()
@@ -64,7 +68,7 @@ def update_settings(new: dict):
 
 def list_local_models() -> list[str]:
     """Scan models/ directory for GGUF files."""
-    models_dir = Path(__file__).parent / "models"
+    models_dir = Path(__file__).parent.parent / "models"
     if not models_dir.exists():
         return []
     return sorted([f.name for f in models_dir.glob("*.gguf")])
@@ -190,8 +194,9 @@ def api_get_embedding(text: str) -> list:
         base = base + "/v1"
     url = base + "/embeddings"
 
+    emb_model = _settings.get("embedding_model") or _settings["api_model"]
     body = {
-        "model": _settings["api_model"],
+        "model": emb_model,
         "input": text,
     }
 
