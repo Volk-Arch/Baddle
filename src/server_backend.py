@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional, Tuple
 
 if TYPE_CHECKING:
-    from main import StreamCfg
+    from .main import StreamCfg
 
 _server_proc: Optional[subprocess.Popen] = None
 
@@ -59,7 +59,7 @@ def is_native_server(base_url: str, timeout: float = 3.0) -> bool:
 
 def has_native_server() -> bool:
     """Check if a native llama-server binary is available (project dir or PATH)."""
-    project_dir = Path(__file__).resolve().parent / "llama-server"
+    project_dir = Path(__file__).resolve().parent.parent / "llama-server"
     for name in ("llama-server", "llama-server.exe"):
         if (project_dir / name).is_file():
             return True
@@ -76,7 +76,7 @@ def _build_server_cmd(model_path: str, port: int, n_ctx: int, gpu_layers: int) -
     # 1. Native binary (llama.cpp releases)
     # Check: project/llama-server/ folder, then PATH, then llama_cpp package
     binary = None
-    project_dir = Path(__file__).resolve().parent / "llama-server"
+    project_dir = Path(__file__).resolve().parent.parent / "llama-server"
     for name in ("llama-server", "llama-server.exe"):
         candidate = project_dir / name
         if candidate.is_file():

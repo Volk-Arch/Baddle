@@ -8,7 +8,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_SETTINGS_FILE = Path(__file__).parent / "settings.json"
+_SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
 
 _settings = {
     "mode": "local",        # "local" | "api" | "hybrid"
@@ -68,7 +68,7 @@ def update_settings(new: dict):
 
 def list_local_models() -> list[str]:
     """Scan models/ directory for GGUF files."""
-    models_dir = Path(__file__).parent / "models"
+    models_dir = Path(__file__).parent.parent / "models"
     if not models_dir.exists():
         return []
     return sorted([f.name for f in models_dir.glob("*.gguf")])

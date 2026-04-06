@@ -22,7 +22,7 @@ except ImportError:
     _HAS_LLAMA_CPP = False
 
 console = Console()
-MODELS_DIR = Path(__file__).parent / "models"
+MODELS_DIR = Path(__file__).parent.parent / "models"
 
 
 # ── config dataclass ──────────────────────────────────────────────────────────
