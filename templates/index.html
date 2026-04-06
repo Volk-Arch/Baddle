@@ -199,7 +199,7 @@
 
   <!-- ══ Role (shared) ══ -->
   <div class="flex flex-wrap gap-3 items-start mb-3 mt-3">
-    <span class="text-neutral-500 text-sm w-16 shrink-0" style="margin-top:7px">Role</span>
+    <!-- Role label removed for cleaner layout -->
     <select id="lang-select" onchange="onLangChange()"
       style="background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; font-size:0.875rem; width:80px;">
       <option value="en">EN</option>
@@ -480,94 +480,173 @@
   <!-- ══ GRAPH mode ══ -->
   <div id="cfg-graph" class="hidden">
     <!-- Actions bar: collapse + undo/layout/reset -->
-    <div id="graph-actions-bar" class="flex gap-2 mb-3 items-center flex-wrap" style="display:none;">
-      <span id="graph-collapse-btns" class="flex gap-2 flex-wrap"></span>
-      <button onclick="graphToggleManualSelect()" id="graph-btn-manual-select"
-        class="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs transition-colors"
-        title="Select nodes manually for collapse or chat">
-        ✂ Select
-      </button>
-      <button onclick="graphSelectAll()" id="graph-btn-select-all"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Select all nodes">
-        ☐ All
-      </button>
-      <span id="graph-selection-actions" style="display:none" class="flex gap-1 items-center">
-        <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse"
-          class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 border border-red-800 text-white text-xs transition-colors">
-          Collapse (<span id="graph-collapse-count">0</span>)
+    <div id="graph-actions-bar" class="flex gap-2 mb-1 items-center flex-wrap" style="display:none;flex-shrink:0;">
+      <!-- Selection group -->
+      <!-- Selection + Collapse unified -->
+      <span class="flex gap-1 items-center" style="border-right:1px solid #3c3c3c;padding-right:8px;margin-right:4px">
+        <button onclick="graphToggleManualSelect()" id="graph-btn-manual-select"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Click nodes to select for collapse/chat">
+          Select
         </button>
-        <button onclick="graphSendToChat()" id="graph-btn-to-chat"
-          class="px-3 py-1.5 bg-blue-900/50 hover:bg-blue-800/50 border border-blue-800 text-white text-xs transition-colors">
-          → Chat
+        <button onclick="graphSelectAll()" id="graph-btn-select-all"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Select all nodes">
+          All
         </button>
-        <label style="color:#969696;font-size:11px;display:flex;align-items:center;gap:3px" title="Keep original nodes after collapse">
-          <input type="checkbox" id="graph-no-merge"> keep
-        </label>
+        <div style="position:relative;display:inline-block">
+          <button onclick="graphToggleCollapsePanel()" id="graph-btn-collapse-main"
+            class="px-2 py-1 bg-emerald-800 hover:bg-emerald-700 text-white text-xs" title="Collapse: auto-clusters or selected nodes">
+            Collapse <span id="graph-collapse-badge" style="display:none;background:#ef4444;border-radius:50%;padding:0 4px;font-size:9px;margin-left:2px"></span>
+          </button>
+          <div id="graph-collapse-panel" style="display:none;position:absolute;top:100%;left:0;background:#252526;border:1px solid #3c3c3c;border-radius:2px;padding:8px;z-index:50;min-width:250px;max-width:350px;box-shadow:0 2px 8px rgba(0,0,0,0.5)">
+            <div style="color:#cccccc;font-size:11px;font-weight:bold;margin-bottom:6px">Collapse</div>
+            <div id="graph-collapse-list" style="max-height:200px;overflow-y:auto;margin-bottom:6px"></div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse"
+                class="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">
+                Collapse (<span id="graph-collapse-count">0</span>)
+              </button>
+              <button onclick="graphSendToChat()" id="graph-btn-to-chat"
+                class="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">
+                → Chat
+              </button>
+            </div>
+          </div>
+        </div>
+        <span id="graph-collapse-btns" class="flex gap-1 flex-wrap" style="display:none"></span>
+        <span id="graph-selection-actions" style="display:none"></span>
+        <input type="checkbox" id="graph-no-merge" style="display:none">
       </span>
-      <span class="flex-1"></span>
-      <button onclick="graphToggleLinkMode()" id="graph-btn-link"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Toggle link mode: click two nodes to connect/disconnect">
-        🔗 Link
+      <!-- View group -->
+      <span class="flex gap-1 items-center" style="border-right:1px solid #3c3c3c;padding-right:8px;margin-right:4px">
+        <button onclick="graphToggleLinkMode()" id="graph-btn-link"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Link mode: click two nodes to connect/disconnect">
+          Link
+        </button>
+        <button onclick="graphToggleFlow()" id="graph-btn-flow"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Toggle directed flow layout">
+          Flow
+        </button>
+        <button onclick="graphToggleTemporal()" id="graph-btn-temporal"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Show/hide temporal links">
+          Time
+        </button>
+        <button onclick="graphRecalcLayout()"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Recalculate layout">
+          Layout
+        </button>
+      </span>
+      <!-- Think group -->
+      <span class="flex gap-1 items-center" style="border-right:1px solid #3c3c3c;padding-right:8px;margin-right:4px">
+        <button onclick="graphTick()" id="graph-btn-tick"
+          class="px-2 py-1 bg-violet-800 hover:bg-violet-700 text-white text-xs" title="Auto-think: suggest next action">
+          🧠 Auto
+        </button>
+      <div style="position:relative;display:inline-block" id="graph-run-wrapper">
+        <button onclick="graphAutoRun()" id="graph-btn-autorun"
+          class="px-3 py-1.5 bg-violet-900 hover:bg-violet-800 text-white text-xs transition-colors"
+          style="border-radius:2px 0 0 2px"
+          title="Full auto: run tick→action loop until stable (click again to stop)">
+          🔄 Run
+        </button><button onclick="document.getElementById('graph-run-panel').style.display=document.getElementById('graph-run-panel').style.display==='none'?'':'none'"
+          class="px-1 py-1.5 bg-violet-900 hover:bg-violet-800 text-white text-xs transition-colors"
+          style="border-radius:0 2px 2px 0;border-left:1px solid #5b21b6" title="Run settings">▾</button>
+        <div id="graph-run-panel" style="display:none;position:absolute;top:100%;right:0;background:#252526;border:1px solid #3c3c3c;border-radius:2px;padding:8px;z-index:50;white-space:nowrap;min-width:200px;box-shadow:0 2px 8px rgba(0,0,0,0.5)">
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:#cccccc">
+            <label style="display:flex;align-items:center;gap:6px" title="After this many steps → start force-collapsing. Hard stop at 2x.">Collapse at <input id="graph-autorun-steps" type="number" value="50" min="5" max="500" style="width:50px;background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px"></label>
+            <label style="display:flex;align-items:center;gap:6px">Stable <input id="graph-stable-threshold" type="number" value="0.8" min="0.5" max="0.99" step="0.05" style="width:50px;background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px"></label>
+            <label style="display:flex;align-items:center;gap:6px">Mode
+              <select id="graph-run-mode" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px;flex:1">
+                <option value="deep">deep</option><option value="fast">fast</option>
+              </select></label>
+            <label style="display:flex;align-items:center;gap:6px">Verify
+              <select id="graph-verify-mode" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px;flex:1">
+                <option value="replace">replace</option><option value="add">expand</option>
+              </select></label>
+            <label style="display:flex;align-items:center;gap:6px">Output
+              <select id="graph-output-format" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px;flex:1">
+                <option value="essay">essay</option><option value="brief">brief</option><option value="list">list</option><option value="none">none</option>
+              </select></label>
+          </div>
+        </div>
+      </div>
+      </span>
+      <!-- File group -->
+      <span class="flex gap-1 items-center">
+        <button onclick="graphUndo()" id="graph-btn-undo" style="display:none"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Undo last action">
+          Undo
+        </button>
+        <button onclick="graphExport()"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Save graph to JSON">
+          Save
+        </button>
+        <button onclick="document.getElementById('graph-import-file').click()"
+          class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-white text-xs" title="Load graph from JSON">
+          Load
+        </button>
+        <input type="file" id="graph-import-file" accept=".json" style="display:none" onchange="graphImport(event)">
+        <button onclick="graphReset()"
+          class="px-2 py-1 text-white text-xs" style="background:#7f1d1d"
+          onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'" title="Reset graph">
+          Reset
       </button>
-      <button onclick="graphUndo()" id="graph-btn-undo" style="display:none"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors">
-        ↩ Undo
+    </div>
+    <!-- Topic + Add (above graph) -->
+    <div class="border border-neutral-800 bg-neutral-900/50 p-2 mb-1" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <textarea id="graph-topic-top" class="auto-grow" placeholder="Topic / Goal..."
+        style="flex:1;min-width:200px;" rows="1"></textarea>
+      <button id="graph-btn-think-top" onclick="document.getElementById('graph-topic').value=document.getElementById('graph-topic-top').value;graphThink()"
+        class="px-3 py-1 text-white text-xs" style="background:#007acc;border:none;border-radius:2px;">
+        Think
       </button>
-      <button onclick="graphToggleFlow()" id="graph-btn-flow"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Toggle directed flow layout (left-to-right by depth)">
-        → Flow
+      <button onclick="document.getElementById('graph-topic').value=document.getElementById('graph-topic-top').value;document.getElementById('graph-add-type').value=document.getElementById('graph-add-type-top').value;graphAddThought()"
+        class="px-3 py-1 text-white text-xs" style="background:#3c3c3c;border:1px solid #3c3c3c;border-radius:2px;">
+        + Add
       </button>
-      <button onclick="graphToggleTemporal()" id="graph-btn-temporal"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Show/hide temporal links (nodes created close in time)">
-        ⏰ Time
-      </button>
-      <button onclick="graphTick()" id="graph-btn-tick"
-        class="px-3 py-1.5 bg-violet-800 hover:bg-violet-700 text-white text-xs transition-colors"
-        title="Auto-think: analyze graph and suggest next action">
-        🧠 Auto
-      </button>
-      <input id="graph-autorun-steps" type="number" value="20" min="1" max="100" style="width:40px;background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Max auto-run steps">
-      <input id="graph-stable-threshold" type="number" value="0.8" min="0.5" max="0.99" step="0.05" style="width:45px;background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Stable threshold — stop when all nodes above this confidence">
-      <select id="graph-run-mode" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Thinking mode">
-        <option value="deep">deep</option>
-        <option value="fast">fast</option>
+      <select id="graph-add-type-top" onchange="document.getElementById('graph-add-type').value=this.value"
+        class="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-1 py-0.5">
+        <option value="auto">auto</option>
+        <option value="hypothesis">hypothesis</option>
+        <option value="goal">goal</option>
+        <option value="fact">fact</option>
+        <option value="question">question</option>
+        <option value="action">action</option>
       </select>
-      <select id="graph-output-format" style="background:#1e1e1e;border:1px solid #3c3c3c;color:#cccccc;padding:2px 4px;border-radius:2px;font-size:11px" title="Final output format">
-        <option value="essay">essay</option>
-        <option value="brief">brief</option>
-        <option value="list">list</option>
-        <option value="none">no summary</option>
-      </select>
-      <button onclick="graphAutoRun()" id="graph-btn-autorun"
-        class="px-3 py-1.5 bg-violet-900 hover:bg-violet-800 text-white text-xs transition-colors"
-        title="Full auto: run tick→action loop until stable (click again to stop)">
-        🔄 Run
-      </button>
-      <button onclick="graphRecalcLayout()"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Recalculate node positions">
-        ⟳ Layout
-      </button>
-      <button onclick="graphExport()"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Save graph to JSON file">
-        ↓ Save
-      </button>
-      <button onclick="document.getElementById('graph-import-file').click()"
-        class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs transition-colors"
-        title="Load graph from JSON file">
-        ↑ Load
-      </button>
-      <input type="file" id="graph-import-file" accept=".json" style="display:none" onchange="graphImport(event)">
-      <button onclick="graphReset()"
-        class="px-3 py-1.5 text-white text-xs transition-colors" style="background:#7f1d1d"
-        onmouseover="this.style.background='#991b1b'" onmouseout="this.style.background='#7f1d1d'">
-        Reset
-      </button>
+    </div>
+    <div class="border border-neutral-800 bg-neutral-900/50 px-2 pb-1">
+      <details id="graph-params-details">
+        <summary style="color:#969696;font-size:11px;cursor:pointer;user-select:none;letter-spacing:0.03em">
+          Parameters
+        </summary>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:#5a5a5a;font-size:12px">thoughts</span>
+          <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
+          <span style="color:#5a5a5a;font-size:12px">similarity</span>
+          <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px;background:#3c3c3c;border:1px solid #3c3c3c;color:#cccccc;padding:4px 8px;border-radius:2px;font-size:12px;">
+            <option value="embedding">Embedding</option>
+            <option value="jaccard">Jaccard</option>
+            <option value="off">Off</option>
+          </select>
+          <span style="color:#5a5a5a;font-size:12px">threshold</span>
+          <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
+            onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
+          <span style="color:#5a5a5a;font-size:12px">temp</span>
+          <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
+          <span style="color:#5a5a5a;font-size:12px">top_k</span>
+          <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
+          <span style="color:#5a5a5a;font-size:12px">seed</span>
+          <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
+        </div>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:#5a5a5a;font-size:12px">max tokens:</span>
+          <span style="color:#5a5a5a;font-size:11px">think</span>
+          <input id="graph-maxtok-think" type="number" value="60" min="10" max="500" style="width:60px">
+          <span style="color:#5a5a5a;font-size:11px">expand</span>
+          <input id="graph-maxtok-expand" type="number" value="120" min="10" max="500" style="width:60px">
+          <span style="color:#5a5a5a;font-size:11px">elaborate</span>
+          <input id="graph-maxtok-elaborate" type="number" value="120" min="10" max="1000" style="width:60px">
+        </div>
+      </details>
     </div>
     <div id="graph-main" style="display:flex;gap:8px;transition:all 0.3s ease;">
       <!-- Left: graph + detail -->
@@ -640,68 +719,18 @@
     <!-- Collapse prompt removed — now in Generation Studio -->
     <!-- Collapsed result (hidden — now shown in detail panel) -->
     <div id="graph-result" style="display:none;"></div>
-    <!-- Input panel (below graph) -->
-    <div class="mt-3 border border-neutral-800 bg-neutral-900/50 p-3">
-      <div class="flex flex-wrap gap-3 items-center mb-2">
-        <span style="color:#969696;font-size:12px;text-transform:uppercase;letter-spacing:0.05em">Topic</span>
-        <textarea id="graph-topic" class="auto-grow" placeholder="What to think about…"
-          style="flex:1;" rows="1"></textarea>
-        <button id="graph-btn-think" onclick="graphThink()"
-          class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#007acc;border:none;border-radius:2px;">
-          Think
-        </button>
-        <button onclick="graphAddThought()"
-          class="px-4 py-1.5 text-white text-sm transition-colors" style="background:#3c3c3c;border:1px solid #3c3c3c;border-radius:2px;">
-          + Add
-        </button>
-        <select id="graph-add-type" class="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-1 py-1"
-          title="Type for manually added nodes (auto = LLM determines)">
-          <option value="auto">auto</option>
-          <option value="thought">thought</option>
-          <option value="hypothesis">hypothesis</option>
-          <option value="fact">fact</option>
-          <option value="evidence">evidence</option>
-          <option value="question">question</option>
-          <option value="goal">goal</option>
-          <option value="action">action</option>
-        </select>
-      </div>
-      <!-- Collapsible params -->
-      <details id="graph-params-details" style="margin-top:4px;">
-        <summary style="color:#969696;font-size:11px;cursor:pointer;user-select:none;letter-spacing:0.03em">
-          Parameters
-        </summary>
-        <div class="flex flex-wrap gap-2 items-center mt-2">
-          <span style="color:#5a5a5a;font-size:12px">thoughts</span>
-          <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
-          <span style="color:#5a5a5a;font-size:12px">similarity</span>
-          <select id="graph-sim-mode" onchange="graphSimModeChanged()" style="width:100px; background:#3c3c3c; border:1px solid #3c3c3c; color:#cccccc; padding:4px 8px; border-radius:2px; font-size:12px;">
-            <option value="embedding">Embedding</option>
-            <option value="jaccard">Jaccard</option>
-            <option value="off">Off</option>
-          </select>
-          <span style="color:#5a5a5a;font-size:12px">threshold</span>
-          <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
-            onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
-          <span style="color:#5a5a5a;font-size:12px">temp</span>
-          <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
-          <span style="color:#5a5a5a;font-size:12px">top_k</span>
-          <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
-          <span style="color:#5a5a5a;font-size:12px">seed</span>
-          <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
-        </div>
-        <div class="flex flex-wrap gap-2 items-center mt-2">
-          <span style="color:#5a5a5a;font-size:12px">max tokens:</span>
-          <span style="color:#5a5a5a;font-size:11px">think</span>
-          <input id="graph-maxtok-think" type="number" value="60" min="10" max="500" style="width:60px" title="Max tokens for Think">
-          <span style="color:#5a5a5a;font-size:11px">expand</span>
-          <input id="graph-maxtok-expand" type="number" value="120" min="10" max="500" style="width:60px" title="Max tokens for Expand">
-          <span style="color:#5a5a5a;font-size:11px">elaborate</span>
-          <input id="graph-maxtok-elaborate" type="number" value="120" min="10" max="1000" style="width:60px" title="Max tokens for Elaborate">
-        </div>
-      </details>
-      </div>
-    </div>
+    <!-- Hidden: original controls (kept for JS references) -->
+    <textarea id="graph-topic" style="display:none"></textarea>
+    <select id="graph-add-type" style="display:none">
+      <option value="auto">auto</option>
+      <option value="thought">thought</option>
+      <option value="hypothesis">hypothesis</option>
+      <option value="fact">fact</option>
+      <option value="evidence">evidence</option>
+      <option value="question">question</option>
+      <option value="goal">goal</option>
+      <option value="action">action</option>
+    </select>
   </div>
 
 </div>
@@ -2586,6 +2615,59 @@
     return { sim_mode, threshold, lang, temp, top_k, seed, maxtok_think, maxtok_expand, maxtok_elaborate };
   }
 
+  function graphToggleCollapsePanel() {
+    const panel = document.getElementById('graph-collapse-panel');
+    const isOpen = panel.style.display !== 'none';
+    if (isOpen) { panel.style.display = 'none'; return; }
+
+    const list = document.getElementById('graph-collapse-list');
+    const clusters = graphData.clusters || [];
+    let html = '';
+
+    // Section 1: Manual selection (if any)
+    if (graphManualCollapseMode && graphManualCollapseSet.size > 0) {
+      const selCount = graphManualCollapseSet.size;
+      html += '<div style="margin-bottom:8px">'
+        + '<div style="color:#facc15;font-size:10px;font-weight:bold;margin-bottom:4px">Selected (' + selCount + ')</div>'
+        + '<button onclick="graphDoManualCollapse();document.getElementById(\'graph-collapse-panel\').style.display=\'none\'" '
+        + 'class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded w-full">Collapse ' + selCount + ' selected → Studio</button>'
+        + '<button onclick="graphSendToChat();document.getElementById(\'graph-collapse-panel\').style.display=\'none\'" '
+        + 'class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded w-full mt-1">→ Chat</button>'
+        + '</div>';
+    }
+
+    // Section 2: Auto-clusters
+    if (clusters.length > 0) {
+      html += '<div style="color:#10b981;font-size:10px;font-weight:bold;margin-bottom:4px">Clusters</div>';
+      clusters.forEach((cl, ci) => {
+        const color = graphClusterColors[ci % graphClusterColors.length];
+        const texts = cl.slice(0, 3).map(i => graphData.nodes[i] ? '#' + i + ' ' + graphData.nodes[i].text.slice(0, 30) : '').join(', ');
+        html += '<button onclick="graphCollapse(' + ci + ');document.getElementById(\'graph-collapse-panel\').style.display=\'none\'" '
+          + 'style="display:block;width:100%;text-align:left;padding:4px 8px;margin-bottom:2px;background:' + color + '15;border:1px solid ' + color + '40;border-radius:4px;color:#d1d5db;font-size:11px;cursor:pointer" '
+          + 'onmouseover="this.style.background=\'' + color + '30\'" onmouseout="this.style.background=\'' + color + '15\'">'
+          + '<span style="color:' + color + ';font-weight:bold">Cluster ' + (ci+1) + '</span> (' + cl.length + ' nodes) '
+          + '<span style="color:#64748b">' + texts + '...</span>'
+          + '</button>';
+      });
+    }
+
+    // No clusters and no selection
+    if (!html) {
+      html = '<div style="color:#64748b;font-size:11px">No clusters or selection. Use Select All or generate more thoughts.</div>';
+    }
+
+    list.innerHTML = html;
+    panel.style.display = '';
+
+    // Close on outside click
+    setTimeout(() => document.addEventListener('click', function handler(e) {
+      if (!panel.contains(e.target) && !e.target.closest('#graph-btn-collapse-main')) {
+        panel.style.display = 'none';
+        document.removeEventListener('click', handler);
+      }
+    }), 0);
+  }
+
   function graphToggleManualSelect() {
     graphManualCollapseMode = !graphManualCollapseMode;
     graphManualCollapseSet.clear();
@@ -2593,12 +2675,10 @@
     const actions = document.getElementById('graph-selection-actions');
     if (graphManualCollapseMode) {
       btn.style.background = '#b45309';
-      btn.textContent = '✂ Cancel';
-      actions.style.display = '';
-      document.getElementById('graph-collapse-count').textContent = '0';
+      btn.textContent = 'Cancel';
     } else {
       btn.style.background = '';
-      btn.textContent = '✂ Select';
+      btn.textContent = 'Select';
       actions.style.display = 'none';
     }
     graphRenderSvg();
@@ -3114,6 +3194,19 @@
   }
   // Save confidence on slider change (fires when slider is released with new value)
   document.addEventListener('DOMContentLoaded', () => {
+    // Sync topic-top → hidden topic field
+    const topicTop = document.getElementById('graph-topic-top');
+    const topicHidden = document.getElementById('graph-topic');
+    if (topicTop && topicHidden) {
+      topicTop.addEventListener('input', () => { topicHidden.value = topicTop.value; });
+      // Also sync add-type
+      const typeTop = document.getElementById('graph-add-type-top');
+      const typeHidden = document.getElementById('graph-add-type');
+      if (typeTop && typeHidden) {
+        typeTop.addEventListener('change', () => { typeHidden.value = typeTop.value; });
+      }
+    }
+
     // Check model availability on startup
     fetch('/settings').then(r => r.json()).then(async s => {
       if (s.mode === 'local' && !s.local_model) return; // handled by auto-open settings
@@ -3265,8 +3358,10 @@
     btn.textContent = '⏹ Stop';
     btn.style.background = '#991b1b';
 
-    const maxSteps = parseInt(document.getElementById('graph-autorun-steps').value) || 20;
-    for (let step = 0; step < maxSteps && _autoRunning; step++) {
+    const collapseAt = parseInt(document.getElementById('graph-autorun-steps').value) || 50;
+    const hardStop = collapseAt * 2;
+    for (let step = 0; step < hardStop && _autoRunning; step++) {
+      const forceCollapse = step >= collapseAt;  // after collapseAt → start collapsing
       // 1. Get tick suggestion
       const res = await fetch('/graph/tick', {
         method: 'POST',
@@ -3276,6 +3371,7 @@
           sim_mode: document.getElementById('graph-sim-mode').value,
           stable_threshold: parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8,
           run_mode: document.getElementById('graph-run-mode').value,
+          force_collapse: forceCollapse,
         })
       });
       const d = await res.json();
@@ -3314,8 +3410,8 @@
         break;
       }
 
-      // 3. Update UI
-      graphRenderSvg();
+      // 3. Update UI + auto-layout
+      graphDrawSvg();  // full layout recalc, not just render
       graphUpdateThoughtsList();
 
       // 4. Small delay for visibility
@@ -3402,17 +3498,47 @@
     });
     const d = await res.json();
     if (d.synthesis) {
-      // Auto-accept: replace node with synthesis
-      graphData.nodes[idx].text = d.synthesis;
-      graphData.nodes[idx].confidence = d.confidence;
-      await fetch('/graph/sync', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          nodes: graphData.nodes,
-          edges_data: { manual_links: [], manual_unlinks: [], directed: graphDirectedEdges }
-        })
-      });
+      const verifyMode = document.getElementById('graph-verify-mode').value;
+      if (verifyMode === 'add') {
+        // Expand: add synthesis as new child node, keep original
+        const params = graphGetParams();
+        const r2 = await fetch('/graph/studio/apply-child', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            index: idx, text: d.synthesis, type: 'elaborate', ...params
+          })
+        });
+        const d2 = await r2.json();
+        if (!d2.error) {
+          graphUpdateView(d2);
+          // Set confidence on new node AND original (so tick doesn't re-verify)
+          const newIdx = graphData.nodes.length - 1;
+          if (graphData.nodes[newIdx]) {
+            graphData.nodes[newIdx].confidence = d.confidence;
+            // Keep auto-determined type, just ensure high confidence
+          }
+          if (graphData.nodes[idx]) graphData.nodes[idx].confidence = d.confidence;
+          // Sync confidence to backend
+          await fetch('/graph/confidence', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({index: idx, value: d.confidence})
+          }).catch(() => {});
+        }
+      } else {
+        // Replace: overwrite node text and confidence
+        graphData.nodes[idx].text = d.synthesis;
+        graphData.nodes[idx].confidence = d.confidence;
+        await fetch('/graph/sync', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            nodes: graphData.nodes,
+            edges_data: { manual_links: [], manual_unlinks: [], directed: graphDirectedEdges }
+          })
+        });
+      }
     }
   }
 
@@ -3457,7 +3583,7 @@
     const res = await fetch('/graph/think', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic, n: 10, ...params })
+      body: JSON.stringify({ topic, n: 10, existing: graphData.nodes, ...params })
     });
     const d = await res.json();
     if (!d.error) graphUpdateView(d);
@@ -3899,12 +4025,12 @@
     if (!topic) return;
     const n = parseInt(document.getElementById('graph-n').value) || 6;
 
-    document.getElementById('graph-btn-think').disabled = true;
-    document.getElementById('graph-btn-think').textContent = 'Thinking...';
+    const thinkBtn = document.getElementById('graph-btn-think-top') || document.getElementById('graph-btn-think');
+    if (thinkBtn) { thinkBtn.disabled = true; thinkBtn.textContent = 'Thinking...'; }
 
     const r = await fetch('/graph/think', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic, n, existing: graphData.nodes.map(nd => nd.text), ...graphGetParams() })
+      body: JSON.stringify({ topic, n, existing: graphData.nodes, ...graphGetParams() })
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
@@ -3916,24 +4042,29 @@
     graphDrawSvg();
     graphUpdateThoughtsList();
 
-    document.getElementById('graph-btn-think').disabled = false;
-    document.getElementById('graph-btn-think').textContent = 'Think';
+    if (thinkBtn) { thinkBtn.disabled = false; thinkBtn.textContent = 'Think'; }
 
     graphUpdateCollapseButtons();
     document.getElementById('graph-actions-bar').style.display = '';
   }
 
   function graphUpdateCollapseButtons() {
-    const span = document.getElementById('graph-collapse-btns');
+    // Update badge and disabled state on Collapse button
+    const badge = document.getElementById('graph-collapse-badge');
+    const collapseBtn = document.getElementById('graph-btn-collapse-main');
     const clusters = graphData.clusters || [];
-    if (!clusters.length) { span.innerHTML = ''; return; }
-    span.innerHTML = clusters.map((cl, ci) => {
-      const color = graphClusterColors[ci % graphClusterColors.length];
-      return '<button onclick="graphCollapse(' + ci + ',\'studio\')" '
-        + 'class="px-3 py-2 text-white text-sm transition-opacity hover:opacity-80 mr-1" '
-        + 'style="background:' + color + '22;border:1px solid ' + color + ';color:' + color + ';border-radius:8px">'
-        + 'Collapse ' + (ci + 1) + ' (' + cl.length + ')</button>';
-    }).join('');
+    const hasSelection = graphManualCollapseMode && graphManualCollapseSet.size > 0;
+    if (clusters.length > 0 || hasSelection) {
+      badge.textContent = hasSelection ? graphManualCollapseSet.size : clusters.length;
+      badge.style.display = '';
+      if (collapseBtn) { collapseBtn.disabled = false; collapseBtn.style.opacity = '1'; }
+    } else {
+      badge.style.display = 'none';
+      if (collapseBtn) { collapseBtn.disabled = true; collapseBtn.style.opacity = '0.4'; }
+    }
+    // Keep hidden span for backward compat
+    const span = document.getElementById('graph-collapse-btns');
+    span.innerHTML = '';
   }
 
   function graphCollapse(clusterIdx) {
@@ -3961,8 +4092,8 @@
   }
 
   async function graphToGraphAdd() {
-    const input = document.getElementById('graph-to-graph-input');
-    const text = input.value.trim();
+    const input = document.getElementById('graph-topic-top');
+    const text = input ? input.value.trim() : '';
     if (!text) return;
     const r = await fetch('/graph/add', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -4025,6 +4156,7 @@
         }
         // Restore topic and settings
         document.getElementById('graph-topic').value = state.topic || '';
+        document.getElementById('graph-topic-top').value = state.topic || '';
         if (state.threshold) document.getElementById('graph-threshold').value = state.threshold;
         if (state.sim_mode) document.getElementById('graph-sim-mode').value = state.sim_mode;
 
