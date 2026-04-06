@@ -1034,9 +1034,11 @@ function graphToggleCollapsePanel() {
   // Section 1: Manual selection (if any)
   if (graphManualCollapseMode && graphManualCollapseSet.size > 0) {
     const selCount = graphManualCollapseSet.size;
+    // Capture indices now so button works even if set changes later
+    const capturedIndices = JSON.stringify([...graphManualCollapseSet]);
     html += '<div style="margin-bottom:8px">'
       + '<div style="color:#facc15;font-size:10px;font-weight:bold;margin-bottom:4px">Selected (' + selCount + ')</div>'
-      + '<button onclick="graphDoManualCollapse();document.getElementById(\'graph-collapse-panel\').style.display=\'none\'" '
+      + '<button onclick="graphDoManualCollapseFrom(' + capturedIndices + ');document.getElementById(\'graph-collapse-panel\').style.display=\'none\'" '
       + 'class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded w-full">Collapse ' + selCount + ' selected \u2192 Studio</button>'
       + '<button onclick="graphSendToChat();document.getElementById(\'graph-collapse-panel\').style.display=\'none\'" '
       + 'class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded w-full mt-1">\u2192 Chat</button>'
@@ -1135,7 +1137,11 @@ function graphSendToChat() {
 
 async function graphDoManualCollapse() {
   if (graphManualCollapseSet.size < 2) { alert('Select at least 2 nodes'); return; }
-  const cluster = [...graphManualCollapseSet];
+  graphDoManualCollapseFrom([...graphManualCollapseSet]);
+}
+
+function graphDoManualCollapseFrom(cluster) {
+  if (!cluster || cluster.length < 2) { alert('Select at least 2 nodes'); return; }
   const ideas = cluster.map(i => graphData.nodes[i]?.text).filter(Boolean);
   graphManualCollapseMode = false;
   graphManualCollapseSet.clear();
@@ -1382,12 +1388,11 @@ function graphShowDetail(idx) {
   const edges = graphData.edges || [];
   const connEdges = edges.filter(e => e.from === idx || e.to === idx);
   if (connEdges.length) {
-    edgesHtml = '<div style="margin-top:8px;border-top:1px solid #e0ddd8;padding-top:6px">'
-      + '<span style="color:#64748b;font-size:11px">Edges (' + connEdges.length + '):</span>';
+    edgesHtml = '<details style="margin-top:8px;border-top:1px solid #e0ddd8;padding-top:6px">'
+      + '<summary style="color:#64748b;font-size:11px;cursor:pointer;user-select:none">Edges (' + connEdges.length + ')</summary>';
     connEdges.forEach(e => {
       const other = e.from === idx ? e.to : e.from;
       const tp = e.from === idx ? (e.tp || 0) : (e.tp_rev || 0);
-      const tpBack = e.from === idx ? (e.tp_rev || 0) : (e.tp || 0);
       const otherText = (graphData.nodes[other] && graphData.nodes[other].text || '').slice(0, 50);
       const barWidth = Math.round(tp * 100);
       edgesHtml += '<div onclick="graphSelectFromList(' + other + ')" style="font-size:11px;color:#9ca3af;padding:2px 0;cursor:pointer" '
@@ -1398,7 +1403,7 @@ function graphShowDetail(idx) {
         + '<div style="height:2px;background:#10b981;width:' + barWidth + '%;border-radius:1px"></div></div>'
         + '</div>';
     });
-    edgesHtml += '</div>';
+    edgesHtml += '</details>';
   }
   // Timestamp info
   let timeHtml = '';
@@ -1572,11 +1577,16 @@ async function graphSmartDC() {
 // ── Auto-think (tick) ──
 let _autoRunning = false;
 let _autoRunLog = [];
+let _autoRunAbort = null;
 
 async function graphAutoRun() {
   if (_autoRunning) {
     _autoRunning = false;
-    document.getElementById('graph-btn-autorun').textContent = '\uD83D\uDD04 Run';
+    if (_autoRunAbort) _autoRunAbort.abort();
+    const _rb = document.getElementById('graph-btn-autorun');
+    _rb.textContent = 'Run';
+    _rb.style.background = '#6d28d9';
+    _rb.style.borderColor = '#6d28d9';
     return;
   }
   // Check if goal exists
@@ -1598,29 +1608,46 @@ async function graphAutoRun() {
   }
 
   _autoRunning = true;
+  _autoRunAbort = new AbortController();
   _autoRunLog = [];
+  _autoRunExhausted = 0;
+  _autoRunSparkline = [];
+  document.getElementById('graph-run-overlay').style.display = '';
   const btn = document.getElementById('graph-btn-autorun');
-  btn.textContent = '\u23F9 Stop';
+  btn.textContent = 'Stop';
   btn.style.background = '#991b1b';
+  btn.style.borderColor = '#991b1b';
 
+  const infinite = document.getElementById('graph-autorun-infinite').checked;
   const collapseAt = parseInt(document.getElementById('graph-autorun-steps').value) || 50;
-  const hardStop = collapseAt * 2;
+  const hardStop = infinite ? Infinity : collapseAt * 2;
   for (let step = 0; step < hardStop && _autoRunning; step++) {
-    const forceCollapse = step >= collapseAt;  // after collapseAt → start collapsing
+    const forceCollapse = !infinite && step >= collapseAt;
     // 1. Get tick suggestion
-    const res = await fetch('/graph/tick', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
-        sim_mode: document.getElementById('graph-sim-mode').value,
-        stable_threshold: parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8,
-        run_mode: document.getElementById('graph-run-mode').value,
-        force_collapse: forceCollapse,
-      })
-    });
-    const d = await res.json();
+    let res, d;
+    try {
+      res = await fetch('/graph/tick', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+          sim_mode: document.getElementById('graph-sim-mode').value,
+          stable_threshold: parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8,
+          min_hyp: parseInt(document.getElementById('graph-min-hyp').value) || 5,
+          max_meta: parseInt(document.getElementById('graph-meta-rounds').value) || 2,
+          force_collapse: forceCollapse,
+        }),
+        signal: _autoRunAbort.signal,
+      });
+      d = await res.json();
+    } catch(e) {
+      if (e.name === 'AbortError') { _autoRunLog.push({step: step + 1, action: 'STOPPED', reason: 'User stopped'}); break; }
+      throw e;
+    }
     _autoRunLog.push({step: step + 1, action: d.action, reason: d.reason});
+
+    // Live metrics overlay
+    _updateRunOverlay(step + 1, d.phase || d.action);
 
     if (d.action === 'none' || d.action === 'stable') {
       _autoRunLog.push({step: step + 1, action: 'STABLE', reason: d.reason});
@@ -1650,6 +1677,7 @@ async function graphAutoRun() {
         await _autoRunRephrase(targetIdx);
       }
     } catch(e) {
+      if (e.name === 'AbortError') { _autoRunLog.push({step: step + 1, action: 'STOPPED', reason: 'User stopped'}); break; }
       console.error('AutoRun action error:', e);
       _autoRunLog.push({step: step + 1, action: 'ERROR', reason: e.message});
       break;
@@ -1659,59 +1687,172 @@ async function graphAutoRun() {
     graphDrawSvg();  // full layout recalc, not just render
     graphUpdateThoughtsList();
 
+    // 3.5 Check model exhaustion — natural convergence
+    if (_autoRunExhausted >= 3) {
+      _autoRunLog.push({step: step + 1, action: 'EXHAUSTED', reason: 'Model ran out of novel ideas. Converging.'});
+      console.log('[autorun] model exhausted — stopping explore, final synthesis');
+      break;
+    }
+
     // 4. Small delay for visibility
     await new Promise(r => setTimeout(r, 500));
   }
 
   _autoRunning = false;
-  btn.textContent = '\uD83D\uDD04 Run';
-  btn.style.background = '';
+  btn.textContent = 'Run';
+  btn.style.background = '#6d28d9';
+  btn.style.borderColor = '#6d28d9';
+  // Update overlay to show final state
+  const _ov = document.getElementById('graph-run-overlay');
+  if (_ov) {
+    document.getElementById('graph-run-status').textContent = '✓ Complete';
+    document.getElementById('graph-run-status').style.color = '#10b981';
+    // Keep visible for 10s then hide
+    setTimeout(() => { _ov.style.display = 'none'; }, 10000);
+  }
 
-  // Final summary after cycle ends
+  // Final summary — pyramidal batch synthesis
   try {
     const outputFormat = document.getElementById('graph-output-format').value;
     if (outputFormat !== 'none') {
-      const allNodes = graphData.nodes.filter(n => n.depth >= 0 && n.type !== 'goal');
+      // Final summary selection criteria:
+      // 1. Only hypothesis/thought nodes (not evidence, not goal)
+      // 2. Prefer collapse-synthesized nodes (they already contain child ideas)
+      // 3. Exclude source nodes that were collapsed into a synthesis
+      // 4. Sort by confidence descending — best material first
+      const stableThreshold = parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8;
+      const directed = graphData.directed_edges || [];
+      // Find nodes that are collapse-sources (have directed edge TO a higher-depth node)
+      const collapsedInto = new Set();
+      for (const [from, to] of directed) {
+        const fromN = graphData.nodes[from];
+        const toN = graphData.nodes[to];
+        if (fromN && toN && toN.depth > fromN.depth) {
+          collapsedInto.add(from); // 'from' was collapsed into 'to'
+        }
+      }
+      const allNodes = graphData.nodes
+        .filter(n => n.depth >= 0
+          && n.type !== 'goal'
+          && n.type !== 'evidence'
+          && !collapsedInto.has(n.id))
+        .sort((a, b) => (b.confidence || 0.5) - (a.confidence || 0.5));
       const indices = allNodes.map(n => n.id);
       if (indices.length >= 2) {
         const goalNode = graphData.nodes.find(n => n.type === 'goal');
         const goalText = goalNode ? goalNode.text : '';
-        _autoRunLog.push({step: _autoRunLog.length + 1, action: 'FINAL_SUMMARY', reason: outputFormat + ' from ' + indices.length + ' nodes'});
-
-        const formatPrompts = {
-          essay: 'Write a comprehensive essay. Include ALL ideas as sections with reasoning. Add conclusions.',
-          brief: 'Write a brief summary in 3-5 sentences capturing the key findings.',
-          list: 'Write a structured list of key points with brief explanations for each.',
-        };
         const params = graphGetParams();
-        const colRes = await fetch('/graph/collapse', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            cluster: indices,
-            mode: outputFormat === 'essay' ? 'long' : 'short',
-            no_merge: true,
-            custom_max_tokens: outputFormat === 'essay' ? 4000 : 1000,
-            collapse_prompt: (goalText ? 'Goal: ' + goalText + '\n\n' : '') + formatPrompts[outputFormat],
-            ...params
-          })
-        });
-        const d2 = await colRes.json();
-        if (!d2.error) {
-          graphUpdateView(d2);
-          const goalNode2 = graphData.nodes.find(n => n.type === 'goal');
-          const summaryIdx = graphData.nodes.length - 1;
-          if (goalNode2) {
-            await fetch('/graph/link', {
+
+        const BATCH_SIZE = 5;
+        let sectionIndices = [];
+        const essayTokens = parseInt(document.getElementById('graph-essay-tokens').value) || 6000;
+
+        const batchedEssay = document.getElementById('graph-autorun-batched').checked;
+        if (outputFormat === 'essay' && batchedEssay && indices.length > BATCH_SIZE) {
+          // Pyramidal: split into batches → collapse each into a section → final essay from sections
+          const batches = [];
+          for (let i = 0; i < indices.length; i += BATCH_SIZE) {
+            batches.push(indices.slice(i, i + BATCH_SIZE));
+          }
+          _autoRunLog.push({step: _autoRunLog.length + 1, action: 'FINAL_SECTIONS', reason: `${batches.length} batches of ~${BATCH_SIZE} from ${indices.length} nodes`});
+
+          // Phase 1: collapse each batch into a section
+          for (let b = 0; b < batches.length; b++) {
+            const batch = batches[b];
+            console.log(`[autorun] final section ${b+1}/${batches.length}: nodes ${batch.join(',')}`);
+            const secRes = await _autoFetch('/graph/collapse', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ a: summaryIdx, b: goalNode2.id, ...params })
-            }).then(r => r.json()).then(d3 => { if (!d3.error) graphUpdateView(d3); }).catch(e => console.error(e));
+              body: JSON.stringify({
+                cluster: batch,
+                mode: 'long',
+                no_merge: true,
+                custom_max_tokens: 1500,
+                collapse_prompt: (goalText ? 'Goal: ' + goalText + '\n' : '') + 'Write a detailed section covering these ideas. Include reasoning and examples.',
+                ...params
+              })
+            });
+            const secD = await secRes.json();
+            if (!secD.error) {
+              graphUpdateView(secD);
+              const secIdx = graphData.nodes.length - 1;
+              sectionIndices.push(secIdx);
+              graphDrawSvg();
+              graphUpdateThoughtsList();
+            }
+          }
+
+          // Phase 2: final essay from sections
+          if (sectionIndices.length >= 2) {
+            _autoRunLog.push({step: _autoRunLog.length + 1, action: 'FINAL_ESSAY', reason: `essay from ${sectionIndices.length} sections`});
+            const essayRes = await _autoFetch('/graph/collapse', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                cluster: sectionIndices,
+                mode: 'long',
+                no_merge: true,
+                custom_max_tokens: essayTokens,
+                collapse_prompt: (goalText ? 'Goal: ' + goalText + '\n\n' : '')
+                  + 'Combine these sections into a comprehensive essay. Add an introduction and conclusion. Maintain all arguments and details from each section.',
+                ...params
+              })
+            });
+            const essayD = await essayRes.json();
+            if (!essayD.error) {
+              graphUpdateView(essayD);
+              const essayIdx = graphData.nodes.length - 1;
+              if (goalNode) {
+                await _autoFetch('/graph/link', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ a: essayIdx, b: goalNode.id, ...params })
+                }).then(r => r.json()).then(d3 => { if (!d3.error) graphUpdateView(d3); }).catch(() => {});
+              }
+            }
+          }
+        } else {
+          // Non-essay or small graph: single collapse (as before)
+          _autoRunLog.push({step: _autoRunLog.length + 1, action: 'FINAL_SUMMARY', reason: outputFormat + ' from ' + indices.length + ' nodes'});
+          const formatPrompts = {
+            essay: 'Write a comprehensive essay. Include ALL ideas as sections with reasoning. Add conclusions.',
+            brief: 'Write a brief summary in 3-5 sentences capturing the key findings.',
+            list: 'Write a structured list of key points with brief explanations for each.',
+          };
+          const colRes = await _autoFetch('/graph/collapse', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              cluster: indices,
+              mode: outputFormat === 'essay' ? 'long' : 'short',
+              no_merge: true,
+              custom_max_tokens: outputFormat === 'essay' ? essayTokens : 1500,
+              collapse_prompt: (goalText ? 'Goal: ' + goalText + '\n\n' : '') + formatPrompts[outputFormat],
+              ...params
+            })
+          });
+          const d2 = await colRes.json();
+          if (!d2.error) {
+            graphUpdateView(d2);
+            const summaryIdx = graphData.nodes.length - 1;
+            if (goalNode) {
+              await _autoFetch('/graph/link', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ a: summaryIdx, b: goalNode.id, ...params })
+              }).then(r => r.json()).then(d3 => { if (!d3.error) graphUpdateView(d3); }).catch(() => {});
+            }
           }
         }
+
+        graphDrawSvg();
+        graphUpdateThoughtsList();
       }
     }
-  } catch(e) { console.error('Final summary error:', e); }
+  } catch(e) {
+    if (e.name !== 'AbortError') console.error('Final summary error:', e);
+  }
+  _autoRunAbort = null;
 
   // Show log
   const panel = document.getElementById('graph-detail');
@@ -1727,8 +1868,82 @@ async function graphAutoRun() {
     ).join('');
 }
 
+// ── Run overlay: live convergence metrics ──
+let _autoRunSparkline = [];
+
+function _updateRunOverlay(step, phase) {
+  const stableThreshold = parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8;
+  const nodes = graphData.nodes || [];
+  const hyps = nodes.filter(n => (n.type === 'hypothesis' || n.type === 'thought') && n.depth >= 0);
+  const verified = hyps.filter(n => n.confidence >= stableThreshold);
+  const allActive = nodes.filter(n => n.depth >= 0 && n.type !== 'evidence' && n.type !== 'goal');
+  const avgConf = allActive.length > 0 ? allActive.reduce((s, n) => s + (n.confidence || 0.5), 0) / allActive.length : 0;
+  const ratio = hyps.length > 0 ? verified.length / hyps.length : 0;
+
+  document.getElementById('graph-run-step').textContent = step;
+  document.getElementById('graph-run-phase').textContent = phase;
+  document.getElementById('graph-run-hyps').textContent = hyps.length;
+  document.getElementById('graph-run-verified').textContent = verified.length;
+  document.getElementById('graph-run-avg').textContent = Math.round(avgConf * 100) + '%';
+  document.getElementById('graph-run-status').textContent = phase === 'synthesize' ? '✓ Converged' : '⟳ Running';
+  document.getElementById('graph-run-status').style.color = phase === 'synthesize' ? '#10b981' : '#6d28d9';
+
+  // Sparkline: track verified ratio over time
+  _autoRunSparkline.push(ratio);
+  const canvas = document.getElementById('graph-run-sparkline');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const data = _autoRunSparkline;
+  if (data.length < 2) return;
+
+  // Grid line at 100%
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 2); ctx.lineTo(w, 2);
+  ctx.stroke();
+
+  // Curve
+  ctx.strokeStyle = '#10b981';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const step_w = w / Math.max(data.length - 1, 1);
+  for (let i = 0; i < data.length; i++) {
+    const x = i * step_w;
+    const y = h - data[i] * (h - 4) - 2;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Fill under curve
+  ctx.lineTo((data.length - 1) * step_w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(16,185,129,0.1)';
+  ctx.fill();
+}
+
+// Fetch wrapper for autorun — adds AbortController signal
+function _autoFetch(url, opts = {}) {
+  if (_autoRunAbort) opts.signal = _autoRunAbort.signal;
+  return fetch(url, opts);
+}
+
 async function _autoRunSmartDC(idx) {
-  const res = await fetch('/graph/smartdc', {
+  // Gather evidence context from connected nodes
+  const node = graphData.nodes[idx];
+  const evidenceContext = [];
+  if (node && graphData.nodes) {
+    for (const n of graphData.nodes) {
+      if (n.type === 'evidence' && n.evidence_target === idx) {
+        evidenceContext.push((n.evidence_relation === 'contradicts' ? '[-] ' : '[+] ') + n.text);
+      }
+    }
+  }
+  const res = await _autoFetch('/graph/smartdc', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -1738,58 +1953,35 @@ async function _autoRunSmartDC(idx) {
       top_k: parseInt(document.getElementById('graph-topk').value) || 40,
       seed: parseInt(document.getElementById('graph-seed').value) || -1,
       threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
-      sim_mode: document.getElementById('graph-sim-mode').value
+      sim_mode: document.getElementById('graph-sim-mode').value,
+      evidence_context: evidenceContext.length > 0 ? evidenceContext : undefined,
     })
   });
   const d = await res.json();
   if (d.synthesis) {
-    const verifyMode = document.getElementById('graph-verify-mode').value;
-    if (verifyMode === 'add') {
-      // Expand: add synthesis as new child node, keep original
-      const params = graphGetParams();
-      const r2 = await fetch('/graph/studio/apply-child', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          index: idx, text: d.synthesis, type: 'elaborate', ...params
-        })
-      });
-      const d2 = await r2.json();
-      if (!d2.error) {
-        graphUpdateView(d2);
-        // Set confidence on new node AND original (so tick doesn't re-verify)
-        const newIdx = graphData.nodes.length - 1;
-        if (graphData.nodes[newIdx]) {
-          graphData.nodes[newIdx].confidence = d.confidence;
-          // Keep auto-determined type, just ensure high confidence
-        }
-        if (graphData.nodes[idx]) graphData.nodes[idx].confidence = d.confidence;
-        // Sync confidence to backend
-        await fetch('/graph/confidence', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({index: idx, value: d.confidence})
-        }).catch(() => {});
-      }
-    } else {
-      // Replace: overwrite node text and confidence
-      graphData.nodes[idx].text = d.synthesis;
-      graphData.nodes[idx].confidence = d.confidence;
-      await fetch('/graph/sync', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          nodes: graphData.nodes,
-          edges_data: { manual_links: [], manual_unlinks: [], directed: graphDirectedEdges }
-        })
-      });
-    }
+    // Autorun: always replace in place — no new nodes, just update text + confidence
+    graphData.nodes[idx].text = d.synthesis;
+    graphData.nodes[idx].confidence = d.confidence;
+    const r3 = await _autoFetch('/graph/studio/apply-rephrase', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        index: idx, text: d.synthesis, ...graphGetParams()
+      })
+    });
+    const d3 = await r3.json();
+    if (!d3.error) graphUpdateView(d3);
+    await _autoFetch('/graph/confidence', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({index: idx, value: d.confidence})
+    }).catch(() => {});
   }
 }
 
 async function _autoRunElaborate(idx) {
   const params = graphGetParams();
-  const res = await fetch('/graph/elaborate', {
+  const res = await _autoFetch('/graph/elaborate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ index: idx, n: 2, ...params })
@@ -1800,7 +1992,7 @@ async function _autoRunElaborate(idx) {
 
 async function _autoRunExpand(idx) {
   const params = graphGetParams();
-  const res = await fetch('/graph/expand', {
+  const res = await _autoFetch('/graph/expand', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ index: idx, n: 2, ...params })
@@ -1825,31 +2017,48 @@ async function _autoRunThink() {
     if (anyNode) topic = anyNode.text;
   }
   if (!topic) { console.log('[autorun] No topic for Think'); return; }
-  const res = await fetch('/graph/think', {
+  const res = await _autoFetch('/graph/think', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ topic, n: 10, existing: graphData.nodes, ...params })
   });
   const d = await res.json();
-  if (!d.error) graphUpdateView(d);
+  if (!d.error) {
+    graphUpdateView(d);
+    // Track model exhaustion: if mostly duplicates, signal to stop exploring
+    if (d.duplicates_skipped > 0 && d.new_count <= 1) {
+      _autoRunExhausted = (_autoRunExhausted || 0) + 1;
+      console.log(`[autorun] model exhaustion: ${d.duplicates_skipped} rejected, ${d.new_count} new (streak: ${_autoRunExhausted})`);
+    } else {
+      _autoRunExhausted = 0;
+    }
+  }
 }
 
 async function _autoRunCollapse(indices) {
   const params = graphGetParams();
-  const res = await fetch('/graph/collapse', {
+  // Autorun merge always removes originals — no_merge would cause infinite growth
+  const res = await _autoFetch('/graph/collapse', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ cluster: indices, mode: 'short', ...params })
+    body: JSON.stringify({ cluster: indices, mode: 'short', no_merge: false, ...params })
   });
   const d = await res.json();
-  if (!d.error) graphUpdateView(d);
+  if (!d.error) {
+    graphUpdateView(d);
+    const newIdx = graphData.nodes.length - 1;
+    graphSelectedNode = newIdx;
+    graphDrawSvg();
+    graphUpdateThoughtsList();
+  }
 }
 
 async function _autoRunAsk(idx) {
-  // Generate a probing question about this node via LLM
+  // Generate a probing question about this node via LLM, then answer it as evidence
   const node = graphData.nodes[idx];
   if (!node) return;
-  const res = await fetch('/graph/studio/generate', {
+  const params = graphGetParams();
+  const res = await _autoFetch('/graph/studio/generate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -1866,30 +2075,58 @@ async function _autoRunAsk(idx) {
   const d = await res.json();
   if (d.variants && d.variants.length > 0) {
     const questionText = d.variants[0].text;
-    // Add as question node linked to parent
-    await fetch('/graph/studio/apply-child', {
+    // Add question as child node
+    const r2 = await _autoFetch('/graph/studio/apply-child', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        index: idx,
-        text: questionText,
-        type: 'elaborate',
-        threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
-        sim_mode: document.getElementById('graph-sim-mode').value
-      })
-    }).then(r => r.json()).then(d2 => {
-      if (!d2.error) {
-        graphUpdateView(d2);
-        // Set type to question
-        const newIdx = graphData.nodes.length - 1;
-        fetch('/graph/set-type', {
+      body: JSON.stringify({ index: idx, text: questionText, type: 'elaborate', ...params })
+    });
+    const d2 = await r2.json();
+    if (!d2.error) {
+      graphUpdateView(d2);
+      const qIdx = graphData.nodes.length - 1;
+      // Set type to question
+      await _autoFetch('/graph/set-type', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({index: qIdx, type: 'question'})
+      }).catch(() => {});
+      if (graphData.nodes[qIdx]) graphData.nodes[qIdx].type = 'question';
+
+      // Now answer the question — add answer as evidence on the parent hypothesis
+      const ansRes = await _autoFetch('/graph/studio/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          mode: 'freeform',
+          index: idx,
+          text: node.text,
+          instruction: 'Question: ' + questionText + '\nAnswer this question concisely based on the hypothesis above. One paragraph.',
+          temp: 0.7,
+          top_k: 40,
+          max_tokens: 120,
+          lang: document.getElementById('lang-select').value,
+        })
+      });
+      const ansD = await ansRes.json();
+      if (ansD.variants && ansD.variants.length > 0) {
+        const answerText = ansD.variants[0].text;
+        // Add as evidence on the parent hypothesis
+        await _autoFetch('/graph/add-evidence', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({index: newIdx, type: 'question'})
-        }).catch(e => console.error('set-type error:', e));
-        if (graphData.nodes[newIdx]) graphData.nodes[newIdx].type = 'question';
+          body: JSON.stringify({
+            hypothesis: idx,
+            text: answerText,
+            relation: 'supports',
+            strength: 0.6,
+            ...params
+          })
+        }).then(r => r.json()).then(d3 => {
+          if (!d3.error) graphUpdateView(d3);
+        }).catch(e => console.error('add-evidence error:', e));
       }
-    }).catch(e => console.error('apply-child error:', e));
+    }
   }
 }
 
@@ -1897,7 +2134,8 @@ async function _autoRunRephrase(idx) {
   // Auto-rephrase: ask LLM to make hypothesis more specific and testable
   const node = graphData.nodes[idx];
   if (!node) return;
-  const res = await fetch('/graph/studio/generate', {
+  const params = graphGetParams();
+  const res = await _autoFetch('/graph/studio/generate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -1915,10 +2153,10 @@ async function _autoRunRephrase(idx) {
   if (d.variants && d.variants.length > 0) {
     // Auto-apply first variant
     const newText = d.variants[0].text;
-    await fetch('/graph/studio/apply-rephrase', {
+    await _autoFetch('/graph/studio/apply-rephrase', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ index: idx, text: newText })
+      body: JSON.stringify({ index: idx, text: newText, ...params })
     });
     graphData.nodes[idx].text = newText;
     graphRenderSvg();
@@ -2451,13 +2689,17 @@ function graphImport(event) {
 }
 
 function graphReset() {
+  if (!confirm('Reset graph? This cannot be undone.')) return;
   fetch('/graph/reset', { method: 'POST' });
+  // Delete autosave
+  fetch('/graph/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: '_autosave'}) }).catch(() => {});
   graphData = { nodes: [], edges: [], clusters: [] };
   graphSelectedNode = -1;
   graphLinkMode = false;
   graphFlowMode = false;
   graphManualCollapseMode = false;
   graphManualCollapseSet.clear();
+  _graphCurrentSaveName = '';
   const flowBtn = document.getElementById('graph-btn-flow');
   if (flowBtn) { flowBtn.style.background = ''; flowBtn.onmouseover = null; flowBtn.onmouseout = null; }
   graphZoom = 1; graphPanX = 0; graphPanY = 0;
@@ -2473,9 +2715,12 @@ function graphReset() {
   document.getElementById('graph-thoughts').innerHTML =
     '<span style="color:#b4b2ad;font-size:12px;">Thoughts will appear here...</span>';
   document.getElementById('graph-collapse-btns').innerHTML = '';
+  document.getElementById('graph-collapse-panel').style.display = 'none';
   document.getElementById('graph-detail').style.display = 'none';
   document.getElementById('graph-btn-undo').style.display = 'none';
   document.getElementById('graph-actions-bar').style.display = 'none';
+  document.getElementById('graph-topic').value = '';
+  document.getElementById('graph-topic-top').value = '';
 }
 
 // --------------- Server Save / Load / AutoSave ---------------

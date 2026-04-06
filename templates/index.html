@@ -102,7 +102,7 @@
           </label>
           <label style="color:var(--text-secondary);font-size:12px;display:flex;align-items:center;gap:4px">
             Context:
-            <input id="settings-ctx" type="number" value="4096" class="modal-input" style="width:70px;padding:4px 8px;font-size:12px">
+            <input id="settings-ctx" type="number" value="8192" class="modal-input" style="width:70px;padding:4px 8px;font-size:12px">
           </label>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
@@ -115,6 +115,13 @@
             <option value="">(same as main model)</option>
           </select>
         </div>
+      </div>
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <label class="modal-label" style="margin-bottom:6px">Experimental</label>
+        <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
+          title="Update hypothesis confidence via Bayesian formula when auto-evidence is created during Elaborate/Expand. Off = confidence only changes via Smart DC (Verify).">
+          <input id="settings-live-bayes" type="checkbox"> Live Bayesian update on auto-evidence
+        </label>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button onclick="closeSettings()" class="btn-secondary">Cancel</button>
@@ -218,20 +225,17 @@
             class="btn-action text-xs" style="background:#6d28d9;color:#fff;border-color:#6d28d9;border-radius:0 var(--radius-sm) var(--radius-sm) 0;border-left:1px solid #8b5cf6;padding:5px 6px" title="Run settings">&#9662;</button>
           <div id="graph-run-panel" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:10px;z-index:50;white-space:nowrap;min-width:200px;box-shadow:var(--shadow-lg)">
             <div style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--text-primary)">
-              <label style="display:flex;align-items:center;gap:6px" title="After this many steps -> start force-collapsing. Hard stop at 2x.">Collapse at <input id="graph-autorun-steps" type="number" value="50" min="5" max="500" style="width:50px" class="modal-input"></label>
-              <label style="display:flex;align-items:center;gap:6px">Stable <input id="graph-stable-threshold" type="number" value="0.8" min="0.5" max="0.99" step="0.05" style="width:50px" class="modal-input"></label>
-              <label style="display:flex;align-items:center;gap:6px">Mode
-                <select id="graph-run-mode" class="modal-select" style="font-size:11px;flex:1;padding:2px 4px">
-                  <option value="deep">deep</option><option value="fast">fast</option>
-                </select></label>
-              <label style="display:flex;align-items:center;gap:6px">Verify
-                <select id="graph-verify-mode" class="modal-select" style="font-size:11px;flex:1;padding:2px 4px">
-                  <option value="replace">replace</option><option value="add">expand</option>
-                </select></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Run until stable, no step limit"><input id="graph-autorun-infinite" type="checkbox"> Infinite</label>
+              <label style="display:flex;align-items:center;gap:6px" title="After this many steps -> start force-collapsing. Hard stop at 2x.">Collapse at <input id="graph-autorun-steps" type="number" value="50" min="5" max="500" style="width:65px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px">Stable <input id="graph-stable-threshold" type="number" value="0.8" min="0.5" max="0.99" step="0.05" style="width:65px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px" title="How many 'what did I miss?' rounds. More = deeper exploration, longer output.">Depth <input id="graph-meta-rounds" type="number" value="2" min="1" max="10" style="width:50px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Initial hypotheses to generate before merging/verifying">Start ideas <input id="graph-min-hyp" type="number" value="5" min="3" max="20" style="width:50px" class="modal-input"></label>
               <label style="display:flex;align-items:center;gap:6px">Output
                 <select id="graph-output-format" class="modal-select" style="font-size:11px;flex:1;padding:2px 4px">
                   <option value="essay">essay</option><option value="brief">brief</option><option value="list">list</option><option value="none">none</option>
                 </select></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Max tokens for final essay output">Essay tokens <input id="graph-essay-tokens" type="number" value="6000" min="500" max="30000" step="500" style="width:70px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Split final essay into batched sections, then combine. Use for large graphs or small context windows."><input id="graph-autorun-batched" type="checkbox"> Batched essay</label>
             </div>
           </div>
         </div>
@@ -313,6 +317,19 @@
       <div style="flex:1;min-width:0;">
         <div id="graph-svg-wrap" style="position:relative;">
           <svg id="graph-svg" width="100%" height="520" style="user-select:none;"></svg>
+          <div id="graph-run-overlay" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.92);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:11px;color:var(--text-secondary);pointer-events:none;min-width:160px;box-shadow:var(--shadow);">
+            <div style="font-weight:bold;color:var(--text-primary);margin-bottom:4px" id="graph-run-status">—</div>
+            <div style="display:flex;gap:12px;margin-bottom:4px">
+              <span>Step <b id="graph-run-step">0</b></span>
+              <span>Phase <b id="graph-run-phase">—</b></span>
+            </div>
+            <div style="display:flex;gap:12px;margin-bottom:6px">
+              <span>Hyp <b id="graph-run-hyps">0</b></span>
+              <span>Verified <b id="graph-run-verified" style="color:#10b981">0</b></span>
+              <span>Avg <b id="graph-run-avg">0%</b></span>
+            </div>
+            <canvas id="graph-run-sparkline" width="150" height="32" style="display:block;border-radius:3px;background:#f8fafc"></canvas>
+          </div>
           <div class="flex items-center mt-1">
             <span style="color:var(--text-tertiary);font-size:11px;">Drag nodes &middot; Click to select &middot; Link mode to connect</span>
           </div>

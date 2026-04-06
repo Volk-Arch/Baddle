@@ -116,7 +116,7 @@ def settings_reload_model():
     data = request.get_json(force=True)
     new_model = data.get("model", "")
     gpu_layers = int(data.get("gpu_layers", -1))
-    ctx = int(data.get("ctx", 4096))
+    ctx = int(data.get("ctx", 8192))
     if not new_model:
         return jsonify({"error": "no model specified"}), 400
     try:
@@ -173,13 +173,18 @@ def main():
     parser.add_argument("-m", "--model",    help="model path or filename in models/")
     parser.add_argument("--no-gpu",         action="store_true")
     parser.add_argument("--gpu-layers",     type=int, default=-1)
-    parser.add_argument("--ctx",            type=int, default=4096)
+    parser.add_argument("--ctx",            type=int, default=None)
     parser.add_argument("--port",           type=int, default=7860)
     parser.add_argument("--server",         type=str, default=None, nargs="?", const="auto",
                         help="llama-server URL or just --server to auto-launch")
     args = parser.parse_args()
 
     global llm, model_name, server_url
+
+    # ctx: CLI arg takes priority, otherwise from settings
+    if args.ctx is None:
+        from src.api_backend import get_settings as _gs
+        args.ctx = _gs().get("local_ctx", 8192)
 
     if args.server is not None:
         if args.server == "auto" or not args.server.startswith("http"):

@@ -1,6 +1,7 @@
 """API backend — OpenAI-compatible client for graph/chat generation."""
 
 import json
+import time
 import logging
 import urllib.request
 import urllib.error
@@ -22,10 +23,12 @@ _settings = {
     # Local model
     "local_model": "",          # filename in models/
     "local_gpu_layers": -1,
-    "local_ctx": 4096,
+    "local_ctx": 8192,
     # Embedding model (separate from main model)
     "embedding_model": "",      # API: model name for /v1/embeddings. Local: GGUF filename
     "local_embedding_path": "", # full path to local embedding GGUF (e.g. nomic-embed-text.gguf)
+    # Experimental
+    "live_bayes": False,        # Update confidence via Bayes on auto-evidence (elaborate/expand)
 }
 
 
@@ -60,7 +63,8 @@ def update_settings(new: dict):
     for k in ("mode", "api_url", "api_key", "api_model",
               "hybrid_graph", "hybrid_embeddings", "hybrid_chat",
               "local_model", "local_gpu_layers", "local_ctx",
-              "embedding_model", "local_embedding_path"):
+              "embedding_model", "local_embedding_path",
+              "live_bayes"):
         if k in new:
             _settings[k] = new[k]
     _save_settings()
@@ -113,6 +117,39 @@ def fetch_models(api_url: str, api_key: str) -> dict:
         return {"error": str(e), "models": []}
 
 
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = (1, 3, 8)  # seconds
+
+
+def _api_request(url: str, data: bytes = None, headers: dict = None,
+                 method: str = "POST", timeout: int = 120) -> dict:
+    """HTTP request with retry + exponential backoff on 5xx/timeout."""
+    last_err = None
+    for attempt in range(_MAX_RETRIES):
+        req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            if e.code < 500 and e.code != 429:
+                # Client error (4xx except 429) — don't retry
+                log.error(f"[api] HTTP {e.code}: {error_body[:500]}")
+                raise RuntimeError(f"API error {e.code}: {error_body[:200]}")
+            last_err = f"HTTP {e.code}: {error_body[:200]}"
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            last_err = str(e)
+        except Exception as e:
+            last_err = str(e)
+
+        wait = _RETRY_BACKOFF[attempt] if attempt < len(_RETRY_BACKOFF) else _RETRY_BACKOFF[-1]
+        log.warning(f"[api] Attempt {attempt + 1}/{_MAX_RETRIES} failed: {last_err}. Retrying in {wait}s...")
+        time.sleep(wait)
+
+    log.error(f"[api] All {_MAX_RETRIES} attempts failed: {last_err}")
+    raise RuntimeError(f"API failed after {_MAX_RETRIES} retries: {last_err}")
+
+
 def api_chat_completion(messages: list, max_tokens: int = 200, temperature: float = 0.9,
                         top_k: int = 40, repeat_penalty: float = 1.1) -> tuple:
     """Call OpenAI-compatible chat completion API.
@@ -143,18 +180,7 @@ def api_chat_completion(messages: list, max_tokens: int = 200, temperature: floa
     if _settings["api_key"]:
         headers["Authorization"] = f"Bearer {_settings['api_key']}"
 
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace")
-        log.error(f"[api] HTTP {e.code}: {error_body[:500]}")
-        raise RuntimeError(f"API error {e.code}: {error_body[:200]}")
-    except Exception as e:
-        log.error(f"[api] Request failed: {e}")
-        raise RuntimeError(f"API request failed: {e}")
+    result = _api_request(url, data=data, headers=headers, timeout=120)
 
     choice = result.get("choices", [{}])[0]
     message = choice.get("message", {})
@@ -207,11 +233,8 @@ def api_get_embedding(text: str) -> list:
     if _settings["api_key"]:
         headers["Authorization"] = f"Bearer {_settings['api_key']}"
 
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        result = _api_request(url, data=data, headers=headers, timeout=30)
         return result["data"][0]["embedding"]
     except Exception as e:
         log.warning(f"[api] Embedding failed: {e}")

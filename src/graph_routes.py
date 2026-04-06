@@ -1,8 +1,6 @@
 """baddle — graph Flask routes (Blueprint)."""
 
-import re
 import random
-import logging
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
@@ -13,7 +11,7 @@ from flask import Blueprint, request, jsonify
 from .prompts import _p
 from .main import cosine_similarity, get_embedding
 from .graph_logic import (
-    _graph, _llm, init_graph, reset_graph,
+    _graph, graph_lock, _llm, init_graph, reset_graph,
     _auto_type_and_confidence, _auto_evidence_relation, _bayesian_update,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
     _graph_generate, _clean_thought, _generate_thought, _api_available,
@@ -21,13 +19,31 @@ from .graph_logic import (
     _detect_traps, _compute_alpha_beta,
 )
 
-log = logging.getLogger(__name__)
-
 graph_bp = Blueprint("graph", __name__)
 
 
-def _graph_response(nodes, edges, clusters, **extra):
-    """Build standard graph response with node objects."""
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _p_data():
+    """Extract common params from request JSON."""
+    d = request.get_json(force=True)
+    d.setdefault("threshold", 0.91)
+    d.setdefault("sim_mode", "embedding")
+    d.setdefault("lang", "en")
+    d.setdefault("temp", 0.9)
+    d.setdefault("top_k", 40)
+    d.setdefault("seed", -1)
+    d["threshold"] = float(d["threshold"])
+    d["temp"] = float(d["temp"])
+    d["top_k"] = int(d["top_k"])
+    d["seed"] = int(d["seed"])
+    return d
+
+
+def _finalize(nodes, threshold, sim_mode, **extra):
+    """Compute edges/clusters and return standard graph response."""
+    edges = _compute_edges(nodes, threshold, sim_mode)
+    clusters = _find_clusters(len(nodes), edges, threshold)
     traps = _detect_traps(nodes, edges)
     alpha_beta = _compute_alpha_beta(nodes)
     resp = {
@@ -57,17 +73,11 @@ def graph_think():
     """Generate N thoughts about a topic."""
     if _llm is None and not _api_available():
         return jsonify({"error": "requires in-process model or API"})
-    data = request.get_json(force=True)
-    topic = data.get("topic", "").strip()
-    n = int(data.get("n", 6))
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
-    lang = data.get("lang", "en")
-    temp = float(data.get("temp", 0.9))
-    top_k = int(data.get("top_k", 40))
-    seed = int(data.get("seed", -1))
-    maxtok_think = int(data.get("maxtok_think", 60))
-    existing = data.get("existing", [])
+    d = _p_data()
+    topic = d.get("topic", "").strip()
+    n = int(d.get("n", 6))
+    maxtok_think = int(d.get("maxtok_think", 60))
+    existing = d.get("existing", [])
 
     if not topic:
         return jsonify({"error": "empty topic"})
@@ -112,17 +122,48 @@ def graph_think():
     new_thoughts = []
     directed = _graph["edges"]["directed"]
     manual_links = _graph["edges"]["manual_links"]
+    novelty_threshold = float(d.get("novelty_threshold", 0.92))
+    duplicates_skipped = 0
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        t, ent = _generate_thought(topic, new_thoughts, lang, temp, top_k, seed, maxtok_think)
+        t, ent = _generate_thought(topic, new_thoughts, d["lang"], d["temp"], d["top_k"], d["seed"], maxtok_think)
         if not t or len(t) < 10:
             continue
         if t.lower().strip("., ") in ("qwen3", "qwen", "llama", "gpt", "assistant"):
             continue
         if any(t.lower() == nd["text"].lower() for nd in nodes):
+            duplicates_skipped += 1
             continue
+        # Novelty check: reject if too similar to any existing node
+        if nodes and len(nodes) > 1:
+            try:
+                texts = _get_texts(nodes)
+                _ensure_embeddings(texts)
+                cache = _graph.get("embeddings", [])
+                from .api_backend import use_api_for, api_get_embedding
+                if use_api_for("embeddings"):
+                    new_emb = api_get_embedding(t)
+                else:
+                    new_emb = get_embedding(_llm, t)
+                    new_emb = new_emb.tolist() if hasattr(new_emb, 'tolist') and len(new_emb) > 0 else None
+                if new_emb:
+                    too_similar = False
+                    for idx, emb in enumerate(cache):
+                        if emb is not None:
+                            sim = cosine_similarity(
+                                np.array(new_emb, dtype=np.float32),
+                                np.array(emb, dtype=np.float32))
+                            if sim > novelty_threshold:
+                                print(f"[think] novelty reject: '{t[:40]}' sim={sim:.2f} with #{idx} '{nodes[idx]['text'][:40]}'")
+                                too_similar = True
+                                duplicates_skipped += 1
+                                break
+                    if too_similar:
+                        continue
+            except Exception as e:
+                log.warning(f"[think] novelty check failed: {e}")
         auto_type, llm_conf = _auto_type_and_confidence(t)
         # Hypothesis = 0.5 (unverified, needs evidence/verify to change)
         # Fact = LLM confidence (already verified by knowledge)
@@ -147,24 +188,20 @@ def graph_think():
                 manual_links.append(gpair)
         new_thoughts.append(t)
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-
-    return _graph_response(nodes, edges, clusters)
+    if duplicates_skipped > 0:
+        print(f"[think] {len(new_thoughts)} new, {duplicates_skipped} novelty-rejected")
+    return _finalize(nodes, d["threshold"], d["sim_mode"],
+                     duplicates_skipped=duplicates_skipped, new_count=len(new_thoughts))
 
 
 @graph_bp.route("/graph/recalc", methods=["POST"])
 def graph_recalc():
     """Recompute edges and clusters with a new threshold (no generation)."""
-    data = request.get_json(force=True)
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
     nodes = _graph["nodes"]
     if not nodes:
         return jsonify({"error": "no thoughts"})
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/add", methods=["POST"])
@@ -172,14 +209,12 @@ def graph_add():
     """Add a user-provided thought and recompute edges."""
     if _llm is None and not _api_available():
         return jsonify({"error": "requires in-process model or API"})
-    data = request.get_json(force=True)
-    text = data.get("text", "").strip()
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
-    node_type = data.get("node_type", "auto")
+    d = _p_data()
+    text = d.get("text", "").strip()
+    node_type = d.get("node_type", "auto")
+    print(f"[add] text='{text[:40]}' node_type='{node_type}' raw={d.get('node_type')}")
     if not text:
         return jsonify({"error": "empty thought"})
-    # Determine type and confidence
     if node_type == "auto":
         node_type, auto_conf = _auto_type_and_confidence(text)
         new_idx = _add_node(text, depth=0, topic="", node_type=node_type, confidence=auto_conf)
@@ -190,7 +225,6 @@ def graph_add():
     directed = _graph["edges"]["directed"]
     manual_links = _graph["edges"]["manual_links"]
 
-    # Goal: connect all existing hypothesis/thought nodes → goal (they work toward it)
     if node_type == "goal":
         for i, n in enumerate(nodes):
             if i == new_idx:
@@ -201,26 +235,19 @@ def graph_add():
                 if pair not in manual_links:
                     manual_links.append(pair)
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/remove", methods=["POST"])
 def graph_remove():
     """Remove a thought by index and recompute edges."""
-    data = request.get_json(force=True)
-    idx = int(data.get("index", -1))
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
+    idx = int(d.get("index", -1))
     nodes = _graph["nodes"]
     if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
     _remove_node(idx)
-    nodes = _graph["nodes"]
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(_graph["nodes"], d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/confidence", methods=["POST"])
@@ -240,18 +267,15 @@ def graph_confidence():
 @graph_bp.route("/graph/link", methods=["POST"])
 def graph_link():
     """Manually add or remove an edge between two thoughts."""
-    data = request.get_json(force=True)
-    a = int(data.get("a", -1))
-    b = int(data.get("b", -1))
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
+    a, b = int(d.get("a", -1)), int(d.get("b", -1))
     nodes = _graph["nodes"]
     if a < 0 or b < 0 or a >= len(nodes) or b >= len(nodes) or a == b:
         return jsonify({"error": "invalid indices"})
     pair = (min(a, b), max(a, b))
     manual_links = _graph["edges"]["manual_links"]
     manual_unlinks = _graph["edges"]["manual_unlinks"]
-    edges_before = _compute_edges(nodes, threshold, sim_mode)
+    edges_before = _compute_edges(nodes, d["threshold"], d["sim_mode"])
     has_edge = any(e["from"] == pair[0] and e["to"] == pair[1] for e in edges_before)
     if has_edge:
         if list(pair) in manual_links:
@@ -263,9 +287,7 @@ def graph_link():
             manual_unlinks.remove(list(pair))
         else:
             manual_links.append(list(pair))
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/collapse", methods=["POST"])
@@ -276,19 +298,13 @@ def graph_collapse():
         data_peek = request.get_json(silent=True) or {}
         if not data_peek.get("collapse_override"):
             return jsonify({"error": "requires in-process model or API"})
-    data = request.get_json(force=True)
-    indices = data.get("cluster", [])
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
-    lang = data.get("lang", "en")
-    temp = float(data.get("temp", 0.7))
-    top_k = int(data.get("top_k", 40))
-    seed = int(data.get("seed", -1))
-    collapse_mode = data.get("collapse_mode", "short")
-    custom_max_tokens = data.get("max_tokens")
-    user_prompt = data.get("collapse_prompt", "").strip()
-    no_merge = data.get("no_merge", False)
-    collapse_override = data.get("collapse_override", "").strip()
+    d = _p_data()
+    indices = d.get("cluster", [])
+    collapse_mode = d.get("collapse_mode", "short")
+    custom_max_tokens = d.get("max_tokens")
+    user_prompt = d.get("collapse_prompt", "").strip()
+    no_merge = d.get("no_merge", False)
+    collapse_override = d.get("collapse_override", "").strip()
     nodes = _graph["nodes"]
     topic = _graph["meta"]["topic"]
 
@@ -302,21 +318,21 @@ def graph_collapse():
     else:
         cluster_texts = [nodes[i]["text"] for i in indices if i < len(nodes)]
         if collapse_mode == "long":
-            system = _p(lang, "collapse_long")
-            instruction = _p(lang, "write_long")
+            system = _p(d["lang"], "collapse_long")
+            instruction = _p(d["lang"], "write_long")
             max_tokens = 2000
         else:
-            system = _p(lang, "collapse")
-            instruction = _p(lang, "write_para")
+            system = _p(d["lang"], "collapse")
+            instruction = _p(d["lang"], "write_para")
             max_tokens = 800
         if custom_max_tokens:
             max_tokens = int(custom_max_tokens)
         # Smart truncation: fit texts into context window
         from .api_backend import _settings
-        ctx_size = _settings.get("local_ctx", 4096)
+        ctx_size = _settings.get("local_ctx", 8192)
         token_budget = ctx_size - 200 - max_tokens  # leave room for system + generation
 
-        user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
+        user = f"{_p(d['lang'], 'topic')}: {topic}\n\n{_p(d['lang'], 'ideas')}:\n"
 
         # Sort by confidence (highest first) so we keep the best if truncating
         indexed_texts = sorted(enumerate(cluster_texts), key=lambda x: -(nodes[indices[x[0]]].get("confidence", 0.5) if x[0] < len(indices) and indices[x[0]] < len(nodes) else 0))
@@ -341,17 +357,20 @@ def graph_collapse():
             user += f"\n\n{instruction}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=temp, top_k=top_k, seed=seed)
-        # If text was cut mid-sentence, try to continue
-        if text and not text.rstrip().endswith(('.', '!', '?', '。', '»', '"')):
+        text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
+        # If text was cut mid-sentence, continue (up to 3 attempts)
+        for _cont_attempt in range(3):
+            if not text or text.rstrip().endswith(('.', '!', '?', '。', '»', '"')):
+                break
             messages_cont = list(messages) + [{"role": "assistant", "content": text}]
-            cont, ent2 = _graph_generate(messages_cont, max_tokens=max_tokens // 2, temp=temp, top_k=top_k, seed=seed)
-            if cont:
-                text = text + cont
-                if ent.get("tokens") and ent2.get("tokens"):
-                    ent["tokens"].extend(ent2["tokens"])
-                ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
-                ent["unc"] = max(ent["unc"], ent2["unc"])
+            cont, ent2 = _graph_generate(messages_cont, max_tokens=max_tokens // 2, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
+            if not cont:
+                break
+            text = text + cont
+            if ent.get("tokens") and ent2.get("tokens"):
+                ent["tokens"].extend(ent2["tokens"])
+            ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
+            ent["unc"] = max(ent["unc"], ent2["unc"])
 
     valid_indices = [i for i in indices if i < len(nodes)]
 
@@ -361,6 +380,11 @@ def graph_collapse():
         max_depth = max((nodes[i]["depth"] for i in valid_indices), default=0)
         collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
         new_idx = _add_node(text, depth=max_depth + 1, topic=collapsed_topic, entropy=ent, confidence=round(collapsed_conf, 2))
+        # Store lineage — all sources this node was collapsed from (for ancestry checks)
+        lineage = set(valid_indices)
+        for i in valid_indices:
+            lineage |= set(nodes[i].get("collapsed_from", []))
+        nodes[new_idx]["collapsed_from"] = sorted(lineage)
         directed = _graph["edges"]["directed"]
         manual_links = _graph["edges"]["manual_links"]
         # Link each source → collapsed (traceable chain)
@@ -375,6 +399,10 @@ def graph_collapse():
         collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
         # Average confidence of collapsed nodes
         collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
+        # Collect lineage before removing nodes
+        lineage = set(valid_indices)
+        for i in valid_indices:
+            lineage |= set(nodes[i].get("collapsed_from", []))
         for i in sorted(valid_indices, reverse=True):
             nodes.pop(i)
         # Reassign ids after removal
@@ -383,7 +411,9 @@ def graph_collapse():
         _remap_edges(valid_indices)
         new_idx = _add_node(text, depth=min_depth, topic=collapsed_topic,
                             entropy=ent, confidence=collapsed_conf)
-        # Link collapsed node to its topic root
+        # Note: lineage indices are pre-removal, but that's OK for ancestry tracking
+        nodes[new_idx]["collapsed_from"] = sorted(lineage)
+        # Link collapsed node to topic root and goal
         directed = _graph["edges"]["directed"]
         manual_links = _graph["edges"]["manual_links"]
         for i, nd in enumerate(nodes):
@@ -393,36 +423,39 @@ def graph_collapse():
                 if pair not in manual_links:
                     manual_links.append(pair)
                 break
+        # Also link goal → collapsed (maintain goal connectivity)
+        for i, nd in enumerate(nodes):
+            if nd.get("type") == "goal":
+                directed.append([i, new_idx])
+                pair = [min(i, new_idx), max(i, new_idx)]
+                if pair not in manual_links:
+                    manual_links.append(pair)
+                break
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-
-    return _graph_response(nodes, edges, clusters, text=text)
+    return _finalize(nodes, d["threshold"], d["sim_mode"], text=text)
 
 
 @graph_bp.route("/graph/sync", methods=["POST"])
 def graph_sync():
     """Restore graph state (used by undo)."""
-    data = request.get_json(force=True)
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
 
     # Support both new node-object format and legacy parallel-array format
-    if "nodes" in data:
-        incoming_nodes = data["nodes"]
+    if "nodes" in d:
+        incoming_nodes = d["nodes"]
         if incoming_nodes and isinstance(incoming_nodes[0], str):
             # Legacy: list of strings
-            topic = data.get("topic", _graph["meta"].get("topic", ""))
+            topic = d.get("topic", _graph["meta"].get("topic", ""))
             incoming_nodes = [_make_node(i, t, topic=topic) for i, t in enumerate(incoming_nodes)]
         _graph["nodes"] = incoming_nodes
-    elif "thoughts" in data:
+    elif "thoughts" in d:
         # Legacy parallel-array format
-        thoughts = data["thoughts"]
-        topic = data.get("topic", _graph["meta"].get("topic", ""))
-        ents = data.get("entropies", [])
-        depths = data.get("depths", [])
-        topics = data.get("topics", [])
-        confs = data.get("confidences", [])
+        thoughts = d["thoughts"]
+        topic = d.get("topic", _graph["meta"].get("topic", ""))
+        ents = d.get("entropies", [])
+        depths = d.get("depths", [])
+        topics = d.get("topics", [])
+        confs = d.get("confidences", [])
         _graph["nodes"] = []
         for i, t in enumerate(thoughts):
             _graph["nodes"].append(_make_node(
@@ -435,32 +468,40 @@ def graph_sync():
     _ensure_node_fields(_graph["nodes"])
 
     # Restore edges
-    if "edges" in data and isinstance(data["edges"], dict) and "manual_links" in data["edges"]:
+    if "edges" in d and isinstance(d["edges"], dict) and "manual_links" in d["edges"]:
         # New format: edges is the edges dict
-        _graph["edges"]["manual_links"] = data["edges"].get("manual_links", [])
-        _graph["edges"]["manual_unlinks"] = data["edges"].get("manual_unlinks", [])
-        _graph["edges"]["directed"] = data["edges"].get("directed", [])
+        _graph["edges"]["manual_links"] = d["edges"].get("manual_links", [])
+        _graph["edges"]["manual_unlinks"] = d["edges"].get("manual_unlinks", [])
+        _graph["edges"]["directed"] = d["edges"].get("directed", [])
     else:
         # Compat: directed_edges / manual_links at top level
-        _graph["edges"]["manual_links"] = data.get("manual_links", [])
-        _graph["edges"]["manual_unlinks"] = data.get("manual_unlinks", [])
-        _graph["edges"]["directed"] = data.get("directed_edges", _graph["edges"].get("directed", []))
+        _graph["edges"]["manual_links"] = d.get("manual_links", [])
+        _graph["edges"]["manual_unlinks"] = d.get("manual_unlinks", [])
+        _graph["edges"]["directed"] = d.get("directed_edges", _graph["edges"].get("directed", []))
 
-    _graph["meta"]["hub_nodes"] = set(data.get("hub_nodes", list(_graph["meta"].get("hub_nodes", set()))))
-    if "topic" in data:
-        _graph["meta"]["topic"] = data["topic"]
+    _graph["meta"]["hub_nodes"] = set(d.get("hub_nodes", list(_graph["meta"].get("hub_nodes", set()))))
+    if "topic" in d:
+        _graph["meta"]["topic"] = d["topic"]
 
     # If saved computed edges/clusters provided, use them directly (undo restore)
-    if "edges" in data and isinstance(data["edges"], list) and "clusters" in data:
+    if "edges" in d and isinstance(d["edges"], list) and "clusters" in d:
         _graph["embeddings"] = []
-        return _graph_response(_graph["nodes"], data["edges"], data["clusters"])
+        nodes = _graph["nodes"]
+        traps = _detect_traps(nodes, d["edges"])
+        alpha_beta = _compute_alpha_beta(nodes)
+        return jsonify({
+            "nodes": nodes,
+            "edges": d["edges"],
+            "clusters": d["clusters"],
+            "directed_edges": _graph["edges"].get("directed", []),
+            "hub_nodes": list(_graph["meta"].get("hub_nodes", set())),
+            "traps": traps,
+            "alpha_beta": {str(k): v for k, v in alpha_beta.items()},
+        })
 
     # Otherwise recompute
     _graph["embeddings"] = []
-    nodes = _graph["nodes"]
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(_graph["nodes"], d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/expand", methods=["POST"])
@@ -468,16 +509,10 @@ def graph_expand():
     """Generate child ideas branching from a specific thought (same topic, new angles)."""
     if _llm is None and not _api_available():
         return jsonify({"error": "requires in-process model or API"})
-    data = request.get_json(force=True)
-    idx = int(data.get("index", -1))
-    n = int(data.get("n", 3))
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
-    lang = data.get("lang", "en")
-    temp = float(data.get("temp", 0.9))
-    top_k = int(data.get("top_k", 40))
-    seed = int(data.get("seed", -1))
-    maxtok_expand = int(data.get("maxtok_expand", 120))
+    d = _p_data()
+    idx = int(d.get("index", -1))
+    n = int(d.get("n", 3))
+    maxtok_expand = int(d.get("maxtok_expand", 120))
     nodes = _graph["nodes"]
 
     if idx < 0 or idx >= len(nodes):
@@ -489,18 +524,18 @@ def graph_expand():
     parent_depth = nodes[idx]["depth"]
     parent_topic = nodes[idx]["topic"] or topic
 
-    system = _p(lang, "think")
+    system = _p(d["lang"], "think")
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        user = f"{_p(lang, 'topic')}: {topic}\n{_p(lang, 'source')}: {source}"
+        user = f"{_p(d['lang'], 'topic')}: {topic}\n{_p(d['lang'], 'source')}: {source}"
         if new_thoughts:
-            user += f"\n{_p(lang, 'already_gen')}:\n" + "\n".join(f"- {t}" for t in new_thoughts)
-        user += f"\n{_p(lang, 'branch')}"
+            user += f"\n{_p(d['lang'], 'already_gen')}:\n" + "\n".join(f"- {t}" for t in new_thoughts)
+        user += f"\n{_p(d['lang'], 'branch')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t, ent = _graph_generate(messages, max_tokens=maxtok_expand, temp=temp, top_k=top_k, seed=seed)
+        t, ent = _graph_generate(messages, max_tokens=maxtok_expand, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
         t = _clean_thought(t, topic)
 
         if not t or len(t) < 10:
@@ -531,11 +566,18 @@ def graph_expand():
             nodes[new_idx]["evidence_strength"] = strength
             nodes[new_idx]["evidence_target"] = idx
             nodes[new_idx]["type"] = "evidence"
-            print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
+            # Live Bayesian update if enabled
+            from .api_backend import _settings
+            if _settings.get("live_bayes"):
+                old_conf = nodes[idx]["confidence"]
+                p_e_h = strength if rel == "supports" else (1 - strength)
+                p_e_nh = (1 - strength) if rel == "supports" else strength
+                nodes[idx]["confidence"] = _bayesian_update(old_conf, p_e_h, p_e_nh)
+                print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
+            else:
+                print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/elaborate", methods=["POST"])
@@ -543,17 +585,11 @@ def graph_elaborate():
     """Generate deeper ideas that elaborate on a specific thought (the source becomes a hub)."""
     if _llm is None and not _api_available():
         return jsonify({"error": "requires in-process model or API"})
-    data = request.get_json(force=True)
-    idx = int(data.get("index", -1))
-    n = int(data.get("n", 3))
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
-    lang = data.get("lang", "en")
-    temp = float(data.get("temp", 0.9))
-    top_k = int(data.get("top_k", 40))
-    seed = int(data.get("seed", -1))
-    direction = data.get("direction", "").strip()
-    maxtok_elaborate = int(data.get("maxtok_elaborate", 120))
+    d = _p_data()
+    idx = int(d.get("index", -1))
+    n = int(d.get("n", 3))
+    direction = d.get("direction", "").strip()
+    maxtok_elaborate = int(d.get("maxtok_elaborate", 120))
     nodes = _graph["nodes"]
 
     if idx < 0 or idx >= len(nodes):
@@ -565,20 +601,20 @@ def graph_elaborate():
     parent_depth = nodes[idx]["depth"]
     parent_topic = nodes[idx]["topic"] or topic
 
-    system = _p(lang, "think")
+    system = _p(d["lang"], "think")
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
-        user = f"{_p(lang, 'topic')}: {topic}\n{_p(lang, 'elaborate')}: {source}"
+        user = f"{_p(d['lang'], 'topic')}: {topic}\n{_p(d['lang'], 'elaborate')}: {source}"
         if direction:
-            user += f"\n{_p(lang, 'direction')}: {direction}"
+            user += f"\n{_p(d['lang'], 'direction')}: {direction}"
         if new_thoughts:
-            user += f"\n{_p(lang, 'already_elab')}:\n" + "\n".join(f"- {t}" for t in new_thoughts)
-        user += f"\n{_p(lang, 'deeper')}"
+            user += f"\n{_p(d['lang'], 'already_elab')}:\n" + "\n".join(f"- {t}" for t in new_thoughts)
+        user += f"\n{_p(d['lang'], 'deeper')}"
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        t, ent = _graph_generate(messages, max_tokens=maxtok_elaborate, temp=temp, top_k=top_k, seed=seed)
+        t, ent = _graph_generate(messages, max_tokens=maxtok_elaborate, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
         t = _clean_thought(t, topic)
 
         if not t or len(t) < 10:
@@ -612,11 +648,18 @@ def graph_elaborate():
             nodes[new_idx]["evidence_strength"] = strength
             nodes[new_idx]["evidence_target"] = idx
             nodes[new_idx]["type"] = "evidence"
-            print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
+            # Live Bayesian update if enabled
+            from .api_backend import _settings as _s2
+            if _s2.get("live_bayes"):
+                old_conf = nodes[idx]["confidence"]
+                p_e_h = strength if rel == "supports" else (1 - strength)
+                p_e_nh = (1 - strength) if rel == "supports" else strength
+                nodes[idx]["confidence"] = _bayesian_update(old_conf, p_e_h, p_e_nh)
+                print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
+            else:
+                print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 # ── Generation Studio ────────────────────────────────────────────────────────
@@ -686,11 +729,9 @@ def graph_studio_generate():
 @graph_bp.route("/graph/studio/apply-rephrase", methods=["POST"])
 def graph_studio_apply_rephrase():
     """Apply a rephrase result: replace the text of a node, keep all links/positions."""
-    data = request.get_json(force=True)
-    idx = int(data.get("index", -1))
-    new_text = data.get("text", "").strip()
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
+    idx = int(d.get("index", -1))
+    new_text = d.get("text", "").strip()
 
     nodes = _graph["nodes"]
     if idx < 0 or idx >= len(nodes):
@@ -704,20 +745,16 @@ def graph_studio_apply_rephrase():
     if idx < len(cache):
         cache[idx] = None
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 @graph_bp.route("/graph/studio/apply-child", methods=["POST"])
 def graph_studio_apply_child():
     """Apply an elaborate/expand result: add as child node linked to parent with directed edge."""
-    data = request.get_json(force=True)
-    parent_idx = int(data.get("index", -1))
-    new_text = data.get("text", "").strip()
-    child_type = data.get("type", "elaborate")  # "elaborate" or "expand"
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
+    parent_idx = int(d.get("index", -1))
+    new_text = d.get("text", "").strip()
+    child_type = d.get("type", "elaborate")  # "elaborate" or "expand"
 
     nodes = _graph["nodes"]
     topic = _graph["meta"].get("topic", "")
@@ -744,9 +781,7 @@ def graph_studio_apply_child():
     if child_type == "elaborate":
         hubs.add(parent_idx)
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    return _graph_response(nodes, edges, clusters)
+    return _finalize(nodes, d["threshold"], d["sim_mode"])
 
 
 # --------------- Smart DC (Dialectical Convergence) ---------------
@@ -754,43 +789,43 @@ def graph_studio_apply_child():
 @graph_bp.route("/graph/smartdc", methods=["POST"])
 def graph_smartdc():
     """Smart DC: generate thesis, antithesis, neutral → centroid → synthesis."""
-    data = request.get_json(force=True)
-    node_idx = int(data.get("index", -1))
-    lang = data.get("lang", "en")
-    temp = float(data.get("temp", 0.9))
-    top_k = int(data.get("top_k", 40))
-    seed = int(data.get("seed", -1))
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
+    node_idx = int(d.get("index", -1))
 
     nodes = _graph["nodes"]
     if node_idx < 0 or node_idx >= len(nodes):
         return jsonify({"error": "invalid node index"})
 
     statement = nodes[node_idx]["text"]
+    evidence_context = d.get("evidence_context", [])
 
     # Phase 1: Divergence — generate 3 poles
+    # If evidence context provided, include it so poles are informed
+    context_block = ""
+    if evidence_context:
+        context_block = "\n\nExisting evidence:\n" + "\n".join(evidence_context[:5])
+
     poles = []
     for role_key in ["dc_thesis", "dc_antithesis", "dc_neutral"]:
         messages = [
-            {"role": "system", "content": _p(lang, role_key)},
-            {"role": "user", "content": f"{_p(lang, 'dc_statement')}: {statement}"},
+            {"role": "system", "content": _p(d["lang"], role_key)},
+            {"role": "user", "content": f"{_p(d['lang'], 'dc_statement')}: {statement}{context_block}"},
         ]
-        text, ent = _graph_generate(messages, max_tokens=200, temp=temp, top_k=top_k, seed=seed)
+        text, ent = _graph_generate(messages, max_tokens=200, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
         print(f"[smartdc] {role_key}: {text[:80]}...")
         poles.append({"role": role_key, "text": text, "entropy": ent})
 
     # Phase 2: Convergence — synthesize from 3 poles (BEFORE embeddings to keep KV cache clean)
     synthesis_messages = [
-        {"role": "system", "content": _p(lang, "dc_synthesis")},
+        {"role": "system", "content": _p(d["lang"], "dc_synthesis")},
         {"role": "user", "content":
-            f"{_p(lang, 'dc_statement')}: {statement}\n\n"
-            f"{_p(lang, 'dc_for')}:\n{poles[0]['text']}\n\n"
-            f"{_p(lang, 'dc_against')}:\n{poles[1]['text']}\n\n"
-            f"{_p(lang, 'dc_context')}:\n{poles[2]['text']}"
+            f"{_p(d['lang'], 'dc_statement')}: {statement}\n\n"
+            f"{_p(d['lang'], 'dc_for')}:\n{poles[0]['text']}\n\n"
+            f"{_p(d['lang'], 'dc_against')}:\n{poles[1]['text']}\n\n"
+            f"{_p(d['lang'], 'dc_context')}:\n{poles[2]['text']}"
         },
     ]
-    synthesis_text, synthesis_ent = _graph_generate(synthesis_messages, max_tokens=300, temp=0.7, top_k=top_k, seed=seed)
+    synthesis_text, synthesis_ent = _graph_generate(synthesis_messages, max_tokens=300, temp=0.7, top_k=d["top_k"], seed=d["seed"])
     print(f"[smartdc] synthesis: {synthesis_text[:80]}...")
 
     # Phase 3: Try embeddings for centroid confidence, fallback to entropy
@@ -853,19 +888,19 @@ def graph_tick():
     """Phase-based automatic thinking: EXPLORE → DEEPEN → VERIFY → META → SYNTHESIZE."""
     from .thinking import tick
 
-    data = request.get_json(force=True)
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
-    stable_threshold = float(data.get("stable_threshold", 0.8))
-    run_mode = data.get("run_mode", "deep")
-    force_collapse = data.get("force_collapse", False)
+    d = _p_data()
+    stable_threshold = float(d.get("stable_threshold", 0.8))
+    force_collapse = d.get("force_collapse", False)
+    max_meta = int(d.get("max_meta", 2))
+    min_hyp = int(d.get("min_hyp", 5))
 
     nodes = _graph["nodes"]
-    edges = _compute_edges(nodes, threshold, sim_mode)
+    edges = _compute_edges(nodes, d["threshold"], d["sim_mode"])
 
     result = tick(nodes, edges, _graph,
-                  threshold=threshold, stable_threshold=stable_threshold,
-                  run_mode=run_mode, force_collapse=force_collapse)
+                  threshold=d["threshold"], stable_threshold=stable_threshold,
+                  force_collapse=force_collapse,
+                  max_meta=max_meta, min_hyp=min_hyp)
     return jsonify(result)
 
 
@@ -887,13 +922,11 @@ def graph_set_type():
 @graph_bp.route("/graph/add-evidence", methods=["POST"])
 def graph_add_evidence():
     """Add evidence node linked to a hypothesis, update hypothesis confidence via Bayes."""
-    data = request.get_json(force=True)
-    hyp_idx = int(data.get("hypothesis", -1))
-    evidence_text = data.get("text", "").strip()
-    relation = data.get("relation", "supports")  # "supports" or "contradicts"
-    strength = float(data.get("strength", 0.7))  # P(E|H) — how likely is this evidence if hypothesis is true
-    threshold = float(data.get("threshold", 0.91))
-    sim_mode = data.get("sim_mode", "embedding")
+    d = _p_data()
+    hyp_idx = int(d.get("hypothesis", -1))
+    evidence_text = d.get("text", "").strip()
+    relation = d.get("relation", "supports")
+    strength = float(d.get("strength", 0.7))
 
     nodes = _graph["nodes"]
     if hyp_idx < 0 or hyp_idx >= len(nodes):
@@ -939,12 +972,9 @@ def graph_add_evidence():
     if pair not in manual_links:
         manual_links.append(pair)
 
-    edges = _compute_edges(nodes, threshold, sim_mode)
-    clusters = _find_clusters(len(nodes), edges, threshold)
-
     print(f"[bayes] hyp #{hyp_idx} '{hyp['text'][:40]}': {old_conf:.2f} → {posterior:.3f} ({relation}, strength={strength})")
 
-    return _graph_response(nodes, edges, clusters, bayes_update={
+    return _finalize(nodes, d["threshold"], d["sim_mode"], bayes_update={
         "hypothesis": hyp_idx,
         "prior": old_conf,
         "posterior": posterior,
