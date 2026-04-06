@@ -753,13 +753,22 @@ def graph_think():
             _graph["nodes"] = list(existing)
         nodes = _graph["nodes"]
         _ensure_node_fields(nodes)
+        goal_check = [n for n in nodes if n.get("type") == "goal"]
+        print(f"[think] existing restored: {len(nodes)} nodes, goals: {len(goal_check)}, types: {[n.get('type','?') for n in nodes[:6]]}")
 
     # Add topic as root node (depth=-1) if not already present
+    # First check if a goal node matches the topic text — use it instead
     topic_idx = -1
     for i, nd in enumerate(nodes):
         if nd["depth"] == -1 and nd["text"] == topic:
             topic_idx = i
             break
+    if topic_idx < 0:
+        # Check if goal node has same text — don't duplicate it
+        for i, nd in enumerate(nodes):
+            if nd.get("type") == "goal" and nd["text"] == topic:
+                topic_idx = i
+                break
     if topic_idx < 0:
         topic_idx = _add_node(topic, depth=-1, topic=topic)
 
@@ -791,6 +800,14 @@ def graph_think():
         pair = [min(topic_idx, new_idx), max(topic_idx, new_idx)]
         if pair not in manual_links:
             manual_links.append(pair)
+        # Also link goal → new thought (if goal exists)
+        goal_nodes = [i for i, nd in enumerate(nodes) if nd.get("type") == "goal"]
+        if goal_nodes:
+            g_idx = goal_nodes[0]
+            directed.append([g_idx, new_idx])
+            gpair = [min(g_idx, new_idx), max(g_idx, new_idx)]
+            if gpair not in manual_links:
+                manual_links.append(gpair)
         new_thoughts.append(t)
 
     edges = _compute_edges(nodes, threshold, sim_mode)
@@ -957,8 +974,31 @@ def graph_collapse():
             max_tokens = 800
         if custom_max_tokens:
             max_tokens = int(custom_max_tokens)
+        # Smart truncation: fit texts into context window
+        # Estimate context budget: total context - system prompt (~100 tok) - max_tokens for generation
+        from api_backend import _settings
+        ctx_size = _settings.get("local_ctx", 4096)
+        token_budget = ctx_size - 200 - max_tokens  # leave room for system + generation
+
         user = f"{_p(lang, 'topic')}: {topic}\n\n{_p(lang, 'ideas')}:\n"
-        user += "\n".join(f"- {t}" for t in cluster_texts)
+
+        # Sort by confidence (highest first) so we keep the best if truncating
+        indexed_texts = sorted(enumerate(cluster_texts), key=lambda x: -(nodes[indices[x[0]]].get("confidence", 0.5) if x[0] < len(indices) and indices[x[0]] < len(nodes) else 0))
+
+        # Rough token count: len(text) / 3 for multilingual
+        used_tokens = len(user) // 3
+        selected_texts = []
+        for orig_idx, t in indexed_texts:
+            t_tokens = len(t) // 3 + 2  # +2 for "- " prefix
+            if used_tokens + t_tokens > token_budget:
+                continue  # skip, doesn't fit
+            selected_texts.append(t)
+            used_tokens += t_tokens
+
+        if len(selected_texts) < len(cluster_texts):
+            print(f"[collapse] context fit: {len(selected_texts)}/{len(cluster_texts)} texts ({used_tokens}/{token_budget} est. tokens)")
+
+        user += "\n".join(f"- {t}" for t in selected_texts)
         if user_prompt:
             user += f"\n\n{user_prompt}"
         else:
@@ -980,20 +1020,19 @@ def graph_collapse():
     valid_indices = [i for i in indices if i < len(nodes)]
 
     if no_merge:
-        # Test mode: add collapsed text as new node but keep originals
+        # Keep originals, add collapsed as new node linked FROM source nodes
         collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
-        min_depth = min((nodes[i]["depth"] for i in valid_indices), default=0)
-        new_idx = _add_node(text, depth=min_depth, topic=collapsed_topic, entropy=ent)
-        # Link to topic root
+        max_depth = max((nodes[i]["depth"] for i in valid_indices), default=0)
+        collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
+        new_idx = _add_node(text, depth=max_depth + 1, topic=collapsed_topic, entropy=ent, confidence=round(collapsed_conf, 2))
         directed = _graph["edges"]["directed"]
         manual_links = _graph["edges"]["manual_links"]
-        for i, nd in enumerate(nodes):
-            if nd["depth"] == -1 and nd["topic"] == collapsed_topic:
-                directed.append([i, new_idx])
-                pair = [min(i, new_idx), max(i, new_idx)]
-                if pair not in manual_links:
-                    manual_links.append(pair)
-                break
+        # Link each source → collapsed (traceable chain)
+        for src_idx in valid_indices:
+            directed.append([src_idx, new_idx])
+            pair = [min(src_idx, new_idx), max(src_idx, new_idx)]
+            if pair not in manual_links:
+                manual_links.append(pair)
     else:
         # Normal mode: remove source nodes, add collapsed result
         min_depth = min((nodes[i]["depth"] for i in valid_indices), default=0)
@@ -1483,6 +1522,7 @@ def graph_tick():
     sim_mode = data.get("sim_mode", "embedding")
     stable_threshold = float(data.get("stable_threshold", 0.8))
     run_mode = data.get("run_mode", "deep")  # "fast" or "deep"
+    force_collapse = data.get("force_collapse", False)
 
     nodes = _graph["nodes"]
     if not nodes:
@@ -1497,6 +1537,8 @@ def graph_tick():
     goals = [(i, n) for i, n in active_nodes if n.get("type") == "goal"]
     goal_idx = goals[0][0] if goals else None
     goal_text = nodes[goal_idx]["text"][:60] if goal_idx is not None else ""
+    if not goals:
+        print(f"[tick] WARNING: no goal node found. Types: {[n.get('type','?') for _,n in active_nodes[:5]]}")
 
     hypotheses = [(i, n) for i, n in active_nodes
                   if n.get("type") in ("hypothesis", "thought")]
@@ -1510,6 +1552,36 @@ def graph_tick():
     unverified = [h for h in hypotheses if h[1].get("confidence", 0.5) < stable_threshold]
     weak = [h for h in hypotheses if h[1].get("confidence", 0.5) <= 0.5]
     verified = [h for h in hypotheses if h[1].get("confidence", 0.5) >= stable_threshold]
+
+    # ── FORCE COLLAPSE (after step limit reached) — collapse in batches of 5 ──
+    if force_collapse:
+        collapsable = [i for i, n in active_nodes if n.get("type") not in ("evidence", "goal")]
+        if len(collapsable) > 5:
+            # Take first 5 to collapse
+            batch = collapsable[:5]
+            return jsonify({
+                "action": "collapse",
+                "target": batch,
+                "phase": "collapse",
+                "reason": f"COLLAPSE PHASE: batch of 5 from {len(collapsable)} remaining.",
+                "text": "batch collapse",
+            })
+        elif len(collapsable) >= 2:
+            # Last batch
+            return jsonify({
+                "action": "collapse",
+                "target": collapsable,
+                "phase": "collapse",
+                "reason": f"FINAL COLLAPSE: {len(collapsable)} remaining.",
+                "text": "final batch",
+            })
+        # Already collapsed enough → stable
+        avg_conf = sum(n.get("confidence", 0.5) for _, n in active_nodes) / len(active_nodes)
+        return jsonify({
+            "action": "stable",
+            "phase": "synthesize",
+            "reason": f"SYNTHESIZE: {len(active_nodes)} nodes, avg {avg_conf:.0%}.",
+        })
 
     # ── Helper: pick best node toward goal (BFS shortest path + exploration) ──
     def _pick_toward_goal(candidates):
@@ -1613,7 +1685,7 @@ def graph_tick():
             t = isolated[0]
             return jsonify({"action": "expand", "target": t[0], "phase": "fast",
                             "reason": f"FAST: #{t[0]} isolated. Expand.", "text": t[1]["text"][:80]})
-        # 8. Large cluster → Collapse
+        # 8. Collapse verified nodes (cluster-based or all verified if ≥5)
         clusters = _find_clusters(len(nodes), edges, threshold)
         for cl in clusters:
             real = [i for i in cl if nodes[i].get("depth", 0) >= 0 and nodes[i].get("type") not in ("evidence", "goal")]
@@ -1623,6 +1695,12 @@ def graph_tick():
                     return jsonify({"action": "collapse", "target": real, "phase": "fast",
                                     "reason": f"FAST: cluster {len(real)} nodes, avg {avg_c:.0%}. Collapse.",
                                     "text": ", ".join(nodes[i]["text"][:25] for i in real[:3]) + "..."})
+        # 8b. No clusters but many verified → collapse all verified
+        if len(verified) >= 5:
+            v_ids = [i for i, _ in verified]
+            return jsonify({"action": "collapse", "target": v_ids, "phase": "fast",
+                            "reason": f"FAST: {len(verified)} verified, no clusters. Collapse verified.",
+                            "text": ", ".join(nodes[i]["text"][:25] for i in v_ids[:3]) + "..."})
         # 9. META
         meta_done = _graph.get("_meta_done", False)
         if not meta_done and len(verified) >= 3:
@@ -1706,7 +1784,7 @@ def graph_tick():
             "text": goal_text,
         })
 
-    # ── PHASE 3b: COLLAPSE — synthesize large verified clusters ──
+    # ── PHASE 3b: COLLAPSE — verified clusters or all verified ──
     clusters = _find_clusters(len(nodes), edges, threshold)
     for cl in clusters:
         real_nodes = [i for i in cl if nodes[i].get("depth", 0) >= 0
@@ -1717,9 +1795,19 @@ def graph_tick():
                 "action": "collapse",
                 "target": real_nodes,
                 "phase": "collapse",
-                "reason": f"COLLAPSE: cluster of {len(real_nodes)} nodes ({len(verified_in_cl)} verified). Synthesize before next round.",
+                "reason": f"COLLAPSE: cluster of {len(real_nodes)} nodes ({len(verified_in_cl)} verified).",
                 "text": ", ".join(nodes[i]["text"][:25] for i in real_nodes[:3]) + "...",
             })
+    # No clusters but many verified → collapse all verified
+    if len(verified) >= 5:
+        v_ids = [i for i, _ in verified]
+        return jsonify({
+            "action": "collapse",
+            "target": v_ids,
+            "phase": "collapse",
+            "reason": f"COLLAPSE: {len(verified)} verified, no clusters. Synthesize.",
+            "text": ", ".join(nodes[i]["text"][:25] for i in v_ids[:3]) + "...",
+        })
 
     # ── PHASE 4a: EXPAND — isolated nodes ──
     connected = set()

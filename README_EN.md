@@ -1,114 +1,105 @@
 # baddle
 
-> AHI Protocol — Augmented Human Intelligence. Don't ask AI for an answer — control the thinking process.
+> AHI Protocol — Augmented Human Intelligence.
+> Don't ask AI for an answer — control the thinking process.
 
-**[Русская версия →](README.md)**
+**[Русская версия →](README.md)** · **[Installation & Setup →](SETUP_EN.md)**
 
-A thought graph with Bayesian confidence, Markov transitions and dialectical synthesis. Runs locally via llama.cpp or through API. Not a chatbot — here you branch ideas, verify hypotheses, and the system learns with you.
-
-**[Installation & Setup →](SETUP_EN.md)**
+A thought graph with Bayesian confidence, Markov transitions and dialectical synthesis. Set a goal → system automatically explores the topic, verifies hypotheses, synthesizes results. Runs locally via llama.cpp or through API. Free, on a quantized 8B model.
 
 ---
 
-## Graph Thinking
+## How it works
 
-The key mode. Enter a topic → model generates thoughts → connections form → clusters → collapse → repeat.
+1. Set a **goal** — "Prove that procrastination is useful"
+2. Press **🔄 Run**
+3. System automatically:
+   - Generates 10 hypotheses
+   - Gathers evidence for each
+   - Verifies dialectically (thesis/antithesis → synthesis via embedding centroid)
+   - Asks itself questions ("what did I miss?")
+   - Collapses verified clusters
+   - Repeats the cycle
+4. Get a **structured essay** with argumentation
 
-**Two modes of thinking:**
-- **Divergent** — Think generates ideas, Expand branches
-- **Convergent** — Collapse synthesizes a cluster, Elaborate deepens
+Real example: "Prove that matter is not primary" → 51 steps → three rounds of Think/Verify/Collapse → essay with arguments from quantum physics, philosophy of consciousness, emergence.
 
-### Bayesian Confidence (Stone 1)
+---
 
-Every node has **confidence** (0–1). Everything is determined automatically via LLM:
+## Thought Graph
 
-- **Auto-type + auto-confidence** — LLM classifies text (hypothesis/fact/question/evidence) and rates initial confidence in one call. "Ants are better than sparrows" → hypothesis 35%. "Earth is round" → fact 95%
-- **Auto-evidence** — Expand/Elaborate children automatically become evidence. LLM determines supports/contradicts and strength. Parent confidence updates via Bayes
-- **α/β model** — for hypotheses: α = sum of supports, β = sum of contradicts. Progress bar + evidence list sorted by strength ("What changes the mind?")
-- **Manual evidence** — "+ Evidence" button, supports/contradicts, strength slider
-- **Edge types** — similarity (grey), supports (green →), contradicts (red ⇢), temporal (cyan), directed (purple →)
+### Bayesian Confidence
 
-### Markov Transitions (Stone 2)
+Every node has **confidence** (0–1). Determined automatically:
 
-Every edge has **transition_prob** — probability of traversal. Normalized, directed edges get a bonus.
+- **LLM classification** — type (hypothesis/fact/question/evidence/goal/action) + initial confidence in one call
+- **Auto-evidence** — Elaborate children automatically become evidence. LLM determines supports/contradicts
+- **Smart DC** — dialectical check: thesis + antithesis + neutral → centroid in embedding space → confidence from cosine similarity
+- **α/β model** — supports vs contradicts, progress bar, "What changes the mind?"
 
-- **Random Walk** — 🚶 Walk button: "where does this thought lead?" 50 simulations, top-3 endpoints
-- **Trap detector** — nodes with high inflow, low outflow → red outline
-- **Hebb learning** — navigating between nodes strengthens transition_prob. "Neurons that fire together, wire together"
-- **Edge tooltip** — P-values, similarity, relation type
+### Markov Transitions
 
-### Temporal Links (Stone 3)
+Every edge has **transition_prob**. Random Walk shows where thought leads. Trap detector. Hebb: frequently used paths strengthen.
 
-Every node stores `created_at` and `last_accessed`.
+### Temporal Links
 
-- **Temporal links** — auto-connections between nodes created within 5 min. Cyan, hidden by default (⏰ Time button)
-- **Timestamps** in detail panel
+Nodes from same session linked contextually. Timestamp on every node.
 
-### Smart DC — Dialectical Synthesis (Stone 4)
+### A→B Navigation
 
-**Two automatic thinking modes (🔄 Run):**
+Set goal → BFS finds shortest path → system guides along it. Exploration: if obvious fails → tries less obvious. Trap avoidance.
 
-**Fast** — priority-based. Fixes weakest problem first, converges when possible.
+---
 
-**Deep** — phase-based. Processes ALL nodes through ALL phases. Doesn't stop until everything is examined.
+## Automatic Thinking
 
-Both use the same tools:
-1. **Think** — generate ideas (10 at a time)
-2. **Elaborate** — add evidence (α/β without changing confidence)
-3. **Smart DC (Verify)** — dialectical check: thesis/antithesis/neutral → synthesis → confidence from centroid distance (embeddings)
-4. **Ask** — "why do I think this?" (question-node, reveals assumptions)
-5. **Rephrase** — reformulate if evidence doesn't help (max 1 per node)
-6. **Expand** — branch isolated nodes
-7. **Collapse** — synthesize verified clusters
-8. **META** — "what did I miss?" (another Think round after verification)
-9. **Summary** — final text → linked to goal (essay/brief/list/none)
+**Two modes (🔄 Run):**
 
-Common mechanisms: BFS to goal (shortest path), exploration (if obvious fails → try less obvious), trap avoidance (bypass dead ends)
-- **🔄 Run** — full automatic cycle: tick → action → ... until stable. Configurable steps, stable threshold, output format (essay/brief/list/none). Prompts for goal if none exists. At stable — final document (join all thoughts + conclusions) → linked to goal. Exploration: if best path fails — tries less obvious route
-- **Types: goal / action** — goal = target state (point B), action = completed action. A→B navigation: system guides from current state to goal. Goal auto-links to all hypotheses
-- **Context menu** — right-click: Expand, Elaborate, Rephrase, Verify, Walk, Evidence, Chat, Edit, node type, Delete
+| | Fast | Deep |
+|---|---|---|
+| Approach | By priority: fix weakest | By phases: process all |
+| Think | When < 3 hypotheses | When < 5, ×10 |
+| Ask | 1 question | 3 questions |
+| META | When ≥ 3 verified | When ≥ 5 verified |
 
-### Generation Studio
+**Tools (both modes):**
+Think → Elaborate → Verify (Smart DC) → Ask → Rephrase → Expand → Collapse → META → Summary
 
-Universal modal: Rephrase, Elaborate, Expand, Collapse, Freeform. Batch generation of N variants, compare, Apply.
+**Phase marker:** "Collapse at N" — after N steps, system starts forced compression in batches of 5. Hard stop at 2N.
 
-### Graph Interface
+**Verify mode:** replace (overwrites node) or expand (adds synthesis as child, original stays).
 
-- Right-click → context menu, drag → reposition, scroll → zoom, drag background → pan
-- Link mode, Undo (Ctrl+Z), Delete, Esc
-- → Flow / free graph, ⟳ Layout, ↓ Save / ↑ Load
-- threshold — live edge recalculation
-- Thought list with numbers, types [H][E][F][Q], sorted by cluster
-- Detail panel: per-token heatmap, confidence slider, source tracking, connected edges with P-values
+**Output format:** essay / brief / list / none.
+
+---
+
+## Interface
+
+- **Topic + Add** — above graph, with type selector (auto/hypothesis/goal/fact/...)
+- **Parameters** — collapsible panel (thoughts, similarity, threshold, temp, top_k, seed, max tokens)
+- **Buttons**: Select / All / Collapse(badge) | Link / Flow / Time / Layout | Auto / Run▾ | Undo / Save / Load / Reset
+- **Collapse** — dropdown: auto-clusters + manual selection → Studio
+- **Detail panel** — per-token heatmap, confidence, type, α/β, edges, Walk, Verify
+- **Context menu** — right-click: Expand, Elaborate, Rephrase, Verify, Walk, Evidence, Chat, Edit, type, Delete
+- **Generation Studio** — universal modal for all generations with batch variants
 
 ---
 
 ## Other Modes
 
-### `step` — token-by-token generation
-
-One token at a time. Probability distribution (top-10), editable text, heatmap.
-
-### `parallel` — two prompts / compare
-
-Two prompts in parallel, each with temp/top_k. **compare** checkbox — one prompt, two configs, divergence badge.
-
-### `chat` — conversation with the model
-
-Chat template (ChatML / Jinja2). Continue, heatmap.
-**Context sidebar** — context from graph (→ Chat), from responses (→ ctx), manual. **→ graph** — send chat text to graph.
+**step** — token by token, probability distribution, heatmap
+**parallel** — two prompts + compare mode
+**chat** — with context sidebar (→ Chat from graph, → Graph from chat)
 
 ---
 
-## Common Features
+## Settings
 
-- **Confidence heatmap** — tokens colored by entropy, adjustable scale
-- **Roles** — presets from `roles.json`, EN/RU switcher
-- **Settings** — Local / API / Hybrid, auto-load models from API, hot-swap, `settings.json`
-- **Embedding model** — separate model for embeddings (similarity + Smart DC centroid). Dropdown in Settings from available API/local models
-- **Similarity** — Embedding / Jaccard / Off, auto-fallback
+- **Local / API / Hybrid** — generation + embeddings separately
+- **Embedding model** — separate model (nomic-embed-text) for similarity and centroid
+- **Heatmap** — adjustable entropy scale
 
-> 💡 **Recommended**: main model (Qwen3-8B) for generation + separate embedding model (nomic-embed-text) for similarity and Smart DC centroid. Both run in parallel via LM Studio without conflicts.
+> 💡 Qwen3-8B for generation + nomic-embed-text for embeddings. Both run in parallel via LM Studio.
 
 ---
 
