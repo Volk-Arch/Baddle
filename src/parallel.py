@@ -29,7 +29,7 @@ def get_dual_result():
 
 @parallel_bp.route("/stream")
 def stream():
-    from main import StreamCfg
+    from .main import StreamCfg
 
     pa      = request.args.get("pa", "")
     pb      = request.args.get("pb", pa)
@@ -54,7 +54,7 @@ def stream():
         def _iter():
             """Try server, then batch, then interleaved."""
             if server_url:
-                from server_backend import _server_generate_iter, is_native_server
+                from .server_backend import _server_generate_iter, is_native_server
                 native = is_native_server(server_url)
                 yield "tag", "llama-server (parallel)" if native else "llama-server (sequential)"
                 for item in _server_generate_iter(server_url, pa, pb, n, cfg_a, cfg_b):

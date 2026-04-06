@@ -9,6 +9,6 @@
   "local_model": "Qwen3-8B-Q4_K_M.gguf",
   "local_gpu_layers": -1,
   "local_ctx": 4096,
-  "embedding_model": "text-embedding-nomic-embed-text-v2-moe",
+  "embedding_model": "",
   "local_embedding_path": ""
 }
