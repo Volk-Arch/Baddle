@@ -54,6 +54,8 @@ function openSettings() {
       }
     });
     embSel.value = s.embedding_model || '';
+    // Experimental
+    document.getElementById('settings-live-bayes').checked = !!s.live_bayes;
     // Populate local models dropdown
     const sel = document.getElementById('settings-local-model');
     sel.innerHTML = '<option value="">-- select --</option>';
@@ -121,6 +123,7 @@ function saveSettings() {
     local_gpu_layers: parseInt(document.getElementById('settings-gpu-layers').value) || -1,
     local_ctx: parseInt(document.getElementById('settings-ctx').value) || 4096,
     embedding_model: document.getElementById('settings-embedding-model').value,
+    live_bayes: document.getElementById('settings-live-bayes').checked,
   };
   fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
     .then(r => r.json()).then(s => {

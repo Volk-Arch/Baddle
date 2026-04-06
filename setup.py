@@ -151,8 +151,10 @@ def download_server(cuda_ver: str | None) -> bool:
             return True
 
     if platform.system() != "Windows" or platform.machine() not in ("AMD64", "x86_64"):
-        print("\n[server] Auto-download only supports Windows x64.")
-        print("  Download manually from https://github.com/ggml-org/llama.cpp/releases")
+        print(f"\n⚠ llama-server auto-download only supports Windows x64.")
+        print(f"  Your platform: {platform.system()} {platform.machine()}")
+        print(f"  Download manually: https://github.com/ggml-org/llama.cpp/releases")
+        print(f"  Or use API mode (Settings → API) — no local server needed.")
         return False
 
     print("\n── Downloading llama-server ──")

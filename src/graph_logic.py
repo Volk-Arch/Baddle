@@ -3,6 +3,7 @@
 import re
 import random
 import logging
+import threading
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
@@ -49,16 +50,18 @@ def _auto_type_and_confidence(text: str) -> tuple[str, float]:
         elif len(parts) >= 1 and parts[0] in valid_types:
             defaults = {"hypothesis": 0.5, "fact": 0.9, "question": 0.5, "evidence": 0.7, "goal": 0.6, "action": 0.9}
             return (parts[0], defaults[parts[0]])
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"[auto_type] LLM classification failed: {e}")
 
     # Regex fallback
+    log.info(f"[auto_type] fallback to regex for: '{t[:60]}...'")
     if t.endswith('?'):
         return ("question", 0.5)
     q_words = ('почему', 'зачем', 'как ', 'что ', 'какой', 'какая', 'какие',
                'why', 'how', 'what', 'which', 'when', 'where', 'is ', 'are ', 'can ', 'does ')
     if any(t.lower().startswith(w) for w in q_words):
         return ("question", 0.5)
+    log.warning(f"[auto_type] defaulting to hypothesis/0.5 for: '{t[:60]}...'")
     return ("hypothesis", 0.5)
 
 
@@ -81,10 +84,11 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
             return (parts[0], round(max(0.1, min(0.95, strength)), 2))
         elif len(parts) >= 1 and parts[0] in ("supports", "contradicts"):
             return (parts[0], 0.7)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"[auto_evidence] LLM relation check failed: {e}")
 
     # Regex fallback
+    log.info(f"[auto_evidence] fallback to regex")
     neg_patterns = (r'\bне\b', r'\bнет\b', r'\bоднако\b', r'\bно\b', r'\bnot\b', r'\bhowever\b', r'\bbut\b')
     child_lower = child_text.lower()
     if any(re.search(p, child_lower) for p in neg_patterns):
@@ -145,24 +149,24 @@ def _add_node(text: str, depth: int = 0, topic: str = "",
               entropy: dict | None = None, confidence: float = 0.5,
               node_type: str = "thought") -> int:
     """Create node with next id, append to graph, return new index."""
-    nodes = _graph["nodes"]
-    new_id = len(nodes)
-    nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence, node_type))
-    _graph.pop("_tick_tried", None)  # reset exploration tracking on graph change
-    return new_id
+    with graph_lock:
+        nodes = _graph["nodes"]
+        new_id = len(nodes)
+        nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence, node_type))
+        _graph.pop("_tick_tried", None)
+        return new_id
 
 
 def _remove_node(idx: int):
     """Remove node at idx, remap all edge indices and embeddings."""
-    nodes = _graph["nodes"]
-    if idx < 0 or idx >= len(nodes):
-        return
-    nodes.pop(idx)
-    # Reassign sequential ids
-    for i, node in enumerate(nodes):
-        node["id"] = i
-    # Remap edges and embeddings
-    _remap_edges([idx])
+    with graph_lock:
+        nodes = _graph["nodes"]
+        if idx < 0 or idx >= len(nodes):
+            return
+        nodes.pop(idx)
+        for i, node in enumerate(nodes):
+            node["id"] = i
+        _remap_edges([idx])
 
 
 # ── module-level model reference (set by init_graph) ─────────────────────────
@@ -193,12 +197,15 @@ def _fresh_graph():
     }
 
 _graph = _fresh_graph()
+graph_lock = threading.Lock()
 
 
 def reset_graph():
-    """Reset all graph state."""
-    global _graph
-    _graph = _fresh_graph()
+    """Reset all graph state (clears in-place to preserve references)."""
+    with graph_lock:
+        fresh = _fresh_graph()
+        _graph.clear()
+        _graph.update(fresh)
 
 
 # ── generation helpers ───────────────────────────────────────────────────────

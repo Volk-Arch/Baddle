@@ -2,11 +2,11 @@
 
 _PROMPTS = {
     "en": {
-        "think":       "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). No numbering, no bullets, just the idea. Answer directly.",
+        "think":       "/no_think\nYou generate ONE short idea (1 sentence, max 15 words). Focus on a DIFFERENT aspect than what's already listed — a new angle, cause, effect, example, or counterargument. No numbering, no bullets, just the idea. Answer directly.",
         "collapse":    "/no_think\nYou combine ideas into a coherent paragraph. Write naturally, do not list the ideas separately. Answer directly.",
         "deeper":      "Go DEEPER into this specific idea. Unpack a detail, consequence, or mechanism. Not a new angle — dig into THIS idea.",
         "branch":      "Generate a NEW related idea that branches from the source idea. A different angle on the same subject.",
-        "new_idea":    "Generate a NEW different idea.",
+        "new_idea":    "Generate a NEW idea about a COMPLETELY DIFFERENT aspect. Not a rephrasing — a new angle.",
         "one_idea":    "Generate one idea.",
         "topic":       "Topic",
         "already":     "Already suggested",
@@ -29,11 +29,11 @@ _PROMPTS = {
         "dc_statement":"Statement to verify",
     },
     "ru": {
-        "think":       "/no_think\nТы генерируешь ОДНУ короткую идею (1 предложение, максимум 15 слов). Без нумерации, без списков, только идея. Отвечай сразу.",
+        "think":       "/no_think\nТы генерируешь ОДНУ короткую идею (1 предложение, максимум 15 слов). Сосредоточься на ДРУГОМ аспекте — новый ракурс, причина, следствие, пример или контраргумент. Без нумерации, без списков, только идея. Отвечай сразу.",
         "collapse":    "/no_think\nОбъедини идеи в связный абзац. Пиши естественно, не перечисляй идеи отдельно. Отвечай сразу.",
         "deeper":      "Углубись В ЭТУ конкретную идею. Раскрой деталь, следствие или механизм. Не новый ракурс — копай ВГЛУБЬ.",
         "branch":      "Сгенерируй НОВУЮ связанную идею, ответвлённую от исходной. Другой ракурс на ту же тему.",
-        "new_idea":    "Сгенерируй НОВУЮ, другую идею.",
+        "new_idea":    "Сгенерируй идею о СОВЕРШЕННО ДРУГОМ аспекте. Не перефразировка — новый ракурс.",
         "one_idea":    "Сгенерируй одну идею.",
         "topic":       "Тема",
         "already":     "Уже предложено",

@@ -4,28 +4,7 @@
 
 ---
 
-## Рефакторинг
-
-### Надёжность
-- [ ] **Thread safety** — добавить `threading.Lock` на мутирующие операции графа (Flask многопоточный, глобальное состояние = гонка)
-- [ ] **Retry + backoff в `api_backend.py`** — HTTP-запросы без retry при timeout/5xx дают непонятные ошибки
-- [ ] **Валидация JSON от LLM** — `_auto_type_and_confidence()` тихо фоллбэчит на `thought/0.5`, стоит логировать и предупреждать
-
-### Безопасность
-- [ ] **`api_key` из `settings.json` → `.env`** — ключ в открытом виде, рискованно при публикации
-- [ ] **`settings.json` в `.gitignore`** — персональные настройки не должны попадать в репо
-
-### Тесты
-- [ ] **Базовые unit-тесты** — покрыть детерминированную логику: `_bayesian_update()`, `cosine_similarity()`, `_compute_edges()` с фиксированными эмбеддингами
-- [ ] **Интеграционные тесты роутов** — Flask test client, моки для LLM
-
-### Мелочи
-- [ ] **`setup.py` — предупреждение для не-Windows** — сейчас молча не качает llama-server на Linux/Mac
-- [ ] **Увеличить n_ctx (8192+)** — summary обрезается на 4096 (переношу из UX)
-
----
-
-## Следующие шаги
+## Фичи
 
 ### Масштаб
 - [ ] **Множественные графы** — вкладки, отдельный save/load, теги/слои
@@ -45,7 +24,6 @@
 - [ ] Консолидация — сжатие слабых веток, прунинг. Забывание как фича
 
 ### UX
-- [ ] Auto-save после каждого действия
 - [ ] Compare hypotheses — 2 hypothesis рядом, α/β, Марков
 
 ### Экосистема
@@ -55,20 +33,16 @@
 - [ ] Данные с девайсов (HRV/сон)
 
 ### Полезные фичи
-- [ ] 3D граф (three.js)
 - [ ] Constraint-based layout (d3/dagre/ELK)
 - [ ] Параллельные API-запросы (3-6x ускорение)
 - [ ] Извлечение графа из текста (статья → граф)
-- [ ] REST API
 
 ---
+## Рефакторинг
+
+### Тесты
+- [ ] **Базовые unit-тесты** — покрыть детерминированную логику: `_bayesian_update()`, `cosine_similarity()`, `_compute_edges()` с фиксированными эмбеддингами
+- [ ] **Интеграционные тесты роутов** — Flask test client, моки для LLM
+
 
 ## Done
-
-- Байесовская уверенность (confidence, α/β, 7 типов, auto-type, 6 типов связей)
-- Марковские переходы (transition_prob, Random Walk, Хебб, детектор ловушек)
-- Время (created_at/last_accessed, temporal links)
-- Smart DC + автономность (тезис/антитезис/синтез → centroid, tick с фазами, Fast/Deep, BFS навигация)
-- UI (grouped buttons, Run dropdown, Collapse panel, Generation Studio, контекстное меню)
-- Инфраструктура (node objects, Chat↔Graph, API/Hybrid, Settings)
-- Рефакторинг (src/, graph.py → 3 файла, index.html → HTML + CSS + 6 JS, Notion-тема, thinking.py)
