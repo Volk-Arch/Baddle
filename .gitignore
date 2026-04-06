@@ -5,3 +5,5 @@ models/
 llama-server/
 __pycache__/
 Article/
+settings.json
+graphs/*.json

@@ -4,12 +4,7 @@
 
 ---
 
-## Рефакторинг — привести код в порядок
-
-### Структура кода
-- [ ] **Разбить `graph.py` (2045 строк)** — вынести промпты (`_PROMPTS`) в `prompts.py`/JSON, роуты в `graph_routes.py`, оставить чистую логику графа
-- [ ] **Разбить `index.html` (4577 строк)** — вынести JS в отдельные модули (graph-renderer, settings-panel, tabs), CSS в отдельный файл
-- [ ] **Вынести tick()/thinking в `thinking.py`** (уже было в UX, переношу сюда)
+## Рефакторинг
 
 ### Надёжность
 - [ ] **Thread safety** — добавить `threading.Lock` на мутирующие операции графа (Flask многопоточный, глобальное состояние = гонка)
@@ -70,14 +65,10 @@
 
 ## Done
 
-**Камень 1 — Байесовская уверенность:** confidence 0-1, α/β модель, 7 типов узлов (thought/hypothesis/evidence/fact/question/goal/action), auto-type + auto-confidence через LLM, auto-evidence relation через LLM, Байесовское обновление, 6 типов связей (similarity/supports/contradicts/temporal/directed/manual), embedding model в Settings
-
-**Камень 2 — Марковские переходы:** transition_prob на рёбрах, нормализация, Random Walk (no-backtrack, top-3), детектор ловушек, Хебб, tooltip с P-значениями
-
-**Камень 3 — Время:** created_at/last_accessed, temporal links (5 мин), timestamps в detail panel
-
-**Камень 4 — Smart DC + автономность:** диалектический синтез (тезис/антитезис/нейтраль → centroid → confidence), Verify + рекурсия, tick() с фазами (EXPLORE→DEEPEN→VERIFY→META→SYNTHESIZE), два режима (Fast/Deep), навигация A→B (BFS + exploration + trap avoidance), auto-run с фазовым маркером (collapse at N), batch collapse по 5, context overflow protection
-
-**UI:** topic над графом, grouped buttons (Select/Collapse/View/Think/File), Run dropdown (steps/stable/mode/verify/output), unified Collapse panel, Goal-rooted tree, verify replace/expand mode, Generation Studio, контекстное меню (10 действий)
-
-**Инфраструктура:** node objects, Chat↔Graph мост, API/Hybrid mode, Settings с embedding model, code review, auto-questions, exploration tracking
+- Байесовская уверенность (confidence, α/β, 7 типов, auto-type, 6 типов связей)
+- Марковские переходы (transition_prob, Random Walk, Хебб, детектор ловушек)
+- Время (created_at/last_accessed, temporal links)
+- Smart DC + автономность (тезис/антитезис/синтез → centroid, tick с фазами, Fast/Deep, BFS навигация)
+- UI (grouped buttons, Run dropdown, Collapse panel, Generation Studio, контекстное меню)
+- Инфраструктура (node objects, Chat↔Graph, API/Hybrid, Settings)
+- Рефакторинг (src/, graph.py → 3 файла, index.html → HTML + CSS + 6 JS, Notion-тема, thinking.py)

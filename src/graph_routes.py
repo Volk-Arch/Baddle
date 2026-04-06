@@ -851,337 +851,22 @@ def graph_smartdc():
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
     """Phase-based automatic thinking: EXPLORE → DEEPEN → VERIFY → META → SYNTHESIZE."""
+    from .thinking import tick
+
     data = request.get_json(force=True)
     threshold = float(data.get("threshold", 0.91))
     sim_mode = data.get("sim_mode", "embedding")
     stable_threshold = float(data.get("stable_threshold", 0.8))
-    run_mode = data.get("run_mode", "deep")  # "fast" or "deep"
+    run_mode = data.get("run_mode", "deep")
     force_collapse = data.get("force_collapse", False)
 
     nodes = _graph["nodes"]
-    if not nodes:
-        return jsonify({"action": "none", "reason": "Graph is empty.", "phase": "none"})
-
     edges = _compute_edges(nodes, threshold, sim_mode)
-    active_nodes = [(i, n) for i, n in enumerate(nodes) if n.get("depth", 0) >= 0]
-    if not active_nodes:
-        return jsonify({"action": "none", "reason": "No active nodes.", "phase": "none"})
 
-    # Classify nodes
-    goals = [(i, n) for i, n in active_nodes if n.get("type") == "goal"]
-    goal_idx = goals[0][0] if goals else None
-    goal_text = nodes[goal_idx]["text"][:60] if goal_idx is not None else ""
-    if not goals:
-        print(f"[tick] WARNING: no goal node found. Types: {[n.get('type','?') for _,n in active_nodes[:5]]}")
-
-    hypotheses = [(i, n) for i, n in active_nodes
-                  if n.get("type") in ("hypothesis", "thought")]
-    questions = [(i, n) for i, n in active_nodes if n.get("type") == "question"]
-
-    directed_children = {}
-    for a, b in _graph["edges"].get("directed", []):
-        directed_children[a] = directed_children.get(a, 0) + 1
-
-    no_evidence = [h for h in hypotheses if directed_children.get(h[0], 0) == 0]
-    unverified = [h for h in hypotheses if h[1].get("confidence", 0.5) < stable_threshold]
-    weak = [h for h in hypotheses if h[1].get("confidence", 0.5) <= 0.5]
-    verified = [h for h in hypotheses if h[1].get("confidence", 0.5) >= stable_threshold]
-
-    # ── FORCE COLLAPSE (after step limit reached) — collapse in batches of 5 ──
-    if force_collapse:
-        collapsable = [i for i, n in active_nodes if n.get("type") not in ("evidence", "goal")]
-        if len(collapsable) > 5:
-            # Take first 5 to collapse
-            batch = collapsable[:5]
-            return jsonify({
-                "action": "collapse",
-                "target": batch,
-                "phase": "collapse",
-                "reason": f"COLLAPSE PHASE: batch of 5 from {len(collapsable)} remaining.",
-                "text": "batch collapse",
-            })
-        elif len(collapsable) >= 2:
-            # Last batch
-            return jsonify({
-                "action": "collapse",
-                "target": collapsable,
-                "phase": "collapse",
-                "reason": f"FINAL COLLAPSE: {len(collapsable)} remaining.",
-                "text": "final batch",
-            })
-        # Already collapsed enough → stable
-        avg_conf = sum(n.get("confidence", 0.5) for _, n in active_nodes) / len(active_nodes)
-        return jsonify({
-            "action": "stable",
-            "phase": "synthesize",
-            "reason": f"SYNTHESIZE: {len(active_nodes)} nodes, avg {avg_conf:.0%}.",
-        })
-
-    # ── Helper: pick best node toward goal (BFS shortest path + exploration) ──
-    def _pick_toward_goal(candidates):
-        """Pick candidate closest to goal by BFS. Exploration if stuck."""
-        if not candidates:
-            return None
-        if goal_idx is None:
-            pick = min(candidates, key=lambda x: x[1].get("confidence", 0.5))
-            return pick, -1, False
-
-        adj_h = defaultdict(set)
-        for e in edges:
-            adj_h[e["from"]].add(e["to"]); adj_h[e["to"]].add(e["from"])
-
-        def bfs_dist(start, target):
-            if start == target: return 0
-            visited = {start}; queue = deque([(start, 0)])
-            while queue:
-                cur, d = queue.popleft()
-                for nb in adj_h.get(cur, []):
-                    if nb == target: return d + 1
-                    if nb not in visited: visited.add(nb); queue.append((nb, d + 1))
-            return 999
-
-        distances = {ci: bfs_dist(ci, goal_idx) for ci, _ in candidates}
-        sorted_c = sorted(candidates, key=lambda x: (distances.get(x[0], 999), x[1].get("confidence", 0.5)))
-
-        traps = set(_detect_traps(nodes, edges))
-        safe = [c for c in sorted_c if c[0] not in traps] or sorted_c
-
-        tried = _graph.get("_tick_tried", set())
-        if safe[0][0] in tried and len(safe) > 1:
-            remaining = [c for c in safe if c[0] not in tried]
-            pick = remaining[0] if remaining else random.choice(safe)
-            expl = True
-        else:
-            pick = safe[0]
-            expl = False
-        tried.add(pick[0])
-        _graph["_tick_tried"] = tried
-        return pick, distances.get(pick[0], 999), expl
-
-    # ══════════ FAST MODE — priority-based, converges when possible ══════════
-    if run_mode == "fast":
-        # 1. Too few hypotheses → Think
-        if len(hypotheses) < 3:
-            return jsonify({"action": "think_toward", "target": goal_idx or 0, "phase": "fast",
-                            "reason": f"FAST: {len(hypotheses)} hypotheses, need more.", "text": goal_text})
-        # 2. Weak → Verify (BFS + exploration + traps)
-        if weak:
-            result = _pick_toward_goal(weak)
-            if result:
-                t, dist, expl = result
-                tag = " [exploration]" if expl else ""
-                return jsonify({"action": "smartdc", "target": t[0], "phase": "fast",
-                                "reason": f"FAST: #{t[0]} conf={t[1]['confidence']:.0%}, dist={dist}. Verify.{tag}", "text": t[1]["text"][:80]})
-        # 3. No evidence → Elaborate (BFS + exploration + traps)
-        if no_evidence:
-            result = _pick_toward_goal(no_evidence)
-            if result:
-                t, dist, expl = result
-                tag = " [exploration]" if expl else ""
-                return jsonify({"action": "elaborate", "target": t[0], "phase": "fast",
-                                "reason": f"FAST: #{t[0]} no evidence, dist={dist}. Elaborate.{tag}", "text": t[1]["text"][:80]})
-        # 4. Rephrase — if 2+ children but still weak (max 1 per node)
-        rephrased = _graph.get("_rephrased", set())
-        needs_rephrase = [h for h in unverified
-                          if directed_children.get(h[0], 0) >= 2
-                          and h[1].get("confidence", 0.5) <= 0.5
-                          and h[0] not in rephrased]
-        if needs_rephrase:
-            t = needs_rephrase[0]
-            rephrased.add(t[0]); _graph["_rephrased"] = rephrased
-            return jsonify({"action": "rephrase", "target": t[0], "phase": "fast",
-                            "reason": f"FAST: #{t[0]} {directed_children[t[0]]} children, conf={t[1]['confidence']:.0%}. Rephrase.", "text": t[1]["text"][:80]})
-        # 5. Ask (max 1)
-        asked = _graph.get("_asked_nodes", set())
-        total_q = sum(1 for n in nodes if n.get("type") == "question")
-        if total_q < 1 and unverified:
-            need_q = [h for h in unverified if h[0] not in asked]
-            if need_q:
-                t = need_q[0]
-                asked.add(t[0]); _graph["_asked_nodes"] = asked
-                return jsonify({"action": "ask", "target": t[0], "phase": "fast",
-                                "reason": f"FAST: probing #{t[0]}.", "text": t[1]["text"][:80]})
-        # 6. Unverified → Verify (BFS + exploration + traps)
-        if unverified:
-            result = _pick_toward_goal(unverified)
-            if result:
-                t, dist, expl = result
-                tag = " [exploration]" if expl else ""
-                return jsonify({"action": "smartdc", "target": t[0], "phase": "fast",
-                                "reason": f"FAST: #{t[0]} conf={t[1]['confidence']:.0%}, dist={dist}. Verify.{tag}", "text": t[1]["text"][:80]})
-        # 7. Isolated → Expand
-        connected = set()
-        for e in edges:
-            connected.add(e["from"]); connected.add(e["to"])
-        isolated = [(i, n) for i, n in active_nodes
-                    if i not in connected and n.get("type") not in ("evidence", "goal")]
-        if isolated:
-            t = isolated[0]
-            return jsonify({"action": "expand", "target": t[0], "phase": "fast",
-                            "reason": f"FAST: #{t[0]} isolated. Expand.", "text": t[1]["text"][:80]})
-        # 8. Collapse verified nodes (cluster-based or all verified if ≥5)
-        clusters = _find_clusters(len(nodes), edges, threshold)
-        for cl in clusters:
-            real = [i for i in cl if nodes[i].get("depth", 0) >= 0 and nodes[i].get("type") not in ("evidence", "goal")]
-            if len(real) >= 5:
-                avg_c = sum(nodes[i].get("confidence", 0.5) for i in real) / len(real)
-                if avg_c >= stable_threshold - 0.1:
-                    return jsonify({"action": "collapse", "target": real, "phase": "fast",
-                                    "reason": f"FAST: cluster {len(real)} nodes, avg {avg_c:.0%}. Collapse.",
-                                    "text": ", ".join(nodes[i]["text"][:25] for i in real[:3]) + "..."})
-        # 8b. No clusters but many verified → collapse all verified
-        if len(verified) >= 5:
-            v_ids = [i for i, _ in verified]
-            return jsonify({"action": "collapse", "target": v_ids, "phase": "fast",
-                            "reason": f"FAST: {len(verified)} verified, no clusters. Collapse verified.",
-                            "text": ", ".join(nodes[i]["text"][:25] for i in v_ids[:3]) + "..."})
-        # 9. META
-        meta_done = _graph.get("_meta_done", False)
-        if not meta_done and len(verified) >= 3:
-            _graph["_meta_done"] = True
-            return jsonify({"action": "think_toward", "target": goal_idx or 0, "phase": "fast",
-                            "reason": f"FAST META: {len(verified)} verified. What did I miss?", "text": goal_text})
-        # 10. Stable
-        avg = sum(n.get("confidence", 0.5) for _, n in active_nodes) / len(active_nodes)
-        return jsonify({"action": "stable", "phase": "fast",
-                        "reason": f"FAST DONE: {len(active_nodes)} nodes, avg {avg:.0%}."})
-
-    # ══════════ DEEP MODE — phase-based, thorough investigation ══════════
-
-    # ── PHASE 1: EXPLORE — need mass (< 5 hypotheses) ──
-    if len(hypotheses) < 5:
-        return jsonify({
-            "action": "think_toward",
-            "target": goal_idx or 0,
-            "phase": "explore",
-            "reason": f"EXPLORE: {len(hypotheses)} hypotheses, need more ideas. (goal: {goal_text})",
-            "text": goal_text,
-        })
-
-    # ── PHASE 2: DEEPEN — add evidence to bare hypotheses ──
-    if no_evidence:
-        result = _pick_toward_goal(no_evidence)
-        if result:
-            target, dist, expl = result
-            tag = " [exploration]" if expl else ""
-            return jsonify({
-                "action": "elaborate",
-                "target": target[0],
-                "phase": "deepen",
-                "reason": f"DEEPEN: #{target[0]} no evidence ({len(no_evidence)} bare, dist={dist}){tag}",
-                "text": target[1]["text"][:80],
-            })
-
-    # ── PHASE 2b: REPHRASE — if 2+ children but still weak (max 1 per node) ──
-    rephrased = _graph.get("_rephrased", set())
-    needs_rephrase = [h for h in unverified
-                      if directed_children.get(h[0], 0) >= 2
-                      and h[1].get("confidence", 0.5) <= 0.5
-                      and h[0] not in rephrased]
-    if needs_rephrase:
-        result = _pick_toward_goal(needs_rephrase)
-        if result:
-            target, dist, expl = result
-            rephrased.add(target[0]); _graph["_rephrased"] = rephrased
-            tag = " [exploration]" if expl else ""
-            return jsonify({
-                "action": "rephrase",
-                "target": target[0],
-                "phase": "deepen",
-                "reason": f"DEEPEN: #{target[0]} {directed_children[target[0]]} children, conf={target[1]['confidence']:.0%}. Rephrase. (dist={dist}){tag}",
-                "text": target[1]["text"][:80],
-            })
-
-    # ── PHASE 3: VERIFY — Smart DC on unverified ──
-    if unverified:
-        result = _pick_toward_goal(unverified)
-        if result:
-            target, dist, expl = result
-            tag = " [exploration]" if expl else ""
-            return jsonify({
-                "action": "smartdc",
-                "target": target[0],
-                "phase": "verify",
-                "reason": f"VERIFY: #{target[0]} conf={target[1]['confidence']:.0%} ({len(unverified)} unverified, dist={dist}){tag}",
-                "text": target[1]["text"][:80],
-            })
-
-    # ── PHASE 4: META — "what did I miss?" ──
-    meta_done = _graph.get("_meta_done", False)
-    if not meta_done and len(verified) >= 5:
-        _graph["_meta_done"] = True
-        return jsonify({
-            "action": "think_toward",
-            "target": goal_idx or 0,
-            "phase": "meta",
-            "reason": f"META: {len(verified)} verified. What angles did I miss?",
-            "text": goal_text,
-        })
-
-    # ── PHASE 3b: COLLAPSE — verified clusters or all verified ──
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    for cl in clusters:
-        real_nodes = [i for i in cl if nodes[i].get("depth", 0) >= 0
-                      and nodes[i].get("type") not in ("evidence", "goal")]
-        verified_in_cl = [i for i in real_nodes if nodes[i].get("confidence", 0.5) >= stable_threshold]
-        if len(verified_in_cl) >= 5:
-            return jsonify({
-                "action": "collapse",
-                "target": real_nodes,
-                "phase": "collapse",
-                "reason": f"COLLAPSE: cluster of {len(real_nodes)} nodes ({len(verified_in_cl)} verified).",
-                "text": ", ".join(nodes[i]["text"][:25] for i in real_nodes[:3]) + "...",
-            })
-    # No clusters but many verified → collapse all verified
-    if len(verified) >= 5:
-        v_ids = [i for i, _ in verified]
-        return jsonify({
-            "action": "collapse",
-            "target": v_ids,
-            "phase": "collapse",
-            "reason": f"COLLAPSE: {len(verified)} verified, no clusters. Synthesize.",
-            "text": ", ".join(nodes[i]["text"][:25] for i in v_ids[:3]) + "...",
-        })
-
-    # ── PHASE 4a: EXPAND — isolated nodes ──
-    connected = set()
-    for e in edges:
-        connected.add(e["from"]); connected.add(e["to"])
-    isolated = [(i, n) for i, n in active_nodes
-                if i not in connected and n.get("type") not in ("evidence", "goal")]
-    if isolated:
-        t = isolated[0]
-        return jsonify({
-            "action": "expand",
-            "target": t[0],
-            "phase": "deepen",
-            "reason": f"DEEPEN: #{t[0]} isolated. Expand to connect.",
-            "text": t[1]["text"][:80],
-        })
-
-    # ── PHASE 4b: ASK — probing questions (max 3, only once per node) ──
-    asked_nodes = _graph.get("_asked_nodes", set())
-    if len(questions) < 3:
-        need_q = [h for h in hypotheses if h[0] not in asked_nodes and h[1].get("confidence", 0.5) < stable_threshold]
-        if need_q:
-            target = need_q[0]
-            asked_nodes.add(target[0])
-            _graph["_asked_nodes"] = asked_nodes
-            return jsonify({
-                "action": "ask",
-                "target": target[0],
-                "phase": "ask",
-                "reason": f"ASK: probing #{target[0]} ({len(questions)}/3 questions, {len(asked_nodes)} asked)",
-                "text": target[1]["text"][:80],
-            })
-
-    # ── PHASE 5: SYNTHESIZE ──
-    avg_conf = sum(n.get("confidence", 0.5) for _, n in active_nodes) / len(active_nodes)
-    return jsonify({
-        "action": "stable",
-        "phase": "synthesize",
-        "reason": f"SYNTHESIZE: {len(active_nodes)} nodes, {len(verified)} verified, avg {avg_conf:.0%}. Ready for final summary.",
-    })
+    result = tick(nodes, edges, _graph,
+                  threshold=threshold, stable_threshold=stable_threshold,
+                  run_mode=run_mode, force_collapse=force_collapse)
+    return jsonify(result)
 
 
 # --------------- Bayesian Evidence ---------------
@@ -1374,3 +1059,111 @@ def graph_walk():
         "runs": runs,
         "steps": steps
     })
+
+
+# --------------- Save / Load / AutoSave ---------------
+
+import json as _json
+from pathlib import Path as _Path
+
+def _graphs_dir():
+    d = _Path(__file__).parent.parent / "graphs"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _slugify(text: str) -> str:
+    """Simple slug from topic text (ASCII + cyrillic safe)."""
+    import re as _re
+    s = text.strip().lower()[:60]
+    s = _re.sub(r'[^\w\s-]', '', s)
+    s = _re.sub(r'[\s_]+', '_', s).strip('_')
+    return s or "untitled"
+
+
+@graph_bp.route("/graph/list", methods=["GET"])
+def graph_list():
+    """List saved graphs."""
+    graphs = []
+    for f in sorted(_graphs_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = _json.loads(f.read_text(encoding="utf-8"))
+            nodes = data.get("nodes", data.get("thoughts", []))
+            graphs.append({
+                "name": f.stem,
+                "topic": data.get("topic", ""),
+                "nodes_count": len(nodes),
+                "modified": f.stat().st_mtime,
+            })
+        except Exception:
+            pass
+    return jsonify({"graphs": graphs})
+
+
+@graph_bp.route("/graph/save", methods=["POST"])
+def graph_save():
+    """Save current graph to server."""
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+
+    # Build save payload from frontend data + backend state
+    topic = data.get("topic", _graph["meta"].get("topic", ""))
+    if not name:
+        name = _slugify(topic) if topic else "untitled"
+
+    # Sanitize name
+    name = name.replace("/", "_").replace("\\", "_").replace("..", "_")
+
+    save_data = {
+        "topic": topic,
+        "nodes": data.get("nodes", _graph["nodes"]),
+        "edges": data.get("edges", []),
+        "clusters": data.get("clusters", []),
+        "positions": data.get("positions", []),
+        "collapsed": data.get("collapsed", []),
+        "hubs": data.get("hubs", []),
+        "directed": data.get("directed", _graph["edges"].get("directed", [])),
+        "manual_links": data.get("manual_links", _graph["edges"].get("manual_links", [])),
+        "manual_unlinks": data.get("manual_unlinks", _graph["edges"].get("manual_unlinks", [])),
+        "threshold": data.get("threshold", 0.91),
+        "sim_mode": data.get("sim_mode", "embedding"),
+    }
+
+    path = _graphs_dir() / f"{name}.json"
+    path.write_text(_json.dumps(save_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return jsonify({"ok": True, "name": name, "path": str(path)})
+
+
+@graph_bp.route("/graph/load", methods=["POST"])
+def graph_load():
+    """Load a saved graph from server."""
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "no name specified"})
+
+    path = _graphs_dir() / f"{name}.json"
+    if not path.is_file():
+        return jsonify({"error": f"graph '{name}' not found"})
+
+    try:
+        save_data = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return jsonify({"error": f"failed to read: {e}"})
+
+    return jsonify({"ok": True, "data": save_data})
+
+
+@graph_bp.route("/graph/delete", methods=["POST"])
+def graph_delete():
+    """Delete a saved graph."""
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "no name specified"})
+
+    path = _graphs_dir() / f"{name}.json"
+    if path.is_file():
+        path.unlink()
+        return jsonify({"ok": True})
+    return jsonify({"error": f"graph '{name}' not found"})
