@@ -86,45 +86,79 @@ Connected components on edges above threshold. Used for group collapse, hull vis
 
 ## Tick Cycle — Automatic Thinking
 
-`thinking.py` — autonomous thinking engine. On each step, analyzes the graph and decides what action to perform next.
+`thinking.py` — autonomous thinking engine. Models how humans think: brainstorm ideas, group similar ones, deepen each unique one, challenge them, repeat.
+
+### Principle
+
+Four tools, four phases. Each phase runs to completion before the next begins:
+
+```
+GENERATE    few ideas?              -> Think (build mass)
+MERGE       similar nodes?          -> Collapse (merge BEFORE deepening)
+ELABORATE   bare hypotheses?        -> Elaborate (add evidence)
+DOUBT       unverified?             -> Smart DC (challenge)
+GENERATE+   all verified?           -> Think ("what did I miss?", with context)
+SYNTHESIZE  nothing new             -> Stable (final essay)
+```
+
+### Why this order
+
+1. **GENERATE** first — need mass of diverse ideas before working with them
+2. **MERGE** before elaborate — don't waste work on duplicates. "8B is cheaper" and "8B reduces costs" merge into one node BEFORE both get evidence
+3. **ELABORATE** before doubt — a bare claim "8B is cheaper" verifies worse than a developed "8B is cheaper → inference $0.001 vs $0.03 → consumer GPU sufficient"
+4. **DOUBT** last — verify what's already substantiated. SmartDC (thesis/antithesis/synthesis) works better on developed ideas
+5. **GENERATE+** — after verifying everything, look for gaps. Model sees list of verified thoughts and generates missing aspects
 
 ### Classification
 
-Input: all nodes, edges, directed children. Output:
-- **hypotheses** — unverified claims
-- **weak** — confidence <= 0.5
-- **unverified** — confidence < stable_threshold
-- **verified** — confidence >= stable_threshold
-- **no_evidence** — hypotheses without child evidence
-- **isolated** — nodes without edges
+Every tick, all nodes are classified:
+- **bare** — hypotheses with no evidence and not yet verified (need elaborate)
+- **unverified** — confidence < stable_threshold (need doubt)
+- **verified** — confidence >= stable_threshold (ready for merge or final)
 
-### Goal Navigation
+Synthesis nodes (from collapse and SmartDC) are not considered bare — they're already processed.
 
-`pick_toward_goal()` — BFS from each candidate to goal. Picks closest. Trap avoidance: skips traps. Exploration: if best was already tried — picks less obvious.
+### Convergence
 
-### Deep mode (by phases)
+The cycle converges naturally through three mechanisms:
+- **Novelty check** — when generating new thoughts, embedding similarity is checked against existing nodes. If > 0.92, the thought is rejected. When the model exhausts the topic — all rejections → stop
+- **Lineage tracking** — each collapse node stores `collapsed_from` (list of source indices). Merge won't collapse a node with its own ancestor — no re-grinding the same material
+- **Phase completion** — each phase fully completes before the next. No infinite interleaving
 
+### Infinite mode
+
+No step limit. Cycle runs until the model exhausts the topic:
 ```
-EXPLORE    if hypotheses < 5    -> Think (build mass)
-DEEPEN     if bare hypotheses   -> Elaborate (add evidence)
-REPHRASE   if 2+ children, weak -> Rephrase (reformulate)
-VERIFY     if unverified exist  -> Smart DC (check)
-META       if verified >= 5     -> Think ("what did I miss?")
-COLLAPSE   if verified >= 5     -> Collapse (synthesize clusters)
-EXPAND     if isolated exist    -> Expand (connect)
-ASK        if questions < 3     -> Ask (probe)
-SYNTHESIZE all verified         -> Stable (ready for final essay)
+generate 10 → merge 6 into 3 → elaborate 3 → doubt 3 → verified →
+generate+ ("what did I miss?") → 5 new → merge → elaborate → doubt →
+generate+ → novelty reject → EXHAUSTED → final synthesis
 ```
 
-### Fast mode (by priority)
+Stronger model = more unique thoughts = longer cycle = deeper result.
 
-Same tools, but by priority instead of phases: fixes weakest first, converges when possible.
+### Run Settings
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| **Start ideas** | 5 | How many ideas to generate before the cycle begins (3-20) |
+| **Depth** | 2 | META rounds "what did I miss?" — more = deeper exploration (1-10) |
+| **Stable** | 0.8 | Confidence threshold for verified status |
+| **Collapse at** | 50 | Step to force-collapse (in limited mode) |
+| **Essay tokens** | 6000 | Max tokens for final essay (500-30000) |
+| **Infinite** | off | No step limit — cycle finds its own stopping point |
+| **Batched essay** | off | Pyramidal synthesis: sections → final text |
+| **Output** | essay | Final format: essay / brief / list / none |
 
 ### Force Collapse
 
-After N steps (configurable) — forced compression in batches of 5. Hard stop at 2N.
+With step limit: after N steps — forced compression in batches of 5. Hard stop at 2N.
 
-**Output:** essay / brief / list / none.
+### Live Metrics
+
+During Run, an overlay in the top-right corner of the graph shows:
+- **Step / Phase** — current step and cycle phase
+- **Hyp / Verified / Avg** — hypothesis count, how many verified, average confidence
+- **Sparkline** — convergence curve (verified/total). Sawtooth = new ideas enter → get verified → peak. Damping sawtooth = convergence
 
 ---
 

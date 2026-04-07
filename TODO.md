@@ -1,74 +1,94 @@
 # TODO
 
-> Видение, концепция и архитектура → [VISION.md](VISION.md)
+> Видение → [VISION.md](VISION.md)
 
----
+## Бэклог
 
-## Рефакторинг
-
-### Надёжность
-- [ ] **Thread safety** — добавить `threading.Lock` на мутирующие операции графа (Flask многопоточный, глобальное состояние = гонка)
-- [ ] **Retry + backoff в `api_backend.py`** — HTTP-запросы без retry при timeout/5xx дают непонятные ошибки
-- [ ] **Валидация JSON от LLM** — `_auto_type_and_confidence()` тихо фоллбэчит на `thought/0.5`, стоит логировать и предупреждать
-
-### Безопасность
-- [ ] **`api_key` из `settings.json` → `.env`** — ключ в открытом виде, рискованно при публикации
-- [ ] **`settings.json` в `.gitignore`** — персональные настройки не должны попадать в репо
-
-### Тесты
-- [ ] **Базовые unit-тесты** — покрыть детерминированную логику: `_bayesian_update()`, `cosine_similarity()`, `_compute_edges()` с фиксированными эмбеддингами
-- [ ] **Интеграционные тесты роутов** — Flask test client, моки для LLM
-
-### Мелочи
-- [ ] **`setup.py` — предупреждение для не-Windows** — сейчас молча не качает llama-server на Linux/Mac
-- [ ] **Увеличить n_ctx (8192+)** — summary обрезается на 4096 (переношу из UX)
-
----
-
-## Следующие шаги
-
-### Масштаб
-- [ ] **Множественные графы** — вкладки, отдельный save/load, теги/слои
-- [ ] **Cross-graph edges** — связи между графами. `serendipity_engine`
-- [ ] **JSONL storage** — `nodes.jsonl` + `edges.jsonl` + `meta.json`, lazy load
-
-### Поиск и память
-- [ ] Семантический + контекстный поиск (embedding + confidence + время)
-- [ ] Ассоциативное воспоминание — прямое (по смыслу) и непрямое (паттерны)
-- [ ] Распространение активации — "всплеск" в графе
-- [ ] Режим "Время" — слайдер эволюции графа
-
-### Автономность
-- [ ] **Автономное блуждание** — ночной режим, целенаправленный, поиск мостов
-- [ ] **`watchdog.py`** — проактивный помощник
-- [ ] **`tie_breaker`** — паралич выбора → марковские последствия
-- [ ] Консолидация — сжатие слабых веток, прунинг. Забывание как фича
-
-### UX
-- [ ] Auto-save после каждого действия
-- [ ] Compare hypotheses — 2 hypothesis рядом, α/β, Марков
-
-### Экосистема
-- [ ] EXE-установщик
-- [ ] Экспорт/импорт (PNG/SVG/markdown/Obsidian)
-- [ ] Graph Store + Git Verify
+- [ ] Множественные графы + cross-graph edges
+- [ ] JSONL storage (lazy load)
+- [ ] Автономное блуждание (ночной режим)
 - [ ] Данные с девайсов (HRV/сон)
+- [ ] Мета-режим А→Б (автоопределение режима по цели)
 
-### Полезные фичи
-- [ ] 3D граф (three.js)
-- [ ] Constraint-based layout (d3/dagre/ELK)
-- [ ] Параллельные API-запросы (3-6x ускорение)
-- [ ] Извлечение графа из текста (статья → граф)
-- [ ] REST API
+---
+
+## v1: доработки
+
+- [ ] Убрать мёртвый код: graphTick(), _autoRunExpand, _autoRunRephrase, _autoRunAsk, autorun switch ветки (expand/rephrase/ask), import _detect_traps из thinking.py
+- [ ] Убрать temporal рёбра из _compute_edges, кнопку Time из UI
+- [ ] Timeline player вместо Time — ⏮▶⏸⏭ по timestamps
+- [ ] Тюнинг novelty threshold + промпты для разнообразия
+- [ ] Параллельные API-запросы (ускорение цикла)
+- [ ] Layout (d3/dagre/ELK)
+- [ ] Тесты (unit + integration)
+- [ ] Экспорт (PNG/SVG/markdown)
+
+---
+
+## v2: режимы мышления
+
+### Архитектура
+
+Три базовых цикла. Простые, без модификаторов. Разница между "исследованием" и "диагностикой" — не в коде, а в промпте и входных полях.
+
+### 3 базовых цикла
+
+| Цикл | Фазы | Стоп |
+|------|------|------|
+| **Research** | generate→merge→elaborate→doubt→meta | всё verified + novelty exhausted |
+| **Choice** | generate_per_option→doubt_each→compare | winner clear |
+| **Cycle** | check→act→wait | never (snapshot evaluation) |
+
+Диагностика = Research + промпт "найди причину". Создание = Research + промпт "собери текст". Рефлексия = Research на своих данных. Не другой код — другой контент.
+
+### Конфиг режима — минимальный
+
+```python
+{
+    "cycle": "research",               # research / choice / cycle
+    "fields": ["topic"],               # что ввести для старта
+    "goal_prompt": "Исследуй тему",    # системный промпт для цикла
+    "stop": "all_verified",            # условие остановки
+}
+```
+
+Настройки инфраструктуры (не часть режима, а настройки Run):
+- Какую модель использовать (local 8B / API / auto per-этап)
+- Искать в интернете или нет
+- Depth, essay tokens, stable threshold — уже есть
+
+### Что реализовать
+
+1. **Mode config** — простой dict. Хранится в goal-ноде
+2. **tick(config, graph)** — три реализации (research/choice/cycle), выбор по config.cycle
+3. **Goal evaluation** — discrete (достигнута/нет) или continuous (snapshot+streak)
+4. **UI** — селектор режима, поля ввода из config.fields
+
+### Goal evaluation
+
+| Тип цели | Evaluation | Пример |
+|----------|-----------|--------|
+| **Discrete** | Достигнута → stable | "Раскрыто на 8/10" |
+| **Continuous** | Snapshot: today + streak + trend | "3/3 ✅, streak 5д, ↑" |
+
+Качественная проверка: LLM сравнивает goal↔result, оценивает покрытие.
+
+### Источники данных per-этап
+
+| Этап | LLM | Интернет | Когда что |
+|------|-----|----------|----------|
+| Generate | ✅ | ✅ | LLM для творческих, поиск для фактов |
+| Elaborate | ✅ | ✅ | Поиск для исследования/диагностики |
+| Doubt | ✅ | — | Только LLM (диалектика) |
+
+Per-этап выбор модели (local 8B / API).
 
 ---
 
 ## Done
 
-- Байесовская уверенность (confidence, α/β, 7 типов, auto-type, 6 типов связей)
-- Марковские переходы (transition_prob, Random Walk, Хебб, детектор ловушек)
-- Время (created_at/last_accessed, temporal links)
-- Smart DC + автономность (тезис/антитезис/синтез → centroid, tick с фазами, Fast/Deep, BFS навигация)
-- UI (grouped buttons, Run dropdown, Collapse panel, Generation Studio, контекстное меню)
-- Инфраструктура (node objects, Chat↔Graph, API/Hybrid, Settings)
-- Рефакторинг (src/, graph.py → 3 файла, index.html → HTML + CSS + 6 JS, Notion-тема, thinking.py)
+- [x] Цикл generate→merge→elaborate→doubt→meta
+- [x] SmartDC (thesis/antithesis/synthesis via centroid)
+- [x] Novelty check + lineage tracking
+- [x] Infinite mode + convergence sparkline
+- [x] Configurable: start ideas, depth, essay tokens, stable threshold
