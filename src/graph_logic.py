@@ -436,44 +436,6 @@ def _compute_edges(nodes: list[dict], threshold: float, sim_mode: str = "embeddi
                     "manual": manual and sim < threshold,
                     "relation": rel,
                 })
-    # --- Temporal links: connect nodes created within 5 minutes ---
-    TEMPORAL_WINDOW = 300  # seconds
-    edge_set = {(e["from"], e["to"]) for e in edges}
-    for i in range(n):
-        if nodes[i]["depth"] == -1:
-            continue
-        t_i = nodes[i].get("created_at")
-        if not t_i:
-            continue
-        try:
-            dt_i = datetime.fromisoformat(t_i)
-        except (ValueError, TypeError):
-            continue
-        for j in range(i + 1, n):
-            if nodes[j]["depth"] == -1:
-                continue
-            if (i, j) in edge_set:
-                continue  # already connected
-            t_j = nodes[j].get("created_at")
-            if not t_j:
-                continue
-            try:
-                dt_j = datetime.fromisoformat(t_j)
-            except (ValueError, TypeError):
-                continue
-            diff = abs((dt_i - dt_j).total_seconds())
-            if diff <= TEMPORAL_WINDOW:
-                # Temporal weight: closer in time = stronger (0.3 to 0.6)
-                tw = round(0.6 - (diff / TEMPORAL_WINDOW) * 0.3, 3)
-                edges.append({
-                    "from": i, "to": j,
-                    "weight": tw,
-                    "manual": False,
-                    "temporal": True,
-                    "relation": "temporal",
-                })
-                edge_set.add((i, j))
-
     # --- Compute transition_prob (tp) ---
     # For each node, normalize outgoing weights to sum=1.0
     # Directed edges get a bonus multiplier

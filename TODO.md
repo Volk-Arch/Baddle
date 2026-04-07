@@ -14,9 +14,7 @@
 
 ## v1: доработки
 
-- [ ] Убрать мёртвый код: graphTick(), _autoRunExpand, _autoRunRephrase, _autoRunAsk, autorun switch ветки (expand/rephrase/ask), import _detect_traps из thinking.py
-- [ ] Убрать temporal рёбра из _compute_edges, кнопку Time из UI
-- [ ] Timeline player вместо Time — ⏮▶⏸⏭ по timestamps
+- [ ] Timeline player — ⏮▶⏸⏭ по timestamps (вместо удалённой Time)
 - [ ] Тюнинг novelty threshold + промпты для разнообразия
 - [ ] Параллельные API-запросы (ускорение цикла)
 - [ ] Layout (d3/dagre/ELK)
@@ -92,3 +90,8 @@ Per-этап выбор модели (local 8B / API).
 - [x] Novelty check + lineage tracking
 - [x] Infinite mode + convergence sparkline
 - [x] Configurable: start ideas, depth, essay tokens, stable threshold
+- [x] Вычистка мёртвого кода (~330 строк): graphTick, temporal, autorun handlers
+- [x] Ask как ручной инструмент (контекстное меню + Studio + detail panel)
+- [x] Generation Studio modal восстановлен
+- [x] ~~Убрать мёртвый код: graphTick(), _autoRunExpand, _autoRunRephrase, _autoRunAsk, switch ветки, _detect_traps import~~
+- [x] ~~Убрать temporal рёбра из _compute_edges, кнопку Time из UI~~

@@ -17,7 +17,7 @@ import random
 import logging
 from collections import defaultdict, deque
 
-from .graph_logic import _detect_traps, _find_clusters
+from .graph_logic import _find_clusters
 
 log = logging.getLogger(__name__)
 
