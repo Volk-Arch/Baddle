@@ -205,17 +205,11 @@
           class="btn-action text-xs" title="Link mode: click two nodes to connect/disconnect">Link</button>
         <button onclick="graphToggleFlow()" id="graph-btn-flow"
           class="btn-action text-xs" title="Toggle directed flow layout">Flow</button>
-        <button onclick="graphToggleTemporal()" id="graph-btn-temporal"
-          class="btn-action text-xs" title="Show/hide temporal links">Time</button>
         <button onclick="graphRecalcLayout()"
           class="btn-action text-xs" title="Recalculate layout">Layout</button>
       </span>
       <!-- Think group -->
       <span class="flex gap-1 items-center" style="border-right:1px solid var(--border);padding-right:8px;margin-right:4px">
-        <button onclick="graphTick()" id="graph-btn-tick"
-          class="btn-action text-xs" style="background:#7c3aed;color:#fff;border-color:#7c3aed" title="Auto-think: suggest next action">
-          Auto
-        </button>
         <div style="position:relative;display:inline-block" id="graph-run-wrapper">
           <button onclick="graphAutoRun()" id="graph-btn-autorun"
             class="btn-action text-xs" style="background:#6d28d9;color:#fff;border-color:#6d28d9;border-radius:var(--radius-sm) 0 0 var(--radius-sm)"
@@ -343,6 +337,7 @@
             <button onclick="openStudio('elaborate_preview')" class="btn-action text-xs" title="Generate deeper ideas">&#9998; Elaborate</button>
             <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="btn-action text-xs" style="background:#7c3aed;color:#fff;border-color:#7c3aed">Edit</button>
             <button onclick="openStudio('rephrase')" class="btn-action text-xs" style="background:#d97706;color:#fff;border-color:#d97706" title="Rephrase with Generation Studio">&#x270E; Rephrase</button>
+            <button onclick="openStudio('ask')" class="btn-action text-xs" style="color:#6366f1;border-color:#6366f1" title="Generate probing question">&#x2753; Ask</button>
             <button onclick="graphDetailToChat()" class="btn-action text-xs" style="color:var(--accent);border-color:var(--accent)" title="Send to chat">&rarr; Chat</button>
             <button onclick="graphWalk()" id="graph-walk-btn" class="btn-action text-xs" style="color:#059669;border-color:#059669" title="Random Walk">&#x1F6B6; Walk</button>
             <button onclick="graphSmartDC()" id="graph-dc-btn" class="btn-action text-xs" style="color:#d97706;border-color:#d97706" title="Smart DC verification">&#9889; Verify</button>
@@ -595,5 +590,44 @@
 <script src="/static/js/parallel.js"></script>
 <script src="/static/js/chat.js"></script>
 <script src="/static/js/graph.js"></script>
+
+<!-- Generation Studio Modal -->
+<div id="studio-modal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.3);align-items:center;justify-content:center">
+  <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:20px;width:720px;max-width:90vw;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span style="font-weight:bold;color:var(--text-primary)">Generation Studio</span>
+      <button onclick="closeStudio()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-tertiary)">&times;</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <select id="studio-mode-select" onchange="_studioUpdatePlaceholder(this.value)" class="modal-select" style="font-size:12px">
+        <option value="rephrase">Rephrase</option>
+        <option value="elaborate_preview">Elaborate</option>
+        <option value="expand_preview">Expand</option>
+        <option value="collapse_preview">Collapse</option>
+        <option value="ask">Ask</option>
+        <option value="freeform">Freeform</option>
+      </select>
+      <label style="font-size:11px;color:var(--text-secondary)">temp <input id="studio-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:65px" class="modal-input"></label>
+      <label style="font-size:11px;color:var(--text-secondary)">top_k <input id="studio-topk" type="number" value="40" min="1" max="100" style="width:65px" class="modal-input"></label>
+      <label style="font-size:11px;color:var(--text-secondary)">tokens <input id="studio-maxtok" type="number" value="1000" min="50" max="8000" style="width:75px" class="modal-input"></label>
+      <label style="font-size:11px;color:var(--text-secondary)">count <input id="studio-count" type="number" value="3" min="1" max="10" style="width:55px" class="modal-input"></label>
+    </div>
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:2px">Source</div>
+      <pre id="studio-source" style="background:var(--bg-secondary);padding:8px;border-radius:4px;font-size:12px;max-height:100px;overflow-y:auto;white-space:pre-wrap;margin:0"></pre>
+    </div>
+    <div style="margin-bottom:8px">
+      <input id="studio-instruction" type="text" placeholder="Instruction..." style="width:100%" class="modal-input">
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button id="studio-gen-btn" onclick="studioGenerate()" class="px-4 py-1 bg-violet-700 hover:bg-violet-600 text-white text-sm rounded">Generate</button>
+      <button id="studio-apply-btn" onclick="studioApply()" disabled style="opacity:0.5" class="px-4 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-sm rounded">Apply selected</button>
+    </div>
+    <div id="studio-variants" style="min-height:60px">
+      <span class="text-neutral-500 text-sm">Click Generate to create variants...</span>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

@@ -6,7 +6,6 @@ let graphLinkMode = false;  // toggle for manual linking
 let graphManualCollapseMode = false;
 let graphManualCollapseSet = new Set();
 let graphFlowMode = false;  // directed flow layout
-let graphShowTemporal = false;  // show temporal edges (hidden by default)
 let graphZoom = 1;
 let graphPanX = 0, graphPanY = 0;
 let graphNodePositions = [];  // {x, y, vx, vy, fixed} per node
@@ -435,12 +434,6 @@ function graphRenderSvg() {
       line.setAttribute('stroke-width', 2);
       line.setAttribute('stroke-opacity', 0.7);
       line.setAttribute('marker-end', 'url(#arrowhead)');
-    } else if (e.temporal) {
-      if (!graphShowTemporal) { return; }  // skip if hidden
-      line.setAttribute('stroke', '#06b6d4');
-      line.setAttribute('stroke-width', 1.5);
-      line.setAttribute('stroke-opacity', 0.5);
-      line.setAttribute('stroke-dasharray', '2,4');
     } else if (e.manual) {
       line.setAttribute('stroke', '#a78bfa');
       line.setAttribute('stroke-width', 2);
@@ -869,6 +862,7 @@ function graphShowContextMenu(e, idx) {
     { label: '\u261E Expand', action: 'openStudio("expand_preview")' },
     { label: '\u270E Elaborate', action: 'openStudio("elaborate_preview")' },
     { label: '\u2710 Rephrase', action: 'openStudio("rephrase")' },
+    { label: '\u2753 Ask', action: 'graphAsk(' + idx + ')' },
     { label: '\u26A1 Verify (Smart DC)', action: 'graphSmartDC()' },
     { label: '\uD83D\uDEB6 Walk', action: 'graphWalk()' },
     null, // separator
@@ -897,6 +891,44 @@ function graphShowContextMenu(e, idx) {
 function graphHideContextMenu() {
   const menu = document.getElementById('graph-context-menu');
   if (menu) menu.style.display = 'none';
+}
+
+async function graphAsk(idx) {
+  const node = graphData.nodes[idx];
+  if (!node) return;
+  const params = graphGetParams();
+  const res = await fetch('/graph/studio/generate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      mode: 'freeform', index: idx, text: node.text,
+      instruction: 'Idea: ' + node.text + '\n\nGenerate ONE probing question that challenges this idea or reveals a hidden assumption. Just the question, nothing else.',
+      temp: 0.9, top_k: 40, max_tokens: 1000,
+      lang: document.getElementById('lang-select').value,
+    })
+  });
+  const d = await res.json();
+  if (d.variants && d.variants.length > 0) {
+    graphSaveUndo();
+    const r2 = await fetch('/graph/studio/apply-child', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: idx, text: d.variants[0].text, type: 'elaborate', ...params })
+    });
+    const d2 = await r2.json();
+    if (!d2.error) {
+      graphUpdateView(d2);
+      const qIdx = graphData.nodes.length - 1;
+      fetch('/graph/set-type', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({index: qIdx, type: 'question'})
+      }).catch(() => {});
+      if (graphData.nodes[qIdx]) graphData.nodes[qIdx].type = 'question';
+      graphDrawSvg();
+      graphShowDetail(qIdx);
+    }
+  }
 }
 
 // ── Keyboard shortcuts ──
@@ -1169,20 +1201,6 @@ function graphToggleFlow() {
   graphDrawSvg();
 }
 
-function graphToggleTemporal() {
-  graphShowTemporal = !graphShowTemporal;
-  const btn = document.getElementById('graph-btn-temporal');
-  if (graphShowTemporal) {
-    btn.style.background = '#0e7490';
-    btn.onmouseover = function() { this.style.background='#06b6d4'; };
-    btn.onmouseout = function() { this.style.background='#0e7490'; };
-  } else {
-    btn.style.background = '';
-    btn.onmouseover = null;
-    btn.onmouseout = null;
-  }
-  graphRenderSvg();
-}
 
 function graphToggleLinkMode() {
   graphLinkMode = !graphLinkMode;
@@ -1663,18 +1681,12 @@ async function graphAutoRun() {
     try {
       if (d.action === 'smartdc') {
         await _autoRunSmartDC(targetIdx);
-      } else if (d.action === 'elaborate' || d.action === 'elaborate_toward') {
+      } else if (d.action === 'elaborate') {
         await _autoRunElaborate(targetIdx);
       } else if (d.action === 'think_toward') {
         await _autoRunThink();
-      } else if (d.action === 'expand') {
-        await _autoRunExpand(targetIdx);
       } else if (d.action === 'collapse') {
         await _autoRunCollapse(d.target);
-      } else if (d.action === 'ask') {
-        await _autoRunAsk(targetIdx);
-      } else if (d.action === 'rephrase') {
-        await _autoRunRephrase(targetIdx);
       }
     } catch(e) {
       if (e.name === 'AbortError') { _autoRunLog.push({step: step + 1, action: 'STOPPED', reason: 'User stopped'}); break; }
@@ -1990,16 +2002,6 @@ async function _autoRunElaborate(idx) {
   if (!d.error) graphUpdateView(d);
 }
 
-async function _autoRunExpand(idx) {
-  const params = graphGetParams();
-  const res = await _autoFetch('/graph/expand', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ index: idx, n: 2, ...params })
-  });
-  const d = await res.json();
-  if (!d.error) graphUpdateView(d);
-}
 
 async function _autoRunThink() {
   const params = graphGetParams();
@@ -2053,186 +2055,7 @@ async function _autoRunCollapse(indices) {
   }
 }
 
-async function _autoRunAsk(idx) {
-  // Generate a probing question about this node via LLM, then answer it as evidence
-  const node = graphData.nodes[idx];
-  if (!node) return;
-  const params = graphGetParams();
-  const res = await _autoFetch('/graph/studio/generate', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      mode: 'freeform',
-      index: idx,
-      text: node.text,
-      instruction: 'Generate ONE probing question that challenges this idea or reveals a hidden assumption. Just the question, nothing else.',
-      temp: 0.9,
-      top_k: 40,
-      max_tokens: 60,
-      lang: document.getElementById('lang-select').value,
-    })
-  });
-  const d = await res.json();
-  if (d.variants && d.variants.length > 0) {
-    const questionText = d.variants[0].text;
-    // Add question as child node
-    const r2 = await _autoFetch('/graph/studio/apply-child', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ index: idx, text: questionText, type: 'elaborate', ...params })
-    });
-    const d2 = await r2.json();
-    if (!d2.error) {
-      graphUpdateView(d2);
-      const qIdx = graphData.nodes.length - 1;
-      // Set type to question
-      await _autoFetch('/graph/set-type', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({index: qIdx, type: 'question'})
-      }).catch(() => {});
-      if (graphData.nodes[qIdx]) graphData.nodes[qIdx].type = 'question';
 
-      // Now answer the question — add answer as evidence on the parent hypothesis
-      const ansRes = await _autoFetch('/graph/studio/generate', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          mode: 'freeform',
-          index: idx,
-          text: node.text,
-          instruction: 'Question: ' + questionText + '\nAnswer this question concisely based on the hypothesis above. One paragraph.',
-          temp: 0.7,
-          top_k: 40,
-          max_tokens: 120,
-          lang: document.getElementById('lang-select').value,
-        })
-      });
-      const ansD = await ansRes.json();
-      if (ansD.variants && ansD.variants.length > 0) {
-        const answerText = ansD.variants[0].text;
-        // Add as evidence on the parent hypothesis
-        await _autoFetch('/graph/add-evidence', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            hypothesis: idx,
-            text: answerText,
-            relation: 'supports',
-            strength: 0.6,
-            ...params
-          })
-        }).then(r => r.json()).then(d3 => {
-          if (!d3.error) graphUpdateView(d3);
-        }).catch(e => console.error('add-evidence error:', e));
-      }
-    }
-  }
-}
-
-async function _autoRunRephrase(idx) {
-  // Auto-rephrase: ask LLM to make hypothesis more specific and testable
-  const node = graphData.nodes[idx];
-  if (!node) return;
-  const params = graphGetParams();
-  const res = await _autoFetch('/graph/studio/generate', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      mode: 'rephrase',
-      index: idx,
-      text: node.text,
-      instruction: 'Make this hypothesis more specific, concrete and testable. Keep the core meaning.',
-      temp: parseFloat(document.getElementById('graph-temp').value) || 0.7,
-      top_k: parseInt(document.getElementById('graph-topk').value) || 40,
-      max_tokens: 200,
-      lang: document.getElementById('lang-select').value,
-    })
-  });
-  const d = await res.json();
-  if (d.variants && d.variants.length > 0) {
-    // Auto-apply first variant
-    const newText = d.variants[0].text;
-    await _autoFetch('/graph/studio/apply-rephrase', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ index: idx, text: newText, ...params })
-    });
-    graphData.nodes[idx].text = newText;
-    graphRenderSvg();
-    graphUpdateThoughtsList();
-  }
-}
-
-async function graphTick() {
-  const btn = document.getElementById('graph-btn-tick');
-  btn.disabled = true; btn.textContent = '\uD83E\uDDE0 Thinking...';
-  try {
-    const res = await fetch('/graph/tick', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
-        sim_mode: document.getElementById('graph-sim-mode').value
-      })
-    });
-    const d = await res.json();
-
-    if (d.action === 'none' || d.action === 'stable') {
-      // Show message in detail view area
-      const panel = document.getElementById('graph-detail');
-      panel.style.display = '';
-      document.getElementById('graph-detail-view').innerHTML =
-        '<div style="color:#10b981;font-weight:bold;margin-bottom:4px">\uD83E\uDDE0 Auto-think</div>'
-        + '<div style="color:#37352f;font-size:12px">' + d.reason + '</div>';
-    } else {
-      // Select target node and show suggestion
-      if (d.target !== undefined) {
-        const targetIdx = Array.isArray(d.target) ? d.target[0] : d.target;
-        graphSelectedNode = targetIdx;
-        graphRenderSvg();
-        graphShowDetail(targetIdx);
-      }
-      // Show action suggestion
-      const detailView = document.getElementById('graph-detail-view');
-      const actionColors = {smartdc: '#facc15', elaborate: '#a78bfa', collapse: '#10b981', expand: '#3b82f6'};
-      const actionLabels = {smartdc: '\u26A1 Verify', elaborate: '\u270E Elaborate', collapse: '\u2295 Collapse', expand: '\u261E Expand'};
-      let html = '<div style="border-top:1px solid #c4b5fd;margin-top:8px;padding-top:8px">'
-        + '<div style="color:#a78bfa;font-weight:bold;font-size:12px;margin-bottom:4px">\uD83E\uDDE0 Auto-think suggests:</div>'
-        + '<div style="color:' + (actionColors[d.action] || '#37352f') + ';font-size:12px;margin-bottom:4px">'
-        + (actionLabels[d.action] || d.action) + '</div>'
-        + '<div style="color:#9ca3af;font-size:11px;margin-bottom:6px">' + d.reason + '</div>';
-
-      // Action button
-      if (d.action === 'smartdc') {
-        html += '<button onclick="graphSmartDC()" class="px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-white text-xs rounded">\u26A1 Run Verify</button>';
-      } else if (d.action === 'elaborate') {
-        html += '<button onclick="graphShowAddEvidence()" class="px-3 py-1 bg-cyan-700 hover:bg-cyan-600 text-white text-xs rounded">+ Add evidence</button>';
-        html += ' <button onclick="openStudio(\'elaborate_preview\')" class="px-3 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded">\u270E AI generate</button>';
-      } else if (d.action === 'expand') {
-        html += '<button onclick="openStudio(\'expand_preview\')" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">\u261E Run Expand</button>';
-      } else if (d.action === 'collapse') {
-        html += '<button onclick="graphCollapseViaStudio()" class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">\u2295 Run Collapse</button>';
-      } else if (d.action === 'ask') {
-        html += '<button onclick="_autoRunAsk(' + d.target + ')" class="px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white text-xs rounded">\u2753 Ask</button>';
-      } else if (d.action === 'rephrase') {
-        html += '<button onclick="openStudio(\'rephrase\')" class="px-3 py-1 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded">\u2710 Rephrase</button>';
-      } else if (d.action === 'think_toward') {
-        html += '<button onclick="graphThink()" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">\uD83D\uDCAD Think toward goal</button>';
-      } else if (d.action === 'elaborate_toward') {
-        html += '<button onclick="openStudio(\'elaborate_preview\')" class="px-3 py-1 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded">\u270E Elaborate toward goal</button>';
-        html += ' <button onclick="graphShowAddEvidence()" class="px-3 py-1 bg-cyan-700 hover:bg-cyan-600 text-white text-xs rounded">+ Evidence</button>';
-      }
-      // "Next" button — run tick again after action
-      html += ' <button onclick="graphTick()" class="px-3 py-1 bg-neutral-700 hover:bg-neutral-600 text-white text-xs rounded ml-2">\uD83E\uDDE0 Next</button>';
-      html += '</div>';
-      detailView.insertAdjacentHTML('beforeend', html);
-    }
-  } catch(e) {
-    console.error('Tick error:', e);
-  }
-  btn.disabled = false; btn.textContent = '\uD83E\uDDE0 Auto';
-}
 
 function graphSetNodeType(nodeType) {
   const idx = graphSelectedNode;
@@ -2973,6 +2796,9 @@ function _studioUpdatePlaceholder(mode) {
   } else if (mode === 'collapse_preview') {
     // source already set by openStudio for collapse
     instruction.placeholder = 'Collapse instruction...';
+  } else if (mode === 'ask') {
+    source.textContent = (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '';
+    instruction.placeholder = 'What kind of question? (leave empty for auto)';
   } else {
     source.textContent = (graphData.nodes[studioNodeIdx] && graphData.nodes[studioNodeIdx].text) || '';
     instruction.placeholder = 'Instruction...';
@@ -3013,6 +2839,14 @@ async function studioGenerate() {
   // For collapse, pass ideas
   if (studioMode === 'collapse_preview') {
     body.ideas = document.getElementById('studio-source').textContent.split('\n').map(l => l.replace(/^\d+\.\s*/, ''));
+  }
+  // Ask mode → freeform with question instruction + source context
+  if (studioMode === 'ask') {
+    body.mode = 'freeform';
+    body.index = studioNodeIdx;
+    body.text = body.source_text;
+    const askPrompt = body.instruction || 'Generate ONE probing question that challenges this idea or reveals a hidden assumption. Just the question, nothing else.';
+    body.instruction = 'Idea: ' + body.source_text + '\n\n' + askPrompt;
   }
 
   genBtn.disabled = true;
@@ -3170,6 +3004,30 @@ async function studioApply() {
       graphData = d;
       if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
       if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+    }
+    graphDrawSvg(true);
+    graphUpdateThoughtsList();
+  } else if (studioMode === 'ask' && studioNodeIdx >= 0) {
+    // Add all selected as question nodes linked to parent
+    const allSelected = studioVariants.filter(v => v._selected);
+    graphSaveUndo();
+    for (const sel of allSelected) {
+      const r = await fetch('/graph/studio/apply-child', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index: studioNodeIdx, text: sel.text, type: 'elaborate', ...graphGetParams() })
+      });
+      const d = await r.json();
+      if (d.error) { alert(d.error); continue; }
+      graphData = d;
+      if (d.hub_nodes) d.hub_nodes.forEach(i => graphHubNodes.add(i));
+      if (d.directed_edges) graphDirectedEdges = d.directed_edges;
+      // Set type to question
+      const qIdx = graphData.nodes.length - 1;
+      fetch('/graph/set-type', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({index: qIdx, type: 'question'})
+      }).catch(() => {});
+      if (graphData.nodes[qIdx]) graphData.nodes[qIdx].type = 'question';
     }
     graphDrawSvg(true);
     graphUpdateThoughtsList();
