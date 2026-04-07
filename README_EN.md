@@ -136,11 +136,29 @@ generate+ → novelty reject → EXHAUSTED → final synthesis
 
 Stronger model = more unique thoughts = longer cycle = deeper result.
 
+### Run Settings
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| **Start ideas** | 5 | How many ideas to generate before the cycle begins (3-20) |
+| **Depth** | 2 | META rounds "what did I miss?" — more = deeper exploration (1-10) |
+| **Stable** | 0.8 | Confidence threshold for verified status |
+| **Collapse at** | 50 | Step to force-collapse (in limited mode) |
+| **Essay tokens** | 6000 | Max tokens for final essay (500-30000) |
+| **Infinite** | off | No step limit — cycle finds its own stopping point |
+| **Batched essay** | off | Pyramidal synthesis: sections → final text |
+| **Output** | essay | Final format: essay / brief / list / none |
+
 ### Force Collapse
 
 With step limit: after N steps — forced compression in batches of 5. Hard stop at 2N.
 
-**Output:** essay / brief / list / none. Essay supports batched mode (sections → final text).
+### Live Metrics
+
+During Run, an overlay in the top-right corner of the graph shows:
+- **Step / Phase** — current step and cycle phase
+- **Hyp / Verified / Avg** — hypothesis count, how many verified, average confidence
+- **Sparkline** — convergence curve (verified/total). Sawtooth = new ideas enter → get verified → peak. Damping sawtooth = convergence
 
 ---
 
