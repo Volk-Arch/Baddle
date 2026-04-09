@@ -1,7 +1,4 @@
 // ── Chat mode ────────────────────────────────────────────────────────────────
-let chatEs = null;
-let chatLastMsgDiv = null;
-let chatLastLabel = null;
 
 function chatAddMsg(role, content) {
   const container = document.getElementById('chat-messages');
@@ -43,47 +40,6 @@ function chatAddMsg(role, content) {
   return div;
 }
 
-function chatShowButtons(state) {
-  document.getElementById('chat-btn-send').style.display = state === 'send' || state === 'continue' ? '' : 'none';
-  document.getElementById('chat-btn-continue').style.display = state === 'continue' ? '' : 'none';
-  document.getElementById('chat-btn-stop').style.display = state === 'streaming' ? '' : 'none';
-}
-
-function chatStreamTo(url, msgDiv) {
-  chatLastMsgDiv = msgDiv;
-  chatLastLabel = msgDiv.querySelector('.text-xs');
-  chatShowButtons('streaming');
-
-  chatEs = new EventSource(url);
-  chatEs.onmessage = function(e) {
-    const d = JSON.parse(e.data);
-    if (d.error) {
-      msgDiv.textContent = 'Error: ' + d.error;
-      chatDone('eos'); return;
-    }
-    if (d.toks && d.ents && d.toks.length > 0) {
-      const newText = d.toks.join('');
-      const prevText = d.text.endsWith(newText) ? d.text.slice(0, d.text.length - newText.length) : '';
-      renderHeatmap(msgDiv, d.toks, d.ents, prevText);
-      if (chatLastLabel) msgDiv.prepend(chatLastLabel);
-    } else if (chatLastLabel) {
-      msgDiv.textContent = d.text;
-      msgDiv.prepend(chatLastLabel);
-    } else {
-      msgDiv.textContent = d.text;
-    }
-    document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
-    if (d.total_tokens) updateTokenCounter(d.total_tokens);
-    if (d.done) chatDone(d.reason || 'eos');
-  };
-  chatEs.onerror = function() { chatDone('eos'); };
-}
-
-function chatDone(reason) {
-  if (chatEs) { chatEs.close(); chatEs = null; }
-  chatShowButtons(reason === 'limit' || reason === 'length' ? 'continue' : 'send');
-}
-
 async function chatSend() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
@@ -92,7 +48,6 @@ async function chatSend() {
   autoGrow(input);
 
   chatAddMsg('user', text);
-
   const temp = parseFloat(document.getElementById('chat-temp').value) || 0.7;
   const top_k = parseInt(document.getElementById('chat-topk').value) || 40;
   let system = getRole();
@@ -103,38 +58,35 @@ async function chatSend() {
     system = system ? system + '\n\n' + ctxText : ctxText;
   }
 
-  chatShowButtons('streaming');
+  const sendBtn = document.getElementById('chat-btn-send');
+  sendBtn.disabled = true;
+  sendBtn.textContent = 'Thinking...';
 
-  const r = await fetch('/chat/send', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text, system, temp, top_k})
-  });
-  const d = await r.json();
-  if (d.error) {
-    chatAddMsg('system', 'Error: ' + d.error);
-    chatShowButtons('send');
-    return;
+  const pending = chatAddMsg('assistant', '…');
+  try {
+    const r = await fetch('/chat/send', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, system, temp, top_k})
+    });
+    const d = await r.json();
+    if (d.error) {
+      pending.textContent = 'Error: ' + d.error;
+    } else {
+      // Rebuild msg div with response text, keep header/buttons
+      const label = pending.querySelector('.text-xs');
+      pending.textContent = d.text;
+      if (label) pending.prepend(label);
+    }
+  } catch(e) {
+    pending.textContent = 'Error: ' + e.message;
+  } finally {
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Send';
+    document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
   }
-
-  const maxN = parseInt(document.getElementById('chat-max').value) || 200;
-  const msgDiv = chatAddMsg('assistant', '');
-  chatStreamTo('/chat/stream?n=' + maxN, msgDiv);
-}
-
-function chatContinue() {
-  if (!chatLastMsgDiv) return;
-  const maxN = parseInt(document.getElementById('chat-max').value) || 200;
-  chatStreamTo('/chat/continue?n=' + maxN, chatLastMsgDiv);
-}
-
-function chatStop() {
-  chatDone('eos');
 }
 
 async function chatReset() {
-  chatDone('eos');
-  chatLastMsgDiv = null;
-  chatLastLabel = null;
   await fetch('/chat/reset', {method: 'POST'});
   document.getElementById('chat-messages').innerHTML = '';
 }

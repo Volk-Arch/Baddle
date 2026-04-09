@@ -191,36 +191,4 @@ Regular conversation with the model. Context sidebar links graph ↔ chat (send 
 
 ---
 
-## Project Structure
-
-```
-baddle/
-  ui.py                    # entry point (Flask)
-  setup.py                 # pip install flask numpy
-  src/
-    main.py                # utilities: StreamCfg, cosine_similarity
-    thinking.py            # autonomous thinking (tick, phases, BFS)
-    graph_logic.py         # graph logic (nodes, edges, Bayes, SmartDC)
-    graph_routes.py        # Flask routes for graph
-    chat.py                # chat mode (API-based)
-    api_backend.py         # OpenAI-compatible HTTP client
-    prompts.py             # system prompts (EN/RU)
-  static/
-    css/style.css          # Notion-style theme
-    js/                    # graph, chat, modes, settings
-  templates/index.html     # HTML markup
-  graphs/                  # saved graphs
-```
-
----
-
-## Quick Start
-
-```bash
-git clone https://github.com/Volk-Arch/Baddle.git
-cd Baddle
-python setup.py        # pip install flask numpy
-python ui.py           # opens http://localhost:7860
-```
-
-Details: [SETUP_EN.md](SETUP_EN.md)
+Install and run → [SETUP_EN.md](SETUP_EN.md)

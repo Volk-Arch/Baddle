@@ -82,37 +82,7 @@ python ui.py --port 8080      # different port
 
 Browser opens automatically.
 
----
-
-## Modes
-
-### Graph (primary)
-Thought graph with automatic thinking — set a goal, press Run, the system thinks
-for itself. See [README](README_EN.md) for the concept.
-
-### Chat
-Regular conversation with the model. History persists in the session. **Continue**
-button re-generates if the response was truncated.
-
----
-
-## Generation parameters
-
-Configured right in the UI, per-mode.
-
-### Temperature (temp)
-
-| Value | Effect |
-|---|---|
-| **0.0** | always the most likely token (greedy) |
-| **0.3–0.7** | balance of predictability and variety |
-| **0.9** | for creative tasks and brainstorming |
-| **1.2+** | high variance, sometimes unstable |
-
-### Max tokens
-
-Token limit per response. In Graph mode the final essay has its own setting:
-**Essay tokens** (default 6000, max 30000).
+How to use → [README](README_EN.md)
 
 ---
 
