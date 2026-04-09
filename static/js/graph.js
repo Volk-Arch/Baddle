@@ -1477,33 +1477,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Check model availability on startup
   fetch('/settings').then(r => r.json()).then(async s => {
-    if (s.mode === 'local' && !s.local_model) return; // handled by auto-open settings
-    if (s.mode !== 'local' && s.api_url) {
-      try {
-        const mr = await fetch('/settings/models', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({api_url: s.api_url, api_key: s.api_key || ''})
-        });
-        const md = await mr.json();
-        const available = md.models || [];
-        const warnings = [];
-        if (s.api_model && !available.includes(s.api_model)) {
-          warnings.push('Main model "' + s.api_model + '" not available');
-        }
-        if (s.embedding_model && !available.includes(s.embedding_model)) {
-          warnings.push('Embedding model "' + s.embedding_model + '" not available');
-        }
-        if (warnings.length) {
-          const bar = document.getElementById('graph-actions-bar') || document.body;
-          const warn = document.createElement('div');
-          warn.style.cssText = 'color:#facc15;font-size:12px;padding:6px 12px;background:#ffffff;border:1px solid #facc15;border-radius:2px;margin:4px;cursor:pointer;';
-          warn.textContent = '\u26A0 ' + warnings.join('. ') + ' \u2014 click to open Settings';
-          warn.onclick = function() { openSettings(); this.remove(); };
-          bar.prepend(warn);
-        }
-      } catch(e) {}
-    }
+    if (!s.api_url || !s.api_model) return; // handled by auto-open settings
+    try {
+      const mr = await fetch('/settings/models', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({api_url: s.api_url, api_key: s.api_key || ''})
+      });
+      const md = await mr.json();
+      const available = md.models || [];
+      const warnings = [];
+      if (s.api_model && !available.includes(s.api_model)) {
+        warnings.push('Main model "' + s.api_model + '" not available');
+      }
+      if (s.embedding_model && !available.includes(s.embedding_model)) {
+        warnings.push('Embedding model "' + s.embedding_model + '" not available');
+      }
+      if (warnings.length) {
+        const bar = document.getElementById('graph-actions-bar') || document.body;
+        const warn = document.createElement('div');
+        warn.style.cssText = 'color:#facc15;font-size:12px;padding:6px 12px;background:#ffffff;border:1px solid #facc15;border-radius:2px;margin:4px;cursor:pointer;';
+        warn.textContent = '\u26A0 ' + warnings.join('. ') + ' \u2014 click to open Settings';
+        warn.onclick = function() { openSettings(); this.remove(); };
+        bar.prepend(warn);
+      }
+    } catch(e) {}
   }).catch(e => console.error('startup settings check error:', e));
 
   const slider = document.getElementById('graph-detail-conf-slider');

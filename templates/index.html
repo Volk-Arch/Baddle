@@ -34,88 +34,46 @@
         <span style="color:var(--text-primary);font-size:14px;font-weight:600">Settings</span>
         <button onclick="closeSettings()" style="background:none;border:none;color:var(--text-secondary);font-size:18px;cursor:pointer">&times;</button>
       </div>
-      <div style="margin-bottom:12px">
-        <label class="modal-label">Mode</label>
-        <select id="settings-mode" onchange="onSettingsModeChange()" class="modal-select">
-          <option value="local">Local (llama.cpp)</option>
-          <option value="api">API (OpenAI-compatible)</option>
-          <option value="hybrid">Hybrid (API + Local)</option>
-        </select>
+
+      <div style="color:var(--text-tertiary);font-size:11px;margin-bottom:12px">
+        Baddle uses an OpenAI-compatible API for all generation.
+        Point it at LM Studio, llama-server, Ollama, or any compatible endpoint.
       </div>
-      <div id="settings-api-fields" style="display:none">
-        <div style="margin-bottom:10px">
-          <label class="modal-label">API URL</label>
-          <input id="settings-api-url" type="text" placeholder="https://api.openai.com/v1" class="modal-input">
-        </div>
-        <div style="margin-bottom:10px">
-          <label class="modal-label">API Key</label>
-          <input id="settings-api-key" type="password" placeholder="sk-..." class="modal-input">
-        </div>
-        <div style="margin-bottom:10px">
-          <label class="modal-label">Model</label>
-          <div style="display:flex;gap:6px">
-            <select id="settings-api-model-select" onchange="document.getElementById('settings-api-model').value=this.value" class="modal-select" style="flex:1">
-              <option value="">-- select --</option>
-            </select>
-            <button onclick="fetchApiModels()" class="btn-secondary" style="padding:8px 12px;white-space:nowrap;font-size:12px" title="Fetch models from API">&#8635; Load</button>
-          </div>
-          <input id="settings-api-model" type="text" placeholder="or type model name manually" class="modal-input" style="margin-top:4px">
-        </div>
-        <div id="settings-hybrid-fields" class="hybrid-panel" style="display:none">
-          <label class="modal-label" style="margin-bottom:8px">Hybrid routing</label>
-          <div style="display:flex;gap:12px;flex-wrap:wrap">
-            <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:4px">
-              Graph gen:
-              <select id="settings-hybrid-graph" class="modal-select" style="width:auto;padding:4px 8px;font-size:12px">
-                <option value="api">API</option><option value="local">Local</option>
-              </select>
-            </label>
-            <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:4px">
-              Embeddings:
-              <select id="settings-hybrid-embeddings" class="modal-select" style="width:auto;padding:4px 8px;font-size:12px">
-                <option value="local">Local</option><option value="api">API</option>
-              </select>
-            </label>
-            <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:4px">
-              Chat:
-              <select id="settings-hybrid-chat" class="modal-select" style="width:auto;padding:4px 8px;font-size:12px">
-                <option value="api">API</option><option value="local">Local</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        <div style="color:var(--text-tertiary);font-size:11px;margin-bottom:10px">
-          Step &amp; Parallel modes always use local model.
-        </div>
+
+      <div style="margin-bottom:10px">
+        <label class="modal-label">API URL</label>
+        <input id="settings-api-url" type="text" placeholder="http://localhost:1234" class="modal-input">
       </div>
-      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
-        <label class="modal-label">Local model</label>
-        <div style="display:flex;gap:6px;margin-bottom:6px">
-          <select id="settings-local-model" class="modal-select" style="flex:1">
+
+      <div style="margin-bottom:10px">
+        <label class="modal-label">API Key <span style="color:var(--text-tertiary);font-weight:normal">(optional, for OpenAI/cloud)</span></label>
+        <input id="settings-api-key" type="password" placeholder="sk-..." class="modal-input">
+      </div>
+
+      <div style="margin-bottom:10px">
+        <label class="modal-label">Chat model</label>
+        <div style="display:flex;gap:6px">
+          <select id="settings-api-model-select" onchange="onApiModelSelectChange()" class="modal-select" style="flex:1">
             <option value="">-- select --</option>
           </select>
+          <button onclick="fetchApiModels()" class="btn-secondary" style="padding:8px 12px;white-space:nowrap;font-size:12px" title="Fetch models from API">&#8635; Load</button>
         </div>
-        <div style="display:flex;gap:8px;margin-bottom:6px">
-          <label style="color:var(--text-secondary);font-size:12px;display:flex;align-items:center;gap:4px">
-            GPU layers:
-            <input id="settings-gpu-layers" type="number" value="-1" class="modal-input" style="width:60px;padding:4px 8px;font-size:12px" title="-1 = all layers on GPU">
-          </label>
-          <label style="color:var(--text-secondary);font-size:12px;display:flex;align-items:center;gap:4px">
-            Context:
-            <input id="settings-ctx" type="number" value="8192" class="modal-input" style="width:70px;padding:4px 8px;font-size:12px">
-          </label>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <span id="settings-current-model" style="color:var(--text-tertiary);font-size:11px;flex:1"></span>
-          <button onclick="reloadModel()" class="btn-warning" title="Reload model (takes a few seconds)">&#8635; Reload model</button>
-        </div>
-        <label class="modal-label" style="margin-top:8px">Embedding model (for similarity & Smart DC centroid)</label>
-        <div style="display:flex;gap:6px;margin-bottom:6px">
-          <select id="settings-embedding-model" class="modal-select" style="flex:1;font-size:12px">
-            <option value="">(same as main model)</option>
-          </select>
-        </div>
+        <input id="settings-api-model" type="text" placeholder="or type model name manually" class="modal-input" style="margin-top:4px">
       </div>
+
+      <div style="margin-bottom:10px">
+        <label class="modal-label">Embedding model <span style="color:var(--text-tertiary);font-weight:normal">(for similarity & Smart DC centroid)</span></label>
+        <select id="settings-embedding-model-select" onchange="onEmbeddingSelectChange()" class="modal-select" style="margin-bottom:4px">
+          <option value="">-- select --</option>
+        </select>
+        <input id="settings-embedding-model" type="text" placeholder="or type embedding model name" class="modal-input">
+      </div>
+
+      <div style="margin-bottom:10px">
+        <label class="modal-label">Context window (hint)</label>
+        <input id="settings-ctx" type="number" value="32768" class="modal-input" style="width:100px;padding:4px 8px;font-size:12px">
+      </div>
+
       <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
         <label class="modal-label" style="margin-bottom:6px">Experimental</label>
         <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
@@ -123,6 +81,11 @@
           <input id="settings-live-bayes" type="checkbox"> Live Bayesian update on auto-evidence
         </label>
       </div>
+
+      <div style="margin-top:12px">
+        <span id="settings-current-model" style="color:var(--text-tertiary);font-size:11px"></span>
+      </div>
+
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button onclick="closeSettings()" class="btn-secondary">Cancel</button>
         <button onclick="saveSettings()" class="btn-primary">Save</button>
@@ -130,16 +93,12 @@
     </div>
   </div>
 
-  <!-- Mode tabs — Graph first -->
+  <!-- Mode tabs -->
   <div class="tab-bar flex" style="margin:0 -12px;padding:0 12px;">
     <button id="tab-graph"   onclick="setMode('graph')"
       class="tab-active px-4 py-2 text-sm">graph</button>
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
-    <button id="tab-step"     onclick="setMode('step')"
-      class="tab-inactive px-4 py-2 text-sm">step</button>
-    <button id="tab-parallel" onclick="setMode('parallel')"
-      class="tab-inactive px-4 py-2 text-sm">parallel</button>
   </div>
 
   <!-- ══ Role (shared) ══ -->
@@ -451,143 +410,10 @@
     </div>
   </div>
 
-  <!-- ══ STEP mode ══ -->
-  <div id="cfg-step" class="hidden">
-    <div class="flex flex-wrap gap-3 items-center mb-4">
-      <span style="color:var(--text-secondary);font-size:13px;width:50px;flex-shrink:0">Prompt</span>
-      <textarea id="step-prompt" class="auto-grow" placeholder="Enter prompt..." style="width:380px" rows="1"></textarea>
-      <span style="color:var(--text-secondary);font-size:13px">temp</span>
-      <input id="step-temp" type="number" value="0.0" step="0.1" min="0" max="2" style="width:70px"
-             onchange="stepUpdateParams()" onblur="stepUpdateParams()">
-      <span style="color:var(--text-secondary);font-size:13px">top_k</span>
-      <input id="step-topk" type="number" value="40" min="1" max="100" style="width:70px"
-             onchange="stepUpdateParams()" onblur="stepUpdateParams()">
-      <button onclick="stepInit()" class="btn-primary" style="padding:5px 14px;font-size:12px">Init</button>
-    </div>
-    <div class="grid gap-4 mb-4" style="grid-template-columns: 2fr 1fr">
-      <div class="card overflow-hidden">
-        <div class="panel-header px-3 py-1 flex items-center">
-          <span style="font-weight:500">Generated</span>
-          <span id="step-status" class="ml-auto" style="font-size:11px;color:var(--text-secondary)"></span>
-        </div>
-        <div class="scroll-panel" style="background:var(--bg-secondary)">
-          <div id="step-output" class="stream-content p-4 text-sm" contenteditable="false" spellcheck="false"></div>
-        </div>
-      </div>
-      <div class="card overflow-hidden">
-        <div class="panel-header px-3 py-1">
-          <span style="font-weight:500">Next token probs</span>
-        </div>
-        <div class="scroll-panel p-3" style="background:var(--bg-secondary)">
-          <div id="step-top" class="text-xs font-mono" style="color:var(--text-primary)"></div>
-        </div>
-      </div>
-    </div>
-    <div class="flex flex-wrap items-center gap-3">
-      <button id="step-btn-next" onclick="stepNext()" disabled
-        class="btn-action" style="background:#059669;color:#fff;border-color:#059669">Next Token</button>
-      <div class="flex items-center gap-2">
-        <button id="step-btn-auto" onclick="stepAuto()" disabled
-          class="btn-action" style="background:#7c3aed;color:#fff;border-color:#7c3aed">Auto</button>
-        <input id="step-auto-n" type="number" value="20" min="1" max="500" style="width:60px">
-        <span style="color:var(--text-secondary);font-size:12px">tokens</span>
-      </div>
-      <button id="step-btn-edit" onclick="stepToggleEdit()" disabled class="btn-action">Edit</button>
-      <button id="step-btn-sync" onclick="stepSync()" style="display:none"
-        class="btn-action" style="background:var(--accent);color:#fff;border-color:var(--accent)">Sync (Ctrl+Enter)</button>
-      <button id="step-btn-reset" onclick="stepReset()" disabled
-        class="btn-action" style="color:#dc2626;border-color:#dc2626">Reset</button>
-      <button id="step-btn-stop" onclick="stepStopAuto()" style="display:none"
-        class="btn-action" style="background:#dc2626;color:#fff;border-color:#dc2626">Stop Auto</button>
-    </div>
-  </div>
-
-  <!-- ══ PARALLEL mode ══ -->
-  <div id="cfg-parallel" class="hidden">
-    <div class="flex flex-col gap-3 mb-4 max-w-2xl">
-      <div class="flex gap-3 items-center">
-        <span style="color:var(--accent);font-size:13px;width:70px;flex-shrink:0">Prompt A</span>
-        <textarea id="pa" class="auto-grow" placeholder="First prompt..." style="flex:1" rows="1"></textarea>
-      </div>
-      <div id="parallel-prompt-b" class="flex gap-3 items-center">
-        <span style="color:#a78bfa;font-size:13px;width:70px;flex-shrink:0">Prompt B</span>
-        <textarea id="pb" class="auto-grow" placeholder="Second prompt..." style="flex:1" rows="1"></textarea>
-      </div>
-      <div class="flex gap-3 items-center">
-        <label style="color:var(--accent);font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer" title="Same prompt, different parameters">
-          <input type="checkbox" id="parallel-compare-mode" onchange="toggleCompareMode()"> compare
-        </label>
-      </div>
-      <div class="grid grid-cols-2 gap-4">
-        <div class="card p-3">
-          <div style="color:var(--accent);font-size:13px;font-weight:500;margin-bottom:8px">Config A</div>
-          <label style="color:var(--text-secondary);font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            temp <input id="temp-pa" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
-          </label>
-          <label style="color:var(--text-secondary);font-size:13px;display:flex;align-items:center;gap:8px">
-            top_k <input id="topk-a" type="number" value="40" min="1" max="100" style="width:70px">
-          </label>
-        </div>
-        <div class="card p-3">
-          <div style="color:#a78bfa;font-size:13px;font-weight:500;margin-bottom:8px">Config B</div>
-          <label style="color:var(--text-secondary);font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            temp <input id="temp-pb" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
-          </label>
-          <label style="color:var(--text-secondary);font-size:13px;display:flex;align-items:center;gap:8px">
-            top_k <input id="topk-b" type="number" value="40" min="1" max="100" style="width:70px">
-          </label>
-        </div>
-      </div>
-      <div class="flex gap-6 items-center">
-        <label style="color:var(--text-secondary);font-size:13px;display:flex;align-items:center;gap:8px">
-          max tokens <input id="n-p" type="number" value="60" min="1" max="500" style="width:70px">
-        </label>
-        <label style="color:var(--text-secondary);font-size:13px;display:flex;align-items:center;gap:8px">
-          seed <input id="seed-p" type="number" value="-1" min="-1" style="width:80px">
-        </label>
-      </div>
-    </div>
-  </div>
-
-  <!-- Parallel controls -->
-  <div id="dual-controls" class="hidden flex items-center gap-4 mb-5">
-    <button id="btn-gen" onclick="generate()" class="btn-primary">Generate</button>
-    <button id="btn-stop" onclick="stopDual()" style="display:none" class="btn-action" style="background:#dc2626;color:#fff;border-color:#dc2626">Stop</button>
-    <span id="status" style="color:var(--text-secondary);font-size:13px"></span>
-  </div>
-
-  <!-- Stream panels (parallel / compare) -->
-  <div id="dual-panels" class="hidden grid grid-cols-2 gap-4">
-    <div class="card overflow-hidden">
-      <div class="panel-header px-3 py-1 flex items-center gap-2">
-        <span id="title-a" style="color:var(--accent);font-weight:500;font-size:13px">Stream A</span>
-        <span id="step-a" style="color:var(--text-secondary);font-size:11px;margin-left:auto"></span>
-        <button id="btn-to-step-a" onclick="dualToStep('a')" style="display:none"
-          class="btn-action text-xs">&rarr; Step</button>
-      </div>
-      <div class="scroll-panel" style="background:var(--bg-secondary)">
-        <div id="output-a" class="stream-content p-4 text-sm"></div>
-      </div>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="panel-header px-3 py-1 flex items-center gap-2">
-        <span id="title-b" style="color:#a78bfa;font-weight:500;font-size:13px">Stream B</span>
-        <span id="step-b" style="color:var(--text-secondary);font-size:11px"></span>
-        <button id="btn-to-step-b" onclick="dualToStep('b')" style="display:none"
-          class="btn-action text-xs">&rarr; Step</button>
-        <span id="diverge-badge" class="hidden" style="margin-left:auto;font-size:11px;background:#fbbf24;color:#37352f;padding:1px 8px;border-radius:10px"></span>
-      </div>
-      <div class="scroll-panel" style="background:var(--bg-secondary)">
-        <div id="output-b" class="stream-content p-4 text-sm"></div>
-      </div>
-    </div>
-  </div>
 
 </div>
 <script src="/static/js/modes.js"></script>
 <script src="/static/js/settings.js"></script>
-<script src="/static/js/step.js"></script>
-<script src="/static/js/parallel.js"></script>
 <script src="/static/js/chat.js"></script>
 <script src="/static/js/graph.js"></script>
 

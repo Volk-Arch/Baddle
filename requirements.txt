@@ -1,16 +1,5 @@
-# Core — install via setup.py (detects CUDA and builds GPU version)
-# llama-cpp-python
+# Minimal dependencies — Baddle uses an OpenAI-compatible API for all LLM calls.
+# See SETUP.md for configuring an endpoint (LM Studio / llama-server / etc.).
 
-# Numerics
-numpy>=1.20
-
-# CLI UI
-rich>=10.0
-prompt_toolkit>=3.0
-questionary>=1.10
-
-# Web UI (python ui.py)
 flask>=2.0
-
-# Chat templates
-jinja2>=3.0
+numpy>=1.20

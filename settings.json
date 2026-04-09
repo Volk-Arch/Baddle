@@ -1,14 +1,8 @@
 {
-  "mode": "api",
   "api_url": "http://127.0.0.1:1234",
   "api_key": "sk-lm-JfZ20v1k:HHdgiYi8vwA3ZG8X4wT2",
   "api_model": "qwen/qwen3-8b",
-  "hybrid_graph": "api",
-  "hybrid_embeddings": "local",
-  "hybrid_chat": "api",
-  "local_model": "Qwen3-8B-Q4_K_M.gguf",
-  "local_gpu_layers": -1,
+  "embedding_model": "text-embedding-nomic-embed-text-v2-moe",
   "local_ctx": 4096,
-  "embedding_model": "",
-  "local_embedding_path": ""
+  "live_bayes": false
 }

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from .main import _sample, _get_logits, _entropy, format_chat, get_embedding, cosine_similarity
+from .main import cosine_similarity
 from .prompts import _p
 
 log = logging.getLogger(__name__)
@@ -169,16 +169,6 @@ def _remove_node(idx: int):
         _remap_edges([idx])
 
 
-# ── module-level model reference (set by init_graph) ─────────────────────────
-_llm = None
-
-
-def init_graph(llm):
-    """Call once after model is loaded to give graph mode access to the model."""
-    global _llm
-    _llm = llm
-
-
 # ── state ────────────────────────────────────────────────────────────────────
 def _fresh_graph():
     return {
@@ -210,24 +200,9 @@ def reset_graph():
 
 # ── generation helpers ───────────────────────────────────────────────────────
 
-def _api_available() -> bool:
-    """Check if API mode is configured for graph generation."""
-    from .api_backend import use_api_for
-    return use_api_for("graph")
-
-
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, dict]:
-    """Generate text from chat messages. Uses API or local model based on settings.
+    """Generate text from chat messages via OpenAI-compatible API backend.
     Returns (text, entropy_info)."""
-    from .api_backend import use_api_for
-
-    if use_api_for("graph"):
-        return _graph_generate_api(messages, max_tokens, temp, top_k)
-    return _graph_generate_local(messages, max_tokens, temp, top_k, seed)
-
-
-def _graph_generate_api(messages: list[dict], max_tokens: int, temp: float, top_k: int) -> tuple[str, dict]:
-    """Generate via OpenAI-compatible API."""
     from .api_backend import api_chat_completion
 
     try:
@@ -235,67 +210,14 @@ def _graph_generate_api(messages: list[dict], max_tokens: int, temp: float, top_
             messages, max_tokens=max_tokens, temperature=temp, top_k=top_k,
         )
     except (KeyError, IndexError, TypeError) as e:
-        log.error(f"[graph_generate_api] Failed to parse API response: {e}")
+        log.error(f"[_graph_generate] Failed to parse API response: {e}")
         return "", {"avg": 0.0, "unc": 0.0, "tokens": []}
-    # Clean thinking blocks
     text = _clean_thinking(text)
-    # Build token entropy info
     token_ents = []
     for i, e in enumerate(token_ents_raw):
         tok = token_texts[i] if i < len(token_texts) else ""
         token_ents.append({"token": tok, "ent": round(float(e), 3)})
     return text, {"avg": round(float(avg_ent), 3), "unc": round(float(unc_pct), 3), "tokens": token_ents}
-
-
-def _graph_generate_local(messages: list[dict], max_tokens: int, temp: float, top_k: int, seed: int) -> tuple[str, dict]:
-    """Generate via local llama.cpp model."""
-    use_logprobs = getattr(_graph_generate_local, '_logprobs_ok', True)
-    # Reset KV cache before each generation to avoid stale state
-    _llm.reset()
-    try:
-        kwargs = dict(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temp,
-            top_k=top_k,
-            top_p=0.95,
-            repeat_penalty=1.1,
-        )
-        if seed >= 0:
-            kwargs["seed"] = seed
-        if use_logprobs:
-            kwargs["logprobs"] = True
-            kwargs["top_logprobs"] = 1
-        result = _llm.create_chat_completion(**kwargs)
-    except (ValueError, RuntimeError) as e:
-        log.warning(f"[graph_generate_local] logprobs failed: {e}, retrying without")
-        _graph_generate_local._logprobs_ok = False
-        _llm.reset()
-        result = _llm.create_chat_completion(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temp,
-            top_k=top_k,
-            top_p=0.95,
-            repeat_penalty=1.1,
-        )
-    raw = result["choices"][0]["message"]["content"] or ""
-    text = _clean_thinking(raw)
-    # Extract per-token entropy from logprobs
-    logprobs_data = result["choices"][0].get("logprobs")
-    avg_ent = 0.0
-    unc = 0.0
-    token_ents = []
-    if logprobs_data and logprobs_data.get("content"):
-        for lp in logprobs_data["content"]:
-            if "logprob" in lp:
-                e = -lp["logprob"]
-                token_ents.append({"token": lp.get("token", ""), "ent": round(float(e), 3)})
-        if token_ents:
-            lps = [t["ent"] for t in token_ents]
-            avg_ent = sum(lps) / len(lps)
-            unc = sum(1 for lp in lps if lp > 2.0) / len(lps)
-    return text, {"avg": round(float(avg_ent), 3), "unc": round(float(unc), 3), "tokens": token_ents}
 
 
 def _clean_thinking(raw: str) -> str:
@@ -347,31 +269,22 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
 # ── similarity & clustering ──────────────────────────────────────────────────
 
 def _ensure_embeddings(texts: list[str]):
-    """Compute and cache embeddings for all texts."""
-    from .api_backend import use_api_for, api_get_embedding
+    """Compute and cache embeddings for all texts via API backend."""
+    from .api_backend import api_get_embedding
 
     cache = _graph.setdefault("embeddings", [])
     while len(cache) < len(texts):
         idx = len(cache)
-        if use_api_for("embeddings"):
-            emb = api_get_embedding(texts[idx])
-            cache.append(emb if emb else None)
-        else:
-            emb = get_embedding(_llm, texts[idx])
-            cache.append(emb.tolist() if len(emb) > 0 else None)
+        emb = api_get_embedding(texts[idx])
+        cache.append(emb if emb else None)
     while len(cache) > len(texts):
         cache.pop()
 
 
 def _jaccard(i: int, j: int, texts: list[str]) -> float:
-    """Jaccard similarity on token sets."""
-    if _llm is None:
-        # Fallback: word-level jaccard when no local model
-        toks_i = set(texts[i].lower().split())
-        toks_j = set(texts[j].lower().split())
-    else:
-        toks_i = set(_llm.tokenize(texts[i].encode(), add_bos=False))
-        toks_j = set(_llm.tokenize(texts[j].encode(), add_bos=False))
+    """Jaccard similarity on word sets (simple fallback)."""
+    toks_i = set(texts[i].lower().split())
+    toks_j = set(texts[j].lower().split())
     if not toks_i or not toks_j:
         return 0.0
     return len(toks_i & toks_j) / len(toks_i | toks_j)

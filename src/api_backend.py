@@ -12,23 +12,13 @@ log = logging.getLogger(__name__)
 _SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
 
 _settings = {
-    "mode": "local",        # "local" | "api" | "hybrid"
-    "api_url": "",          # e.g. "https://api.openai.com/v1"
-    "api_key": "",
-    "api_model": "",        # e.g. "gpt-4o", "claude-sonnet-4-20250514"
-    # Hybrid routing
-    "hybrid_graph": "api",      # "api" | "local"
-    "hybrid_embeddings": "local",  # "api" | "local"
-    "hybrid_chat": "api",       # "api" | "local"
-    # Local model
-    "local_model": "",          # filename in models/
-    "local_gpu_layers": -1,
-    "local_ctx": 8192,
-    # Embedding model (separate from main model)
-    "embedding_model": "",      # API: model name for /v1/embeddings. Local: GGUF filename
-    "local_embedding_path": "", # full path to local embedding GGUF (e.g. nomic-embed-text.gguf)
+    "api_url": "http://localhost:1234",   # LM Studio default, or OpenAI/etc
+    "api_key": "",                         # optional — for OpenAI/cloud
+    "api_model": "",                       # e.g. "qwen/qwen3-8b"
+    "embedding_model": "",                 # e.g. "text-embedding-nomic-embed-text-v1.5"
+    "local_ctx": 32768,                    # hint only, server enforces its own ctx
     # Experimental
-    "live_bayes": False,        # Update confidence via Bayes on auto-evidence (elaborate/expand)
+    "live_bayes": False,
 }
 
 
@@ -60,39 +50,11 @@ def get_settings():
 
 
 def update_settings(new: dict):
-    for k in ("mode", "api_url", "api_key", "api_model",
-              "hybrid_graph", "hybrid_embeddings", "hybrid_chat",
-              "local_model", "local_gpu_layers", "local_ctx",
-              "embedding_model", "local_embedding_path",
-              "live_bayes"):
+    for k in ("api_url", "api_key", "api_model",
+              "embedding_model", "local_ctx", "live_bayes"):
         if k in new:
             _settings[k] = new[k]
     _save_settings()
-
-
-def list_local_models() -> list[str]:
-    """Scan models/ directory for GGUF files."""
-    models_dir = Path(__file__).parent.parent / "models"
-    if not models_dir.exists():
-        return []
-    return sorted([f.name for f in models_dir.glob("*.gguf")])
-
-
-def is_api_mode():
-    return _settings["mode"] == "api" and _settings["api_url"] and _settings["api_model"]
-
-
-def use_api_for(component: str) -> bool:
-    """Check if a component should use API. component: 'graph', 'embeddings', 'chat'."""
-    if _settings["mode"] == "local":
-        return False
-    if _settings["mode"] == "api":
-        return bool(_settings["api_url"] and _settings["api_model"])
-    # hybrid
-    if not _settings["api_url"] or not _settings["api_model"]:
-        return False
-    key = f"hybrid_{component}"
-    return _settings.get(key, "local") == "api"
 
 
 def fetch_models(api_url: str, api_key: str) -> dict:
@@ -151,11 +113,12 @@ def _api_request(url: str, data: bytes = None, headers: dict = None,
 
 
 def api_chat_completion(messages: list, max_tokens: int = 200, temperature: float = 0.9,
-                        top_k: int = 40, repeat_penalty: float = 1.1) -> tuple:
+                        top_k: int = 40, repeat_penalty: float = 1.1,
+                        top_logprobs: int = 1, return_full: bool = False) -> tuple:
     """Call OpenAI-compatible chat completion API.
 
-    Returns (text, entropy_avg, uncertainty_pct, token_entropies, token_texts)
-    where entropy/token data may be empty if API doesn't support logprobs.
+    Returns (text, entropy_avg, uncertainty_pct, token_entropies, token_texts).
+    If return_full=True, also returns top_candidates per token (for step mode).
     """
     base = _settings["api_url"].rstrip("/")
     if not base.endswith("/v1"):
@@ -167,16 +130,12 @@ def api_chat_completion(messages: list, max_tokens: int = 200, temperature: floa
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "logprobs": True,
+        "top_logprobs": top_logprobs,
     }
-
-    # Try to request logprobs (OpenAI supports this)
-    body["logprobs"] = True
-    body["top_logprobs"] = 1
 
     data = json.dumps(body).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     if _settings["api_key"]:
         headers["Authorization"] = f"Bearer {_settings['api_key']}"
 
@@ -185,28 +144,36 @@ def api_chat_completion(messages: list, max_tokens: int = 200, temperature: floa
     choice = result.get("choices", [{}])[0]
     message = choice.get("message", {})
     text = message.get("content", "")
-    # Fallback: if content is empty but reasoning_content has text (Qwen3 thinking mode)
     if not text and message.get("reasoning_content"):
         text = message["reasoning_content"]
 
-    # Extract logprobs if available
+    # Extract logprobs
     token_ents = []
     token_texts = []
+    top_candidates = []  # list of lists: per-token top-N alternatives
     logprobs_data = choice.get("logprobs")
     if logprobs_data and "content" in logprobs_data:
         for tok_info in logprobs_data["content"]:
             lp = tok_info.get("logprob", 0)
             token_ents.append(-lp if lp else 0.0)
             token_texts.append(tok_info.get("token", ""))
+            if return_full:
+                alts = tok_info.get("top_logprobs", []) or []
+                import math
+                top_candidates.append([
+                    {"token": a.get("token", ""), "prob": math.exp(a.get("logprob", -100))}
+                    for a in alts
+                ])
 
     if token_ents:
         avg_ent = sum(token_ents) / len(token_ents)
-        high_threshold = 2.0
-        unc_pct = sum(1 for e in token_ents if e > high_threshold) / len(token_ents)
+        unc_pct = sum(1 for e in token_ents if e > 2.0) / len(token_ents)
     else:
         avg_ent = 0.0
         unc_pct = 0.0
 
+    if return_full:
+        return text, avg_ent, unc_pct, token_ents, token_texts, top_candidates
     return text, avg_ent, unc_pct, token_ents, token_texts
 
 
