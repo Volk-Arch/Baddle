@@ -101,16 +101,12 @@
       class="tab-inactive px-4 py-2 text-sm">chat</button>
   </div>
 
-  <!-- ══ Role (shared) ══ -->
-  <div class="flex gap-2 items-center mb-2 mt-2">
+  <!-- ══ Shared top strip: language + heatmap ══ -->
+  <div class="flex gap-3 items-center mb-2 mt-2">
     <select id="lang-select" onchange="onLangChange()" class="modal-select" style="width:56px;padding:3px 4px;font-size:12px;">
       <option value="en">EN</option>
       <option value="ru">RU</option>
     </select>
-    <select id="role-select" onchange="onRoleSelect()" class="modal-select" style="min-width:110px;padding:3px 6px;font-size:12px;">
-    </select>
-    <textarea id="role-text" class="auto-grow" placeholder="Role / system prompt..."
-      style="flex:1; min-width:120px;" rows="1"></textarea>
     <label class="flex items-center gap-1 cursor-pointer select-none" style="color:var(--text-secondary);font-size:11px;white-space:nowrap"
       title="Heatmap: color tokens by model confidence. Red = uncertain, green = confident.">
       <input id="heatmap-toggle" type="checkbox" checked style="accent-color:var(--accent)"> heatmap
@@ -357,27 +353,24 @@
 
   <!-- ══ CHAT mode ══ -->
   <div id="cfg-chat" class="hidden">
-    <div class="flex flex-wrap gap-3 items-center mb-4">
-      <span style="color:var(--text-secondary);font-size:13px">temp</span>
-      <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:70px">
-      <span style="color:var(--text-secondary);font-size:13px">top_k</span>
-      <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:70px">
-      <span style="color:var(--text-secondary);font-size:13px">max</span>
-      <input id="chat-max" type="number" value="200" min="1" max="2000" style="width:80px">
-      <select id="tpl-select" onchange="onTplSelect()" class="modal-select" style="display:none"></select>
-      <button onclick="chatReset()" class="btn-action ml-auto" style="background:#dc2626;color:#fff;border-color:#dc2626">Reset</button>
+    <div class="flex flex-wrap gap-2 items-center mb-2" style="font-size:12px">
+      <label style="color:var(--text-secondary)">temp <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:55px"></label>
+      <label style="color:var(--text-secondary)">top_k <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:55px"></label>
+      <select id="role-select" onchange="onRoleSelect()" class="modal-select" style="min-width:100px;max-width:140px;padding:3px 6px;font-size:12px;"></select>
+      <textarea id="role-text" class="auto-grow" placeholder="Role / system prompt..."
+        style="flex:1;min-width:150px;font-size:12px;padding:4px 6px" rows="1"></textarea>
+      <select id="tpl-select" onchange="onTplSelect()" class="modal-select" style="display:none;max-width:140px;font-size:12px"></select>
     </div>
-    <div id="tpl-vars" class="flex flex-wrap gap-3 items-center mb-4" style="display:none;"></div>
+    <div id="tpl-vars" class="flex flex-wrap gap-2 items-center mb-2" style="display:none;font-size:12px"></div>
     <div style="display:flex;gap:8px;">
       <div style="flex:1;min-width:0;">
-        <div id="chat-messages" class="card p-4 mb-4"
+        <div id="chat-messages" class="card p-4 mb-2"
              style="min-height:300px;max-height:500px;overflow-y:auto;display:flex;flex-direction:column;"></div>
-        <div class="flex gap-3">
+        <div class="flex gap-2">
           <textarea id="chat-input" class="auto-grow" placeholder="Type a message..."
             style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
           <button id="chat-btn-send" onclick="chatSend()" class="btn-primary" style="padding:8px 20px;font-size:13px">Send</button>
-          <button id="chat-btn-continue" onclick="chatContinue()" style="display:none" class="btn-action" style="background:#d97706;color:#fff;border-color:#d97706">Continue</button>
-          <button id="chat-btn-stop" onclick="chatStop()" style="display:none" class="btn-action" style="background:#dc2626;color:#fff;border-color:#dc2626">Stop</button>
+          <button onclick="chatReset()" class="btn-action" style="background:#dc2626;color:#fff;border-color:#dc2626;padding:8px 14px;font-size:12px">Reset</button>
         </div>
       </div>
       <!-- Context sidebar -->

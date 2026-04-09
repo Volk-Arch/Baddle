@@ -1,23 +1,28 @@
-"""Chat mode — conversation with the model via API backend."""
+"""Chat mode — conversation with the model via API backend.
 
-import json
-from flask import Blueprint, Response, request, jsonify, stream_with_context
+Non-streaming by design: chat is a helper tool for the graph, not a live typing
+demo. User sends a message, waits, gets the full response, decides what to do
+with it (save as node, copy, etc).
+"""
+
+from flask import Blueprint, request, jsonify
 
 from .api_backend import api_chat_completion
 
 chat_bp = Blueprint("chat", __name__)
 
+_MAX_TOKENS = 4000  # reasonable default, LM Studio/API server enforces its own ctx
+
 _chat = {
     "messages": [],
-    "temp":     0.7,
-    "top_k":    40,
-    "ready":    False,
+    "temp": 0.7,
+    "top_k": 40,
 }
 
 
 @chat_bp.route("/chat/send", methods=["POST"])
 def chat_send():
-    """Add user message — response generated via /chat/stream."""
+    """Add user message and return the assistant response in one shot."""
     data = request.get_json(force=True)
     text = data.get("text", "").strip()
     system = data.get("system", "")
@@ -29,93 +34,29 @@ def chat_send():
     _chat["temp"] = temp
     _chat["top_k"] = top_k
 
-    # Build messages list
+    # Inject / update system message
     if not _chat["messages"] and system:
         _chat["messages"].append({"role": "system", "content": system})
-    if _chat["messages"] and _chat["messages"][0]["role"] == "system":
+    elif _chat["messages"] and _chat["messages"][0]["role"] == "system":
         _chat["messages"][0]["content"] = system
 
     _chat["messages"].append({"role": "user", "content": text})
-    _chat["ready"] = True
-
-    return jsonify({"ok": True, "count": len(_chat["messages"])})
-
-
-def _chat_response_impl(max_tokens: int, initial_text: str = ""):
-    """Generate assistant response via API and stream as SSE.
-    Since API is non-streaming in our wrapper, emit full result once then done."""
-    messages = list(_chat["messages"])
-    if initial_text:
-        # Continue mode: last message is assistant, append a nudge
-        if messages and messages[-1]["role"] == "assistant":
-            messages = messages[:-1]
-        messages.append({"role": "assistant", "content": initial_text})
 
     try:
-        text, _avg, _unc, token_ents, token_texts = api_chat_completion(
-            messages, max_tokens=max_tokens, temperature=_chat["temp"],
+        reply, _avg, _unc, _ents, _toks = api_chat_completion(
+            _chat["messages"], max_tokens=_MAX_TOKENS, temperature=temp, top_k=top_k,
         )
     except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        return
+        return jsonify({"error": str(e)})
 
-    response_text = (initial_text + text) if initial_text else text
+    _chat["messages"].append({"role": "assistant", "content": reply})
 
-    # Emit as one chunk (API is non-streaming) with token-level data for heatmap
-    payload = {
-        "text": response_text,
-        "done": True,
-        "reason": "api",
-        "total_tokens": len(token_texts),
-        "toks": token_texts,
-        "ents": [round(float(e), 3) for e in token_ents],
-    }
-    yield f"data: {json.dumps(payload)}\n\n"
-
-    # Save assistant message
-    if _chat["messages"] and _chat["messages"][-1]["role"] == "assistant":
-        _chat["messages"][-1]["content"] = response_text
-    else:
-        _chat["messages"].append({"role": "assistant", "content": response_text})
-
-
-@chat_bp.route("/chat/stream")
-def chat_stream():
-    """Generate assistant response (single chunk — API is not streaming)."""
-    if not _chat["ready"]:
-        def err():
-            yield f"data: {json.dumps({'error': 'not ready'})}\n\n"
-        return Response(err(), mimetype="text/event-stream")
-
-    max_tokens = int(request.args.get("n", 200))
-    return Response(
-        stream_with_context(_chat_response_impl(max_tokens)),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@chat_bp.route("/chat/continue")
-def chat_continue():
-    """Continue generating from the last assistant message."""
-    if not _chat["ready"] or not _chat["messages"] or _chat["messages"][-1]["role"] != "assistant":
-        def err():
-            yield f"data: {json.dumps({'error': 'nothing to continue'})}\n\n"
-        return Response(err(), mimetype="text/event-stream")
-
-    max_tokens = int(request.args.get("n", 200))
-    prev_text = _chat["messages"][-1]["content"]
-    return Response(
-        stream_with_context(_chat_response_impl(max_tokens, initial_text=prev_text)),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return jsonify({"text": reply, "count": len(_chat["messages"])})
 
 
 @chat_bp.route("/chat/reset", methods=["POST"])
 def chat_reset():
     _chat["messages"] = []
-    _chat["ready"] = False
     return jsonify({"ok": True})
 
 
