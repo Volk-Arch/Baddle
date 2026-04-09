@@ -9,12 +9,12 @@ import numpy as np
 from flask import Blueprint, request, jsonify
 
 from .prompts import _p
-from .main import cosine_similarity, get_embedding
+from .main import cosine_similarity
 from .graph_logic import (
-    _graph, graph_lock, _llm, init_graph, reset_graph,
+    _graph, graph_lock, reset_graph,
     _auto_type_and_confidence, _auto_evidence_relation, _bayesian_update,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
-    _graph_generate, _clean_thought, _generate_thought, _api_available,
+    _graph_generate, _clean_thought, _generate_thought,
     _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
     _detect_traps, _compute_alpha_beta,
 )
@@ -71,8 +71,6 @@ def graph_reset():
 @graph_bp.route("/graph/think", methods=["POST"])
 def graph_think():
     """Generate N thoughts about a topic."""
-    if _llm is None and not _api_available():
-        return jsonify({"error": "requires in-process model or API"})
     d = _p_data()
     topic = d.get("topic", "").strip()
     n = int(d.get("n", 6))
@@ -142,12 +140,8 @@ def graph_think():
                 texts = _get_texts(nodes)
                 _ensure_embeddings(texts)
                 cache = _graph.get("embeddings", [])
-                from .api_backend import use_api_for, api_get_embedding
-                if use_api_for("embeddings"):
-                    new_emb = api_get_embedding(t)
-                else:
-                    new_emb = get_embedding(_llm, t)
-                    new_emb = new_emb.tolist() if hasattr(new_emb, 'tolist') and len(new_emb) > 0 else None
+                from .api_backend import api_get_embedding
+                new_emb = api_get_embedding(t)
                 if new_emb:
                     too_similar = False
                     for idx, emb in enumerate(cache):
@@ -207,8 +201,6 @@ def graph_recalc():
 @graph_bp.route("/graph/add", methods=["POST"])
 def graph_add():
     """Add a user-provided thought and recompute edges."""
-    if _llm is None and not _api_available():
-        return jsonify({"error": "requires in-process model or API"})
     d = _p_data()
     text = d.get("text", "").strip()
     node_type = d.get("node_type", "auto")
@@ -293,11 +285,6 @@ def graph_link():
 @graph_bp.route("/graph/collapse", methods=["POST"])
 def graph_collapse():
     """Collapse a cluster: generate summary, remove source nodes, add result."""
-    if _llm is None and not _api_available():
-        # Check if collapse_override is provided (from Generation Studio)
-        data_peek = request.get_json(silent=True) or {}
-        if not data_peek.get("collapse_override"):
-            return jsonify({"error": "requires in-process model or API"})
     d = _p_data()
     indices = d.get("cluster", [])
     collapse_mode = d.get("collapse_mode", "short")
@@ -507,8 +494,6 @@ def graph_sync():
 @graph_bp.route("/graph/expand", methods=["POST"])
 def graph_expand():
     """Generate child ideas branching from a specific thought (same topic, new angles)."""
-    if _llm is None and not _api_available():
-        return jsonify({"error": "requires in-process model or API"})
     d = _p_data()
     idx = int(d.get("index", -1))
     n = int(d.get("n", 3))
@@ -583,8 +568,6 @@ def graph_expand():
 @graph_bp.route("/graph/elaborate", methods=["POST"])
 def graph_elaborate():
     """Generate deeper ideas that elaborate on a specific thought (the source becomes a hub)."""
-    if _llm is None and not _api_available():
-        return jsonify({"error": "requires in-process model or API"})
     d = _p_data()
     idx = int(d.get("index", -1))
     n = int(d.get("n", 3))
@@ -828,23 +811,22 @@ def graph_smartdc():
     synthesis_text, synthesis_ent = _graph_generate(synthesis_messages, max_tokens=300, temp=0.7, top_k=d["top_k"], seed=d["seed"])
     print(f"[smartdc] synthesis: {synthesis_text[:80]}...")
 
-    # Phase 3: Try embeddings for centroid confidence, fallback to entropy
-    from .api_backend import use_api_for, api_get_embedding
+    # Phase 3: Get embeddings for centroid confidence
+    from .api_backend import api_get_embedding
     pole_embs = []
     syn_emb = None
-    if use_api_for("embeddings"):
-        try:
-            for p in poles:
-                emb = api_get_embedding(p["text"])
-                pole_embs.append(emb if emb and len(emb) > 0 else None)
-            syn_emb_raw = api_get_embedding(synthesis_text)
-            syn_emb = syn_emb_raw if syn_emb_raw and len(syn_emb_raw) > 0 else None
-            pole_embs = [e for e in pole_embs if e is not None]
-            print(f"[smartdc] embeddings: {len(pole_embs)}/3 poles + {'yes' if syn_emb else 'no'} synthesis")
-        except Exception as e:
-            print(f"[smartdc] embedding error: {e}")
-            pole_embs = []
-            syn_emb = None
+    try:
+        for p in poles:
+            emb = api_get_embedding(p["text"])
+            pole_embs.append(emb if emb and len(emb) > 0 else None)
+        syn_emb_raw = api_get_embedding(synthesis_text)
+        syn_emb = syn_emb_raw if syn_emb_raw and len(syn_emb_raw) > 0 else None
+        pole_embs = [e for e in pole_embs if e is not None]
+        print(f"[smartdc] embeddings: {len(pole_embs)}/3 poles + {'yes' if syn_emb else 'no'} synthesis")
+    except Exception as e:
+        print(f"[smartdc] embedding error: {e}")
+        pole_embs = []
+        syn_emb = None
     new_confidence = 0.5
     centroid_distance = -1
 

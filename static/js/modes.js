@@ -1,6 +1,5 @@
 // ── Global variables ─────────────────────────────────────────────────────
 let mode = 'graph';
-let dualEs = null;
 let roles = [];
 let modelCtx = 0;
 
@@ -26,7 +25,6 @@ function populateRoles() {
   custom.value = 'custom';
   custom.textContent = '(custom)';
   sel.appendChild(custom);
-  // Reset role text to first option
   document.getElementById('role-text').value = roles.length ? roles[0].text : '';
 }
 
@@ -49,7 +47,6 @@ function onRoleSelect() {
 const _langHints = { ru: 'Отвечай на русском языке.' };
 
 function getRole() {
-  // If a template is active, build the role from template + variables
   const tplSel = document.getElementById('tpl-select');
   if (tplSel && tplSel.style.display !== 'none' && tplSel.value !== '' && tplSel.value !== 'none') {
     const tpl = templates[parseInt(tplSel.value)];
@@ -64,7 +61,6 @@ function getRole() {
     }
   }
   let text = document.getElementById('role-text').value;
-  // If role is empty and a non-English language is selected, add language hint
   if (!text) {
     const lang = document.getElementById('lang-select').value;
     if (_langHints[lang]) text = _langHints[lang];
@@ -78,6 +74,7 @@ fetch('/templates').then(r => r.json()).then(data => {
   templates = data;
   if (!data.length) return;
   const sel = document.getElementById('tpl-select');
+  if (!sel) return;
   sel.style.display = '';
   const none = document.createElement('option');
   none.value = 'none';
@@ -103,7 +100,6 @@ function onTplSelect() {
   if (!tpl) return;
   varsDiv.innerHTML = '';
   varsDiv.style.display = '';
-  // Extract variable placeholders from template text
   const vars = [...new Set((tpl.text.match(/[{][{]([a-zA-Z0-9_]+)[}][}]/g) || []).map(m => m.slice(2, -2)))];
   vars.forEach(v => {
     const label = document.createElement('span');
@@ -128,20 +124,17 @@ function renderHeatmap(elOrId, toks, ents, promptText) {
     return;
   }
   el.innerHTML = '';
-  // Show prompt as plain text before colored generated tokens
   if (promptText) {
     const pre = document.createElement('span');
     pre.textContent = promptText;
     pre.style.color = '#94a3b8';
     el.appendChild(pre);
   }
-  // Fixed entropy scale from UI control
   const heatScale = parseFloat(document.getElementById('heatmap-scale').value) || 3;
   for (let i = 0; i < toks.length; i++) {
     const span = document.createElement('span');
     span.textContent = toks[i];
     const ratio = Math.min(1, (ents[i] || 0) / heatScale);
-    // Green (confident) → Yellow → Red (uncertain)
     const r = Math.round(ratio < 0.5 ? ratio * 2 * 255 : 255);
     const g = Math.round(ratio < 0.5 ? 255 : (1 - ratio) * 2 * 255);
     span.style.color = `rgb(${r},${g},80)`;
@@ -166,39 +159,24 @@ function heatmapRescale() {
 }
 
 // ── Tab switching ──────────────────────────────────────────────────────────
-function toggleCompareMode() {
-  const isCompare = document.getElementById('parallel-compare-mode').checked;
-  document.getElementById('parallel-prompt-b').style.display = isCompare ? 'none' : '';
-  if (isCompare) {
-    document.getElementById('temp-pa').value = '0.0';
-    document.getElementById('temp-pb').value = '1.0';
-    document.getElementById('topk-a').value = '1';
-    document.getElementById('topk-b').value = '40';
-  }
-}
-
 function setMode(m) {
-  // Map old 'compare' to 'parallel' with compare checkbox
-  if (m === 'compare') { m = 'parallel'; document.getElementById('parallel-compare-mode').checked = true; toggleCompareMode(); }
   mode = m;
-  ['step','parallel','chat','graph'].forEach(t => {
+  ['chat', 'graph'].forEach(t => {
     const el = document.getElementById('cfg-' + t);
     if (el) el.classList.toggle('hidden', t !== m);
     const tab = document.getElementById('tab-' + t);
     if (tab) tab.className = (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-2 text-sm';
   });
   const sbMode = document.getElementById('sb-mode');
-  if (sbMode) sbMode.textContent = m + (m === 'parallel' && document.getElementById('parallel-compare-mode').checked ? ' (compare)' : '');
-  const isDual = m === 'parallel';
-  document.getElementById('dual-controls').classList.toggle('hidden', !isDual);
-  document.getElementById('dual-panels').classList.toggle('hidden', !isDual);
-  // Clear dual panels and stop stream on tab switch
-  if (dualEs) { dualEs.close(); dualEs = null; }
-  ['output-a','output-b'].forEach(id => { document.getElementById(id).textContent = ''; document.getElementById(id).innerHTML = ''; });
-  ['step-a','step-b'].forEach(id => document.getElementById(id).textContent = '');
-  document.getElementById('diverge-badge').classList.add('hidden');
-  document.getElementById('status').textContent = '';
-  document.getElementById('btn-gen').style.display = '';
-  document.getElementById('btn-stop').style.display = 'none';
-  updateTokenCounter(0);
+  if (sbMode) sbMode.textContent = m;
+  if (typeof updateTokenCounter === 'function') updateTokenCounter(0);
+}
+
+function updateTokenCounter(used) {
+  const el = document.getElementById('token-counter');
+  if (!el) return;
+  if (!modelCtx || !used) { el.textContent = ''; return; }
+  const pct = Math.round(used / modelCtx * 100);
+  el.textContent = `${used} / ${modelCtx} tokens (${pct}%)`;
+  el.style.color = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : '';
 }

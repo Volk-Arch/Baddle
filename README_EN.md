@@ -164,35 +164,30 @@ During Run, an overlay in the top-right corner of the graph shows:
 
 ## Interface
 
-Light theme (Notion-style). Four modes: **Graph** (primary), **Chat**, **Step**, **Parallel**.
+Light theme (Notion-style). Two modes: **Graph** (primary) and **Chat**.
 
 ### Graph mode
 - **Topic + Think/Add** — enter topic, automatic thought generation
 - **Save/Load** — server-side graph persistence, auto-save after every action
-- **Actions bar** — Select, Collapse, Link, Flow, Time, Layout, Auto, Run, Undo, Save, Reset
+- **Actions bar** — Select, Collapse, Link, Flow, Layout, Run, Undo, Save, Reset
 - **SVG visualization** — drag, zoom, pan, color-coded by type and confidence
-- **Detail panel** — per-token heatmap, confidence, type, alpha/beta, Walk, Verify
-- **Context menu** — Expand, Elaborate, Rephrase, Verify, Walk, Evidence, Chat, Edit, Delete
-- **Generation Studio** — batch variants for rephrase/elaborate/expand/collapse
+- **Detail panel** — per-token heatmap, confidence, type, alpha/beta, Walk, Verify, Ask, Rephrase
+- **Context menu** — Expand, Elaborate, Rephrase, Verify, Ask, Walk, Evidence, Chat, Edit, Delete
+- **Generation Studio** — batch variants for rephrase/elaborate/expand/collapse/ask
 
 ### Chat mode
-- Conversation with model, context sidebar (graph -> chat, chat -> graph)
-
-### Step mode
-- Token by token, top-10 candidates with probabilities, heatmap
-
-### Parallel mode
-- Two prompts side-by-side, compare mode (same prompt, different parameters)
+Regular conversation with the model. Context sidebar links graph ↔ chat (send nodes as context, save responses as thoughts). Continue button for truncated responses.
 
 ---
 
 ## Settings
 
-- **Local / API / Hybrid** — generation and embeddings separately
-- **Embedding model** — separate model for similarity and centroid (nomic-embed-text)
-- **Heatmap** — adjustable entropy scale
+- **API URL + key** — OpenAI-compatible endpoint (LM Studio / llama-server / Ollama / OpenAI / ...)
+- **Chat model** — main generation model
+- **Embedding model** — for similarity, SmartDC centroid, novelty check
+- **Heatmap** — adjustable entropy scale (reads API logprobs)
 
-> Qwen3-8B for generation + nomic-embed-text for embeddings. Both run in parallel via LM Studio.
+> Qwen3-8B for generation + nomic-embed-text for embeddings. Both run via LM Studio.
 
 ---
 
@@ -201,24 +196,20 @@ Light theme (Notion-style). Four modes: **Graph** (primary), **Chat**, **Step**,
 ```
 baddle/
   ui.py                    # entry point (Flask)
-  setup.py                 # installation
+  setup.py                 # pip install flask numpy
   src/
-    main.py                # model, sampling, embeddings
+    main.py                # utilities: StreamCfg, cosine_similarity
     thinking.py            # autonomous thinking (tick, phases, BFS)
     graph_logic.py         # graph logic (nodes, edges, Bayes, SmartDC)
     graph_routes.py        # Flask routes for graph
+    chat.py                # chat mode (API-based)
+    api_backend.py         # OpenAI-compatible HTTP client
     prompts.py             # system prompts (EN/RU)
-    chat.py                # chat mode
-    step.py                # step mode
-    parallel.py            # parallel mode
-    api_backend.py         # API client (OpenAI-compatible)
-    server_backend.py      # llama-server
   static/
     css/style.css          # Notion-style theme
-    js/                    # 6 JS modules (graph, chat, step, parallel, modes, settings)
+    js/                    # graph, chat, modes, settings
   templates/index.html     # HTML markup
   graphs/                  # saved graphs
-  models/                  # GGUF models
 ```
 
 ---
@@ -228,7 +219,7 @@ baddle/
 ```bash
 git clone https://github.com/Volk-Arch/Baddle.git
 cd Baddle
-python setup.py        # installs dependencies + downloads llama-server
+python setup.py        # pip install flask numpy
 python ui.py           # opens http://localhost:7860
 ```
 
