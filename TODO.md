@@ -6,18 +6,7 @@
 
 ---
 
-## v1: доработки текущего режима (Горизонт/Веер)
-
-Сейчас работает исследовательский цикл (один режим). Нужно довести его до production-качества.
-
-- [ ] **Тюнинг novelty threshold** — 0.92 может быть слишком грубо, проверить на разных темах
-- [ ] **Промпты** — усилить разнообразие начальных идей (сейчас все начинаются одинаково)
-- [ ] **Параллельные API-запросы** — 3-6x ускорение цикла
-- [ ] **Layout** — d3/dagre/ELK вместо плоской линии
-- [ ] **Timeline player** — ⏮▶⏸⏭ по timestamps (вместо удалённой Time)
-- [ ] **Тесты** — unit (`_bayesian_update`, `cosine_similarity`, `_compute_edges`) + integration (Flask + моки)
-- [ ] **Экспорт** — PNG / SVG / markdown / Obsidian
-- [ ] **EXE-установщик**
+## v1: текущий режим (Горизонт/Веер) — работает, нужно тестировать
 
 ---
 
@@ -280,9 +269,27 @@ LLM обобщать.
 
 ---
 
-## v7: экосистема
+## v7: экосистема и полировка
 
+- [ ] **Layout** — d3/dagre/ELK вместо плоской линии
+- [ ] **Тесты** — unit + integration
+- [ ] **Параллельные API-запросы** — threading, ускорение цикла
+- [ ] **Timeline player** — ⏮▶⏸⏭ по timestamps
+- [ ] **Экспорт** — PNG / SVG / markdown / Obsidian
+- [ ] **EXE-установщик** — PyInstaller, ~15-20 MB
 - [ ] **Graph Store** — маркетплейс графов знаний
 - [ ] **Git Verify** — MR для знаний, review, рейтинги
-- [ ] **Baddle Desktop** — EXE с локальным LLM
 - [ ] **Извлечение графа из текста** — статья → граф
+
+---
+
+## Сделано, не тестировано
+
+- **Промпты разнообразия** — think-промпт перечисляет 10 измерений (economic, social, technical...), new_idea подсказывает конкретные варианты. Окно existing 5→10
+- **Novelty threshold в UI** — поле в Run settings, default 0.92, прокидывается в `/graph/think`
+- **API-only переход** — удалён llama_cpp, server_backend, step, parallel. Всё через OpenAI API
+- **Settings modal** — упрощён до API URL / key / model / embedding / ctx
+- **Chat упрощение** — убраны SSE/Continue/Stop, ответ приходит одним чанком
+- **Ask** — контекстное меню + Studio + detail panel, передаёт текст ноды в промпт
+- **Generation Studio modal** — восстановлен, с режимом Ask
+- **Вычистка кода** — graphTick, temporal рёбра, autorun handlers, ~1200 строк убрано

@@ -183,6 +183,7 @@
                 <select id="graph-output-format" class="modal-select" style="font-size:11px;flex:1;padding:2px 4px">
                   <option value="essay">essay</option><option value="brief">brief</option><option value="list">list</option><option value="none">none</option>
                 </select></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Similarity threshold for rejecting duplicate ideas. Lower = more strict (fewer ideas pass). Higher = more permissive.">Novelty <input id="graph-novelty-threshold" type="number" value="0.92" min="0.7" max="0.99" step="0.01" style="width:60px" class="modal-input"></label>
               <label style="display:flex;align-items:center;gap:6px" title="Max tokens for final essay output">Essay tokens <input id="graph-essay-tokens" type="number" value="6000" min="500" max="30000" step="500" style="width:70px" class="modal-input"></label>
               <label style="display:flex;align-items:center;gap:6px" title="Split final essay into batched sections, then combine. Use for large graphs or small context windows."><input id="graph-autorun-batched" type="checkbox"> Batched essay</label>
             </div>

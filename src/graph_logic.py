@@ -256,7 +256,7 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
     system = _p(lang, "think")
     user = f"{_p(lang, 'topic')}: {topic}"
     if existing:
-        user += f"\n{_p(lang, 'already')}:\n" + "\n".join(f"- {t}" for t in existing[-5:])
+        user += f"\n{_p(lang, 'already')}:\n" + "\n".join(f"- {t}" for t in existing[-10:])
         user += f"\n{_p(lang, 'new_idea')}"
     else:
         user += f"\n{_p(lang, 'one_idea')}"

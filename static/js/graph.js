@@ -1051,7 +1051,8 @@ function graphGetParams() {
   const maxtok_think = parseInt(document.getElementById('graph-maxtok-think').value) || 60;
   const maxtok_expand = parseInt(document.getElementById('graph-maxtok-expand').value) || 120;
   const maxtok_elaborate = parseInt(document.getElementById('graph-maxtok-elaborate').value) || 120;
-  return { sim_mode, threshold, lang, temp, top_k, seed, maxtok_think, maxtok_expand, maxtok_elaborate };
+  const novelty_threshold = parseFloat(document.getElementById('graph-novelty-threshold').value) || 0.92;
+  return { sim_mode, threshold, lang, temp, top_k, seed, maxtok_think, maxtok_expand, maxtok_elaborate, novelty_threshold };
 }
 
 function graphToggleCollapsePanel() {
