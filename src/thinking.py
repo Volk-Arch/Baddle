@@ -186,6 +186,11 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
 
     goal_idx = cl["goal_idx"]
     goal_text = cl["goal_text"]
+
+    # Read mode from goal node (default: horizon = current research cycle)
+    mode_id = "horizon"
+    if goal_idx is not None:
+        mode_id = nodes[goal_idx].get("mode", "horizon")
     hypotheses = cl["hypotheses"]
     bare = cl["bare"]
     unverified = cl["unverified"]

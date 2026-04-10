@@ -183,7 +183,6 @@
                 <select id="graph-output-format" class="modal-select" style="font-size:11px;flex:1;padding:2px 4px">
                   <option value="essay">essay</option><option value="brief">brief</option><option value="list">list</option><option value="none">none</option>
                 </select></label>
-              <label style="display:flex;align-items:center;gap:6px" title="Similarity threshold for rejecting duplicate ideas. Lower = more strict (fewer ideas pass). Higher = more permissive.">Novelty <input id="graph-novelty-threshold" type="number" value="0.92" min="0.7" max="0.99" step="0.01" style="width:60px" class="modal-input"></label>
               <label style="display:flex;align-items:center;gap:6px" title="Max tokens for final essay output">Essay tokens <input id="graph-essay-tokens" type="number" value="6000" min="500" max="30000" step="500" style="width:70px" class="modal-input"></label>
               <label style="display:flex;align-items:center;gap:6px" title="Split final essay into batched sections, then combine. Use for large graphs or small context windows."><input id="graph-autorun-batched" type="checkbox"> Batched essay</label>
             </div>
@@ -199,12 +198,13 @@
       </span>
     </div>
 
-    <!-- Topic + Add -->
+    <!-- Mode + Topic + Add -->
     <div class="card p-2 mb-1" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <select id="graph-mode-select" onchange="onGraphModeChange()" class="modal-select"
+        style="font-size:13px;padding:5px 10px;font-weight:600;min-width:130px;color:var(--accent)"></select>
+      <span id="graph-mode-tooltip" style="color:var(--text-tertiary);font-size:10px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
       <textarea id="graph-topic-top" class="auto-grow" placeholder="Topic / Goal..."
         style="flex:1;min-width:200px;" rows="1"></textarea>
-      <button id="graph-btn-think-top" onclick="document.getElementById('graph-topic').value=document.getElementById('graph-topic-top').value;graphThink()"
-        class="btn-primary" style="padding:5px 14px;font-size:12px">Think</button>
       <button onclick="document.getElementById('graph-topic').value=document.getElementById('graph-topic-top').value;document.getElementById('graph-add-type').value=document.getElementById('graph-add-type-top').value;graphAddThought()"
         class="btn-secondary" style="padding:5px 14px;font-size:12px">+ Add</button>
       <select id="graph-add-type-top" onchange="document.getElementById('graph-add-type').value=this.value"
@@ -243,6 +243,8 @@
           <span style="color:var(--text-tertiary);font-size:12px">threshold</span>
           <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
             onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
+          <span style="color:var(--text-tertiary);font-size:12px" title="Reject new ideas with similarity above this (0.7=strict, 0.99=permissive)">novelty</span>
+          <input id="graph-novelty-threshold" type="number" value="0.92" step="0.01" min="0.7" max="0.99" style="width:70px">
           <span style="color:var(--text-tertiary);font-size:12px">temp</span>
           <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
           <span style="color:var(--text-tertiary);font-size:12px">top_k</span>
@@ -289,6 +291,7 @@
           <div class="flex items-center gap-2 mb-2">
             <span id="graph-detail-dot" style="font-size:16px;">&#9679;</span>
             <span style="color:var(--text-primary);font-size:13px;font-weight:500;flex:1">Selected thought</span>
+            <button onclick="graphBrainstorm(graphSelectedNode)" class="btn-action text-xs" title="Generate independent ideas from this node" style="color:#f59e0b;border-color:#f59e0b">&#128161; Brainstorm</button>
             <button onclick="openStudio('expand_preview')" class="btn-action text-xs" title="Generate child ideas">&#9758; Expand</button>
             <button onclick="openStudio('elaborate_preview')" class="btn-action text-xs" title="Generate deeper ideas">&#9998; Elaborate</button>
             <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="btn-action text-xs" style="background:#7c3aed;color:#fff;border-color:#7c3aed">Edit</button>

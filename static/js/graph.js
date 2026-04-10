@@ -859,6 +859,7 @@ function graphShowContextMenu(e, idx) {
   const node = graphData.nodes[idx] || {};
   const nodeType = node.type || 'thought';
   const items = [
+    { label: '\uD83D\uDCA1 Brainstorm', action: 'graphBrainstorm(' + idx + ')' },
     { label: '\u261E Expand', action: 'openStudio("expand_preview")' },
     { label: '\u270E Elaborate', action: 'openStudio("elaborate_preview")' },
     { label: '\u2710 Rephrase', action: 'openStudio("rephrase")' },
@@ -1476,6 +1477,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Load thinking modes into selector
+  window._graphModes = {};
+  fetch('/modes').then(r => r.json()).then(modes => {
+    const sel = document.getElementById('graph-mode-select');
+    if (!sel) return;
+    modes.forEach(m => {
+      window._graphModes[m.id] = m;
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      sel.appendChild(opt);
+    });
+    sel.value = 'free';
+    onGraphModeChange();
+  }).catch(() => {});
+
   // Check model availability on startup
   fetch('/settings').then(r => r.json()).then(async s => {
     if (!s.api_url || !s.api_model) return; // handled by auto-open settings
@@ -1615,7 +1632,7 @@ async function graphAutoRun() {
     const r = await fetch('/graph/add', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ text: goalText.trim(), node_type: 'goal', ...graphGetParams() })
+      body: JSON.stringify({ text: goalText.trim(), node_type: 'goal', mode: document.getElementById('graph-mode-select').value || 'horizon', ...graphGetParams() })
     });
     const d = await r.json();
     if (!d.error) {
@@ -2004,24 +2021,12 @@ async function _autoRunElaborate(idx) {
 
 async function _autoRunThink() {
   const params = graphGetParams();
-  // Build topic: goal text first, then input field, then any existing node
   const goalNode = graphData.nodes.find(n => n.type === 'goal');
-  let topic = '';
-  if (goalNode) {
-    topic = goalNode.text;
-  }
-  if (!topic) {
-    topic = document.getElementById('graph-topic').value;
-  }
-  if (!topic) {
-    const anyNode = graphData.nodes.find(n => n.depth >= 0 && n.type !== 'evidence');
-    if (anyNode) topic = anyNode.text;
-  }
-  if (!topic) { console.log('[autorun] No topic for Think'); return; }
+  if (!goalNode) { console.log('[autorun] No goal node for Think'); return; }
   const res = await _autoFetch('/graph/think', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ topic, n: 10, existing: graphData.nodes, ...params })
+    body: JSON.stringify({ topic: goalNode.text, n: 10, source_idx: goalNode.id, existing: graphData.nodes, ...params })
   });
   const d = await res.json();
   if (!d.error) {
@@ -2385,9 +2390,11 @@ async function graphAddThought() {
   const text = input.value.trim();
   if (!text) return;
   const addType = document.getElementById('graph-add-type').value;
+  const body = { text, node_type: addType, ...graphGetParams() };
+  if (addType === 'goal') body.mode = document.getElementById('graph-mode-select').value || 'horizon';
   const r = await fetch('/graph/add', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ text, node_type: addType, ...graphGetParams() })
+    body: JSON.stringify(body)
   });
   const d = await r.json();
   if (d.error) { alert(d.error); return; }
@@ -2508,6 +2515,36 @@ function graphImport(event) {
   };
   reader.readAsText(file);
   event.target.value = '';  // reset file input
+}
+
+async function graphBrainstorm(idx) {
+  const node = graphData.nodes[idx];
+  if (!node) return;
+  const params = graphGetParams();
+  graphSaveUndo();
+  const res = await fetch('/graph/think', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ topic: node.text, n: 5, source_idx: idx, existing: graphData.nodes, ...params })
+  });
+  const d = await res.json();
+  if (!d.error) graphUpdateView(d);
+}
+
+function onGraphModeChange() {
+  const sel = document.getElementById('graph-mode-select');
+  const mode = window._graphModes && window._graphModes[sel.value];
+  if (!mode) return;
+
+  // Update tooltip
+  const tip = document.getElementById('graph-mode-tooltip');
+  if (tip) tip.textContent = mode.tooltip || '';
+
+  // Update placeholder
+  const lang = document.getElementById('lang-select').value;
+  const ph = (lang === 'ru' ? mode.placeholder : mode.placeholder_en) || mode.placeholder || 'Topic / Goal...';
+  const topicInput = document.getElementById('graph-topic-top');
+  if (topicInput) topicInput.placeholder = ph;
 }
 
 function graphReset() {

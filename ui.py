@@ -71,6 +71,12 @@ def model_info():
     return jsonify({"n_ctx": s.get("local_ctx", 32768), "model": s.get("api_model", "")})
 
 
+@app.route("/modes")
+def get_modes():
+    from src.modes import list_modes
+    return jsonify(list_modes())
+
+
 # ── Settings ────────────────────────────────────────────────────────────────
 
 @app.route("/settings", methods=["GET"])

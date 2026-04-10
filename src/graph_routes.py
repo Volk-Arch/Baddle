@@ -101,21 +101,29 @@ def graph_think():
         goal_check = [n for n in nodes if n.get("type") == "goal"]
         print(f"[think] existing restored: {len(nodes)} nodes, goals: {len(goal_check)}, types: {[n.get('type','?') for n in nodes[:6]]}")
 
-    # Add topic as root node (depth=-1) if not already present
-    # First check if a goal node matches the topic text — use it instead
-    topic_idx = -1
-    for i, nd in enumerate(nodes):
-        if nd["depth"] == -1 and nd["text"] == topic:
-            topic_idx = i
-            break
-    if topic_idx < 0:
-        # Check if goal node has same text — don't duplicate it
+    # Brainstorm mode: if source_idx provided, link to that node instead of topic root
+    source_idx = d.get("source_idx")
+    if source_idx is not None:
+        source_idx = int(source_idx)
+        if source_idx < 0 or source_idx >= len(nodes):
+            source_idx = None
+
+    if source_idx is not None:
+        topic_idx = source_idx
+    else:
+        # Add topic as root node (depth=-1) if not already present
+        topic_idx = -1
         for i, nd in enumerate(nodes):
-            if nd.get("type") == "goal" and nd["text"] == topic:
+            if nd["depth"] == -1 and nd["text"] == topic:
                 topic_idx = i
                 break
-    if topic_idx < 0:
-        topic_idx = _add_node(topic, depth=-1, topic=topic)
+        if topic_idx < 0:
+            for i, nd in enumerate(nodes):
+                if nd.get("type") == "goal" and nd["text"] == topic:
+                    topic_idx = i
+                    break
+        if topic_idx < 0:
+            topic_idx = _add_node(topic, depth=-1, topic=topic)
 
     new_thoughts = []
     directed = _graph["edges"]["directed"]
@@ -218,6 +226,10 @@ def graph_add():
     manual_links = _graph["edges"]["manual_links"]
 
     if node_type == "goal":
+        # Store mode on goal node and graph meta
+        mode_id = d.get("mode", "horizon")
+        nodes[new_idx]["mode"] = mode_id
+        _graph["meta"]["mode"] = mode_id
         for i, n in enumerate(nodes):
             if i == new_idx:
                 continue
