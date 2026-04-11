@@ -6,44 +6,10 @@
 
 ---
 
-## v1: стабилизация
+## v1.7: доводка
 
-- [ ] **Дубль эссе в финале** — модель повторяет введение при длинной генерации. Возможно continuation в collapse создаёт второй блок. Промпт "Do NOT repeat" добавлен, проверить
-- [ ] **Novelty check оптимизация** — 30 embedding API-вызовов = медленно. Варианты: batch, Jaccard → embedding двухступенчато
-
----
-
-## Целевая архитектура
-
-```python
-def tick(graph, horizon):
-    horizon.update(surprise, gradient, novelty)
-    phase = horizon.select_phase()    # policy weights → выбор фазы
-    params = horizon.to_llm_params()  # precision → temperature/top_k/top_p
-
-    if phase == "generate":  return brainstorm(graph, params)
-    if phase == "merge":     return collapse_similar(graph, params)
-    if phase == "elaborate": return elaborate(graph, params)
-    if phase == "doubt":     return smartdc(graph, params)
-```
-
-Один tick, один horizon, четыре функции. Режим = preset. Текущий if/else в thinking.py — промежуточное состояние.
-
----
-
-## ~~v1.5: CognitiveHorizon~~ ✅ реализован
-
-`src/horizon.py` — адаптивный контроллер: precision → temperature/top_k, surprise → обратная связь, 4 состояния, 13 presets. Интегрирован в tick, autorun, UI overlay. Детали → [docs/horizon-design.md](docs/horizon-design.md)
-
----
-
-## ~~v1.6: Pump (Накачка)~~ ✅ реализован
-
-`src/pump_logic.py` — накачка облаков → 3 моста → авто-SmartDC на каждый → quality (lean/tension/balance). UI: контекстное меню "Pump to..." → клик → авто-верификация → ранжирование. Детали → [docs/pump-design.md](docs/pump-design.md)
-
-Доработки на потом:
-- [ ] Визуализация облаков на SVG (два hull расширяющихся навстречу)
-- [ ] Pump в autorun для режима Разведка (когда будет реализован)
+- [ ] **Pump: визуализация облаков** на SVG (два hull расширяющихся навстречу)
+- [ ] **Pump в autorun** для Scout mode (автономный поиск мостов между далёкими нодами)
 
 ---
 
@@ -185,21 +151,3 @@ Pump между далёкими нодами может породить мет
 - [ ] **Git Verify** — MR для знаний, review, рейтинги
 - [ ] **Извлечение графа из текста** — статья → граф
 
----
-
-## Сделано, не тестировано
-
-- **Промпты разнообразия** — think-промпт перечисляет 10 измерений (economic, social, technical...), new_idea подсказывает конкретные варианты. Окно existing 5→10
-- **Novelty threshold в UI** — поле в Run settings, default 0.92, прокидывается в `/graph/think`
-- **API-only переход** — удалён llama_cpp, server_backend, step, parallel. Всё через OpenAI API
-- **Settings modal** — упрощён до API URL / key / model / embedding / ctx
-- **Chat упрощение** — убраны SSE/Continue/Stop, ответ приходит одним чанком
-- **Ask** — контекстное меню + Studio + detail panel, передаёт текст ноды в промпт
-- **Generation Studio modal** — восстановлен, с режимом Ask
-- **Вычистка кода** — graphTick, temporal рёбра, autorun handlers, ~1200 строк убрано
-- **settings.json** — автосоздание с дефолтами при первом запуске
-- **modes.py** — структура 12 режимов (`MODES` dict), роут `/modes`, `get_mode()`, `list_modes()`
-- **Mode selector в UI** — dropdown в toolbar, заполняется из `/modes`, передаёт mode при создании goal
-- **Goal-нода хранит mode_id** — записывается при создании, tick() читает из goal
-- **Полный путь данных** — UI → goal-нода → tick() → (пока только horizon)
-- **Mode selector redesign** — первый элемент в toolbar, крупный, с tooltip режима. Placeholder поля ввода меняется под режим. Mode хранится в graph meta + goal-ноде

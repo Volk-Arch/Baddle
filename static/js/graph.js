@@ -1,4 +1,12 @@
 // ── Graph thinking ────────────────────────────────────────────────────────
+
+// Close detail dropdown menus on outside click
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.detail-dropdown')) {
+    document.querySelectorAll('.detail-dropdown > div:last-child').forEach(d => d.style.display = 'none');
+  }
+});
+
 const graphClusterColors = ['#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316'];
 let graphData = { nodes: [], edges: [], clusters: [] };
 let graphSelectedNode = -1;
@@ -858,31 +866,55 @@ function graphShowContextMenu(e, idx) {
   }
   const node = graphData.nodes[idx] || {};
   const nodeType = node.type || 'thought';
-  const items = [
-    { label: '\uD83D\uDCA1 Brainstorm', action: 'graphBrainstorm(' + idx + ')' },
-    { label: '\u261E Expand', action: 'openStudio("expand_preview")' },
-    { label: '\u270E Elaborate', action: 'openStudio("elaborate_preview")' },
-    { label: '\u2710 Rephrase', action: 'openStudio("rephrase")' },
-    { label: '\u2753 Ask', action: 'graphAsk(' + idx + ')' },
-    { label: '\u26A1 Verify (Smart DC)', action: 'graphSmartDC()' },
-    { label: '\uD83D\uDEB6 Walk', action: 'graphWalk()' },
-    { label: '\uD83D\uDD17 Pump to...', action: 'graphPumpStart(' + idx + ')' },
-    null, // separator
-    { label: '+ Evidence', action: 'graphShowAddEvidence()', show: nodeType === 'hypothesis' || nodeType === 'thought' },
-    { label: '\u2192 Chat', action: 'graphDetailToChat()' },
-    { label: '\u270F Edit', action: 'graphDetailEdit()' },
-    null, // separator
-    { label: 'Type: hypothesis', action: 'graphSetNodeType("hypothesis")', show: nodeType !== 'hypothesis' },
-    { label: 'Type: fact', action: 'graphSetNodeType("fact")', show: nodeType !== 'fact' },
-    { label: 'Type: question', action: 'graphSetNodeType("question")', show: nodeType !== 'question' },
-    null,
-    { label: '\u2715 Delete', action: 'graphRemoveThought(' + idx + ')' },
+
+  const groups = [
+    { label: 'Generative', icon: '💡', items: [
+      { label: 'Brainstorm', action: 'graphBrainstorm(' + idx + ')' },
+      { label: 'Expand', action: 'openStudio("expand_preview")' },
+      { label: 'Elaborate', action: 'openStudio("elaborate_preview")' },
+    ]},
+    { label: 'Verification', icon: '⚡', items: [
+      { label: 'Smart DC', action: 'graphSmartDC()' },
+      { label: 'Ask', action: 'graphAsk(' + idx + ')' },
+    ]},
+    { label: 'Structural', icon: '✎', items: [
+      { label: 'Rephrase', action: 'openStudio("rephrase")' },
+      { label: '+ Evidence', action: 'graphShowAddEvidence()', show: nodeType === 'hypothesis' || nodeType === 'thought' },
+      { label: 'Edit', action: 'graphDetailEdit()' },
+    ]},
+    { label: 'Navigation', icon: '🔍', items: [
+      { label: 'Walk', action: 'graphWalk()' },
+      { label: 'Pump to...', action: 'graphPumpStart(' + idx + ')' },
+      { label: '→ Chat', action: 'graphDetailToChat()' },
+    ]},
   ];
-  menu.innerHTML = items.map(item => {
-    if (item === null) return '<div style="border-top:1px solid #e0ddd8;margin:2px 0"></div>';
-    if (item.show === false) return '';
-    return '<div onclick="' + item.action + ';graphHideContextMenu()" style="padding:4px 16px;cursor:pointer;color:#37352f;font-size:13px;" onmouseover="this.style.background=\'#e8f4fd\'" onmouseout="this.style.background=\'\'">' + item.label + '</div>';
-  }).join('');
+
+  const itemStyle = 'padding:3px 16px 3px 24px;cursor:pointer;color:#37352f;font-size:13px;';
+  const hoverIn = "this.style.background='#e8f4fd'";
+  const hoverOut = "this.style.background=''";
+
+  let html = '';
+  groups.forEach((g, gi) => {
+    if (gi > 0) html += '<div style="border-top:1px solid #e0ddd8;margin:2px 0"></div>';
+    html += '<div style="padding:3px 16px;color:#9ca3af;font-size:10px;font-weight:600;letter-spacing:0.5px">' + g.icon + ' ' + g.label.toUpperCase() + '</div>';
+    g.items.forEach(item => {
+      if (item.show === false) return;
+      html += '<div onclick="' + item.action + ';graphHideContextMenu()" style="' + itemStyle + '" onmouseover="' + hoverIn + '" onmouseout="' + hoverOut + '">' + item.label + '</div>';
+    });
+  });
+
+  // Type & Delete
+  html += '<div style="border-top:1px solid #e0ddd8;margin:2px 0"></div>';
+  const types = ['hypothesis', 'fact', 'question'];
+  types.forEach(t => {
+    if (t !== nodeType) {
+      html += '<div onclick="graphSetNodeType(&quot;' + t + '&quot;);graphHideContextMenu()" style="' + itemStyle + '" onmouseover="' + hoverIn + '" onmouseout="' + hoverOut + '">Type: ' + t + '</div>';
+    }
+  });
+  html += '<div style="border-top:1px solid #e0ddd8;margin:2px 0"></div>';
+  html += '<div onclick="graphRemoveThought(' + idx + ');graphHideContextMenu()" style="' + itemStyle + 'color:#ef4444;" onmouseover="' + hoverIn + '" onmouseout="' + hoverOut + '">✕ Delete</div>';
+
+  menu.innerHTML = html;
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
   menu.style.display = '';
