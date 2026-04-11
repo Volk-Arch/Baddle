@@ -866,6 +866,7 @@ function graphShowContextMenu(e, idx) {
     { label: '\u2753 Ask', action: 'graphAsk(' + idx + ')' },
     { label: '\u26A1 Verify (Smart DC)', action: 'graphSmartDC()' },
     { label: '\uD83D\uDEB6 Walk', action: 'graphWalk()' },
+    { label: '\uD83D\uDD17 Pump to...', action: 'graphPumpStart(' + idx + ')' },
     null, // separator
     { label: '+ Evidence', action: 'graphShowAddEvidence()', show: nodeType === 'hypothesis' || nodeType === 'thought' },
     { label: '\u2192 Chat', action: 'graphDetailToChat()' },
@@ -1261,6 +1262,11 @@ async function graphNodeClick(i) {
     }
     document.getElementById('graph-collapse-count').textContent = graphManualCollapseSet.size;
     graphRenderSvg();
+    return;
+  }
+  // Pump mode: second click → find bridge
+  if (_pumpSourceIdx >= 0 && _pumpSourceIdx !== i) {
+    graphPumpTo(i);
     return;
   }
   if (!graphLinkMode || graphSelectedNode === -1 || graphSelectedNode === i) {
@@ -2566,6 +2572,197 @@ async function graphBrainstorm(idx) {
   });
   const d = await res.json();
   if (!d.error) graphUpdateView(d);
+}
+
+// ── Pump (Накачка) ──
+let _pumpSourceIdx = -1;
+
+function graphPumpStart(idx) {
+  _pumpSourceIdx = idx;
+  const node = graphData.nodes[idx];
+  // Visual hint
+  const bar = document.getElementById('graph-actions-bar');
+  if (bar) {
+    let hint = document.getElementById('pump-hint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'pump-hint';
+      hint.style.cssText = 'color:#f59e0b;font-size:12px;padding:4px 12px;background:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;';
+      hint.onclick = function() { _pumpSourceIdx = -1; this.remove(); };
+      bar.prepend(hint);
+    }
+    hint.textContent = '🔗 Pump: click second node (click here to cancel) — source: #' + idx + ' ' + (node ? node.text.slice(0, 30) : '') + '...';
+  }
+}
+
+async function graphPumpTo(targetIdx) {
+  if (_pumpSourceIdx < 0 || _pumpSourceIdx === targetIdx) return;
+  const sourceIdx = _pumpSourceIdx;
+  _pumpSourceIdx = -1;
+  const hint = document.getElementById('pump-hint');
+  if (hint) hint.textContent = '🔗 Pump: searching...';
+
+  try {
+    const params = graphGetParams();
+    const res = await fetch('/graph/pump', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ node_a: sourceIdx, node_b: targetIdx, max_iterations: 3, ...params })
+    });
+    const d = await res.json();
+
+    if (hint) hint.remove();
+
+    // Show result in detail panel
+    const panel = document.getElementById('graph-detail');
+    panel.style.display = '';
+    const view = document.getElementById('graph-detail-view');
+
+    if (d.error) {
+      view.innerHTML = '<div style="color:#ef4444;font-weight:bold;margin-bottom:4px">🔗 Pump — no bridge found</div>'
+        + '<div style="color:#9ca3af;font-size:12px">' + d.error + '</div>';
+      return;
+    }
+
+    const bridges = d.all_bridges || [];
+    let html = '<div style="color:#f59e0b;font-weight:bold;margin-bottom:8px">🔗 Pump — ' + bridges.length + ' bridges (verified)</div>';
+
+    // Store bridges data for save access
+    window._pumpBridges = bridges;
+    window._pumpSource = sourceIdx;
+    window._pumpTarget = targetIdx;
+
+    bridges.forEach((b, i) => {
+      const qualPct = ((b.quality || 0) * 100).toFixed(0);
+      const leanStr = b.lean !== undefined ? (b.lean > 0.05 ? '→thesis' : b.lean < -0.05 ? '→anti' : '≈balanced') : '';
+      const tensionStr = b.tension !== undefined ? (b.tension < 0.6 ? 'deep' : b.tension > 0.8 ? 'trivial' : 'moderate') : '';
+      const qualColor = qualPct > 50 ? '#10b981' : qualPct > 30 ? '#f59e0b' : '#ef4444';
+
+      html += '<div style="padding:8px;margin-bottom:6px;background:' + (i === 0 ? '#fef3c7' : '#f8fafc') + ';border-radius:4px;border:1px solid ' + (i === 0 ? '#f59e0b' : '#e2e8f0') + '">'
+        + '<div style="color:#37352f;font-size:13px;font-weight:500;margin-bottom:4px">' + b.text + '</div>'
+        + '<div style="color:#9ca3af;font-size:10px;margin-bottom:2px">'
+        + '<span style="color:' + qualColor + ';font-weight:bold">quality=' + qualPct + '%</span>'
+        + (leanStr ? ' · ' + leanStr : '')
+        + (tensionStr ? ' · ' + tensionStr : '')
+        + (b.dc_confidence ? ' · DC=' + (b.dc_confidence * 100).toFixed(0) + '%' : '')
+        + '</div>';
+
+      if (b.synthesis) {
+        html += '<div style="color:#64748b;font-size:11px;margin-bottom:4px;font-style:italic">'
+          + b.synthesis + '</div>';
+      }
+
+      html += '<div style="display:flex;gap:4px;margin-top:4px">'
+        + '<button onclick="graphPumpSave(' + i + ', \'bridge\')" '
+        + 'class="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded" title="Save short bridge text">Save bridge</button>';
+      if (b.synthesis) {
+        html += '<button onclick="graphPumpSave(' + i + ', \'synthesis\')" '
+          + 'class="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded" title="Save full synthesis">Save synthesis</button>';
+      }
+      html += '</div></div>';
+    });
+
+    html += '<div style="color:#9ca3af;font-size:10px;margin-top:4px">Iterations: ' + d.iterations + ' · Clouds: A=' + (d.cloud_a||[]).length + ' B=' + (d.cloud_b||[]).length + '</div>';
+    view.innerHTML = html;
+
+  } catch(e) {
+    if (hint) hint.remove();
+    console.error('Pump error:', e);
+  }
+}
+
+async function graphPumpSave(bridgeIdx, saveType) {
+  const bridges = window._pumpBridges;
+  const sourceIdx = window._pumpSource;
+  const targetIdx = window._pumpTarget;
+  if (!bridges || bridgeIdx >= bridges.length) return;
+
+  const b = bridges[bridgeIdx];
+  const text = saveType === 'synthesis' ? b.synthesis : b.text;
+  const confidence = b.quality || 0.5;
+
+  const params = graphGetParams();
+  graphSaveUndo();
+  const r = await fetch('/graph/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ text: text, node_type: 'hypothesis', ...params })
+  });
+  const d = await r.json();
+  if (d.error) { alert(d.error); return; }
+  graphUpdateView(d);
+  const newIdx = graphData.nodes.length - 1;
+  // Set confidence
+  await fetch('/graph/confidence', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ index: newIdx, value: confidence })
+  }).catch(() => {});
+  // Link to both source nodes
+  await fetch('/graph/link', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ a: newIdx, b: sourceIdx, ...params })
+  }).then(r => r.json()).then(d2 => { if (!d2.error) graphUpdateView(d2); }).catch(() => {});
+  await fetch('/graph/link', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ a: newIdx, b: targetIdx, ...params })
+  }).then(r => r.json()).then(d2 => { if (!d2.error) graphUpdateView(d2); }).catch(() => {});
+}
+
+async function graphPumpVerify(bridgeText, sourceIdx, targetIdx) {
+  const nodeA = graphData.nodes[sourceIdx];
+  const nodeB = graphData.nodes[targetIdx];
+  if (!nodeA || !nodeB) return;
+
+  const view = document.getElementById('graph-detail-view');
+  view.innerHTML = '<div style="color:#f59e0b">⏳ Verifying bridge...</div>';
+
+  const hp = await _getHorizonParams();
+  const res = await fetch('/graph/smartdc', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      index: sourceIdx,
+      lang: document.getElementById('lang-select').value,
+      temp: hp.temperature || 0.7,
+      top_k: hp.top_k || 40,
+      seed: -1,
+      threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
+      sim_mode: document.getElementById('graph-sim-mode').value,
+      // Override statement with bridge context
+      pump_context: {
+        bridge: bridgeText,
+        node_a: nodeA.text,
+        node_b: nodeB.text,
+      }
+    })
+  });
+  const d = await res.json();
+  if (d.error) { view.innerHTML = '<div style="color:#ef4444">Error: ' + d.error + '</div>'; return; }
+
+  let html = '<div style="color:#f59e0b;font-weight:bold;margin-bottom:8px">⚡ Bridge Verification</div>';
+  html += '<div style="color:#9ca3af;font-size:11px;margin-bottom:6px">A: ' + nodeA.text.slice(0, 50) + ' · B: ' + nodeB.text.slice(0, 50) + '</div>';
+  html += '<div style="background:#fef3c7;padding:6px 8px;border-radius:4px;margin-bottom:8px;font-weight:500">' + bridgeText + '</div>';
+  if (d.poles) {
+    d.poles.forEach(p => {
+      const color = p.role === 'thesis' ? '#10b981' : p.role === 'antithesis' ? '#ef4444' : '#64748b';
+      html += '<div style="margin-bottom:6px"><span style="color:' + color + ';font-size:11px;font-weight:bold">' + p.role.toUpperCase() + '</span><div style="color:#37352f;font-size:12px">' + p.text + '</div></div>';
+    });
+  }
+  if (d.synthesis) {
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px"><span style="color:#f59e0b;font-size:11px;font-weight:bold">SYNTHESIS (conf: ' + (d.confidence * 100).toFixed(0) + '%)</span><div style="color:#37352f;font-size:12px">' + d.synthesis + '</div></div>';
+  }
+  // Store for save
+  window._pumpBridges = [{ text: bridgeText, synthesis: d.synthesis || '', quality: d.confidence || 0.5 }];
+  window._pumpSource = sourceIdx;
+  window._pumpTarget = targetIdx;
+  html += '<div style="display:flex;gap:4px;margin-top:8px">'
+    + '<button onclick="graphPumpSave(0, \'bridge\')" class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">Save bridge</button>'
+    + (d.synthesis ? '<button onclick="graphPumpSave(0, \'synthesis\')" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">Save synthesis</button>' : '')
+    + '</div>';
+  view.innerHTML = html;
 }
 
 function onGraphModeChange() {
