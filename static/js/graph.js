@@ -2647,16 +2647,34 @@ async function graphPumpTo(targetIdx) {
         + (b.dc_confidence ? ' · DC=' + (b.dc_confidence * 100).toFixed(0) + '%' : '')
         + '</div>';
 
+      // Expandable thesis/antithesis
+      if (b.thesis || b.antithesis) {
+        html += '<div style="margin-bottom:4px">'
+          + '<a style="color:#9ca3af;font-size:10px;cursor:pointer;text-decoration:underline" '
+          + 'onclick="var d=this.nextElementSibling;d.style.display=d.style.display===\'none\'?\'block\':\'none\'">thesis / antithesis</a>'
+          + '<div style="display:none;margin-top:4px;padding:6px;background:#f1f5f9;border-radius:4px;font-size:11px">';
+        if (b.thesis) {
+          html += '<div style="margin-bottom:4px"><span style="color:#10b981;font-weight:bold">FOR:</span> ' + b.thesis + '</div>';
+        }
+        if (b.antithesis) {
+          html += '<div style="margin-bottom:4px"><span style="color:#ef4444;font-weight:bold">AGAINST:</span> ' + b.antithesis + '</div>';
+        }
+        if (b.neutral) {
+          html += '<div><span style="color:#64748b;font-weight:bold">NEUTRAL:</span> ' + b.neutral + '</div>';
+        }
+        html += '</div></div>';
+      }
+
       if (b.synthesis) {
         html += '<div style="color:#64748b;font-size:11px;margin-bottom:4px;font-style:italic">'
           + b.synthesis + '</div>';
       }
 
       html += '<div style="display:flex;gap:4px;margin-top:4px">'
-        + '<button onclick="graphPumpSave(' + i + ', \'bridge\')" '
+        + '<button onclick="graphPumpSave(' + i + ', \'bridge\', this)" '
         + 'class="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded" title="Save short bridge text">Save bridge</button>';
       if (b.synthesis) {
-        html += '<button onclick="graphPumpSave(' + i + ', \'synthesis\')" '
+        html += '<button onclick="graphPumpSave(' + i + ', \'synthesis\', this)" '
           + 'class="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded" title="Save full synthesis">Save synthesis</button>';
       }
       html += '</div></div>';
@@ -2671,7 +2689,7 @@ async function graphPumpTo(targetIdx) {
   }
 }
 
-async function graphPumpSave(bridgeIdx, saveType) {
+async function graphPumpSave(bridgeIdx, saveType, btnEl) {
   const bridges = window._pumpBridges;
   const sourceIdx = window._pumpSource;
   const targetIdx = window._pumpTarget;
@@ -2709,6 +2727,13 @@ async function graphPumpSave(bridgeIdx, saveType) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ a: newIdx, b: targetIdx, ...params })
   }).then(r => r.json()).then(d2 => { if (!d2.error) graphUpdateView(d2); }).catch(() => {});
+
+  // Mark saved visually but keep panel open
+  if (btnEl) {
+    btnEl.textContent = 'Saved ✓';
+    btnEl.disabled = true;
+    btnEl.style.opacity = '0.5';
+  }
 }
 
 async function graphPumpVerify(bridgeText, sourceIdx, targetIdx) {
@@ -2759,8 +2784,8 @@ async function graphPumpVerify(bridgeText, sourceIdx, targetIdx) {
   window._pumpSource = sourceIdx;
   window._pumpTarget = targetIdx;
   html += '<div style="display:flex;gap:4px;margin-top:8px">'
-    + '<button onclick="graphPumpSave(0, \'bridge\')" class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">Save bridge</button>'
-    + (d.synthesis ? '<button onclick="graphPumpSave(0, \'synthesis\')" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">Save synthesis</button>' : '')
+    + '<button onclick="graphPumpSave(0, \'bridge\', this)" class="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded">Save bridge</button>'
+    + (d.synthesis ? '<button onclick="graphPumpSave(0, \'synthesis\', this)" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded">Save synthesis</button>' : '')
     + '</div>';
   view.innerHTML = html;
 }

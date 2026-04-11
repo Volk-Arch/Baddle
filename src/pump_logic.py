@@ -95,6 +95,7 @@ def pump(node_a_idx: int, node_b_idx: int, max_iterations: int = 3,
 
             print(f"[pump] iter={iteration+1} bridge='{bt[:40]}' emb={emb_conf:.2f} quality={quality:.2f} lean={dc_result.get('lean', '?')}")
 
+            poles = dc_result.get("poles", [])
             bridge_data = {
                 "text": bt,
                 "emb_confidence": round(emb_conf, 3),
@@ -102,6 +103,9 @@ def pump(node_a_idx: int, node_b_idx: int, max_iterations: int = 3,
                 "sim_to_b": round(sim_b, 3),
                 "quality": round(quality, 3),
                 "synthesis": dc_result.get("synthesis", ""),
+                "thesis": poles[0] if len(poles) > 0 else "",
+                "antithesis": poles[1] if len(poles) > 1 else "",
+                "neutral": poles[2] if len(poles) > 2 else "",
                 "lean": dc_result.get("lean"),
                 "tension": dc_result.get("tension"),
                 "dc_confidence": dc_result.get("confidence"),
