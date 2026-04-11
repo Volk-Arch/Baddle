@@ -191,6 +191,28 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     mode_id = "horizon"
     if goal_idx is not None:
         mode_id = nodes[goal_idx].get("mode", "horizon")
+
+    # Load or create CognitiveHorizon
+    from .horizon import CognitiveHorizon, create_horizon
+    horizon_data = graph.get("_horizon")
+    if horizon_data:
+        horizon = CognitiveHorizon.from_dict(horizon_data)
+    else:
+        horizon = create_horizon(mode_id)
+
+    # Feedback from previous step (if any)
+    last_feedback = graph.pop("_horizon_feedback", None)
+    if last_feedback:
+        horizon.update(
+            surprise=last_feedback.get("surprise"),
+            gradient=last_feedback.get("gradient"),
+            novelty=last_feedback.get("novelty"),
+            phase=last_feedback.get("phase"),
+        )
+
+    horizon_params = horizon.to_llm_params()
+    print(f"[horizon] state={horizon.state} precision={horizon.precision:.2f} temp={horizon_params['temperature']:.2f} top_k={horizon_params['top_k']}")
+
     hypotheses = cl["hypotheses"]
     bare = cl["bare"]
     unverified = cl["unverified"]
@@ -199,69 +221,86 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     if force_collapse:
         return _tick_force_collapse(cl["active_nodes"], stable_threshold)
 
-    # ── PHASE 1: GENERATE ──
-    # Only generate if we haven't built mass yet. Once we did, merge may reduce
-    # count — that's good, don't refill. META handles "need more" later.
+    def _emit(action_dict):
+        """Attach horizon data to every tick result and persist."""
+        action_dict["horizon_params"] = horizon_params
+        action_dict["horizon_metrics"] = horizon.get_metrics()
+        graph["_horizon"] = horizon.to_dict()
+        return action_dict
+
+    # ── Determine what's available ──
     generated = graph.get("_generated", False)
-    if not generated and len(hypotheses) < min_hyp:
-        return {
-            "action": "think_toward", "target": goal_idx or 0, "phase": "generate",
-            "reason": f"GENERATE: {len(hypotheses)}/{min_hyp} ideas. Need more.",
-            "text": goal_text,
-        }
+    need_generate = not generated and len(hypotheses) < min_hyp
+    merge_group = _find_similar_group(hypotheses, nodes, edges, threshold)
+    meta_count = graph.get("_meta_count", 0)
+    can_meta = meta_count < max_meta and len(verified) >= 3
+
     if len(hypotheses) >= min_hyp:
         graph["_generated"] = True
 
-    # ── PHASE 2: MERGE similar ──
-    # Before elaborating or doubting, reduce duplicates
-    merge = _find_similar_group(hypotheses, nodes, edges, threshold)
-    if merge:
-        return {
-            "action": "collapse", "target": merge, "phase": "merge",
-            "reason": f"MERGE: {len(merge)} similar. Combine before deepening.",
-            "text": ", ".join(nodes[i]["text"][:25] for i in merge[:3]) + "...",
-        }
+    # Doubt only on non-bare unverified (nodes that have evidence but aren't verified yet).
+    # Bare nodes need elaborate first — doubt on a bare hypothesis is less effective.
+    bare_ids = {i for i, _ in bare}
+    doubt_candidates = [u for u in unverified if u[0] not in bare_ids]
 
-    # ── PHASE 3: ELABORATE bare ──
-    # Deepen ideas that have no evidence yet
-    if bare:
+    available = {
+        "generate": need_generate,
+        "merge": bool(merge_group),
+        "elaborate": bool(bare),
+        "doubt": bool(doubt_candidates),
+    }
+
+    # ── Policy-based phase selection ──
+    # Horizon picks phase by weight; if nothing available → META or SYNTHESIZE
+    phase = horizon.select_phase(available)
+
+    if phase == "generate":
+        return _emit({
+            "action": "think_toward", "target": goal_idx or 0, "phase": "generate",
+            "reason": f"GENERATE: {len(hypotheses)}/{min_hyp} ideas. Need more.",
+            "text": goal_text,
+        })
+
+    if phase == "merge":
+        return _emit({
+            "action": "collapse", "target": merge_group, "phase": "merge",
+            "reason": f"MERGE: {len(merge_group)} similar. Combine before deepening.",
+            "text": ", ".join(nodes[i]["text"][:25] for i in merge_group[:3]) + "...",
+        })
+
+    if phase == "elaborate":
         target = _pick_target(bare, goal_idx, edges)
         if target:
-            return {
+            return _emit({
                 "action": "elaborate", "target": target[0], "phase": "elaborate",
                 "reason": f"ELABORATE: #{target[0]} needs evidence ({len(bare)} bare).",
                 "text": target[1]["text"][:80],
-            }
+            })
 
-    # ── PHASE 4: DOUBT unverified ──
-    if unverified:
-        target = _pick_target(unverified, goal_idx, edges)
+    if phase == "doubt":
+        target = _pick_target(doubt_candidates, goal_idx, edges)
         if target:
-            return {
+            return _emit({
                 "action": "smartdc", "target": target[0], "phase": "doubt",
                 "reason": f"DOUBT: #{target[0]} conf={target[1]['confidence']:.0%} ({len(unverified)} unverified).",
                 "text": target[1]["text"][:80],
-            }
+            })
 
-    # ── PHASE 5: GENERATE+ (META) ──
-    # All verified. Look for gaps.
-    meta_count = graph.get("_meta_count", 0)
-    if meta_count < max_meta and len(verified) >= 3:
+    # ── META (if no phase selected or nothing available) ──
+    if can_meta:
         graph["_meta_count"] = meta_count + 1
-        verified_texts = [n["text"][:80] for _, n in verified]
-        return {
+        return _emit({
             "action": "think_toward", "target": goal_idx or 0, "phase": "generate",
             "reason": f"GENERATE+: {len(verified)} verified. What's missing?",
             "text": goal_text,
-            "verified_texts": verified_texts,
-        }
+        })
 
-    # ── PHASE 6: SYNTHESIZE ──
+    # ── SYNTHESIZE ──
     avg = sum(n.get("confidence", 0.5) for _, n in cl["active_nodes"]) / max(len(cl["active_nodes"]), 1)
-    return {
+    return _emit({
         "action": "stable", "phase": "synthesize",
         "reason": f"SYNTHESIZE: {len(hypotheses)} ideas, {len(verified)} verified, avg {avg:.0%}. Ready.",
-    }
+    })
 
 
 # ── Force Collapse ───────────────────────────────────────────────────────────

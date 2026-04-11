@@ -1543,11 +1543,19 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ── Smart DC ──
+async function _getHorizonParams() {
+  try {
+    const r = await fetch('/graph/horizon-params');
+    return await r.json();
+  } catch(e) { return {}; }
+}
+
 async function graphSmartDC() {
   const idx = graphSelectedNode;
   if (idx < 0) return;
   const btn = document.getElementById('graph-dc-btn');
   btn.disabled = true; btn.textContent = '\u23F3 Verifying...';
+  const hp = await _getHorizonParams();
   try {
     const res = await fetch('/graph/smartdc', {
       method: 'POST',
@@ -1555,8 +1563,8 @@ async function graphSmartDC() {
       body: JSON.stringify({
         index: idx,
         lang: document.getElementById('lang-select').value,
-        temp: parseFloat(document.getElementById('graph-temp').value) || 0.9,
-        top_k: parseInt(document.getElementById('graph-topk').value) || 40,
+        temp: hp.temperature || parseFloat(document.getElementById('graph-temp').value) || 0.9,
+        top_k: hp.top_k || parseInt(document.getElementById('graph-topk').value) || 40,
         seed: parseInt(document.getElementById('graph-seed').value) || -1,
         threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
         sim_mode: document.getElementById('graph-sim-mode').value
@@ -1681,7 +1689,7 @@ async function graphAutoRun() {
     _autoRunLog.push({step: step + 1, action: d.action, reason: d.reason});
 
     // Live metrics overlay
-    _updateRunOverlay(step + 1, d.phase || d.action);
+    _updateRunOverlay(step + 1, d.phase || d.action, d.horizon_metrics);
 
     if (d.action === 'none' || d.action === 'stable') {
       _autoRunLog.push({step: step + 1, action: 'STABLE', reason: d.reason});
@@ -1694,13 +1702,14 @@ async function graphAutoRun() {
       graphSelectedNode = targetIdx;
     }
 
+    const hp = d.horizon_params || {};  // dynamic temp/top_k from Horizon
     try {
       if (d.action === 'smartdc') {
-        await _autoRunSmartDC(targetIdx);
+        await _autoRunSmartDC(targetIdx, hp);
       } else if (d.action === 'elaborate') {
-        await _autoRunElaborate(targetIdx);
+        await _autoRunElaborate(targetIdx, hp);
       } else if (d.action === 'think_toward') {
-        await _autoRunThink();
+        await _autoRunThink(hp);
       } else if (d.action === 'collapse') {
         await _autoRunCollapse(d.target);
       }
@@ -1843,7 +1852,7 @@ async function graphAutoRun() {
           // Non-essay or small graph: single collapse (as before)
           _autoRunLog.push({step: _autoRunLog.length + 1, action: 'FINAL_SUMMARY', reason: outputFormat + ' from ' + indices.length + ' nodes'});
           const formatPrompts = {
-            essay: 'Write a comprehensive essay. Include ALL ideas as sections with reasoning. Add conclusions.',
+            essay: 'Write a comprehensive essay. Include ALL ideas as sections with reasoning. Add a conclusion. Do NOT repeat the introduction or restate the title.',
             brief: 'Write a brief summary in 3-5 sentences capturing the key findings.',
             list: 'Write a structured list of key points with brief explanations for each.',
           };
@@ -1899,7 +1908,7 @@ async function graphAutoRun() {
 // ── Run overlay: live convergence metrics ──
 let _autoRunSparkline = [];
 
-function _updateRunOverlay(step, phase) {
+function _updateRunOverlay(step, phase, horizonMetrics) {
   const stableThreshold = parseFloat(document.getElementById('graph-stable-threshold').value) || 0.8;
   const nodes = graphData.nodes || [];
   const hyps = nodes.filter(n => (n.type === 'hypothesis' || n.type === 'thought') && n.depth >= 0);
@@ -1912,8 +1921,13 @@ function _updateRunOverlay(step, phase) {
   document.getElementById('graph-run-phase').textContent = phase;
   document.getElementById('graph-run-hyps').textContent = hyps.length;
   document.getElementById('graph-run-verified').textContent = verified.length;
-  document.getElementById('graph-run-avg').textContent = Math.round(avgConf * 100) + '%';
-  document.getElementById('graph-run-status').textContent = phase === 'synthesize' ? '✓ Converged' : '⟳ Running';
+
+  // Horizon metrics
+  const hm = horizonMetrics || {};
+  const precisionStr = hm.precision !== undefined ? ` Π=${hm.precision}` : '';
+  const stateStr = hm.state ? ` ${hm.state.toUpperCase()}` : '';
+  document.getElementById('graph-run-avg').textContent = Math.round(avgConf * 100) + '%' + precisionStr;
+  document.getElementById('graph-run-status').textContent = phase === 'synthesize' ? '✓ Converged' : '⟳' + stateStr;
   document.getElementById('graph-run-status').style.color = phase === 'synthesize' ? '#10b981' : '#6d28d9';
 
   // Sparkline: track verified ratio over time
@@ -1960,8 +1974,7 @@ function _autoFetch(url, opts = {}) {
   return fetch(url, opts);
 }
 
-async function _autoRunSmartDC(idx) {
-  // Gather evidence context from connected nodes
+async function _autoRunSmartDC(idx, hp) {
   const node = graphData.nodes[idx];
   const evidenceContext = [];
   if (node && graphData.nodes) {
@@ -1977,8 +1990,8 @@ async function _autoRunSmartDC(idx) {
     body: JSON.stringify({
       index: idx,
       lang: document.getElementById('lang-select').value,
-      temp: parseFloat(document.getElementById('graph-temp').value) || 0.9,
-      top_k: parseInt(document.getElementById('graph-topk').value) || 40,
+      temp: hp.temperature || parseFloat(document.getElementById('graph-temp').value) || 0.9,
+      top_k: hp.top_k || parseInt(document.getElementById('graph-topk').value) || 40,
       seed: parseInt(document.getElementById('graph-seed').value) || -1,
       threshold: parseFloat(document.getElementById('graph-threshold').value) || 0.91,
       sim_mode: document.getElementById('graph-sim-mode').value,
@@ -2004,11 +2017,23 @@ async function _autoRunSmartDC(idx) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({index: idx, value: d.confidence})
     }).catch(() => {});
+    // Send horizon feedback: surprise = 1 - confidence
+    await _autoFetch('/graph/horizon-feedback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        surprise: 1 - (d.confidence || 0.5),
+        gradient: d.confidence >= 0.8 ? 1 : d.confidence < 0.5 ? -1 : 0,
+        phase: 'doubt',
+      })
+    }).catch(() => {});
   }
 }
 
-async function _autoRunElaborate(idx) {
+async function _autoRunElaborate(idx, hp) {
   const params = graphGetParams();
+  if (hp && hp.temperature) params.temp = hp.temperature;
+  if (hp && hp.top_k) params.top_k = hp.top_k;
   const res = await _autoFetch('/graph/elaborate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -2019,8 +2044,10 @@ async function _autoRunElaborate(idx) {
 }
 
 
-async function _autoRunThink() {
+async function _autoRunThink(hp) {
   const params = graphGetParams();
+  if (hp && hp.temperature) params.temp = hp.temperature;
+  if (hp && hp.top_k) params.top_k = hp.top_k;
   const goalNode = graphData.nodes.find(n => n.type === 'goal');
   if (!goalNode) { console.log('[autorun] No goal node for Think'); return; }
   const res = await _autoFetch('/graph/think', {
@@ -2389,7 +2416,12 @@ async function graphAddThought() {
   const input = document.getElementById('graph-topic');
   const text = input.value.trim();
   if (!text) return;
-  const addType = document.getElementById('graph-add-type').value;
+  let addType = document.getElementById('graph-add-type').value;
+  // If no goal exists yet and mode needs one, auto-set type to goal
+  const hasGoal = graphData.nodes && graphData.nodes.some(n => n.type === 'goal');
+  const currentMode = document.getElementById('graph-mode-select').value || 'free';
+  const needsGoal = currentMode !== 'free' && currentMode !== 'scout';
+  if (!hasGoal && needsGoal && addType === 'auto') addType = 'goal';
   const body = { text, node_type: addType, ...graphGetParams() };
   if (addType === 'goal') body.mode = document.getElementById('graph-mode-select').value || 'horizon';
   const r = await fetch('/graph/add', {
@@ -2521,6 +2553,9 @@ async function graphBrainstorm(idx) {
   const node = graphData.nodes[idx];
   if (!node) return;
   const params = graphGetParams();
+  const hp = await _getHorizonParams();
+  if (hp.temperature) params.temp = hp.temperature;
+  if (hp.top_k) params.top_k = hp.top_k;
   graphSaveUndo();
   const res = await fetch('/graph/think', {
     method: 'POST',
