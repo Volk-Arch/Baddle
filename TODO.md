@@ -1,18 +1,19 @@
 # TODO
 
-> Концепция, 12 режимов и финальное видение → [README](README.md) и [VISION](VISION.md)
+> Концепция, архитектура и научные основы → [README](README.md)
 >
 > Этот файл — что осталось сделать, в порядке приоритета.
 
 ---
 
-## v1: текущий режим (Горизонт/Веер) — работает, нужно тестировать
+## v1: стабилизация
+
+- [ ] **Тестировать текущий цикл** — autorun на 3-5 разных темах, проверить сходимость
+- [ ] **Novelty check оптимизация** — 30 embedding API-вызовов = медленно. Варианты: batch, Jaccard → embedding двухступенчато
 
 ---
 
 ## Целевая архитектура
-
-Весь движок мышления — один tick, один horizon, четыре функции. Режим = preset.
 
 ```python
 def tick(graph, horizon):
@@ -26,10 +27,50 @@ def tick(graph, horizon):
     if phase == "doubt":     return smartdc(graph, params)
 ```
 
-12 режимов = 12 JSON-конфигов (preset для horizon). Вся логика — в horizon + 4 функции.
-Текущий хардкоженный if/else в thinking.py — промежуточное состояние на пути к этому.
+Один tick, один horizon, четыре функции. Режим = preset. Текущий if/else в thinking.py — промежуточное состояние.
 
 ---
+
+## v1.5: CognitiveHorizon — адаптивные параметры
+
+Критический путь (порядок реализации):
+
+```
+Шаг 1: horizon.py (класс)                          ~1 час
+  └─ precision, policy_weights, context_frame
+  └─ to_llm_params() → {temp, top_k, top_p}
+  └─ update(surprise, gradient, novelty)
+  └─ select_phase() → phase name
+  └─ 4 состояния: EXPLORATION/EXECUTION/RECOVERY/INTEGRATION
+
+Шаг 2: _graph_generate принимает params             ~30 мин
+  └─ Сейчас temp/top_k хардкожены или из UI
+  └─ Нужно: принимать из horizon.to_llm_params()
+  └─ Одна точка входа — все LLM вызовы через неё
+
+Шаг 3: tick использует horizon                      ~30 мин
+  └─ Создать/загрузить horizon из graph state
+  └─ horizon.select_phase() вместо if/else
+  └─ Передать params в brainstorm/elaborate/smartdc/collapse
+
+Шаг 4: обратная связь                               ~30 мин
+  └─ После SmartDC: surprise = 1 - confidence
+  └─ После любой фазы: gradient = +1/-1/0
+  └─ novelty уже считается в novelty check
+  └─ horizon.update() → precision/policy обновились
+
+Шаг 5: presets в modes.py                           ~30 мин
+  └─ HORIZON_PRESETS для каждого из 13 режимов
+  └─ init_horizon(mode_id) → настроенный Horizon
+
+Шаг 6: UI                                          ~30 мин
+  └─ Метрики в Run-оверлее: precision, width, state
+  └─ Опционально: слайдер precision
+```
+
+Итого ~3.5 часа до работающего Horizon для Исследование + Мозговой штурм.
+
+### Детали реализации (справка)
 
 ## v1.5: CognitiveHorizon — адаптивный движок мышления
 

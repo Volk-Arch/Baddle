@@ -143,7 +143,8 @@ def graph_think():
             duplicates_skipped += 1
             continue
         # Novelty check: reject if too similar to any existing node
-        if nodes and len(nodes) > 1:
+        # Skip when few nodes (nothing to filter) — saves N embedding API calls
+        if len(nodes) > 5:
             try:
                 texts = _get_texts(nodes)
                 _ensure_embeddings(texts)

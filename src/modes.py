@@ -18,7 +18,7 @@ MODES = {
     # ── Free mode ─────────────────────────────────────────────────────────────
     "free": {
         "name": "Свободный",
-        "name_en": "Free",
+        "name_en": "Free (manual)",
         "primitive": None,
         "strategy": None,
         "goal_type": None,
@@ -33,8 +33,8 @@ MODES = {
 
     # ── 0 goals ──────────────────────────────────────────────────────────────
     "scout": {
-        "name": "Разведка",
-        "name_en": "Scout",
+        "name": "Блуждание",
+        "name_en": "Wander",
         "primitive": None,
         "strategy": None,
         "goal_type": None,
@@ -49,8 +49,8 @@ MODES = {
 
     # ── 1 goal ───────────────────────────────────────────────────────────────
     "vector": {
-        "name": "Вектор",
-        "name_en": "Vector",
+        "name": "Фокус",
+        "name_en": "Focus",
         "primitive": "focus",
         "strategy": None,
         "goal_type": "finite",
@@ -63,8 +63,8 @@ MODES = {
         "tooltip": "1 цель · конечная · стоп: confidence ≥ threshold",
     },
     "rhythm": {
-        "name": "Ритм",
-        "name_en": "Rhythm",
+        "name": "Привычка",
+        "name_en": "Habit",
         "primitive": "focus",
         "strategy": None,
         "goal_type": "repeatable",
@@ -77,8 +77,8 @@ MODES = {
         "tooltip": "1 цель · повторяемая · streak + тренд · бесконечный",
     },
     "horizon": {
-        "name": "Горизонт",
-        "name_en": "Horizon",
+        "name": "Исследование",
+        "name_en": "Research",
         "primitive": "focus",
         "strategy": None,
         "goal_type": "open",
@@ -93,8 +93,8 @@ MODES = {
 
     # ── AND ──────────────────────────────────────────────────────────────────
     "builder": {
-        "name": "Конструктор",
-        "name_en": "Builder",
+        "name": "Сборка",
+        "name_en": "Assembly",
         "primitive": "and",
         "strategy": "unordered",
         "goal_type": "finite",
@@ -107,8 +107,8 @@ MODES = {
         "tooltip": "AND · все обязательны · любой порядок · конечная",
     },
     "pipeline": {
-        "name": "Конвейер",
-        "name_en": "Pipeline",
+        "name": "По шагам",
+        "name_en": "Step by step",
         "primitive": "and",
         "strategy": "seq",
         "goal_type": "finite",
@@ -121,8 +121,8 @@ MODES = {
         "tooltip": "AND · последовательно · по зависимостям · конечная",
     },
     "cascade": {
-        "name": "Каскад",
-        "name_en": "Cascade",
+        "name": "Приоритеты",
+        "name_en": "Priorities",
         "primitive": "and",
         "strategy": "priority",
         "goal_type": "finite",
@@ -135,8 +135,8 @@ MODES = {
         "tooltip": "AND · по приоритету · срочное первым · конечная",
     },
     "scales": {
-        "name": "Весы",
-        "name_en": "Scales",
+        "name": "Баланс",
+        "name_en": "Balance",
         "primitive": "and",
         "strategy": "balance",
         "goal_type": "open",
@@ -151,8 +151,8 @@ MODES = {
 
     # ── OR ───────────────────────────────────────────────────────────────────
     "race": {
-        "name": "Гонка",
-        "name_en": "Race",
+        "name": "Любой вариант",
+        "name_en": "Any option",
         "primitive": "or",
         "strategy": None,
         "goal_type": "finite",
@@ -165,8 +165,8 @@ MODES = {
         "tooltip": "OR · любой достаточен · конечная",
     },
     "fan": {
-        "name": "Веер",
-        "name_en": "Fan",
+        "name": "Мозговой штурм",
+        "name_en": "Brainstorm",
         "primitive": "or",
         "strategy": None,
         "goal_type": "open",
@@ -181,8 +181,8 @@ MODES = {
 
     # ── XOR ──────────────────────────────────────────────────────────────────
     "tournament": {
-        "name": "Турнир",
-        "name_en": "Tournament",
+        "name": "Выбор",
+        "name_en": "Choice",
         "primitive": "xor",
         "strategy": "comparative",
         "goal_type": "finite",
@@ -195,8 +195,8 @@ MODES = {
         "tooltip": "XOR · выбрать одну · сравнение · конечная",
     },
     "dispute": {
-        "name": "Диспут",
-        "name_en": "Dispute",
+        "name": "Дебаты",
+        "name_en": "Debate",
         "primitive": "xor",
         "strategy": "dialectical",
         "goal_type": "finite",
