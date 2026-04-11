@@ -2048,6 +2048,7 @@ async function _autoRunThink(hp) {
   const params = graphGetParams();
   if (hp && hp.temperature) params.temp = hp.temperature;
   if (hp && hp.top_k) params.top_k = hp.top_k;
+  if (hp && hp.novelty_threshold) params.novelty_threshold = hp.novelty_threshold;
   const goalNode = graphData.nodes.find(n => n.type === 'goal');
   if (!goalNode) { console.log('[autorun] No goal node for Think'); return; }
   const res = await _autoFetch('/graph/think', {
@@ -2556,6 +2557,7 @@ async function graphBrainstorm(idx) {
   const hp = await _getHorizonParams();
   if (hp.temperature) params.temp = hp.temperature;
   if (hp.top_k) params.top_k = hp.top_k;
+  if (hp.novelty_threshold) params.novelty_threshold = hp.novelty_threshold;
   graphSaveUndo();
   const res = await fetch('/graph/think', {
     method: 'POST',

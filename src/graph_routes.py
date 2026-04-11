@@ -159,6 +159,25 @@ def graph_think():
                                 np.array(new_emb, dtype=np.float32),
                                 np.array(emb, dtype=np.float32))
                             if sim > novelty_threshold:
+                                # Try rephrase before rejecting — idea may be new but wording similar
+                                rephrase_messages = [
+                                    {"role": "system", "content": "/no_think\nRephrase this idea in completely different words. Keep the core meaning. One sentence. Answer directly."},
+                                    {"role": "user", "content": t},
+                                ]
+                                rephrased, _ = _graph_generate(rephrase_messages, max_tokens=60, temp=0.9)
+                                rephrased = _clean_thought(rephrased, topic)
+                                if rephrased and len(rephrased) > 10:
+                                    re_emb = api_get_embedding(rephrased)
+                                    if re_emb:
+                                        re_sim = cosine_similarity(
+                                            np.array(re_emb, dtype=np.float32),
+                                            np.array(emb, dtype=np.float32))
+                                        if re_sim <= novelty_threshold:
+                                            print(f"[think] novelty rephrase saved: '{t[:30]}' → '{rephrased[:30]}' sim {sim:.2f}→{re_sim:.2f}")
+                                            t = rephrased
+                                            new_emb = re_emb
+                                            too_similar = False
+                                            break
                                 print(f"[think] novelty reject: '{t[:40]}' sim={sim:.2f} with #{idx} '{nodes[idx]['text'][:40]}'")
                                 too_similar = True
                                 duplicates_skipped += 1

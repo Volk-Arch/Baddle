@@ -92,12 +92,17 @@ SYNTHESIZE  ничего нового         → Финальный текст
 Каждый компонент усиливает остальные:
 
 ```
-prediction error → precision → temperature →
+prediction error → precision → temperature + top_k + novelty_threshold →
 → разнообразие идей → диалектическая проверка (Smart DC) →
 → confidence → surprise → prediction error
 ```
 
-Prediction error управляет конусом. Конус управляет temperature. Temperature определяет разнообразие генерации. Идеи проверяются диалектикой. Диалектика даёт confidence. Confidence даёт surprise. Surprise обновляет prediction error. Один замкнутый контур — и он работает.
+Precision управляет **всем сразу**: temperature (креативность генерации), top_k (количество кандидатов), novelty_threshold (строгость фильтра повторов). Один параметр — три эффекта:
+
+- EXPLORATION (precision ↓): высокая temp, большой top_k, мягкий novelty → широко ищем
+- EXECUTION (precision ↑): низкая temp, малый top_k, строгий novelty → фокусируемся
+
+Идеи проверяются диалектикой. Диалектика даёт confidence. Confidence даёт surprise. Surprise обновляет prediction error → precision корректируется → все параметры сдвигаются. Один замкнутый контур.
 
 ### Операции подробнее
 
