@@ -181,6 +181,7 @@ def _fresh_graph():
         "meta": {
             "topic": "",
             "hub_nodes": set(),
+            "mode": "horizon",
         },
         "embeddings": [],  # cache, not persisted
         "tp_overrides": {},  # "from,to" -> learned transition_prob

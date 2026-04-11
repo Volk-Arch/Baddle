@@ -23,13 +23,15 @@ _settings = {
 
 
 def _load_settings():
-    """Load settings from disk if exists."""
+    """Load settings from disk. Create with defaults if missing."""
     try:
         data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
         for k, v in data.items():
             if k in _settings:
                 _settings[k] = v
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
+        _save_settings()  # create with defaults on first run
+    except json.JSONDecodeError:
         pass
 
 
