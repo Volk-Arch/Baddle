@@ -377,19 +377,6 @@ def graph_collapse():
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-        # If text was cut mid-sentence, continue (up to 3 attempts)
-        for _cont_attempt in range(3):
-            if not text or text.rstrip().endswith(('.', '!', '?', '。', '»', '"')):
-                break
-            messages_cont = list(messages) + [{"role": "assistant", "content": text}]
-            cont, ent2 = _graph_generate(messages_cont, max_tokens=max_tokens // 2, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-            if not cont:
-                break
-            text = text + cont
-            if ent.get("tokens") and ent2.get("tokens"):
-                ent["tokens"].extend(ent2["tokens"])
-            ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
-            ent["unc"] = max(ent["unc"], ent2["unc"])
 
     valid_indices = [i for i in indices if i < len(nodes)]
 
