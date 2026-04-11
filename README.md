@@ -82,10 +82,22 @@ SYNTHESIZE  ничего нового         → Финальный текст
 
 Мозг **всегда ожидает чуть больше** чем получает (predictive processing). Это несоответствие (`ε > 0`) — один из ключевых двигателей внимания, обучения, любопытства.
 
-В Baddle: `target_surprise` в CognitiveHorizon `[планируется]`:
+В Baddle: `target_surprise` в CognitiveHorizon:
 - `surprise < target` → "предсказуемо" → конус расширяется → ищем удивление
 - `surprise > target` → "хаотично" → конус сужается → стабилизируемся
 - `surprise ≈ target` → зона потока → система движется вперёд
+
+### Замкнутый контур
+
+Каждый компонент усиливает остальные:
+
+```
+prediction error → precision → temperature →
+→ разнообразие идей → диалектическая проверка (Smart DC) →
+→ confidence → surprise → prediction error
+```
+
+Prediction error управляет конусом. Конус управляет temperature. Temperature определяет разнообразие генерации. Идеи проверяются диалектикой. Диалектика даёт confidence. Confidence даёт surprise. Surprise обновляет prediction error. Один замкнутый контур — и он работает.
 
 ### Операции подробнее
 

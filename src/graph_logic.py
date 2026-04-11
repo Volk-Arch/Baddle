@@ -201,10 +201,16 @@ def reset_graph():
 
 # ── generation helpers ───────────────────────────────────────────────────────
 
-def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1) -> tuple[str, dict]:
+def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1, horizon_params: dict = None) -> tuple[str, dict]:
     """Generate text from chat messages via OpenAI-compatible API backend.
+    If horizon_params provided, uses dynamic temperature/top_k from CognitiveHorizon.
     Returns (text, entropy_info)."""
     from .api_backend import api_chat_completion
+
+    # Horizon overrides fixed params
+    if horizon_params:
+        temp = horizon_params.get("temperature", temp)
+        top_k = horizon_params.get("top_k", top_k)
 
     try:
         text, avg_ent, unc_pct, token_ents_raw, token_texts = api_chat_completion(

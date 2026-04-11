@@ -876,6 +876,38 @@ def graph_smartdc():
     })
 
 
+# --------------- Horizon ---------------
+
+@graph_bp.route("/graph/horizon-params")
+def graph_horizon_params():
+    """Get current Horizon LLM params for manual operations."""
+    from .horizon import CognitiveHorizon, create_horizon
+    horizon_data = _graph.get("_horizon")
+    if horizon_data:
+        h = CognitiveHorizon.from_dict(horizon_data)
+    else:
+        mode_id = _graph["meta"].get("mode", "horizon")
+        h = create_horizon(mode_id)
+    params = h.to_llm_params()
+    print(f"[horizon manual] state={h.state} precision={h.precision:.2f} temp={params['temperature']:.2f} top_k={params['top_k']}")
+    return jsonify(params)
+
+
+# --------------- Horizon feedback ---------------
+
+@graph_bp.route("/graph/horizon-feedback", methods=["POST"])
+def graph_horizon_feedback():
+    """Store feedback for CognitiveHorizon. Applied on next tick."""
+    data = request.get_json(force=True)
+    _graph["_horizon_feedback"] = {
+        "surprise": data.get("surprise"),
+        "gradient": data.get("gradient"),
+        "novelty": data.get("novelty"),
+        "phase": data.get("phase"),
+    }
+    return jsonify({"ok": True})
+
+
 # --------------- tick() — phase-based automatic thinking ---------------
 
 @graph_bp.route("/graph/tick", methods=["POST"])
