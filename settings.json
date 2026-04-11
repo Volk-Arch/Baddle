@@ -1,7 +1,7 @@
 {
   "api_url": "http://127.0.0.1:1234",
   "api_key": "sk-lm-JfZ20v1k:HHdgiYi8vwA3ZG8X4wT2",
-  "api_model": "qwen/qwen3.5-9b",
+  "api_model": "qwen/qwen3-8b",
   "embedding_model": "text-embedding-nomic-embed-text-v2-moe",
   "local_ctx": 4096,
   "live_bayes": false

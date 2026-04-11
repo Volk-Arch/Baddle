@@ -237,13 +237,6 @@ def _clean_thought(text: str, topic: str) -> str:
     """Clean generated thought text — remove thinking, pick best line."""
     text = re.split(r"\s*(?:Human|User|Assistant)\s*:", text, flags=re.IGNORECASE)[0]
     lines = [l.strip() for l in text.split("\n") if l.strip()]
-    # Filter out prompt echo lines
-    echo_patterns = re.compile(
-        r"^(\*\*)?("
-        r"Task|Topic|Тема|Constraint|Generate|Сгенерируй|Already|Уже|"
-        r"Thinking Process|Here is|I need to|Let me"
-        r")(\*\*)?[\s:]", re.IGNORECASE)
-    lines = [l for l in lines if not echo_patterns.match(l)]
     # If topic has cyrillic, prefer cyrillic lines
     has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", topic))
     if has_cyr:
@@ -256,8 +249,6 @@ def _clean_thought(text: str, topic: str) -> str:
             best = best[len(prefix):]
     best = re.sub(r"^\d+[.)]\s*", "", best)
     best = re.sub(r"^(Topic|Тема)\s*:.*?[.!?]\s*", "", best, flags=re.IGNORECASE)
-    # Strip markdown bold
-    best = re.sub(r"\*\*(.+?)\*\*", r"\1", best)
     return best.strip()
 
 
