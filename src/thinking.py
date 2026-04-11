@@ -211,7 +211,7 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         )
 
     horizon_params = horizon.to_llm_params()
-    print(f"[horizon] state={horizon.state} precision={horizon.precision:.2f} temp={horizon_params['temperature']:.2f} top_k={horizon_params['top_k']}")
+    print(f"[horizon] state={horizon.state} precision={horizon.precision:.2f} temp={horizon_params['temperature']:.2f} top_k={horizon_params['top_k']} novelty={horizon_params.get('novelty_threshold', '?')}")
 
     hypotheses = cl["hypotheses"]
     bare = cl["bare"]

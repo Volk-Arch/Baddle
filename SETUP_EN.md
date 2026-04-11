@@ -82,7 +82,7 @@ python ui.py --port 8080      # different port
 
 Browser opens automatically.
 
-How to use → [README](README_EN.md)
+How to use → [README](README.md)
 
 ---
 

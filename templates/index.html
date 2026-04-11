@@ -291,16 +291,43 @@
           <div class="flex items-center gap-2 mb-2">
             <span id="graph-detail-dot" style="font-size:16px;">&#9679;</span>
             <span style="color:var(--text-primary);font-size:13px;font-weight:500;flex:1">Selected thought</span>
-            <button onclick="graphBrainstorm(graphSelectedNode)" class="btn-action text-xs" title="Generate independent ideas from this node" style="color:#f59e0b;border-color:#f59e0b">&#128161; Brainstorm</button>
-            <button onclick="openStudio('expand_preview')" class="btn-action text-xs" title="Generate child ideas">&#9758; Expand</button>
-            <button onclick="openStudio('elaborate_preview')" class="btn-action text-xs" title="Generate deeper ideas">&#9998; Elaborate</button>
-            <button onclick="graphDetailEdit()" id="graph-detail-edit-btn" class="btn-action text-xs" style="background:#7c3aed;color:#fff;border-color:#7c3aed">Edit</button>
-            <button onclick="openStudio('rephrase')" class="btn-action text-xs" style="background:#d97706;color:#fff;border-color:#d97706" title="Rephrase with Generation Studio">&#x270E; Rephrase</button>
-            <button onclick="openStudio('ask')" class="btn-action text-xs" style="color:#6366f1;border-color:#6366f1" title="Generate probing question">&#x2753; Ask</button>
-            <button onclick="graphDetailToChat()" class="btn-action text-xs" style="color:var(--accent);border-color:var(--accent)" title="Send to chat">&rarr; Chat</button>
-            <button onclick="graphWalk()" id="graph-walk-btn" class="btn-action text-xs" style="color:#059669;border-color:#059669" title="Random Walk">&#x1F6B6; Walk</button>
-            <button onclick="graphSmartDC()" id="graph-dc-btn" class="btn-action text-xs" style="color:#d97706;border-color:#d97706" title="Smart DC verification">&#9889; Verify</button>
-            <button onclick="graphDetailClose()" class="btn-action text-xs" style="color:var(--text-secondary)">&times; Close</button>
+
+            <!-- Grouped dropdown menus -->
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#f59e0b;border-color:#f59e0b" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#128161; Generate &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphBrainstorm(graphSelectedNode);this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Brainstorm</div>
+                <div onclick="openStudio('expand_preview');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Expand</div>
+                <div onclick="openStudio('elaborate_preview');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Elaborate</div>
+              </div>
+            </div>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#d97706;border-color:#d97706" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#9889; Verify &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphSmartDC();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Smart DC</div>
+                <div onclick="openStudio('ask');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Ask</div>
+              </div>
+            </div>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#7c3aed;border-color:#7c3aed" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#x270E; Edit &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphDetailEdit();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Edit text</div>
+                <div onclick="openStudio('rephrase');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Rephrase</div>
+              </div>
+            </div>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#059669;border-color:#059669" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#x1F50D; Navigate &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphWalk();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Walk</div>
+                <div onclick="graphPumpStart(graphSelectedNode);this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Pump to...</div>
+                <div onclick="graphDetailToChat();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">&rarr; Chat</div>
+              </div>
+            </div>
+
+            <button onclick="graphDetailClose()" class="btn-action text-xs" style="color:var(--text-secondary)">&times;</button>
           </div>
           <div id="graph-detail-confidence" class="flex items-center gap-2 mb-2">
             <span style="color:var(--text-secondary);font-size:12px">Confidence:</span>

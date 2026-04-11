@@ -159,6 +159,25 @@ def graph_think():
                                 np.array(new_emb, dtype=np.float32),
                                 np.array(emb, dtype=np.float32))
                             if sim > novelty_threshold:
+                                # Try rephrase before rejecting — idea may be new but wording similar
+                                rephrase_messages = [
+                                    {"role": "system", "content": "/no_think\nRephrase this idea in completely different words. Keep the core meaning. One sentence. Answer directly."},
+                                    {"role": "user", "content": t},
+                                ]
+                                rephrased, _ = _graph_generate(rephrase_messages, max_tokens=60, temp=0.9)
+                                rephrased = _clean_thought(rephrased, topic)
+                                if rephrased and len(rephrased) > 10:
+                                    re_emb = api_get_embedding(rephrased)
+                                    if re_emb:
+                                        re_sim = cosine_similarity(
+                                            np.array(re_emb, dtype=np.float32),
+                                            np.array(emb, dtype=np.float32))
+                                        if re_sim <= novelty_threshold:
+                                            print(f"[think] novelty rephrase saved: '{t[:30]}' → '{rephrased[:30]}' sim {sim:.2f}→{re_sim:.2f}")
+                                            t = rephrased
+                                            new_emb = re_emb
+                                            too_similar = False
+                                            break
                                 print(f"[think] novelty reject: '{t[:40]}' sim={sim:.2f} with #{idx} '{nodes[idx]['text'][:40]}'")
                                 too_similar = True
                                 duplicates_skipped += 1
@@ -358,19 +377,6 @@ def graph_collapse():
 
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-        # If text was cut mid-sentence, continue (up to 3 attempts)
-        for _cont_attempt in range(3):
-            if not text or text.rstrip().endswith(('.', '!', '?', '。', '»', '"')):
-                break
-            messages_cont = list(messages) + [{"role": "assistant", "content": text}]
-            cont, ent2 = _graph_generate(messages_cont, max_tokens=max_tokens // 2, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-            if not cont:
-                break
-            text = text + cont
-            if ent.get("tokens") and ent2.get("tokens"):
-                ent["tokens"].extend(ent2["tokens"])
-            ent["avg"] = (ent["avg"] + ent2["avg"]) / 2
-            ent["unc"] = max(ent["unc"], ent2["unc"])
 
     valid_indices = [i for i in indices if i < len(nodes)]
 
@@ -794,9 +800,18 @@ def graph_smartdc():
 
     statement = nodes[node_idx]["text"]
     evidence_context = d.get("evidence_context", [])
+    pump_context = d.get("pump_context")
+
+    # If pump_context provided, override statement with bridge + A + B context
+    if pump_context:
+        statement = (
+            f"Связь между двумя идеями:\n"
+            f"A: {pump_context.get('node_a', '')}\n"
+            f"B: {pump_context.get('node_b', '')}\n"
+            f"Найденный мост: {pump_context.get('bridge', '')}"
+        )
 
     # Phase 1: Divergence — generate 3 poles
-    # If evidence context provided, include it so poles are informed
     context_block = ""
     if evidence_context:
         context_block = "\n\nExisting evidence:\n" + "\n".join(evidence_context[:5])
@@ -843,6 +858,15 @@ def graph_smartdc():
     new_confidence = 0.5
     centroid_distance = -1
 
+    # Per-pole similarity to statement (for bridge quality assessment)
+    pole_confidences = {}
+    statement_emb = None
+    if pole_embs and len(pole_embs) >= 3:
+        try:
+            statement_emb = api_get_embedding(statement)
+        except Exception:
+            pass
+
     if pole_embs and syn_emb is not None:
         centroid = np.mean(pole_embs, axis=0)
         syn_arr = np.array(syn_emb)
@@ -852,9 +876,31 @@ def graph_smartdc():
         if norm > 0:
             centroid_distance = float(dot / norm)
             new_confidence = round(min(0.95, max(0.3, centroid_distance)), 2)
+
+        # Per-pole confidence relative to statement
+        if statement_emb:
+            stmt_arr = np.array(statement_emb, dtype=np.float32)
+            role_names = ["thesis", "antithesis", "neutral"]
+            for i, emb in enumerate(pole_embs[:3]):
+                sim = float(cosine_similarity(np.array(emb, dtype=np.float32), stmt_arr))
+                pole_confidences[role_names[i]] = round(sim, 3)
+
+            # Lean: thesis vs antithesis
+            t_conf = pole_confidences.get("thesis", 0.5)
+            a_conf = pole_confidences.get("antithesis", 0.5)
+            lean = round(t_conf - a_conf, 3)  # positive = thesis wins, negative = antithesis wins
+            pole_confidences["lean"] = lean
+            # Tension: how close thesis and antithesis are (high = genuine debate)
+            if len(pole_embs) >= 2:
+                tension = float(cosine_similarity(
+                    np.array(pole_embs[0], dtype=np.float32),
+                    np.array(pole_embs[1], dtype=np.float32)))
+                pole_confidences["tension"] = round(tension, 3)
+
         print(f"[smartdc] confidence from centroid: {new_confidence} (distance={centroid_distance:.3f})")
+        if pole_confidences:
+            print(f"[smartdc] poles: thesis={pole_confidences.get('thesis','?')} anti={pole_confidences.get('antithesis','?')} lean={pole_confidences.get('lean','?')} tension={pole_confidences.get('tension','?')}")
     else:
-        # Fallback: entropy-based confidence
         syn_ent = synthesis_ent.get("avg", 1.0)
         pole_ents = [p["entropy"].get("avg", 1.0) for p in poles]
         avg_pole_ent = sum(pole_ents) / len(pole_ents)
@@ -864,16 +910,37 @@ def graph_smartdc():
 
     return jsonify({
         "poles": [
-            {"role": "thesis", "text": poles[0]["text"], "entropy": poles[0]["entropy"]},
-            {"role": "antithesis", "text": poles[1]["text"], "entropy": poles[1]["entropy"]},
-            {"role": "neutral", "text": poles[2]["text"], "entropy": poles[2]["entropy"]},
+            {"role": "thesis", "text": poles[0]["text"], "entropy": poles[0]["entropy"],
+             "confidence": pole_confidences.get("thesis")},
+            {"role": "antithesis", "text": poles[1]["text"], "entropy": poles[1]["entropy"],
+             "confidence": pole_confidences.get("antithesis")},
+            {"role": "neutral", "text": poles[2]["text"], "entropy": poles[2]["entropy"],
+             "confidence": pole_confidences.get("neutral")},
         ],
         "synthesis": synthesis_text,
         "synthesis_entropy": synthesis_ent,
         "confidence": new_confidence,
         "centroid_distance": round(centroid_distance, 3),
+        "pole_analysis": pole_confidences,
         "original_idx": node_idx,
     })
+
+
+# --------------- Pump (Накачка) ---------------
+
+@graph_bp.route("/graph/pump", methods=["POST"])
+def graph_pump():
+    """Find the hidden axis between two ideas via bilateral expansion."""
+    from .pump_logic import pump
+
+    d = _p_data()
+    node_a = int(d.get("node_a", -1))
+    node_b = int(d.get("node_b", -1))
+    max_iter = int(d.get("max_iterations", 3))
+
+    result = pump(node_a, node_b, max_iterations=max_iter,
+                  lang=d["lang"], temp=d["temp"], top_k=d["top_k"])
+    return jsonify(result)
 
 
 # --------------- Horizon ---------------

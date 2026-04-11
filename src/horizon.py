@@ -56,12 +56,13 @@ class CognitiveHorizon:
     # ── LLM params ──────────────────────────────────────────────────────────
 
     def to_llm_params(self) -> dict:
-        """Convert precision to LLM generation parameters."""
+        """Convert precision to LLM generation parameters + adaptive novelty."""
         p = self.precision
         return {
             "temperature": max(0.1, min(1.5, 1.0 - p)),
             "top_k": int(max(10, min(100, 10 + 90 * (1 - p)))),
             "top_p": max(0.7, min(0.95, 0.5 + 0.5 * p)),
+            "novelty_threshold": round(max(0.8, min(0.96, 0.85 + 0.1 * p)), 3),
         }
 
     # ── Phase selection ─────────────────────────────────────────────────────
