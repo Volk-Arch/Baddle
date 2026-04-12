@@ -30,6 +30,8 @@ function populateRoles() {
 
 function onLangChange() {
   populateRoles();
+  _loadTemplateSelector();
+  if (typeof onGraphModeChange === 'function') onGraphModeChange();
 }
 
 function onRoleSelect() {
@@ -51,7 +53,8 @@ function getRole() {
   if (tplSel && tplSel.style.display !== 'none' && tplSel.value !== '' && tplSel.value !== 'none') {
     const tpl = templates[parseInt(tplSel.value)];
     if (tpl) {
-      let text = tpl.text;
+      const lang = (document.getElementById('lang-select') || {}).value || 'ru';
+      let text = (lang === 'en' && tpl.text_en) ? tpl.text_en : tpl.text;
       const varsDiv = document.getElementById('tpl-vars');
       varsDiv.querySelectorAll('input[data-var]').forEach(inp => {
         const re = new RegExp('[{][{]' + inp.dataset.var + '[}][}]', 'g');
@@ -70,22 +73,28 @@ function getRole() {
 
 // ── Templates ──────────────────────────────────────────────────────────────
 let templates = [];
-fetch('/templates').then(r => r.json()).then(data => {
-  templates = data;
-  if (!data.length) return;
+function _loadTemplateSelector() {
   const sel = document.getElementById('tpl-select');
-  if (!sel) return;
+  if (!sel || !templates.length) return;
+  const lang = (document.getElementById('lang-select') || {}).value || 'ru';
+  const cur = sel.value;
+  sel.innerHTML = '';
   sel.style.display = '';
   const none = document.createElement('option');
   none.value = 'none';
-  none.textContent = 'Template…';
+  none.textContent = lang === 'ru' ? 'Шаблон…' : 'Template…';
   sel.appendChild(none);
-  data.forEach((t, i) => {
+  templates.forEach((t, i) => {
     const opt = document.createElement('option');
     opt.value = i;
-    opt.textContent = t.name;
+    opt.textContent = (lang === 'ru' ? t.name : t.name_en) || t.name;
     sel.appendChild(opt);
   });
+  sel.value = cur || 'none';
+}
+fetch('/templates').then(r => r.json()).then(data => {
+  templates = data;
+  _loadTemplateSelector();
 }).catch(e => console.error('templates fetch error:', e));
 
 function onTplSelect() {
@@ -116,47 +125,12 @@ function onTplSelect() {
   });
 }
 
-// ── Heatmap rendering ──────────────────────────────────────────────────────
+// ── Text rendering (heatmap removed) ─────────────────────────────────────
 function renderHeatmap(elOrId, toks, ents, promptText) {
   const el = typeof elOrId === 'string' ? document.getElementById(elOrId) : elOrId;
-  if (!document.getElementById('heatmap-toggle').checked) {
-    el.textContent = (promptText || '') + toks.join('');
-    return;
-  }
-  el.innerHTML = '';
-  if (promptText) {
-    const pre = document.createElement('span');
-    pre.textContent = promptText;
-    pre.style.color = '#94a3b8';
-    el.appendChild(pre);
-  }
-  const heatScale = parseFloat(document.getElementById('heatmap-scale').value) || 3;
-  for (let i = 0; i < toks.length; i++) {
-    const span = document.createElement('span');
-    span.textContent = toks[i];
-    const ratio = Math.min(1, (ents[i] || 0) / heatScale);
-    const r = Math.round(ratio < 0.5 ? ratio * 2 * 255 : 255);
-    const g = Math.round(ratio < 0.5 ? 255 : (1 - ratio) * 2 * 255);
-    span.style.color = `rgb(${r},${g},80)`;
-    span.title = `entropy: ${(ents[i] || 0).toFixed(2)}`;
-    el.appendChild(span);
-  }
+  el.textContent = (promptText || '') + toks.join('');
 }
-
-// Store last heatmap data for rescaling
-let _lastHeatmaps = {};
-const _origRenderHeatmap = renderHeatmap;
-renderHeatmap = function(elOrId, toks, ents, promptText) {
-  const id = typeof elOrId === 'string' ? elOrId : elOrId.id;
-  _lastHeatmaps[id] = { toks, ents, promptText };
-  _origRenderHeatmap(elOrId, toks, ents, promptText);
-};
-function heatmapRescale() {
-  Object.entries(_lastHeatmaps).forEach(([id, data]) => {
-    const el = document.getElementById(id);
-    if (el) _origRenderHeatmap(el, data.toks, data.ents, data.promptText);
-  });
-}
+function heatmapRescale() {}
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function setMode(m) {

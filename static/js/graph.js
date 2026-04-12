@@ -1015,24 +1015,13 @@ function graphUpdateThoughtsList() {
     const dot = ci >= 0
       ? '<span style="color:' + clusterColors[ci % clusterColors.length] + '">&#9679;</span> '
       : '<span style="color:#64748b">&#9675;</span> ';
-    const entData = (nodes[i] && nodes[i].entropy) || {};
-    let entBadge = '';
-    if (entData.avg) {
-      const unc = entData.unc || 0;
-      const t = Math.min(unc / 0.15, 1);
-      const r = Math.round(t < 0.5 ? t * 2 * 255 : 255);
-      const g = Math.round(t < 0.5 ? 255 : (1 - (t - 0.5) * 2) * 255);
-      const entColor = 'rgb(' + r + ',' + g + ',60)';
-      entBadge = '<span style="color:' + entColor + ';font-size:11px;white-space:nowrap;margin-left:8px;font-family:Consolas,monospace">'
-        + (entData.avg || 0).toFixed(2) + ' / ' + (unc * 100).toFixed(0) + '%</span>';
-    }
     const del = '<span onclick="event.stopPropagation();graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
     let html = '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
       + 'class="mb-2 text-sm" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px;color:#37352f" '
       + 'onmouseover="this.style.background=\'#e8f4fd\'" onmouseout="graphHighlightListItem(this,' + i + ')">'
       + '<span style="flex:1">' + dot + '<span style="color:#64748b;font-size:10px;margin-right:4px">#' + i + '</span>'
       + (nodeType !== 'thought' ? '<span style="color:' + ({hypothesis:'#a78bfa',evidence:'#06b6d4',fact:'#10b981',question:'#f59e0b',goal:'#f43f5e',action:'#8b5cf6'}[nodeType]||'#64748b') + ';font-size:9px;margin-right:3px">[' + nodeType[0].toUpperCase() + ']</span>' : '')
-      + t + '</span>' + entBadge + del + '</div>';
+      + t + '</span>' + del + '</div>';
 
     // Subgoals display for goal nodes
     const subs = nodes[i].subgoals;
@@ -1364,28 +1353,7 @@ function graphShowDetail(idx) {
   const text = node.text;
   const entData = (node && node.entropy) || {};
   const detailView = document.getElementById('graph-detail-view');
-  const heatmapOn = document.getElementById('heatmap-toggle').checked;
-  if (heatmapOn && entData.tokens && entData.tokens.length) {
-    // Filter out <think>, </think>, control tokens
-    const visibleTokens = entData.tokens.filter(t =>
-      !t.token.match(/^<\/?think>$|^<\|.*\|>$/) && t.token.trim() !== ''
-    );
-    // Skip leading whitespace/newline tokens
-    let start = 0;
-    while (start < visibleTokens.length && visibleTokens[start].token.match(/^\s+$/)) start++;
-    const tokens = visibleTokens.slice(start);
-    // Render heatmap — color each token by entropy, using global scale
-    const scale = parseFloat(document.getElementById('heatmap-scale').value) || 3;
-    detailView.innerHTML = tokens.map(t => {
-      const norm = Math.min(1, t.ent / scale);
-      const r = Math.round(norm < 0.5 ? norm * 2 * 255 : 255);
-      const g = Math.round(norm < 0.5 ? 255 : (1 - (norm - 0.5) * 2) * 200);
-      const escaped = t.token.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return '<span title="ent: ' + t.ent.toFixed(2) + '" style="color:rgb(' + r + ',' + g + ',80)">' + escaped + '</span>';
-    }).join('');
-  } else {
-    detailView.textContent = text;
-  }
+  detailView.textContent = text;
   document.getElementById('graph-detail-edit-wrap').style.display = 'none';
   document.getElementById('graph-detail-view').style.display = '';
   document.getElementById('graph-detail-edit-btn').textContent = 'Edit';
@@ -1544,12 +1512,13 @@ document.addEventListener('DOMContentLoaded', () => {
       opt.value = m.id;
       // Name with short example in parentheses
       const examples = {
-        'free': '', 'scout': '', 'vector': '(одна цель → результат)',
-        'rhythm': '(регулярное действие)', 'horizon': '(изучить тему)',
-        'builder': '(все части нужны)', 'pipeline': '(шаг за шагом)',
-        'cascade': '(срочное первым)', 'scales': '(работа/семья/здоровье)',
-        'race': '(любой вариант подойдёт)', 'fan': '(набросать идеи)',
-        'tournament': '(выбрать одно из)', 'dispute': '(за и против)',
+        'free': '— ручной режим', 'scout': '— просто блуждать',
+        'vector': '— например "написать статью"', 'rhythm': '— например "зарядка каждый день"',
+        'horizon': '— например "разобраться в квантовой физике"',
+        'builder': '— например "подготовить презентацию"', 'pipeline': '— например "рецепт торта"',
+        'cascade': '— например "список дел на неделю"', 'scales': '— например "работа / семья / здоровье"',
+        'race': '— например "найти подарок"', 'fan': '— например "идеи для стартапа"',
+        'tournament': '— например "какую машину купить"', 'dispute': '— например "ИИ заменит программистов?"',
       };
       opt.textContent = m.name + (examples[m.id] ? ' ' + examples[m.id] : '');
       sel.appendChild(opt);
@@ -2932,7 +2901,19 @@ function onGraphModeChange() {
 
   // Update description line
   const desc = document.getElementById('graph-mode-description');
-  if (desc) desc.textContent = mode.tooltip || '';
+  if (desc) {
+    const parts = [];
+    if (mode.primitive) parts.push('логика: ' + mode.primitive.toUpperCase());
+    if (mode.strategy) parts.push('стратегия: ' + mode.strategy);
+    const goals = mode.goals_count === 0 ? '0' : mode.goals_count === 1 ? '1' : '2+';
+    parts.push('целей: ' + goals);
+    const stopMap = {
+      'finite': 'цель достигнута', 'repeatable': 'цикл → snapshot',
+      'open': 'исчерпание новизны'
+    };
+    if (mode.goal_type && stopMap[mode.goal_type]) parts.push('стоп: ' + stopMap[mode.goal_type]);
+    desc.textContent = parts.join(' · ');
+  }
 
   // Set hidden type selector
   const typeSel = document.getElementById('graph-add-type-top');

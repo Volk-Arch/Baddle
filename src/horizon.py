@@ -52,6 +52,8 @@ class CognitiveHorizon:
         self.beta = beta    # policy learning rate
         self.state = EXPLORATION
         self._history = []  # last N surprises for state detection
+        self._pending_state = None  # debounce: target state waiting confirmation
+        self._pending_count = 0     # debounce: consecutive ticks wanting same state
 
     # ── LLM params ──────────────────────────────────────────────────────────
 
@@ -130,40 +132,68 @@ class CognitiveHorizon:
     def _update_state(self, novelty: float = None):
         """Determine current state based on precision + recent history.
 
-        Uses hysteresis to prevent oscillation at boundaries:
-        - EXPLORATION → other: precision must rise above 0.45 (not 0.4)
-        - EXECUTION → other: precision must drop below 0.65 (not 0.7)
-        Gap of 0.05 eliminates dithering near thresholds.
+        Full hysteresis + debounce:
+        - Entry thresholds differ from exit thresholds (gap prevents dithering)
+        - State change requires 2 consecutive ticks wanting the same target (debounce)
+        - RECOVERY triggered instantly on surprise spike (no debounce)
         """
         p = self.precision
 
-        # Surprise spike → RECOVERY
+        # Surprise spike → RECOVERY (instant, no debounce)
         if self._history and len(self._history) >= 2:
             last = self._history[-1]
             prev = self._history[-2]
-            if last - prev > 0.3:  # sudden surprise jump
+            if last - prev > 0.3:
                 self.state = RECOVERY
+                self._pending_state = None
+                self._pending_count = 0
                 return
 
-        # Hysteresis: thresholds depend on current state
-        if self.state == EXPLORATION:
-            # Stay in EXPLORATION until precision clearly rises
-            if p < 0.45:
-                return  # keep EXPLORATION
-        elif self.state == EXECUTION:
-            # Stay in EXECUTION until precision clearly drops
-            if p > 0.65:
-                return  # keep EXECUTION
+        # Determine target state with hysteresis
+        target = self._target_state(p, novelty)
 
-        # State by precision level (entry thresholds)
-        if p < 0.4:
-            self.state = EXPLORATION
-        elif p > 0.7:
-            self.state = EXECUTION
-        elif novelty is not None and novelty < 0.3:
-            self.state = INTEGRATION  # low novelty = consolidating
+        # Same as current → reset pending, stay
+        if target == self.state:
+            self._pending_state = None
+            self._pending_count = 0
+            return
+
+        # Different → debounce: need 2 consecutive ticks
+        if not hasattr(self, '_pending_state'):
+            self._pending_state = None
+            self._pending_count = 0
+
+        if target == self._pending_state:
+            self._pending_count += 1
         else:
-            self.state = EXPLORATION if p < 0.5 else INTEGRATION
+            self._pending_state = target
+            self._pending_count = 1
+
+        if self._pending_count >= 2:
+            self.state = target
+            self._pending_state = None
+            self._pending_count = 0
+
+    def _target_state(self, p: float, novelty: float = None) -> str:
+        """Determine target state using hysteresis thresholds."""
+        # Exit thresholds (harder to leave current state)
+        if self.state == EXPLORATION and p < 0.45:
+            return EXPLORATION
+        if self.state == EXECUTION and p > 0.65:
+            return EXECUTION
+        if self.state == RECOVERY and p < 0.55:
+            return RECOVERY
+        if self.state == INTEGRATION and 0.45 < p < 0.65:
+            return INTEGRATION
+
+        # Entry thresholds (need clear signal to enter)
+        if p < 0.4:
+            return EXPLORATION
+        if p > 0.7:
+            return EXECUTION
+        if novelty is not None and novelty < 0.3:
+            return INTEGRATION
+        return EXPLORATION if p < 0.5 else INTEGRATION
 
     # ── Metrics ─────────────────────────────────────────────────────────────
 

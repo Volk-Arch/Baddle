@@ -36,5 +36,5 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 def entropy_from_logprob(logprob: float) -> float:
     """Convert a single token logprob to entropy contribution (-log p).
-    Used for heatmap coloring: higher = more uncertain."""
+    Higher = more uncertain. Used for confidence estimation."""
     return -float(logprob) if logprob else 0.0

@@ -28,7 +28,7 @@ MODES = {
         "placeholder_en": "Topic or thought...",
         "description": "Ручной режим. Все инструменты доступны, autorun выключен.",
         "description_en": "Manual mode. All tools available, no autorun.",
-        "tooltip": "ручной · без autorun · все инструменты",
+        "tooltip": "Всё вручную, без автопилота. Все инструменты доступны",
     },
 
     # ── 0 goals ──────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ MODES = {
         "placeholder_en": "Just start thinking...",
         "description": "Свободное блуждание без цели. Поиск неожиданных связей.",
         "description_en": "Free exploration without a goal. Serendipity search.",
-        "tooltip": "0 целей · бесконечный · без стоп-условия",
+        "tooltip": "Без цели. Система блуждает и ищет неожиданные связи",
     },
 
     # ── 1 goal ───────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ MODES = {
         "placeholder_en": "Goal: what to achieve?",
         "description": "Одна конечная цель. Фокус до достижения.",
         "description_en": "Single finite goal. Focus until achieved.",
-        "tooltip": "1 цель · конечная · стоп: confidence ≥ threshold",
+        "tooltip": "Одна цель, работаем пока не достигнем",
     },
     "rhythm": {
         "name": "Привычка",
@@ -74,7 +74,7 @@ MODES = {
         "placeholder_en": "Habit: what to do regularly?",
         "description": "Повторяемая цель. Streak, тренд, snapshot.",
         "description_en": "Repeatable goal. Streak, trend, snapshot evaluation.",
-        "tooltip": "1 цель · повторяемая · streak + тренд · бесконечный",
+        "tooltip": "Повторяемое действие. Отслеживает streak и тренд",
     },
     "horizon": {
         "name": "Исследование",
@@ -88,7 +88,7 @@ MODES = {
         "placeholder_en": "Topic: what to explore?",
         "description": "Открытая цель. Бесконечное уточнение до исчерпания новизны.",
         "description_en": "Open-ended goal. Infinite refinement until novelty exhaustion.",
-        "tooltip": "1 цель · открытая · стоп: исчерпание новизны",
+        "tooltip": "Изучаем тему вглубь, пока не исчерпаем новизну",
     },
 
     # ── AND ──────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ MODES = {
         "placeholder_en": "Subtasks (all required):",
         "description": "Все подцели обязательны, порядок неважен.",
         "description_en": "All subgoals required, any order.",
-        "tooltip": "AND · все обязательны · любой порядок · конечная",
+        "tooltip": "Все части обязательны, порядок неважен",
     },
     "pipeline": {
         "name": "По шагам",
@@ -118,7 +118,7 @@ MODES = {
         "placeholder_en": "Steps in order:",
         "description": "Все подцели по порядку. Каждая после предыдущей.",
         "description_en": "All subgoals in order. Each after previous.",
-        "tooltip": "AND · последовательно · по зависимостям · конечная",
+        "tooltip": "Строго по порядку, каждый шаг после предыдущего",
     },
     "cascade": {
         "name": "Приоритеты",
@@ -132,7 +132,7 @@ MODES = {
         "placeholder_en": "Tasks by priority:",
         "description": "Все подцели по приоритету. Срочное первым.",
         "description_en": "All subgoals by priority. Urgent first.",
-        "tooltip": "AND · по приоритету · срочное первым · конечная",
+        "tooltip": "Всё нужно, но срочное и важное первым",
     },
     "scales": {
         "name": "Баланс",
@@ -146,7 +146,7 @@ MODES = {
         "placeholder_en": "What to balance between?",
         "description": "Пропорциональное распределение между целями. Бюджет, баланс.",
         "description_en": "Proportional allocation between goals. Budget, balance.",
-        "tooltip": "AND · пропорции · бесконечный · snapshot",
+        "tooltip": "Распределяем внимание между несколькими целями поровну",
     },
 
     # ── OR ───────────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ MODES = {
         "placeholder_en": "Options (any will do):",
         "description": "Любая одна цель достаточна. Первая выигрывает.",
         "description_en": "Any one goal suffices. First to finish wins.",
-        "tooltip": "OR · любой достаточен · конечная",
+        "tooltip": "Подойдёт любой вариант, берём первый найденный",
     },
     "fan": {
         "name": "Мозговой штурм",
@@ -176,7 +176,7 @@ MODES = {
         "placeholder_en": "Topic for brainstorming:",
         "description": "Набор идей без ограничений. Мозговой штурм.",
         "description_en": "Open-ended idea generation. Brainstorm.",
-        "tooltip": "OR · открытый · стоп: исчерпание новизны",
+        "tooltip": "Набрасываем максимум идей без ограничений",
     },
 
     # ── XOR ──────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ MODES = {
         "placeholder_en": "Options to compare:",
         "description": "Выбрать ровно одну из нескольких. Сравнение вариантов.",
         "description_en": "Pick exactly one from several. Compare options.",
-        "tooltip": "XOR · выбрать одну · сравнение · конечная",
+        "tooltip": "Сравниваем варианты и выбираем лучший",
     },
     "dispute": {
         "name": "Дебаты",
@@ -206,7 +206,7 @@ MODES = {
         "placeholder_en": "Contradictory positions:",
         "description": "Противоречивые утверждения. Диалектический синтез.",
         "description_en": "Contradictory claims. Dialectical synthesis.",
-        "tooltip": "XOR · диалектика · синтез · конечная",
+        "tooltip": "Сталкиваем позиции, ищем синтез",
     },
 }
 

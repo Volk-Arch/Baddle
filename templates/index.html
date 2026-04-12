@@ -110,10 +110,6 @@
       <option value="en">EN</option>
     </select>
   </div>
-  <!-- Hidden heatmap controls (kept for JS compatibility, not shown) -->
-  <input id="heatmap-toggle" type="checkbox" checked style="display:none">
-  <input id="heatmap-scale" type="hidden" value="3">
-  <span id="heatmap-scale-val" style="display:none">3</span>
 
   <!-- ══ GRAPH mode ══ (first, visible by default) -->
   <div id="cfg-graph">
@@ -369,15 +365,17 @@
 
   <!-- ══ CHAT mode ══ -->
   <div id="cfg-chat" class="hidden">
-    <div class="flex flex-wrap gap-2 items-center mb-2" style="font-size:12px">
-      <label style="color:var(--text-secondary)">temp <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:55px"></label>
-      <label style="color:var(--text-secondary)">top_k <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:55px"></label>
-      <select id="role-select" onchange="onRoleSelect()" class="modal-select" style="min-width:100px;max-width:140px;padding:3px 6px;font-size:12px;"></select>
-      <textarea id="role-text" class="auto-grow" placeholder="Role / system prompt..."
-        style="flex:1;min-width:150px;font-size:12px;padding:4px 6px" rows="1"></textarea>
-      <select id="tpl-select" onchange="onTplSelect()" class="modal-select" style="display:none;max-width:140px;font-size:12px"></select>
+    <div class="card p-2 mb-1" style="font-size:12px">
+      <div class="flex flex-wrap gap-3 items-center mb-2">
+        <select id="role-select" onchange="onRoleSelect()" class="modal-select" style="flex:1;min-width:120px;padding:4px 8px;font-size:12px;"></select>
+        <select id="tpl-select" onchange="onTplSelect()" class="modal-select" style="display:none;flex:1;min-width:120px;padding:4px 8px;font-size:12px"></select>
+        <label style="color:var(--text-tertiary);display:flex;align-items:center;gap:4px">temp <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:65px;padding:4px 6px" class="modal-input"></label>
+        <label style="color:var(--text-tertiary);display:flex;align-items:center;gap:4px">top_k <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:65px;padding:4px 6px" class="modal-input"></label>
+      </div>
+      <textarea id="role-text" class="auto-grow" placeholder="System prompt..."
+        style="width:100%;font-size:12px;padding:4px 6px;color:var(--text-primary)" rows="1"></textarea>
+      <div id="tpl-vars" class="flex flex-wrap gap-2 items-center mt-2" style="display:none;font-size:12px"></div>
     </div>
-    <div id="tpl-vars" class="flex flex-wrap gap-2 items-center mb-2" style="display:none;font-size:12px"></div>
     <div style="display:flex;gap:8px;">
       <div style="flex:1;min-width:0;">
         <div id="chat-messages" class="card p-4 mb-2"

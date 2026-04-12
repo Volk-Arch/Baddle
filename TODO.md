@@ -9,8 +9,7 @@
 ## v1.7: доводка
 
 - [ ] **Pump: визуализация облаков** на SVG (два hull расширяющихся навстречу)
-- [ ] **Плавные переходы Horizon** — полный гистерезис для всех 4 состояний (сейчас только EXPLORATION/EXECUTION), взвешенный скоринг переходов, debounce (удерживать N тиков перед переключением)
-- [ ] **Расширение состояний Horizon** — добавить STABILIZE (сброс/калибровка), SHIFT (поворот φ, смена контекста), CONFLICT (несовместимые приоры, детекция merge_fail). Сейчас 4 → будет 7
+- [x] **Horizon: плавные переходы** — полный гистерезис для всех 4 состояний + debounce (2 тика). Расширение до 7 состояний (+STABILIZE/SHIFT/CONFLICT) — вместе с HRV в v5
 
 ---
 
@@ -105,27 +104,9 @@ Pump между далёкими нодами может породить мет
 ## v7: экосистема и полировка
 
 - [ ] **Layout** — d3/dagre/ELK вместо плоской линии
-- [ ] **Вырезать heatmap** — убрать heatmapRescale и связанный код из graph.js, chat.js, CSS. Из UI уже убран
 - [ ] **Тесты** — unit + integration
-- [ ] **Параллельные API-запросы** — threading, ускорение цикла
-- [ ] **Timeline player** — ⏮▶⏸⏭ по timestamps
 - [ ] **Экспорт** — PNG / SVG / markdown / Obsidian
-- [ ] **EXE-установщик** — PyInstaller, ~15-20 MB
-- [ ] **Graph Store** — маркетплейс графов знаний
-- [ ] **Git Verify** — MR для знаний, review, рейтинги
+- [ ] **EXE-установщик** — PyInstaller
+- [ ] **Graph Store** — маркетплейс графов, review, рейтинги
 - [ ] **Извлечение графа из текста** — статья → граф
 
----
-
-## Сделано, не тестировано
-
-- **Pump в autorun (Scout)** — tick выбирает два далёких ноды, запускает Pump, сохраняет лучший мост. Макс 3 за сессию
-- **LLM-as-judge (XOR)** — `/graph/compare`, LLM выбирает лучший из verified вариантов с объяснением, winner → confidence 0.95
-- **Goal display** — subgoals в THOUGHTS списке с ✓/○ и confidence%
-- **Mode-aware elaborate** — промпт учитывает primitive (XOR: плюсы/минусы, AND: детали, OR: пригодность)
-- **Multi-goal ввод** — multiline текст → goal + hypothesis ноды (subgoals), tick фильтрует по ним
-- **XOR min_evidence** — для XOR требует 3 elaborate перед doubt (глубокий анализ каждого варианта)
-- **UI: dynamic form per mode** — textarea расширяется для multi-goal, отдельные пронумерованные поля, type label
-- **UI: mode selector с примерами** — "Фокус (одна цель → результат)", описание отдельной строкой
-- **UI: grouped context menu** — Generate/Verify/Edit/Navigate в контекстном меню и detail panel
-- **UI: Load + Lang в tab bar** — heatmap убран из UI
