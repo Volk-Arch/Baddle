@@ -128,7 +128,13 @@ class CognitiveHorizon:
         self._update_state(novelty)
 
     def _update_state(self, novelty: float = None):
-        """Determine current state based on precision + recent history."""
+        """Determine current state based on precision + recent history.
+
+        Uses hysteresis to prevent oscillation at boundaries:
+        - EXPLORATION → other: precision must rise above 0.45 (not 0.4)
+        - EXECUTION → other: precision must drop below 0.65 (not 0.7)
+        Gap of 0.05 eliminates dithering near thresholds.
+        """
         p = self.precision
 
         # Surprise spike → RECOVERY
@@ -139,7 +145,17 @@ class CognitiveHorizon:
                 self.state = RECOVERY
                 return
 
-        # State by precision level
+        # Hysteresis: thresholds depend on current state
+        if self.state == EXPLORATION:
+            # Stay in EXPLORATION until precision clearly rises
+            if p < 0.45:
+                return  # keep EXPLORATION
+        elif self.state == EXECUTION:
+            # Stay in EXECUTION until precision clearly drops
+            if p > 0.65:
+                return  # keep EXECUTION
+
+        # State by precision level (entry thresholds)
         if p < 0.4:
             self.state = EXPLORATION
         elif p > 0.7:
