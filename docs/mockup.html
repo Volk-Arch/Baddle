@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Baddle — Your Second Brain</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #0a0a0f; color: #e4e4e7; overflow-x: hidden; }
+
+  .hero { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; width: 600px; height: 600px; background: radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%); top: 50%; left: 50%; transform: translate(-50%, -50%); animation: pulse 4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.5; } 50% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.8; } }
+  .hero h1 { font-size: 72px; font-weight: 700; letter-spacing: -2px; background: linear-gradient(135deg, #818cf8, #6366f1, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; position: relative; z-index: 1; }
+  .hero .subtitle { font-size: 24px; font-weight: 300; color: #a1a1aa; margin-top: 16px; position: relative; z-index: 1; }
+  .hero .tagline { font-size: 13px; color: #52525b; margin-top: 32px; letter-spacing: 2px; position: relative; z-index: 1; max-width: 500px; line-height: 1.6; }
+
+  .section { padding: 80px 40px; max-width: 1200px; margin: 0 auto; }
+  .section-title { font-size: 36px; font-weight: 600; margin-bottom: 12px; letter-spacing: -1px; }
+  .section-sub { font-size: 17px; color: #71717a; margin-bottom: 50px; max-width: 600px; line-height: 1.6; }
+  .assistant-section { background: linear-gradient(180deg, #0a0a0f 0%, #1a1a2e 100%); }
+
+  .chat-mockup { background: #18181b; border-radius: 20px; border: 1px solid #27272a; overflow: hidden; max-width: 700px; margin: 0 auto; box-shadow: 0 25px 80px rgba(0,0,0,0.5); }
+  .chat-header { padding: 16px 24px; border-bottom: 1px solid #27272a; display: flex; align-items: center; gap: 12px; }
+  .chat-avatar { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #6366f1, #818cf8); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: white; }
+  .chat-name { font-weight: 500; font-size: 15px; }
+  .chat-status-text { font-size: 11px; color: #10b981; }
+  .chat-messages { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.5; }
+  .msg-ai { background: #1f1f23; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .msg-user { background: #4f46e5; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .msg-meta { font-size: 11px; color: #52525b; margin-top: 6px; }
+  .msg-highlight { color: #818cf8; font-weight: 500; }
+  .msg-energy { display: inline-flex; align-items: center; gap: 6px; background: #27272a; padding: 4px 10px; border-radius: 6px; font-size: 12px; margin-top: 8px; }
+  .chat-input-area { padding: 16px 24px; border-top: 1px solid #27272a; display: flex; gap: 12px; align-items: center; }
+  .chat-input { flex: 1; background: #27272a; border: none; border-radius: 12px; padding: 12px 16px; color: #e4e4e7; font-size: 14px; outline: none; }
+  .chat-send { background: #6366f1; border: none; border-radius: 10px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: white; font-size: 18px; }
+
+  .day-label { color: #52525b; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 12px; }
+  .card-option { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #27272a; border-radius: 8px; }
+  .card-option.recommended { background: #1e1b4b; border: 1px solid #4f46e5; }
+  .pole-card { flex: 1; padding: 10px; border-radius: 8px; }
+  .action-btn { padding: 8px 16px; border-radius: 8px; font-size: 12px; cursor: pointer; border: none; }
+
+  .modes-strip { display: flex; gap: 10px; overflow-x: auto; padding: 16px 0; scrollbar-width: none; flex-wrap: wrap; }
+  .modes-strip::-webkit-scrollbar { display: none; }
+  .mode-chip { padding: 10px 18px; border-radius: 10px; background: #1f1f23; border: 1px solid #27272a; font-size: 13px; white-space: nowrap; cursor: default; transition: all 0.3s; }
+  .mode-chip:hover { border-color: #3f3f46; }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 40px; }
+  .feature-card { background: #18181b; border: 1px solid #27272a; border-radius: 16px; padding: 24px; transition: all 0.3s; }
+  .feature-card:hover { border-color: #3f3f46; transform: translateY(-4px); }
+  .feature-icon { font-size: 28px; margin-bottom: 12px; }
+  .feature-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .feature-desc { font-size: 13px; color: #71717a; line-height: 1.6; }
+
+  .dashboard { background: #18181b; border-radius: 20px; border: 1px solid #27272a; overflow: hidden; box-shadow: 0 25px 80px rgba(0,0,0,0.5); }
+  .dash-header { padding: 20px 28px; border-bottom: 1px solid #27272a; display: flex; align-items: center; gap: 16px; }
+  .dash-header .logo { font-size: 18px; font-weight: 600; color: #818cf8; }
+  .dash-header .mode { background: #27272a; padding: 6px 14px; border-radius: 8px; font-size: 13px; color: #a1a1aa; }
+  .dash-header .mode em { color: #818cf8; font-style: normal; font-weight: 500; }
+  .dash-header .spacer { flex: 1; }
+  .dash-header .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1aa; }
+  .dash-header .dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; animation: blink 2s infinite; }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .dash-body { display: grid; grid-template-columns: 1fr 340px; min-height: 500px; }
+  .graph-area { padding: 32px; }
+  .graph-area svg { width: 100%; height: 400px; }
+  .node { cursor: pointer; transition: all 0.3s; }
+  .node:hover { filter: brightness(1.3); }
+  .edge { stroke: #27272a; stroke-width: 1; }
+  .edge-strong { stroke: #3f3f46; stroke-width: 2; }
+  .sidebar { border-left: 1px solid #27272a; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+  .sidebar-title { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #52525b; margin-bottom: 8px; }
+  .energy-card, .hrv-card { background: #1f1f23; border-radius: 12px; padding: 16px; }
+  .energy-bar-bg { height: 8px; background: #27272a; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .energy-bar { height: 100%; border-radius: 4px; }
+  .energy-label { display: flex; justify-content: space-between; font-size: 12px; color: #71717a; margin-top: 6px; }
+  .hrv-value { font-size: 36px; font-weight: 700; color: #10b981; }
+  .hrv-unit { font-size: 14px; color: #52525b; font-weight: 400; }
+  .hrv-chart { display: flex; align-items: flex-end; gap: 3px; height: 40px; margin-top: 12px; }
+  .hrv-bar { flex: 1; background: #10b981; border-radius: 2px; opacity: 0.6; min-width: 4px; }
+  .thought-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1f1f23; font-size: 13px; }
+  .thought-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .thought-conf { font-size: 11px; color: #52525b; margin-left: auto; font-family: monospace; }
+
+  .cone-container { display: flex; justify-content: center; margin: 40px 0; }
+  .cone-svg { filter: drop-shadow(0 0 20px rgba(99,102,241,0.3)); }
+  .footer { text-align: center; padding: 80px 40px; }
+  .footer .big { font-size: 48px; font-weight: 700; background: linear-gradient(135deg, #818cf8, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<!-- ═══ 1. HERO ═══ -->
+<div class="hero">
+  <h1>baddle</h1>
+  <div class="subtitle">Augmented Human Intelligence</div>
+  <div class="tagline">NOT ARTIFICIAL. AUGMENTED.</div>
+</div>
+
+<!-- ═══ 2. PROBLEM ═══ -->
+<div class="section" style="text-align:center">
+  <div class="section-title">You make 35,000 decisions a day</div>
+  <div class="section-sub" style="margin:12px auto 40px">Each one costs energy. By evening you're empty. The important decisions get the worst version of you.</div>
+  <div style="display:flex;justify-content:center;gap:40px;flex-wrap:wrap">
+    <div style="text-align:center">
+      <div style="font-size:48px;font-weight:700;color:#ef4444">73%</div>
+      <div style="font-size:13px;color:#52525b">of night decisions<br>are regretted</div>
+    </div>
+    <div style="text-align:center">
+      <div style="font-size:48px;font-weight:700;color:#f59e0b">3 min</div>
+      <div style="font-size:13px;color:#52525b">average freeze time<br>on simple choices</div>
+    </div>
+    <div style="text-align:center">
+      <div style="font-size:48px;font-weight:700;color:#10b981">0</div>
+      <div style="font-size:13px;color:#52525b">apps that know<br>when you're tired</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 3. THE WEEK — story first ═══ -->
+<div class="section assistant-section">
+  <div class="section-title">A week with Baddle</div>
+  <div class="section-sub">It thinks while you sleep. It feels when you're tired. It decides when you can't.</div>
+
+  <!-- ─── NIGHT: Scout ─── -->
+  <div class="day-label">Monday &middot; 3:47 AM &middot; You're sleeping. Baddle isn't.</div>
+  <div class="chat-mockup" style="margin-bottom:48px;border-color:#1e1b4b">
+    <div class="chat-header" style="border-color:#1e1b4b">
+      <div class="chat-avatar" style="background:linear-gradient(135deg, #312e81, #4338ca)">&#9790;</div>
+      <div>
+        <div class="chat-name">Baddle Scout</div>
+        <div class="chat-status-text" style="color:#818cf8">autonomous &middot; cycle 3 &middot; 34 nodes explored</div>
+      </div>
+    </div>
+    <div style="padding:24px;display:flex;flex-direction:column;gap:16px">
+      <div style="color:#52525b;font-size:11px">While you slept, Scout explored your graph and found:</div>
+      <div style="padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:16px">&#128279;</span>
+          <span style="font-size:12px;color:#818cf8;font-weight:600">BRIDGE FOUND</span>
+          <span style="font-size:10px;color:#52525b;margin-left:auto">quality: 72%</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px">Your project: auth module</div>
+          <span style="color:#4338ca">&#10230;</span>
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px">Article: distributed systems</div>
+        </div>
+        <div style="font-size:13px;color:#e4e4e7;line-height:1.5">Hidden axis: <span style="color:#818cf8;font-weight:500">"scalability as shared constraint"</span> — your auth bottleneck mirrors the article's point about single points of failure.</div>
+      </div>
+      <div style="padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:16px">&#128279;</span>
+          <span style="font-size:12px;color:#818cf8;font-weight:600">BRIDGE FOUND</span>
+          <span style="font-size:10px;color:#52525b;margin-left:auto">quality: 58%</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px">Last week: "burnout prevention"</div>
+          <span style="color:#4338ca">&#10230;</span>
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px">HRV data: Tuesday dips</div>
+        </div>
+        <div style="font-size:13px;color:#e4e4e7;line-height:1.5">Hidden axis: <span style="color:#818cf8;font-weight:500">"recovery debt accumulation"</span> — your Tuesday HRV dips correlate with Monday overwork.</div>
+        <div style="font-size:11px;color:#52525b;margin-top:6px">Connected your personal data with your research. You didn't ask for this.</div>
+      </div>
+      <div style="padding:14px;background:#27272a;border:1px solid #3f3f46;border-radius:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:16px">&#129300;</span>
+          <span style="font-size:12px;color:#f59e0b;font-weight:600">QUESTION GENERATED</span>
+        </div>
+        <div style="font-size:13px;color:#e4e4e7;line-height:1.5">"If your auth module is a single point of failure, and your energy on Tuesdays is a single point of failure — <span style="color:#f59e0b">what other single points of failure exist that you haven't noticed?</span>"</div>
+        <div style="font-size:11px;color:#52525b;margin-top:6px">META question &middot; waiting for morning</div>
+      </div>
+      <div style="color:#3f3f46;font-size:11px;text-align:center">3:47 AM &middot; 7 nodes added &middot; 2 bridges &middot; 1 question &middot; graph growing while you sleep</div>
+    </div>
+  </div>
+
+  <!-- ─── MONDAY MORNING ─── -->
+  <div class="day-label">Monday &middot; 7:30 AM &middot; Morning</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text">Polar H10 synced &middot; coherence 0.78</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:700;color:#10b981">88<span style="font-size:12px;color:#52525b">/100</span></div>
+        <div style="font-size:10px;color:#52525b">daily energy</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-ai">
+        Good morning. You slept <span class="msg-highlight">7h 20m</span>, recovery <span class="msg-highlight">82%</span>. You're well-rested today.
+        <div class="msg-energy">&#9889; 5 tasks &middot; hardest: code review (cost 22) &middot; budget: 88</div>
+      </div>
+      <div class="msg msg-ai">
+        Overnight Scout found 2 bridges — one connects your auth module to that distributed systems article. <span class="msg-highlight">Worth 10 min?</span>
+      </div>
+      <div class="msg msg-user">Later. What should I eat?</div>
+      <div class="msg msg-ai">
+        From your fridge, 3 options:
+        <div style="margin:8px 0;display:flex;flex-direction:column;gap:6px">
+          <div class="card-option"><span>1</span><div style="flex:1"><div style="font-weight:500">Oatmeal + berries</div><div style="font-size:11px;color:#71717a">320 kcal &middot; 5 min &middot; light</div></div></div>
+          <div class="card-option recommended"><span>2</span><div style="flex:1"><div style="font-weight:500;color:#818cf8">Omelette + avocado &#9733;</div><div style="font-size:11px;color:#71717a">450 kcal &middot; 12 min &middot; recommended</div></div></div>
+          <div class="card-option"><span>3</span><div style="flex:1"><div style="font-weight:500">Yogurt + granola</div><div style="font-size:11px;color:#71717a">280 kcal &middot; 2 min &middot; quick</div></div></div>
+        </div>
+        <div class="msg-meta">decision cost: 2 energy &middot; or I choose for you</div>
+      </div>
+      <div class="msg msg-user">Go with #2</div>
+      <div class="msg msg-ai">
+        Starting with <span class="msg-highlight">code review</span> — your coherence is 0.78, best for complex work. Lighter tasks saved for afternoon.
+        <div class="msg-meta">energy 86/100 remaining</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── MONDAY AFTERNOON ─── -->
+  <div class="day-label">Monday &middot; 2:15 PM &middot; Energy drop</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text" style="color:#f59e0b">coherence dropping &middot; 0.41</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:700;color:#ef4444">31<span style="font-size:12px;color:#52525b">/100</span></div>
+        <div style="font-size:10px;color:#52525b">daily energy</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-ai">
+        &#9888; Coherence dropped to <span style="color:#f59e0b">0.41</span>. Energy <span style="color:#ef4444">31/100</span>. You've made 14 decisions today.
+        <div style="margin-top:8px">Heavy decision <span class="msg-highlight">"change tech stack?"</span> — move to tomorrow morning?</div>
+      </div>
+      <div class="msg msg-user">Yeah, tomorrow</div>
+      <div class="msg msg-ai">
+        Moved. Tonight Scout will think about it in background. Meanwhile — those 2 bridges from last night are still unexplored. Low energy cost, high insight potential.
+        <div class="msg-meta">recovery mode &middot; no pressure</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── WEDNESDAY: Debate ─── -->
+  <div class="day-label">Wednesday &middot; 11:00 AM &middot; Meeting prep</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text">analyzing both sides</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="font-size:12px;color:#a1a1aa">meeting in 3h</div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-user">I need arguments for the architecture meeting. Microservices vs monolith.</div>
+      <div class="msg msg-ai">
+        <div style="margin:8px 0;padding:12px;background:#27272a;border-radius:10px">
+          <div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+            <div class="pole-card" style="background:#052e16;border:1px solid #166534">
+              <div style="font-size:10px;color:#10b981;font-weight:600;margin-bottom:4px">FOR MICROSERVICES</div>
+              <div style="font-size:12px">Independent scaling, team autonomy, fault isolation. Your team of 12 can own services.</div>
+              <div style="font-size:11px;color:#10b981;margin-top:6px">confidence: 74%</div>
+            </div>
+            <div class="pole-card" style="background:#1c1917;border:1px solid #78350f">
+              <div style="font-size:10px;color:#f59e0b;font-weight:600;margin-bottom:4px">AGAINST</div>
+              <div style="font-size:12px">Operational complexity, distributed debugging, premature at your scale.</div>
+              <div style="font-size:11px;color:#f59e0b;margin-top:6px">confidence: 68%</div>
+            </div>
+          </div>
+          <div style="padding:10px;background:#1e1b4b;border-radius:8px;border:1px solid #4338ca">
+            <div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:4px">SYNTHESIS</div>
+            <div style="font-size:12px">Modular monolith now, with clear boundaries. Extract services only when a module needs independent scaling. Best of both.</div>
+            <div style="font-size:11px;color:#818cf8;margin-top:6px">balanced &middot; confidence: 81%</div>
+          </div>
+        </div>
+        <div class="msg-meta">3 perspectives verified &middot; 15 min instead of 2 hours</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── WEDNESDAY NIGHT: Email ─── -->
+  <div class="day-label">Wednesday &middot; 11:47 PM &middot; Baddle saves you</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar" style="background:linear-gradient(135deg, #ef4444, #f59e0b)">!</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text" style="color:#ef4444">proactive alert</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:700;color:#ef4444">9<span style="font-size:12px;color:#52525b">/100</span></div>
+        <div style="font-size:10px;color:#52525b">energy critical</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-ai" style="border-left:3px solid #ef4444">
+        &#9888; You have an angry email draft open. Energy <span style="color:#ef4444">9/100</span>, coherence <span style="color:#ef4444">0.28</span>. Decisions at this level have a <span style="color:#ef4444">73% regret rate</span> in your history.
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <div class="action-btn" style="background:#4f46e5;color:white;cursor:pointer">Save draft for morning</div>
+          <div class="action-btn" style="background:#27272a;color:#52525b;cursor:pointer">Send anyway</div>
+        </div>
+      </div>
+      <div class="msg msg-user">...fine. Morning.</div>
+      <div class="msg msg-ai">
+        Saved. Reminder at 9 AM when your coherence is usually <span class="msg-highlight">0.75+</span>.
+        <div class="msg-meta">you'll thank me tomorrow</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── THURSDAY MORNING: Briefing ─── -->
+  <div class="day-label">Thursday &middot; 7:15 AM &middot; Before you wake up</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text">morning briefing ready</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-ai">
+        <div style="font-weight:600;margin-bottom:10px">&#9728;&#65039; Today's briefing</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;gap:10px;align-items:center;padding:10px;background:#27272a;border-radius:10px">
+            <span style="font-size:22px">&#127782;&#65039;</span>
+            <div><div style="font-size:13px;font-weight:500">14°C, rain after 3pm</div><div style="font-size:11px;color:#71717a">Take umbrella. Move outdoor run to morning</div></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;padding:10px;background:#27272a;border-radius:10px">
+            <span style="font-size:22px">&#128085;</span>
+            <div><div style="font-size:13px;font-weight:500">Client meeting at 11 + gym at 7pm</div><div style="font-size:11px;color:#71717a">Navy blazer + white shirt. Pack gym bag</div></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;padding:10px;background:#27272a;border-radius:10px">
+            <span style="font-size:22px">&#127859;</span>
+            <div><div style="font-size:13px;font-weight:500">Eggs + toast + coffee</div><div style="font-size:11px;color:#71717a">You skip breakfast on Thursdays 60% of the time &#8594; headache by 2pm</div></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;padding:10px;background:#1e1b4b;border:1px solid #4338ca;border-radius:10px">
+            <span style="font-size:22px">&#128161;</span>
+            <div><div style="font-size:13px;font-weight:500;color:#818cf8">Pattern detected</div><div style="font-size:11px;color:#a1a1aa">Last 3 Thursdays: skipped breakfast &#8594; energy crash at 2pm &#8594; postponed tasks &#8594; Friday overload. Breaking the cycle today.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── THURSDAY NIGHT: Shopping ─── -->
+  <div class="day-label">Thursday &middot; 11:30 PM &middot; Impulse control</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar" style="background:linear-gradient(135deg, #f59e0b, #ef4444)">$</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text" style="color:#f59e0b">spending guard</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-ai">
+        3 items in cart. Total: <span style="color:#ef4444;font-weight:600">$380</span>. It's 11:30 PM, energy <span style="color:#ef4444">14/100</span>.
+        <div style="margin:10px 0;padding:12px;background:#27272a;border-radius:10px">
+          <div style="font-size:12px;color:#71717a;margin-bottom:8px">Your impulse purchase history:</div>
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span>Night purchases (energy &lt;20)</span><span style="color:#ef4444">68% returned or regretted</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:4px"><span>Morning purchases (energy &gt;70)</span><span style="color:#10b981">91% kept and satisfied</span></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <div class="action-btn" style="background:#4f46e5;color:white;cursor:pointer">Save cart for morning</div>
+          <div class="action-btn" style="background:#27272a;color:#52525b;cursor:pointer">Buy anyway</div>
+        </div>
+        <div class="msg-meta">saved you $380 last month with this feature</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── FRIDAY: Bayesian ─── -->
+  <div class="day-label">Friday &middot; 10:00 AM &middot; Big decision, no guessing</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text">bayesian mode</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="text-align:right">
+        <div style="font-size:28px;font-weight:700;color:#f59e0b">71<span style="font-size:14px;color:#52525b">%</span></div>
+        <div style="font-size:10px;color:#52525b">P(switch stack)</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-user">Should we switch tech stack?</div>
+      <div class="msg msg-ai">
+        Let me ask a few things first. <span class="msg-highlight">Team size? Current stack age?</span>
+      </div>
+      <div class="msg msg-user">12 people, 3 know the new framework, current stack is 4 years old</div>
+      <div class="msg msg-ai">
+        Initial estimate: <span class="msg-highlight">P = 30%</span>. Now adding observations:
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#052e16;border-radius:8px;border:1px solid #166534">
+            <span style="font-size:12px">"3 people already know the new framework"</span>
+            <span style="font-size:11px;color:#10b981">supports &rarr; 58%</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#1c1917;border-radius:8px;border:1px solid #78350f">
+            <span style="font-size:12px">"Migration takes 3 months"</span>
+            <span style="font-size:11px;color:#f59e0b">contradicts &rarr; 38%</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#052e16;border-radius:8px;border:1px solid #166534">
+            <span style="font-size:12px">"Current stack EOL in 1 year"</span>
+            <span style="font-size:11px;color:#10b981">supports &rarr; 71%</span>
+          </div>
+        </div>
+        <div class="msg-meta" style="margin-top:8px">3 observations &middot; decision on numbers, not feelings</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Add observation..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── SUNDAY: Review ─── -->
+  <div class="day-label">Sunday &middot; 9:00 PM &middot; What changed this week</div>
+  <div class="chat-mockup" style="margin-bottom:20px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text">weekly summary</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-ai">
+        <div style="font-weight:600;margin-bottom:12px">Your week</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div style="background:#27272a;padding:12px;border-radius:10px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:#10b981">5/7</div>
+            <div style="font-size:11px;color:#71717a">exercise streak</div>
+          </div>
+          <div style="background:#27272a;padding:12px;border-radius:10px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:#818cf8">6/7</div>
+            <div style="font-size:11px;color:#71717a">meals on time</div>
+          </div>
+          <div style="background:#27272a;padding:12px;border-radius:10px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:#f59e0b">62</div>
+            <div style="font-size:11px;color:#71717a">decisions made</div>
+          </div>
+          <div style="background:#27272a;padding:12px;border-radius:10px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:#10b981">+8%</div>
+            <div style="font-size:11px;color:#71717a">HRV trend (month)</div>
+          </div>
+        </div>
+        <div style="font-size:13px;color:#a1a1aa">Mornings strong (avg 85 energy), afternoon dips (avg 35). Tuesday was hardest — 3 complex decisions drained you by noon.</div>
+        <div style="font-size:13px;color:#a1a1aa;margin-top:8px">Scout found <span class="msg-highlight">7 bridges</span> this week. 2 became active ideas. Graph grew by 34 nodes.</div>
+        <div style="font-size:13px;margin-top:12px">Recommendation: move hard decisions to before 11am. Your data shows <span class="msg-highlight">2.3x better outcomes</span> in morning sessions.</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+</div>
+
+<!-- ═══ 4. HOW IT WORKS ═══ -->
+<div class="section">
+  <div class="section-title">How it works</div>
+  <div class="section-sub">Under the hood: a graph of thoughts, adaptive controller, and 14 modes built from 5 primitives.</div>
+
+  <!-- Dashboard -->
+  <div class="dashboard" style="margin-bottom:60px">
+    <div class="dash-header">
+      <span class="logo">baddle</span>
+      <span class="mode"><em>Research</em> mode</span>
+      <span class="spacer"></span>
+      <span class="status"><span class="dot"></span> EXECUTION</span>
+      <span class="status" style="color:#818cf8">P = 0.72</span>
+    </div>
+    <div class="dash-body">
+      <div class="graph-area">
+        <svg viewBox="0 0 600 400" id="demo-graph">
+          <line x1="200" y1="180" x2="340" y2="120" class="edge-strong"/>
+          <line x1="200" y1="180" x2="150" y2="300" class="edge"/>
+          <line x1="340" y1="120" x2="450" y2="200" class="edge-strong"/>
+          <line x1="340" y1="120" x2="380" y2="280" class="edge"/>
+          <line x1="150" y1="300" x2="280" y2="340" class="edge"/>
+          <line x1="380" y1="280" x2="280" y2="340" class="edge-strong"/>
+          <line x1="450" y1="200" x2="500" y2="300" class="edge"/>
+          <line x1="100" y1="140" x2="200" y2="180" class="edge"/>
+          <!-- Pump bridge line (hidden, shown on click) -->
+          <line x1="150" y1="300" x2="450" y2="200" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6,4" opacity="0" id="pump-line"/>
+
+          <circle cx="100" cy="140" r="18" fill="#f43f5e" opacity="0.9" class="node" data-node="goal"/>
+          <text x="100" y="115" text-anchor="middle" fill="#71717a" font-size="10">goal</text>
+
+          <circle cx="200" cy="180" r="22" fill="#10b981" opacity="0.9" class="node" data-node="verified1"/>
+          <text x="200" y="155" text-anchor="middle" fill="#a1a1aa" font-size="10">0.87</text>
+          <text x="200" y="205" text-anchor="middle" fill="#71717a" font-size="9">Open-source enables</text>
+          <text x="200" y="215" text-anchor="middle" fill="#71717a" font-size="9">local AI</text>
+
+          <circle cx="340" cy="120" r="20" fill="#10b981" opacity="0.8" class="node" data-node="verified2"/>
+          <text x="340" y="95" text-anchor="middle" fill="#a1a1aa" font-size="10">0.92</text>
+          <text x="340" y="145" text-anchor="middle" fill="#71717a" font-size="9">Privacy drives</text>
+          <text x="340" y="155" text-anchor="middle" fill="#71717a" font-size="9">adoption</text>
+
+          <circle cx="450" cy="200" r="16" fill="#f59e0b" opacity="0.8" class="node" data-node="unverified"/>
+          <text x="450" y="175" text-anchor="middle" fill="#a1a1aa" font-size="10">0.61</text>
+          <text x="450" y="225" text-anchor="middle" fill="#71717a" font-size="9">Enterprise</text>
+          <text x="450" y="235" text-anchor="middle" fill="#71717a" font-size="9">resistance</text>
+
+          <circle cx="150" cy="300" r="14" fill="#f59e0b" opacity="0.7" class="node" data-node="weak"/>
+          <text x="150" y="325" text-anchor="middle" fill="#71717a" font-size="9">Cost barrier</text>
+
+          <circle cx="280" cy="340" r="24" fill="#818cf8" opacity="0.9" class="node" data-node="synthesis"/>
+          <text x="280" y="315" text-anchor="middle" fill="#a1a1aa" font-size="10">synthesis</text>
+
+          <circle cx="380" cy="280" r="13" fill="#ef4444" opacity="0.6" class="node" data-node="rejected"/>
+          <text x="380" y="305" text-anchor="middle" fill="#71717a" font-size="9">Regulation</text>
+
+          <circle cx="500" cy="300" r="12" fill="#52525b" opacity="0.5" class="node" data-node="bare"/>
+        </svg>
+        <!-- Interactive panel under graph -->
+        <div id="graph-info" style="display:none;margin-top:12px;padding:14px;background:#1f1f23;border-radius:12px;font-size:12px;transition:all 0.3s"></div>
+        <div style="color:#3f3f46;font-size:11px;margin-top:8px;text-align:center">Click any node to inspect</div>
+      </div>
+      <div class="sidebar">
+        <div class="energy-card">
+          <div class="sidebar-title">Daily Energy</div>
+          <div style="font-size:28px;font-weight:600;color:#f59e0b">67<span style="font-size:16px;color:#52525b">/100</span></div>
+          <div class="energy-bar-bg"><div class="energy-bar" style="width:67%;background:linear-gradient(90deg,#f59e0b,#eab308)"></div></div>
+          <div class="energy-label"><span>12 decisions today</span><span>~5 left</span></div>
+        </div>
+        <div class="hrv-card">
+          <div class="sidebar-title">HRV Coherence</div>
+          <div class="hrv-value">0.73 <span class="hrv-unit">RMSSD 42ms</span></div>
+          <div class="hrv-chart">
+            <div class="hrv-bar" style="height:40%"></div><div class="hrv-bar" style="height:55%"></div>
+            <div class="hrv-bar" style="height:70%"></div><div class="hrv-bar" style="height:60%"></div>
+            <div class="hrv-bar" style="height:85%"></div><div class="hrv-bar" style="height:75%"></div>
+            <div class="hrv-bar" style="height:90%"></div><div class="hrv-bar" style="height:80%"></div>
+            <div class="hrv-bar" style="height:95%"></div><div class="hrv-bar" style="height:85%;background:#6366f1"></div>
+          </div>
+        </div>
+        <div>
+          <div class="sidebar-title">Verified thoughts</div>
+          <div class="thought-item"><span class="thought-dot" style="background:#10b981"></span><span>Open-source enables local AI</span><span class="thought-conf">92%</span></div>
+          <div class="thought-item"><span class="thought-dot" style="background:#10b981"></span><span>Privacy drives adoption</span><span class="thought-conf">87%</span></div>
+          <div class="thought-item"><span class="thought-dot" style="background:#f59e0b"></span><span>Enterprise resistance</span><span class="thought-conf">61%</span></div>
+          <div class="thought-item"><span class="thought-dot" style="background:#ef4444"></span><span>Regulation slows progress</span><span class="thought-conf">32%</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modes -->
+  <div style="margin-bottom:40px">
+    <div style="font-size:20px;font-weight:600;margin-bottom:8px">Every situation has a mode</div>
+    <div style="font-size:14px;color:#71717a;margin-bottom:16px">14 modes, one engine. You describe the situation — Baddle picks the right mode.</div>
+    <div class="modes-strip">
+      <div class="mode-chip">"BMW or Tesla?" &rarr; <span style="color:#818cf8">verifies both, picks winner with reasons</span></div>
+      <div class="mode-chip">"Pros and cons of moving" &rarr; <span style="color:#818cf8">forced counter-argument on each side</span></div>
+      <div class="mode-chip">"What to eat?" &rarr; <span style="color:#818cf8">picks from your fridge, considers energy</span></div>
+      <div class="mode-chip">"Will it rain?" &rarr; <span style="color:#818cf8">Bayesian update with each observation</span></div>
+      <div class="mode-chip">"Work / family / health" &rarr; <span style="color:#818cf8">balances all three, tracks drift</span></div>
+      <div class="mode-chip">"Exercise every day" &rarr; <span style="color:#818cf8">streak + HRV correlation + nudges</span></div>
+      <div class="mode-chip">"Understand crypto" &rarr; <span style="color:#818cf8">explores until novelty exhaustion</span></div>
+      <div class="mode-chip">"Just wander" &rarr; <span style="color:#818cf8">finds bridges between your ideas at 3 AM</span></div>
+    </div>
+  </div>
+
+  <!-- Features -->
+  <div class="features">
+    <div class="feature-card">
+      <div class="feature-icon">&#9889;</div>
+      <div class="feature-title">Forced counter-argument</div>
+      <div class="feature-desc">Every thought tested from both sides. Not opinion — a weighted position with numerical confidence.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128279;</div>
+      <div class="feature-title">Hidden connections</div>
+      <div class="feature-desc">Two unrelated ideas in, hidden axes out. Insights you can't see yourself. Works while you sleep.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#10084;&#65039;</div>
+      <div class="feature-title">Body as input</div>
+      <div class="feature-desc">HRV sensor syncs with your state. High coherence — explore. Dropping — focus or rest.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#127919;</div>
+      <div class="feature-title">Energy economy</div>
+      <div class="feature-desc">Every decision costs energy. Baddle tracks your budget and protects you from bad choices when you're empty.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128274;</div>
+      <div class="feature-title">Self-hosted</div>
+      <div class="feature-desc">Your device. Your data. 8B model, 4GB RAM. No cloud, no subscription. Works offline.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#129504;</div>
+      <div class="feature-title">Neuroscience-backed</div>
+      <div class="feature-desc">Active Inference, Bayesian brain, dialectics. Independently discovered, then found in 30-year-old research.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 5. CONE ═══ -->
+<div class="section" style="text-align:center">
+  <div class="section-title">How your brain works. How Baddle works.</div>
+  <div class="section-sub" style="margin:12px auto 40px">Your brain constantly predicts what will happen next. When reality doesn't match — you pay attention, learn, adapt. Baddle does the same.</div>
+  <div class="cone-container">
+    <svg class="cone-svg" width="400" height="300" viewBox="0 0 400 300">
+      <path d="M 200 280 L 80 60 L 320 60 Z" fill="none" stroke="#6366f1" stroke-width="2" opacity="0.3"/>
+      <text x="50" y="170" fill="#6366f1" font-size="12" opacity="0.6">searching wide</text>
+      <path d="M 200 280 L 160 100 L 240 100 Z" fill="none" stroke="#10b981" stroke-width="2" opacity="0.6"/>
+      <text x="200" y="180" text-anchor="middle" fill="#10b981" font-size="12" opacity="0.8">narrowing down</text>
+      <path d="M 200 280 L 280 80 L 350 160 Z" fill="none" stroke="#f59e0b" stroke-width="1.5" opacity="0.4"/>
+      <text x="340" y="140" fill="#f59e0b" font-size="12" opacity="0.6">new angle</text>
+      <circle cx="200" cy="280" r="6" fill="#e4e4e7"/>
+      <text x="200" y="298" text-anchor="middle" fill="#71717a" font-size="11">you</text>
+    </svg>
+  </div>
+  <div style="color:#71717a;font-size:14px;max-width:500px;margin:0 auto;line-height:1.8">
+    Too chaotic? &rarr; Baddle narrows focus, gets precise<br>
+    Too predictable? &rarr; Baddle opens up, searches wider<br>
+    Just right? &rarr; Flow. The best work happens here
+  </div>
+</div>
+
+<!-- ═══ 6. FOOTER ═══ -->
+<div class="footer">
+  <div class="big">baddle</div>
+  <div style="color:#a1a1aa;font-size:18px;margin-bottom:8px">Not artificial intelligence. Augmented human.</div>
+  <div style="color:#52525b;font-size:14px;margin-bottom:32px">Self-hosted &middot; Private &middot; Offline &middot; Works on any device</div>
+  <div style="max-width:400px;margin:0 auto">
+    <div style="margin-top:20px">
+      <a href="mailto:your@email.com" style="color:#818cf8;font-size:16px;text-decoration:none;border-bottom:1px solid #4338ca">your@email.com</a>
+    </div>
+    <div style="color:#3f3f46;font-size:12px;margin-top:12px">Tested on 8B models. Runs on laptop, phone, anything with 4GB RAM.</div>
+  </div>
+</div>
+
+<script>
+// Graph node interactivity
+const nodeData = {
+  goal: { title: '&#127919; Goal', text: 'Why open-source LLMs will displace proprietary models', type: 'This is the starting point. Everything in the graph exists to answer this question.' },
+  verified1: { title: '&#9889; Smart DC Result', text: 'Open-source enables local AI', type: '<div style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap"><div style="flex:1;min-width:180px;padding:8px;background:#052e16;border:1px solid #166534;border-radius:8px"><div style="font-size:10px;color:#10b981;font-weight:600">FOR</div><div style="font-size:11px;margin-top:4px">Llama, Mistral, Qwen prove that open weights match proprietary quality at 10x lower cost</div></div><div style="flex:1;min-width:180px;padding:8px;background:#1c1917;border:1px solid #78350f;border-radius:8px"><div style="font-size:10px;color:#f59e0b;font-weight:600">AGAINST</div><div style="font-size:11px;margin-top:4px">Training from scratch still requires $100M+. Open-source free-rides on proprietary research</div></div></div><div style="padding:8px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px"><div style="font-size:10px;color:#818cf8;font-weight:600">SYNTHESIS</div><div style="font-size:11px;margin-top:4px">Open-source wins deployment, proprietary wins frontier research. Both needed. Confidence: <span style="color:#10b981">87%</span></div></div>' },
+  verified2: { title: '&#10003; Verified', text: 'Privacy drives adoption', type: 'Verified via Smart DC with <span style="color:#10b981">92% confidence</span>. Thesis stronger than antithesis (lean: +0.08). Enterprise data stays on-premise.' },
+  unverified: { title: '&#9203; Needs verification', text: 'Enterprise resistance to change', type: 'Confidence <span style="color:#f59e0b">61%</span> — not yet verified. Waiting for Smart DC. Has 2 evidence nodes (supports + contradicts).' },
+  weak: { title: '&#128279; Pump candidate', text: 'Cost barrier for small teams', type: 'Low similarity to other nodes — good candidate for <span style="color:#f59e0b">Pump</span>. Click "Enterprise resistance" to find hidden axis between them.' },
+  synthesis: { title: '&#128301; Synthesis', text: 'Open-source wins deployment, proprietary wins frontier', type: 'Collapsed from 4 verified nodes. This is what the graph <em>concluded</em> — not what was asked, but what emerged from the process.' },
+  rejected: { title: '&#10005; Low confidence', text: 'Regulation will slow progress', type: 'Smart DC result: antithesis was stronger. Confidence <span style="color:#ef4444">32%</span>. Graph keeps it but doesn\'t build on it.' },
+  bare: { title: '&#9898; Bare', text: 'New node, no evidence yet', type: 'Just generated. Needs Elaborate (add evidence) before it can be verified by Smart DC.' },
+};
+document.querySelectorAll('#demo-graph .node').forEach(node => {
+  node.addEventListener('click', function() {
+    const key = this.dataset.node;
+    const d = nodeData[key];
+    if (!d) return;
+    const info = document.getElementById('graph-info');
+    info.style.display = '';
+    info.innerHTML = '<div style="font-weight:600;margin-bottom:6px">' + d.title + ': <span style="color:#e4e4e7">' + d.text + '</span></div>' + '<div style="color:#a1a1aa">' + d.type + '</div>';
+    // Highlight clicked node
+    document.querySelectorAll('#demo-graph .node').forEach(n => n.setAttribute('stroke', 'none'));
+    this.setAttribute('stroke', '#818cf8');
+    this.setAttribute('stroke-width', '3');
+    // Show pump line for weak+unverified
+    const pumpLine = document.getElementById('pump-line');
+    if (key === 'weak' || key === 'unverified') {
+      pumpLine.setAttribute('opacity', '0.6');
+    } else {
+      pumpLine.setAttribute('opacity', '0');
+    }
+  });
+});
+
+document.querySelectorAll('.mode-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.mode-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+  });
+});
+document.querySelectorAll('.action-btn[style*="cursor:pointer"]').forEach(btn => {
+  btn.addEventListener('click', function() {
+    this.parentElement.querySelectorAll('.action-btn').forEach(s => {
+      if (s !== this) { s.style.opacity = '0.3'; s.style.pointerEvents = 'none'; }
+    });
+    this.style.transform = 'scale(0.95)';
+    const response = document.createElement('div');
+    response.className = 'msg msg-ai';
+    response.style.cssText = 'opacity:0;transition:opacity 0.5s';
+    response.innerHTML = '<span style="color:#10b981">&#10003;</span> Done.';
+    const messages = this.closest('.chat-messages');
+    if (messages) { messages.appendChild(response); setTimeout(() => response.style.opacity = '1', 100); }
+  });
+});
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(entry => { if (entry.isIntersecting) { entry.target.style.opacity = '1'; entry.target.style.transform = 'translateY(0)'; } });
+}, { threshold: 0.1 });
+document.querySelectorAll('.chat-mockup, .dashboard, .feature-card').forEach((el, i) => {
+  el.style.opacity = '0'; el.style.transform = 'translateY(30px)';
+  el.style.transition = 'opacity 0.6s ease ' + (i * 0.05) + 's, transform 0.6s ease ' + (i * 0.05) + 's';
+  observer.observe(el);
+});
+</script>
+</body>
+</html>
