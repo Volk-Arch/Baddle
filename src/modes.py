@@ -223,3 +223,40 @@ def get_mode(mode_id: str) -> dict:
 def list_modes() -> list[dict]:
     """List all modes with IDs for UI selector."""
     return [{"id": k, **v} for k, v in MODES.items()]
+
+
+def check_stop(goal_node: dict, cl: dict, graph: dict) -> dict:
+    """Check if goal is reached based on goal_type.
+
+    Returns {"resolved": bool, "reason": str}.
+    cl = classify_nodes() result from thinking.py.
+    """
+    goal_type = goal_node.get("goal_type")
+
+    if goal_type == "finite":
+        # All hypotheses verified → RESOLVED
+        if cl["hypotheses"] and not cl["unverified"]:
+            return {"resolved": True, "reason": "All hypotheses verified"}
+        # High average confidence with enough verified
+        if cl["verified"] and len(cl["verified"]) >= 3:
+            avg = sum(n.get("confidence", 0.5) for _, n in cl["hypotheses"]) / len(cl["hypotheses"])
+            if avg > 0.85:
+                return {"resolved": True, "reason": f"High avg confidence: {avg:.0%}"}
+        return {"resolved": False, "reason": ""}
+
+    elif goal_type == "repeatable":
+        # One cycle done → snapshot, system can restart
+        if cl["hypotheses"] and not cl["unverified"] and cl["verified"]:
+            return {"resolved": True, "reason": "Cycle complete, snapshot"}
+        return {"resolved": False, "reason": ""}
+
+    elif goal_type == "open":
+        # Novelty exhaustion — model is repeating itself
+        horizon_data = graph.get("_horizon", {})
+        precision = horizon_data.get("precision", 0.5)
+        if precision > 0.85 and not cl["bare"] and not cl["unverified"]:
+            return {"resolved": True, "reason": "Diminishing returns"}
+        return {"resolved": False, "reason": ""}
+
+    # None (free/scout) — never auto-stop
+    return {"resolved": False, "reason": ""}

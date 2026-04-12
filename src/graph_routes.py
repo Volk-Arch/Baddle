@@ -246,9 +246,14 @@ def graph_add():
     manual_links = _graph["edges"]["manual_links"]
 
     if node_type == "goal":
-        # Store mode on goal node and graph meta
+        # Store mode config on goal node and graph meta
+        from .modes import get_mode
         mode_id = d.get("mode", "horizon")
+        mode_cfg = get_mode(mode_id)
         nodes[new_idx]["mode"] = mode_id
+        nodes[new_idx]["primitive"] = mode_cfg.get("primitive")
+        nodes[new_idx]["strategy"] = mode_cfg.get("strategy")
+        nodes[new_idx]["goal_type"] = mode_cfg.get("goal_type")
         _graph["meta"]["mode"] = mode_id
         for i, n in enumerate(nodes):
             if i == new_idx:

@@ -189,8 +189,15 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
 
     # Read mode from goal node (default: horizon = current research cycle)
     mode_id = "horizon"
+    primitive = None
+    strategy = None
+    goal_type = None
     if goal_idx is not None:
-        mode_id = nodes[goal_idx].get("mode", "horizon")
+        goal_node = nodes[goal_idx]
+        mode_id = goal_node.get("mode", "horizon")
+        primitive = goal_node.get("primitive")
+        strategy = goal_node.get("strategy")
+        goal_type = goal_node.get("goal_type")
 
     # Load or create CognitiveHorizon
     from .horizon import CognitiveHorizon, create_horizon
@@ -228,6 +235,35 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         graph["_horizon"] = horizon.to_dict()
         return action_dict
 
+    # ── Stop condition check ──
+    if goal_idx is not None:
+        from .modes import check_stop
+        stop = check_stop(nodes[goal_idx], cl, graph)
+        if stop["resolved"]:
+            print(f"[tick] GOAL REACHED: {stop['reason']}")
+            return _emit({
+                "action": "stable", "phase": "synthesize",
+                "reason": f"GOAL REACHED: {stop['reason']}",
+            })
+
+    # ── Primitive-specific early exits ──
+    if primitive == "or" and verified:
+        # OR: first verified hypothesis → done
+        winner = verified[0]
+        print(f"[tick] OR: first verified #{winner[0]} '{winner[1]['text'][:40]}'")
+        return _emit({
+            "action": "stable", "phase": "synthesize",
+            "reason": f"OR: first verified — #{winner[0]}",
+        })
+
+    if primitive == "xor" and strategy == "comparative":
+        # XOR comparative: all doubted → compare
+        if not unverified and len(verified) >= 2:
+            return _emit({
+                "action": "stable", "phase": "synthesize",
+                "reason": f"XOR: {len(verified)} verified, ready to compare",
+            })
+
     # ── Determine what's available ──
     generated = graph.get("_generated", False)
     need_generate = not generated and len(hypotheses) < min_hyp
@@ -242,6 +278,18 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # Bare nodes need elaborate first — doubt on a bare hypothesis is less effective.
     bare_ids = {i for i, _ in bare}
     doubt_candidates = [u for u in unverified if u[0] not in bare_ids]
+
+    # ── Primitive-specific phase modifiers ──
+    if primitive == "and" and strategy == "seq":
+        # SEQ: only process the first unverified node
+        if bare:
+            bare = [bare[0]]
+        if doubt_candidates:
+            doubt_candidates = [doubt_candidates[0]]
+
+    if primitive == "xor" and strategy == "dialectical":
+        # Dialectical: skip elaborate, go straight to doubt
+        bare = []
 
     available = {
         "generate": need_generate,
