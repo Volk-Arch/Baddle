@@ -208,6 +208,22 @@ MODES = {
         "description_en": "Contradictory claims. Dialectical synthesis.",
         "tooltip": "Сталкиваем позиции, ищем синтез",
     },
+
+    # ── Bayesian ────────────────────────────────────────────────────────────
+    "bayes": {
+        "name": "Байесовский",
+        "name_en": "Bayesian",
+        "primitive": "bayes",
+        "strategy": None,
+        "goal_type": "open",
+        "goals_count": 1,
+        "fields": ["hypothesis"],
+        "placeholder": "Гипотеза (что проверяем?):",
+        "placeholder_en": "Hypothesis (what to test?):",
+        "description": "Ввод гипотезы + наблюдения → обновление вероятности по Байесу.",
+        "description_en": "Enter hypothesis + observations → Bayesian probability update.",
+        "tooltip": "Вводишь гипотезу, добавляешь наблюдения, смотришь как меняется вероятность",
+    },
 }
 
 

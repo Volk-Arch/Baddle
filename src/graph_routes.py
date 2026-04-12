@@ -1049,6 +1049,124 @@ def graph_compare():
     })
 
 
+# --------------- Bayesian LLM helpers ---------------
+
+@graph_bp.route("/graph/bayes-estimate-prior", methods=["POST"])
+def graph_bayes_estimate_prior():
+    """LLM estimates initial prior probability for a hypothesis."""
+    d = _p_data()
+    hypothesis = d.get("hypothesis", "")
+    lang = d.get("lang", "ru")
+    temp = float(d.get("temp", 0.3))
+    top_k = int(d.get("top_k", 40))
+
+    if not hypothesis:
+        return jsonify({"error": "need hypothesis"})
+
+    if lang == "ru":
+        system = "/no_think\nОцени начальную вероятность гипотезы (0.01-0.99) без дополнительных данных, только на основе общих знаний.\nОтветь СТРОГО в формате:\nprior: число\nпочему: одно предложение"
+    else:
+        system = "/no_think\nEstimate initial probability of the hypothesis (0.01-0.99) based on general knowledge only.\nAnswer STRICTLY in format:\nprior: number\nwhy: one sentence"
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"Гипотеза: {hypothesis}"},
+    ]
+    result, _ = _graph_generate(messages, max_tokens=80, temp=temp, top_k=top_k)
+
+    prior = 0.5
+    why = ""
+    for line in result.split('\n'):
+        line_s = line.strip().lower()
+        if line_s.startswith('prior:'):
+            try:
+                prior = float(line_s.split(':')[1].strip())
+                prior = max(0.01, min(0.99, prior))
+            except ValueError:
+                pass
+        elif line_s.startswith('почему:') or line_s.startswith('why:'):
+            why = line.split(':', 1)[1].strip()
+
+    return jsonify({"prior": round(prior, 2), "why": why, "raw": result})
+
+
+@graph_bp.route("/graph/bayes-estimate", methods=["POST"])
+def graph_bayes_estimate():
+    """LLM estimates relation and strength for an observation given a hypothesis."""
+    d = _p_data()
+    hypothesis = d.get("hypothesis", "")
+    observation = d.get("observation", "")
+    lang = d.get("lang", "ru")
+    temp = float(d.get("temp", 0.3))
+    top_k = int(d.get("top_k", 40))
+
+    if not hypothesis or not observation:
+        return jsonify({"error": "need hypothesis and observation"})
+
+    if lang == "ru":
+        system = "/no_think\nОцени: наблюдение подтверждает или опровергает гипотезу? Насколько сильно (0.1-0.99)?\nОтветь СТРОГО в формате:\nrelation: supports или contradicts\nstrength: число\nпочему: одно предложение"
+    else:
+        system = "/no_think\nEstimate: does the observation support or contradict the hypothesis? How strongly (0.1-0.99)?\nAnswer STRICTLY in format:\nrelation: supports or contradicts\nstrength: number\nwhy: one sentence"
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"Гипотеза: {hypothesis}\nНаблюдение: {observation}"},
+    ]
+    result, _ = _graph_generate(messages, max_tokens=100, temp=temp, top_k=top_k)
+
+    # Parse
+    relation = "supports"
+    strength = 0.7
+    why = ""
+    for line in result.split('\n'):
+        line_s = line.strip().lower()
+        if line_s.startswith('relation:'):
+            val = line_s.split(':')[1].strip()
+            if 'contradict' in val or 'опроверг' in val:
+                relation = "contradicts"
+        elif line_s.startswith('strength:'):
+            try:
+                strength = float(line_s.split(':')[1].strip())
+                strength = max(0.1, min(0.99, strength))
+            except ValueError:
+                pass
+        elif line_s.startswith('почему:') or line_s.startswith('why:'):
+            why = line.split(':', 1)[1].strip()
+
+    return jsonify({"relation": relation, "strength": round(strength, 2), "why": why, "raw": result})
+
+
+@graph_bp.route("/graph/bayes-suggest", methods=["POST"])
+def graph_bayes_suggest():
+    """LLM suggests observations to look for given a hypothesis."""
+    d = _p_data()
+    hypothesis = d.get("hypothesis", "")
+    existing = d.get("existing", [])
+    lang = d.get("lang", "ru")
+    temp = float(d.get("temp", 0.7))
+    top_k = int(d.get("top_k", 40))
+
+    if not hypothesis:
+        return jsonify({"error": "need hypothesis"})
+
+    existing_text = ""
+    if existing:
+        existing_text = "\nУже проверено:\n" + "\n".join(f"- {e}" for e in existing)
+
+    if lang == "ru":
+        system = "/no_think\nПредложи 3-5 наблюдений которые помогут проверить гипотезу. Для каждого укажи: что искать и подтвердит оно или опровергнет. Коротко, по одной строке."
+    else:
+        system = "/no_think\nSuggest 3-5 observations to test the hypothesis. For each: what to look for and whether it would support or contradict. One line each."
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"Гипотеза: {hypothesis}{existing_text}"},
+    ]
+    result, _ = _graph_generate(messages, max_tokens=300, temp=temp, top_k=top_k)
+
+    return jsonify({"suggestions": result})
+
+
 # --------------- Horizon feedback ---------------
 
 @graph_bp.route("/graph/horizon-feedback", methods=["POST"])

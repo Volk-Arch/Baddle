@@ -20,6 +20,7 @@ Goal structured object, stop conditions (finite/repeatable/open), tick dispatche
 Доработки:
 - [ ] **Snapshot для repeatable** — виджет streak/today/trend
 - [ ] **Персистентность** — state beyond session для Ритм (дни/недели), history log
+- [ ] **Интерактивный ассистент (все режимы)** — `/graph/assist`: LLM задаёт уточняющие вопросы, ответ → нода нужного типа (evidence для Bayes, subgoal для AND, seed для Research). Один route, эффект зависит от primitive. Кнопка "?" в UI. Во время autorun — пауза на вопрос пользователю когда система не уверена или нужен выбор. Третий контур управления конусом: информационный (prediction error) + физиологический (HRV) + диалоговый (assist)
 
 ---
 
