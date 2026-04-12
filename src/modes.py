@@ -267,7 +267,7 @@ def check_stop(goal_node: dict, cl: dict, graph: dict) -> dict:
         if cl["hypotheses"] and not cl["unverified"]:
             return {"resolved": True, "reason": "All hypotheses verified"}
         # High average confidence with enough verified
-        if cl["verified"] and len(cl["verified"]) >= 3:
+        if cl["hypotheses"] and cl["verified"] and len(cl["verified"]) >= 3:
             avg = sum(n.get("confidence", 0.5) for _, n in cl["hypotheses"]) / len(cl["hypotheses"])
             if avg > 0.85:
                 return {"resolved": True, "reason": f"High avg confidence: {avg:.0%}"}

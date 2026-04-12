@@ -46,7 +46,6 @@ Goal structured object, stop conditions (finite/repeatable/open), tick dispatche
 
 ### 5a: Автономное блуждание
 
-- [x] **Scout mode: Pump в autorun** — tick выбирает далёкие ноды, запускает Pump (до 3 за сессию)
 - [ ] **Scout mode: ночной режим** — cron job, автосохранение, seed из последнего графа
 - [ ] **`watchdog.py`** — проактивный помощник, уведомления по триггерам
 - [ ] **Консолидация** — прунинг слабых веток, "забывание" как фича
