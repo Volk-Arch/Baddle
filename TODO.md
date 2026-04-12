@@ -9,71 +9,18 @@
 ## v1.7: доводка
 
 - [ ] **Pump: визуализация облаков** на SVG (два hull расширяющихся навстречу)
-- [ ] **Pump в autorun** для Scout mode (автономный поиск мостов между далёкими нодами)
 - [ ] **Плавные переходы Horizon** — полный гистерезис для всех 4 состояний (сейчас только EXPLORATION/EXECUTION), взвешенный скоринг переходов, debounce (удерживать N тиков перед переключением)
 - [ ] **Расширение состояний Horizon** — добавить STABILIZE (сброс/калибровка), SHIFT (поворот φ, смена контекста), CONFLICT (несовместимые приоры, детекция merge_fail). Сейчас 4 → будет 7
 
 ---
 
-## v2: алгебра режимов
+## ~~v2: алгебра режимов~~ ✅ реализовано
 
-Реализация оставшихся 11 режимов из [README](README.md). Цель — один tick, 12 конфигов.
+Goal structured object, stop conditions (finite/repeatable/open), tick dispatcher по примитивам (none/focus/and/or/xor), multi-goal ввод (subgoals), UI selector с примерами и динамической формой. Детали → [docs/tick-design.md](docs/tick-design.md)
 
-### Шаг 1: инфраструктура конфига
-
-- [ ] **Mode config в goal-ноде** — dict с `(mode, primitive, strategy, goals, goal_type, fields)`:
-  - `primitive`: `none / and / or / xor` (четыре примитива)
-  - `strategy`: `unordered / seq / priority / balance` (для AND) или `comparative / dialectical` (для XOR) или `null`
-  - `goal_type`: `finite / repeatable / open`
-- [ ] **Goal-нода как structured object** — сейчас только text, нужны дополнительные поля
-- [ ] **Stop condition framework** — функции `(graph_state) → bool | snapshot`. По типу цели:
-  - finite: `confidence ≥ threshold` → RESOLVED
-  - repeatable: `step_complete + trigger` → SCHEDULED
-  - open: `diminishing_returns ИЛИ budget` → PARKED
-- [ ] **Goal evaluation** — LLM-as-judge: "достигли цели или нет?", сравнение goal↔result
-
-### Шаг 2: диспетчер tick
-
-- [ ] **tick(config, graph)** — читает `primitive` + `strategy` и вызывает реализацию
-
-Четыре примитива:
-- [ ] **none** (Scout) — без целей, дивергентное блуждание
-- [ ] **AND** — все цели должны быть verified
-- [ ] **OR** — первая достигнутая завершает цикл
-- [ ] **XOR** — выбрать ровно одну из множества
-
-Стратегии обхода AND (четыре режима):
-- [ ] **unordered** — Конструктор: любой порядок
-- [ ] **SEQ** — Конвейер: по зависимостям
-- [ ] **PRIORITY** — Каскад: по важности
-- [ ] **BALANCE** — Весы: пропорциональная аллокация над нефинитными
-
-Стратегии разрешения XOR (два режима):
-- [ ] **comparative** — Турнир: сравнение независимых опций
-- [ ] **dialectical** — Диспут: синтез противоречивых утверждений через SmartDC-on-graph
-
-Варианты OR (по типу цели):
-- [ ] **OR finite** — Гонка (первая цель завершает)
-- [ ] **OR open** — Веер (уже работает как текущий цикл)
-
-### Шаг 3: режимы single-goal по типу цели
-
-- [ ] **Вектор** (finite) — один фокус, сходится к RESOLVED
-- [ ] **Ритм** (repeatable) — heartbeat, snapshot evaluation, streak/trend
-- [ ] **Горизонт** (open) — уже работает как текущий цикл
-
-### Шаг 4: UI
-
-- [ ] **Селектор режима** — 12 опций с подсказками
-- [ ] **Динамическая форма** — поля ввода из `config.fields` под режим
-- [ ] **Display целей** — goal-нода показывает структуру (список целей + оператор)
-- [ ] **Snapshot для repeatable** — виджет streak/today/trend вместо sparkline сходимости
-
-### Шаг 5: персистентность
-
-- [ ] **State beyond session** — Ритм работает днями/неделями, Вектор — месяцами
-- [ ] **History log** — timestamps, changes, confidence evolution
-- [ ] **Автосохранение** — уже есть, нужна проверка для long-running режимов
+Доработки:
+- [ ] **Snapshot для repeatable** — виджет streak/today/trend
+- [ ] **Персистентность** — state beyond session для Ритм (дни/недели), history log
 
 ---
 
@@ -99,7 +46,8 @@
 
 ### 5a: Автономное блуждание
 
-- [ ] **Scout mode в autorun** — ночной режим, целенаправленный обход, Pump между далёкими нодами
+- [x] **Scout mode: Pump в autorun** — tick выбирает далёкие ноды, запускает Pump (до 3 за сессию)
+- [ ] **Scout mode: ночной режим** — cron job, автосохранение, seed из последнего графа
 - [ ] **`watchdog.py`** — проактивный помощник, уведомления по триггерам
 - [ ] **Консолидация** — прунинг слабых веток, "забывание" как фича
 
@@ -158,6 +106,7 @@ Pump между далёкими нодами может породить мет
 ## v7: экосистема и полировка
 
 - [ ] **Layout** — d3/dagre/ELK вместо плоской линии
+- [ ] **Вырезать heatmap** — убрать heatmapRescale и связанный код из graph.js, chat.js, CSS. Из UI уже убран
 - [ ] **Тесты** — unit + integration
 - [ ] **Параллельные API-запросы** — threading, ускорение цикла
 - [ ] **Timeline player** — ⏮▶⏸⏭ по timestamps
@@ -167,3 +116,17 @@ Pump между далёкими нодами может породить мет
 - [ ] **Git Verify** — MR для знаний, review, рейтинги
 - [ ] **Извлечение графа из текста** — статья → граф
 
+---
+
+## Сделано, не тестировано
+
+- **Pump в autorun (Scout)** — tick выбирает два далёких ноды, запускает Pump, сохраняет лучший мост. Макс 3 за сессию
+- **LLM-as-judge (XOR)** — `/graph/compare`, LLM выбирает лучший из verified вариантов с объяснением, winner → confidence 0.95
+- **Goal display** — subgoals в THOUGHTS списке с ✓/○ и confidence%
+- **Mode-aware elaborate** — промпт учитывает primitive (XOR: плюсы/минусы, AND: детали, OR: пригодность)
+- **Multi-goal ввод** — multiline текст → goal + hypothesis ноды (subgoals), tick фильтрует по ним
+- **XOR min_evidence** — для XOR требует 3 elaborate перед doubt (глубокий анализ каждого варианта)
+- **UI: dynamic form per mode** — textarea расширяется для multi-goal, отдельные пронумерованные поля, type label
+- **UI: mode selector с примерами** — "Фокус (одна цель → результат)", описание отдельной строкой
+- **UI: grouped context menu** — Generate/Verify/Edit/Navigate в контекстном меню и detail panel
+- **UI: Load + Lang в tab bar** — heatmap убран из UI

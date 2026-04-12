@@ -220,6 +220,35 @@ def get_mode(mode_id: str) -> dict:
     return MODES.get(mode_id, MODES[DEFAULT_MODE])
 
 
+def get_elaborate_hint(goal_node: dict, lang: str = "ru") -> str:
+    """Get context hint for elaborate prompt based on goal's primitive."""
+    primitive = goal_node.get("primitive")
+    goal_text = goal_node.get("text", "")
+    if not primitive:
+        return ""
+
+    hints = {
+        "xor": {
+            "ru": f"Контекст: мы сравниваем варианты для выбора '{goal_text}'. Раскрой плюсы, минусы, особенности этого варианта.",
+            "en": f"Context: we are comparing options to choose '{goal_text}'. Reveal pros, cons, specifics of this option.",
+        },
+        "and": {
+            "ru": f"Контекст: это часть задачи '{goal_text}'. Углуби детали реализации.",
+            "en": f"Context: this is part of task '{goal_text}'. Elaborate on implementation details.",
+        },
+        "or": {
+            "ru": f"Контекст: это один из вариантов для '{goal_text}'. Раскрой что делает его подходящим.",
+            "en": f"Context: this is one option for '{goal_text}'. Reveal what makes it suitable.",
+        },
+        "focus": {
+            "ru": f"Контекст: цель — '{goal_text}'. Углуби этот аспект.",
+            "en": f"Context: goal is '{goal_text}'. Elaborate on this aspect.",
+        },
+    }
+    h = hints.get(primitive, {})
+    return h.get(lang, h.get("ru", ""))
+
+
 def list_modes() -> list[dict]:
     """List all modes with IDs for UI selector."""
     return [{"id": k, **v} for k, v in MODES.items()]

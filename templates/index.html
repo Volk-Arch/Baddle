@@ -93,35 +93,47 @@
     </div>
   </div>
 
-  <!-- Mode tabs -->
-  <div class="tab-bar flex" style="margin:0 -12px;padding:0 12px;">
+  <!-- Mode tabs + Load + Lang -->
+  <div class="tab-bar flex items-center" style="margin:0 -12px;padding:0 12px;">
     <button id="tab-graph"   onclick="setMode('graph')"
       class="tab-active px-4 py-2 text-sm">graph</button>
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
-  </div>
-
-  <!-- ══ Shared top strip: language + heatmap ══ -->
-  <div class="flex gap-3 items-center mb-2 mt-2">
-    <select id="lang-select" onchange="onLangChange()" class="modal-select" style="width:56px;padding:3px 4px;font-size:12px;">
+    <span style="flex:1"></span>
+    <div style="position:relative;display:inline-block">
+      <button onclick="graphLoadList()" class="btn-secondary" style="padding:3px 10px;font-size:11px" title="Load saved graph">Load</button>
+      <div id="graph-load-panel-top" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px;z-index:50;min-width:320px;max-width:450px;max-height:350px;overflow-y:auto;box-shadow:var(--shadow-lg)"></div>
+    </div>
+    <input type="file" id="graph-import-file-top" accept=".json" style="display:none" onchange="graphImport(event)">
+    <select id="lang-select" onchange="onLangChange()" class="modal-select" style="width:50px;padding:2px 4px;font-size:11px;margin-left:6px">
       <option value="ru">RU</option>
       <option value="en">EN</option>
     </select>
-    <label class="flex items-center gap-1 cursor-pointer select-none" style="color:var(--text-secondary);font-size:11px;white-space:nowrap"
-      title="Heatmap: color tokens by model confidence. Red = uncertain, green = confident.">
-      <input id="heatmap-toggle" type="checkbox" checked style="accent-color:var(--accent)"> heatmap
-      <span style="margin-left:4px;color:#4ec36e;font-size:9px">&#9632;</span>
-      <input id="heatmap-scale" type="range" min="0.5" max="10" step="0.5" value="3"
-        style="width:50px;margin:0 2px;accent-color:var(--accent);vertical-align:middle"
-        oninput="document.getElementById('heatmap-scale-val').textContent=this.value;heatmapRescale()"
-        title="Sensitivity: lower = more red tokens shown">
-      <span style="color:#ef4444;font-size:9px">&#9632;</span>
-      <span id="heatmap-scale-val" style="color:var(--text-tertiary);font-size:10px;margin-left:1px;min-width:14px">3</span>
-    </label>
   </div>
+  <!-- Hidden heatmap controls (kept for JS compatibility, not shown) -->
+  <input id="heatmap-toggle" type="checkbox" checked style="display:none">
+  <input id="heatmap-scale" type="hidden" value="3">
+  <span id="heatmap-scale-val" style="display:none">3</span>
 
   <!-- ══ GRAPH mode ══ (first, visible by default) -->
   <div id="cfg-graph">
+    <!-- Mode + Topic + Add (BEFORE actions bar) -->
+    <div class="card p-2 mb-1">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <select id="graph-mode-select" onchange="onGraphModeChange()" class="modal-select"
+          style="font-size:13px;padding:5px 10px;font-weight:600;min-width:130px;color:var(--accent)"></select>
+      </div>
+      <!-- Mode description -->
+      <div id="graph-mode-description" style="color:var(--text-tertiary);font-size:11px;margin-top:4px;padding:0 2px"></div>
+      <!-- Dynamic input area — rebuilt by onGraphModeChange() -->
+      <div id="graph-mode-input" style="margin-top:6px"></div>
+      <!-- Hidden type selector for compatibility -->
+      <select id="graph-add-type-top" style="display:none">
+        <option value="auto">auto</option><option value="goal">goal</option>
+        <option value="hypothesis">hypothesis</option><option value="fact">fact</option>
+      </select>
+    </div>
+
     <!-- Actions bar -->
     <div id="graph-actions-bar" class="flex gap-2 mb-1 items-center flex-wrap" style="display:none;flex-shrink:0;">
       <!-- Selection + Collapse -->
@@ -196,33 +208,6 @@
         <button onclick="graphSave()" class="btn-action text-xs" title="Save graph">Save</button>
         <button onclick="graphReset()" class="btn-action text-xs" style="background:#dc2626;color:#fff;border-color:#dc2626" title="Reset graph">Reset</button>
       </span>
-    </div>
-
-    <!-- Mode + Topic + Add -->
-    <div class="card p-2 mb-1" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-      <select id="graph-mode-select" onchange="onGraphModeChange()" class="modal-select"
-        style="font-size:13px;padding:5px 10px;font-weight:600;min-width:130px;color:var(--accent)"></select>
-      <span id="graph-mode-tooltip" style="color:var(--text-tertiary);font-size:10px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-      <textarea id="graph-topic-top" class="auto-grow" placeholder="Topic / Goal..."
-        style="flex:1;min-width:200px;" rows="1"></textarea>
-      <button onclick="document.getElementById('graph-topic').value=document.getElementById('graph-topic-top').value;document.getElementById('graph-add-type').value=document.getElementById('graph-add-type-top').value;graphAddThought()"
-        class="btn-secondary" style="padding:5px 14px;font-size:12px">+ Add</button>
-      <select id="graph-add-type-top" onchange="document.getElementById('graph-add-type').value=this.value"
-        class="modal-select" style="font-size:12px;padding:4px 8px;width:auto">
-        <option value="auto">auto</option>
-        <option value="hypothesis">hypothesis</option>
-        <option value="goal">goal</option>
-        <option value="fact">fact</option>
-        <option value="question">question</option>
-        <option value="action">action</option>
-      </select>
-      <span style="border-left:1px solid var(--border);height:20px;margin:0 2px"></span>
-      <div style="position:relative;display:inline-block">
-        <button onclick="graphLoadList()" class="btn-secondary" style="padding:5px 10px;font-size:12px" title="Load saved graph">Load</button>
-        <div id="graph-load-panel-top" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px;z-index:50;min-width:320px;max-width:450px;max-height:350px;overflow-y:auto;box-shadow:var(--shadow-lg)"></div>
-      </div>
-      <input type="file" id="graph-import-file-top" accept=".json" style="display:none" onchange="graphImport(event)">
-      </select>
     </div>
 
     <!-- Parameters -->

@@ -80,6 +80,39 @@ surprise = 1 - confidence
 → следующий tick использует новые параметры
 ```
 
+## Dispatcher по примитивам
+
+tick() читает `primitive`, `strategy`, `goal_type` из goal ноды и маршрутизирует:
+
+### Stop conditions (`check_stop()` в modes.py)
+
+| goal_type | Условие остановки |
+|-----------|------------------|
+| finite | Все hypotheses verified ИЛИ avg confidence > 85% |
+| repeatable | Цикл завершён → snapshot |
+| open | precision > 0.85 и нет bare/unverified → diminishing returns |
+| None (free/scout) | Никогда не останавливается автоматически |
+
+### Примитивы
+
+| Primitive | Логика |
+|-----------|--------|
+| **none** (Scout, Free) | Текущее поведение, без stop condition |
+| **focus** (Vector, Rhythm, Horizon) | Одна цель, check_stop() по goal_type |
+| **or** | Первая verified hypothesis → стоп |
+| **xor comparative** | Все doubted → "ready to compare" |
+| **xor dialectical** | Пропускает elaborate, сразу doubt |
+| **and unordered** | Все должны быть verified, любой порядок |
+| **and seq** | Только первая unverified нода обрабатывается |
+| **and priority** | По расстоянию до goal (через _pick_target) |
+| **and balance** | Round-robin (random каждый 3-й) |
+
+### Multi-goal (subgoals)
+
+Для режимов с `goals_count: "2+"` (AND, OR, XOR): при создании goal ноды multiline текст разбивается на строки. Первая строка = goal text, остальные = hypothesis ноды (subgoals). Goal хранит `subgoals: [idx1, idx2, ...]`.
+
+tick() фильтрует classify только по subgoal нодам — stop conditions и dispatcher работают с отфильтрованными списками.
+
 ## Защита от циклов
 
 - `_generated` flag: не генерировать заново если уже набрали min_hyp

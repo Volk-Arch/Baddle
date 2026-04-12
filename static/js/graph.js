@@ -1019,7 +1019,6 @@ function graphUpdateThoughtsList() {
     let entBadge = '';
     if (entData.avg) {
       const unc = entData.unc || 0;
-      // Color: green (0%) → yellow (5%) → red (15%+)
       const t = Math.min(unc / 0.15, 1);
       const r = Math.round(t < 0.5 ? t * 2 * 255 : 255);
       const g = Math.round(t < 0.5 ? 255 : (1 - (t - 0.5) * 2) * 255);
@@ -1028,12 +1027,31 @@ function graphUpdateThoughtsList() {
         + (entData.avg || 0).toFixed(2) + ' / ' + (unc * 100).toFixed(0) + '%</span>';
     }
     const del = '<span onclick="event.stopPropagation();graphRemoveThought(' + i + ')" style="cursor:pointer;color:#64748b;margin-left:6px;font-size:12px" title="Remove">&times;</span>';
-    return '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
+    let html = '<div data-thought-idx="' + i + '" onclick="graphSelectFromList(' + i + ')" '
       + 'class="mb-2 text-sm" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px;color:#37352f" '
       + 'onmouseover="this.style.background=\'#e8f4fd\'" onmouseout="graphHighlightListItem(this,' + i + ')">'
       + '<span style="flex:1">' + dot + '<span style="color:#64748b;font-size:10px;margin-right:4px">#' + i + '</span>'
       + (nodeType !== 'thought' ? '<span style="color:' + ({hypothesis:'#a78bfa',evidence:'#06b6d4',fact:'#10b981',question:'#f59e0b',goal:'#f43f5e',action:'#8b5cf6'}[nodeType]||'#64748b') + ';font-size:9px;margin-right:3px">[' + nodeType[0].toUpperCase() + ']</span>' : '')
       + t + '</span>' + entBadge + del + '</div>';
+
+    // Subgoals display for goal nodes
+    const subs = nodes[i].subgoals;
+    if (nodeType === 'goal' && subs && subs.length > 0) {
+      html += '<div style="padding-left:24px;margin-bottom:4px">';
+      subs.forEach((si, idx) => {
+        const sn = nodes[si];
+        if (!sn) return;
+        const conf = sn.confidence || 0.5;
+        const done = conf >= 0.8;
+        const icon = done ? '<span style="color:#10b981">&#10003;</span>' : '<span style="color:#9ca3af">&#9675;</span>';
+        html += '<div style="font-size:11px;color:#64748b;padding:1px 0">'
+          + icon + ' <span style="color:' + (done ? '#10b981' : '#37352f') + '">' + sn.text + '</span>'
+          + '<span style="color:#9ca3af;font-size:9px;margin-left:4px">' + Math.round(conf * 100) + '%</span>'
+          + '</div>';
+      });
+      html += '</div>';
+    }
+    return html;
   }).join('');
   // AutoSave after every graph mutation
   graphAutoSave();
@@ -1524,7 +1542,16 @@ document.addEventListener('DOMContentLoaded', () => {
       window._graphModes[m.id] = m;
       const opt = document.createElement('option');
       opt.value = m.id;
-      opt.textContent = m.name;
+      // Name with short example in parentheses
+      const examples = {
+        'free': '', 'scout': '', 'vector': '(одна цель → результат)',
+        'rhythm': '(регулярное действие)', 'horizon': '(изучить тему)',
+        'builder': '(все части нужны)', 'pipeline': '(шаг за шагом)',
+        'cascade': '(срочное первым)', 'scales': '(работа/семья/здоровье)',
+        'race': '(любой вариант подойдёт)', 'fan': '(набросать идеи)',
+        'tournament': '(выбрать одно из)', 'dispute': '(за и против)',
+      };
+      opt.textContent = m.name + (examples[m.id] ? ' ' + examples[m.id] : '');
       sel.appendChild(opt);
     });
     sel.value = 'free';
@@ -1669,16 +1696,23 @@ async function graphAutoRun() {
     _rb.style.borderColor = '#6d28d9';
     return;
   }
-  // Check if goal exists
+  // Check if goal exists — adapt prompt to mode
+  const currentMode = document.getElementById('graph-mode-select').value || 'free';
+  const modeCfg = window._graphModes && window._graphModes[currentMode];
+  const goalsCount = modeCfg ? modeCfg.goals_count : 0;
   const hasGoal = graphData.nodes && graphData.nodes.some(n => n.type === 'goal');
-  if (!hasGoal) {
-    const goalText = prompt('Set a goal (point B) before running:\nWhat do you want to achieve?');
+
+  if (!hasGoal && goalsCount && goalsCount !== 0) {
+    // Mode requires a goal — use mode placeholder as prompt
+    const lang = document.getElementById('lang-select').value;
+    const ph = (lang === 'ru' ? modeCfg.placeholder : modeCfg.placeholder_en) || 'Goal?';
+    const extra = goalsCount === '2+' ? (lang === 'ru' ? '\n(одна строка = одна подзадача)' : '\n(one line = one subgoal)') : '';
+    const goalText = prompt(ph + extra);
     if (!goalText || !goalText.trim()) return;
-    // Add goal node
     const r = await fetch('/graph/add', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ text: goalText.trim(), node_type: 'goal', mode: document.getElementById('graph-mode-select').value || 'horizon', ...graphGetParams() })
+      body: JSON.stringify({ text: goalText.trim(), node_type: 'goal', mode: currentMode, ...graphGetParams() })
     });
     const d = await r.json();
     if (!d.error) {
@@ -1686,6 +1720,7 @@ async function graphAutoRun() {
       graphUpdateView(d);
     }
   }
+  // goalsCount === 0 (free/scout) — no goal needed, proceed
 
   _autoRunning = true;
   _autoRunAbort = new AbortController();
@@ -1750,6 +1785,12 @@ async function graphAutoRun() {
         await _autoRunThink(hp);
       } else if (d.action === 'collapse') {
         await _autoRunCollapse(d.target);
+      } else if (d.action === 'pump') {
+        await _autoRunPump(d.target, hp);
+      } else if (d.action === 'compare') {
+        await _autoRunCompare(d.target, hp);
+        _autoRunLog.push({step: step + 1, action: 'XOR_DECIDED', reason: 'Comparison complete'});
+        break;  // XOR decided — stop autorun
       }
     } catch(e) {
       if (e.name === 'AbortError') { _autoRunLog.push({step: step + 1, action: 'STOPPED', reason: 'User stopped'}); break; }
@@ -2125,7 +2166,69 @@ async function _autoRunCollapse(indices) {
   }
 }
 
+async function _autoRunPump(pair, hp) {
+  if (!pair || pair.length < 2) return;
+  const params = graphGetParams();
+  const res = await _autoFetch('/graph/pump', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ node_a: pair[0], node_b: pair[1], max_iterations: 2, ...params })
+  });
+  const d = await res.json();
+  if (d.error) {
+    console.log('[autorun pump] no bridge:', d.error);
+    return;
+  }
+  // Save best bridge as node
+  const bridges = d.all_bridges || [];
+  if (bridges.length > 0) {
+    const best = bridges[0];
+    const text = best.synthesis || best.text;
+    const addRes = await _autoFetch('/graph/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: text, node_type: 'hypothesis', ...params })
+    });
+    const addD = await addRes.json();
+    if (!addD.error) {
+      graphUpdateView(addD);
+      const newIdx = graphData.nodes.length - 1;
+      // Link to both sources
+      await _autoFetch('/graph/link', { method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ a: newIdx, b: pair[0], ...params }) }).then(r => r.json()).then(d2 => { if (!d2.error) graphUpdateView(d2); }).catch(() => {});
+      await _autoFetch('/graph/link', { method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ a: newIdx, b: pair[1], ...params }) }).then(r => r.json()).then(d2 => { if (!d2.error) graphUpdateView(d2); }).catch(() => {});
+      console.log('[autorun pump] bridge saved:', best.text.substring(0, 40), 'quality:', best.quality);
+    }
+  }
+}
 
+
+async function _autoRunCompare(indices, hp) {
+  if (!indices || indices.length < 2) return;
+  const params = graphGetParams();
+  const res = await _autoFetch('/graph/compare', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ indices: indices, lang: params.lang || 'ru', temp: hp.temperature || 0.5, top_k: hp.top_k || 40 })
+  });
+  const d = await res.json();
+  if (d.error) { console.log('[autorun compare] error:', d.error); return; }
+
+  // Log result
+  console.log('[autorun compare]', d.result);
+  _autoRunLog.push({step: _autoRunLog.length + 1, action: 'COMPARE', reason: d.result});
+
+  // Boost winner confidence
+  if (d.winner_idx !== null && d.winner_idx !== undefined) {
+    await _autoFetch('/graph/confidence', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ index: d.winner_idx, value: 0.95 })
+    }).catch(() => {});
+    console.log('[autorun compare] winner: #' + d.winner_idx);
+  }
+}
 
 function graphSetNodeType(nodeType) {
   const idx = graphSelectedNode;
@@ -2827,15 +2930,90 @@ function onGraphModeChange() {
   const mode = window._graphModes && window._graphModes[sel.value];
   if (!mode) return;
 
-  // Update tooltip
-  const tip = document.getElementById('graph-mode-tooltip');
-  if (tip) tip.textContent = mode.tooltip || '';
+  // Update description line
+  const desc = document.getElementById('graph-mode-description');
+  if (desc) desc.textContent = mode.tooltip || '';
 
-  // Update placeholder
+  // Set hidden type selector
+  const typeSel = document.getElementById('graph-add-type-top');
+  if (typeSel) {
+    typeSel.value = (mode.goals_count === 1 || mode.goals_count === '2+') ? 'goal' : 'auto';
+    const hidden = document.getElementById('graph-add-type');
+    if (hidden) hidden.value = typeSel.value;
+  }
+
+  // Rebuild input area
+  const container = document.getElementById('graph-mode-input');
+  if (!container) return;
   const lang = document.getElementById('lang-select').value;
   const ph = (lang === 'ru' ? mode.placeholder : mode.placeholder_en) || mode.placeholder || 'Topic / Goal...';
-  const topicInput = document.getElementById('graph-topic-top');
-  if (topicInput) topicInput.placeholder = ph;
+
+  const isMulti = mode.goals_count === '2+';
+  const addType = (mode.goals_count === 1 || isMulti) ? 'goal' : 'auto';
+  const typeLabel = addType === 'goal' ? 'goal' : 'thought';
+
+  if (isMulti) {
+    // Multi-goal: separate input fields with + button
+    const fieldLabel = mode.fields && mode.fields[0] || 'goals';
+    const itemName = fieldLabel === 'options' ? 'Вариант' : fieldLabel === 'positions' ? 'Позиция' : 'Подзадача';
+    container.innerHTML =
+      '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">'
+      + '<input id="graph-topic-top" type="text" placeholder="' + ph.split(':')[0] + '" style="flex:1" class="modal-input">'
+      + '<span style="color:var(--text-tertiary);font-size:10px">' + typeLabel + '</span>'
+      + '</div>'
+      + '<div id="graph-subgoals-list"></div>'
+      + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
+      + '<button onclick="_addSubgoalField()" class="btn-secondary" style="padding:3px 10px;font-size:11px">+ ' + itemName + '</button>'
+      + '<span style="flex:1"></span>'
+      + '<button onclick="_submitMultiGoal()" class="btn-secondary" style="padding:5px 14px;font-size:12px">+ Add</button>'
+      + '</div>';
+    // Add 2 initial subgoal fields
+    _addSubgoalField();
+    _addSubgoalField();
+  } else {
+    // Single input (free, scout, focus modes)
+    container.innerHTML =
+      '<div style="display:flex;gap:6px;align-items:center">'
+      + '<textarea id="graph-topic-top" class="auto-grow" placeholder="' + ph + '" style="flex:1;min-width:200px;" rows="1"></textarea>'
+      + '<span style="color:var(--text-tertiary);font-size:10px">' + typeLabel + '</span>'
+      + '<button onclick="document.getElementById(\'graph-topic\').value=document.getElementById(\'graph-topic-top\').value;'
+      + 'document.getElementById(\'graph-add-type\').value=document.getElementById(\'graph-add-type-top\').value;graphAddThought()"'
+      + ' class="btn-secondary" style="padding:5px 14px;font-size:12px">+ Add</button>'
+      + '</div>';
+  }
+}
+
+function _addSubgoalField() {
+  const list = document.getElementById('graph-subgoals-list');
+  if (!list) return;
+  const num = list.children.length + 1;
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:3px';
+  div.innerHTML =
+    '<span style="color:var(--text-tertiary);font-size:11px;min-width:16px">' + num + '.</span>'
+    + '<input type="text" class="subgoal-input modal-input" placeholder="..." style="flex:1">'
+    + '<button onclick="this.parentElement.remove()" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;font-size:14px">&times;</button>';
+  list.appendChild(div);
+  div.querySelector('input').focus();
+}
+
+function _submitMultiGoal() {
+  const title = document.getElementById('graph-topic-top');
+  const inputs = document.querySelectorAll('.subgoal-input');
+  const lines = [];
+  if (title && title.value.trim()) lines.push(title.value.trim());
+  inputs.forEach(inp => { if (inp.value.trim()) lines.push(inp.value.trim()); });
+  if (lines.length === 0) return;
+
+  // Join with newlines and submit as single text
+  document.getElementById('graph-topic').value = lines.join('\n');
+  document.getElementById('graph-add-type').value = 'goal';
+  document.getElementById('graph-add-type-top').value = 'goal';
+  graphAddThought();
+
+  // Clear fields
+  if (title) title.value = '';
+  inputs.forEach(inp => inp.value = '');
 }
 
 function graphReset() {
