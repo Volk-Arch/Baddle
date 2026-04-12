@@ -246,12 +246,36 @@ def graph_add():
     manual_links = _graph["edges"]["manual_links"]
 
     if node_type == "goal":
-        # Store mode on goal node and graph meta
+        # Store mode config on goal node and graph meta
+        from .modes import get_mode
         mode_id = d.get("mode", "horizon")
+        mode_cfg = get_mode(mode_id)
         nodes[new_idx]["mode"] = mode_id
+        nodes[new_idx]["primitive"] = mode_cfg.get("primitive")
+        nodes[new_idx]["strategy"] = mode_cfg.get("strategy")
+        nodes[new_idx]["goal_type"] = mode_cfg.get("goal_type")
         _graph["meta"]["mode"] = mode_id
+
+        # Parse subgoals from multiline text for multi-goal modes
+        subgoal_indices = []
+        if mode_cfg.get("goals_count") == "2+":
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            if len(lines) > 1:
+                # First line = goal text, rest = subgoals
+                nodes[new_idx]["text"] = lines[0]
+                for sub_text in lines[1:]:
+                    sub_idx = _add_node(sub_text, depth=0, topic="", node_type="hypothesis")
+                    subgoal_indices.append(sub_idx)
+                    directed.append([new_idx, sub_idx])  # goal → subgoal
+                    pair = [min(new_idx, sub_idx), max(new_idx, sub_idx)]
+                    if pair not in manual_links:
+                        manual_links.append(pair)
+                print(f"[add] goal '{lines[0][:30]}' with {len(subgoal_indices)} subgoals")
+        nodes[new_idx]["subgoals"] = subgoal_indices
+
+        # Link existing hypotheses to goal
         for i, n in enumerate(nodes):
-            if i == new_idx:
+            if i == new_idx or i in subgoal_indices:
                 continue
             if n.get("type") in ("hypothesis", "thought") and n.get("depth", 0) >= 0:
                 directed.append([i, new_idx])
@@ -603,12 +627,23 @@ def graph_elaborate():
     parent_depth = nodes[idx]["depth"]
     parent_topic = nodes[idx]["topic"] or topic
 
+    # Build context from goal node (if exists) for mode-aware elaboration
+    goal_context = ""
+    goal_nodes = [n for n in nodes if n.get("type") == "goal" and n.get("depth", 0) >= 0]
+    if goal_nodes:
+        from .modes import get_elaborate_hint
+        hint = get_elaborate_hint(goal_nodes[0], d["lang"])
+        if hint:
+            goal_context = "\n" + hint
+
     system = _p(d["lang"], "think")
 
     attempts = 0
     while len(new_thoughts) < n and attempts < n * 3:
         attempts += 1
         user = f"{_p(d['lang'], 'topic')}: {topic}\n{_p(d['lang'], 'elaborate')}: {source}"
+        if goal_context:
+            user += goal_context
         if direction:
             user += f"\n{_p(d['lang'], 'direction')}: {direction}"
         if new_thoughts:
@@ -958,6 +993,60 @@ def graph_horizon_params():
     params = h.to_llm_params()
     print(f"[horizon manual] state={h.state} precision={h.precision:.2f} temp={params['temperature']:.2f} top_k={params['top_k']}")
     return jsonify(params)
+
+
+# --------------- XOR Compare (LLM-as-judge) ---------------
+
+@graph_bp.route("/graph/compare", methods=["POST"])
+def graph_compare():
+    """LLM-as-judge: compare verified options and pick the best."""
+    from .prompts import _p
+    d = _p_data()
+    indices = d.get("indices", [])
+    lang = d.get("lang", "ru")
+    temp = float(d.get("temp", 0.5))
+    top_k = int(d.get("top_k", 40))
+
+    nodes = _graph["nodes"]
+    options = []
+    for idx in indices:
+        if idx < len(nodes):
+            n = nodes[idx]
+            options.append({"idx": idx, "text": n.get("text", ""), "confidence": n.get("confidence", 0.5)})
+
+    if len(options) < 2:
+        return jsonify({"error": "need at least 2 options"})
+
+    # Build comparison prompt
+    options_text = "\n".join(f"{i+1}. {o['text']} (confidence: {o['confidence']:.0%})" for i, o in enumerate(options))
+    if lang == "ru":
+        system = "/no_think\nТы — судья. Сравни варианты и выбери лучший. Объясни почему в 2-3 предложениях. Ответь в формате:\nЛучший: [номер]\nПочему: [объяснение]"
+    else:
+        system = "/no_think\nYou are a judge. Compare options and pick the best. Explain in 2-3 sentences. Format:\nBest: [number]\nWhy: [explanation]"
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": options_text},
+    ]
+    result, _ = _graph_generate(messages, max_tokens=200, temp=temp, top_k=top_k)
+
+    # Parse winner number
+    winner_idx = None
+    for line in result.split('\n'):
+        line_lower = line.strip().lower()
+        if line_lower.startswith('лучший:') or line_lower.startswith('best:'):
+            try:
+                num = int(''.join(c for c in line.split(':')[1] if c.isdigit()))
+                if 1 <= num <= len(options):
+                    winner_idx = options[num - 1]["idx"]
+            except (ValueError, IndexError):
+                pass
+
+    return jsonify({
+        "result": result,
+        "winner_idx": winner_idx,
+        "options": options,
+    })
 
 
 # --------------- Horizon feedback ---------------

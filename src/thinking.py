@@ -130,6 +130,34 @@ def _filter_lineage(indices, nodes):
     return group
 
 
+# ── Pick distant pair (for Pump in Scout) ────────────────────────────────────
+
+def _pick_distant_pair(candidates, edges):
+    """Pick two nodes with lowest similarity (most distant). For Pump in Scout mode."""
+    if len(candidates) < 2:
+        return None
+
+    # Build edge weight lookup
+    weights = {}
+    for e in edges:
+        key = (min(e["from"], e["to"]), max(e["from"], e["to"]))
+        weights[key] = e.get("weight", 0)
+
+    best_pair = None
+    best_sim = 1.0
+    idxs = [i for i, _ in candidates]
+
+    for a in range(len(idxs)):
+        for b in range(a + 1, len(idxs)):
+            key = (min(idxs[a], idxs[b]), max(idxs[a], idxs[b]))
+            sim = weights.get(key, 0)
+            if sim < best_sim:
+                best_sim = sim
+                best_pair = (idxs[a], idxs[b])
+
+    return best_pair
+
+
 # ── Pick target ──────────────────────────────────────────────────────────────
 
 def _pick_target(candidates, goal_idx, edges):
@@ -189,8 +217,15 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
 
     # Read mode from goal node (default: horizon = current research cycle)
     mode_id = "horizon"
+    primitive = None
+    strategy = None
+    goal_type = None
     if goal_idx is not None:
-        mode_id = nodes[goal_idx].get("mode", "horizon")
+        goal_node = nodes[goal_idx]
+        mode_id = goal_node.get("mode", "horizon")
+        primitive = goal_node.get("primitive")
+        strategy = goal_node.get("strategy")
+        goal_type = goal_node.get("goal_type")
 
     # Load or create CognitiveHorizon
     from .horizon import CognitiveHorizon, create_horizon
@@ -218,6 +253,32 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     unverified = cl["unverified"]
     verified = cl["verified"]
 
+    # Filter by subgoals if multi-goal mode
+    subgoals = nodes[goal_idx].get("subgoals", []) if goal_idx is not None else []
+    if subgoals:
+        sub_set = set(subgoals)
+        hypotheses = [(i, n) for i, n in hypotheses if i in sub_set]
+        unverified = [(i, n) for i, n in unverified if i in sub_set]
+        verified = [(i, n) for i, n in verified if i in sub_set]
+
+        # Count directed children per subgoal (evidence depth)
+        directed_children = {}
+        for a, b in graph["edges"].get("directed", []):
+            directed_children[a] = directed_children.get(a, 0) + 1
+
+        # For XOR/AND: require min_evidence elaborations before allowing doubt
+        min_evidence = 3 if primitive == "xor" else 2
+        bare = []
+        for i, n in hypotheses:
+            children = directed_children.get(i, 0)
+            if children < min_evidence and n.get("confidence", 0.5) < stable_threshold:
+                bare.append((i, n))
+
+        # Update cl for stop condition check
+        cl = {**cl, "hypotheses": hypotheses, "bare": bare,
+              "unverified": unverified, "verified": verified}
+        print(f"[tick] subgoals: {len(subgoals)} total, {len(verified)} verified, {len(unverified)} unverified, {len(bare)} need more evidence")
+
     if force_collapse:
         return _tick_force_collapse(cl["active_nodes"], stable_threshold)
 
@@ -227,6 +288,37 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         action_dict["horizon_metrics"] = horizon.get_metrics()
         graph["_horizon"] = horizon.to_dict()
         return action_dict
+
+    # ── Primitive-specific early exits (before generic stop check) ──
+    if primitive == "or" and verified:
+        # OR: first verified hypothesis → done
+        winner = verified[0]
+        print(f"[tick] OR: first verified #{winner[0]} '{winner[1]['text'][:40]}'")
+        return _emit({
+            "action": "stable", "phase": "synthesize",
+            "reason": f"OR: first verified — #{winner[0]}",
+        })
+
+    if primitive == "xor" and strategy == "comparative":
+        # XOR comparative: all doubted → LLM picks the best
+        if not unverified and len(verified) >= 2:
+            return _emit({
+                "action": "compare",
+                "target": [v[0] for v in verified],
+                "phase": "synthesize",
+                "reason": f"XOR: {len(verified)} verified, LLM comparing",
+            })
+
+    # ── Generic stop condition (after primitive-specific checks) ──
+    if goal_idx is not None:
+        from .modes import check_stop
+        stop = check_stop(nodes[goal_idx], cl, graph)
+        if stop["resolved"]:
+            print(f"[tick] GOAL REACHED: {stop['reason']}")
+            return _emit({
+                "action": "stable", "phase": "synthesize",
+                "reason": f"GOAL REACHED: {stop['reason']}",
+            })
 
     # ── Determine what's available ──
     generated = graph.get("_generated", False)
@@ -242,6 +334,18 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # Bare nodes need elaborate first — doubt on a bare hypothesis is less effective.
     bare_ids = {i for i, _ in bare}
     doubt_candidates = [u for u in unverified if u[0] not in bare_ids]
+
+    # ── Primitive-specific phase modifiers ──
+    if primitive == "and" and strategy == "seq":
+        # SEQ: only process the first unverified node
+        if bare:
+            bare = [bare[0]]
+        if doubt_candidates:
+            doubt_candidates = [doubt_candidates[0]]
+
+    if primitive == "xor" and strategy == "dialectical":
+        # Dialectical: skip elaborate, go straight to doubt
+        bare = []
 
     available = {
         "generate": need_generate,
@@ -294,6 +398,21 @@ def tick(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
             "reason": f"GENERATE+: {len(verified)} verified. What's missing?",
             "text": goal_text,
         })
+
+    # ── PUMP for Scout (DMN: find hidden bridges between distant nodes) ──
+    if mode_id == "scout" and len(hypotheses) >= 4:
+        pump_count = graph.get("_pump_count", 0)
+        if pump_count < 3:  # max 3 pump attempts per session
+            # Pick two most distant nodes (lowest similarity)
+            pair = _pick_distant_pair(hypotheses, edges)
+            if pair:
+                graph["_pump_count"] = pump_count + 1
+                print(f"[tick] PUMP: #{pair[0]} ↔ #{pair[1]} (attempt {pump_count + 1})")
+                return _emit({
+                    "action": "pump", "target": pair, "phase": "generate",
+                    "reason": f"PUMP: searching bridge between #{pair[0]} and #{pair[1]}",
+                    "text": f"{nodes[pair[0]]['text'][:30]} ↔ {nodes[pair[1]]['text'][:30]}",
+                })
 
     # ── SYNTHESIZE ──
     avg = sum(n.get("confidence", 0.5) for _, n in cl["active_nodes"]) / max(len(cl["active_nodes"]), 1)

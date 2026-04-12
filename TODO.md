@@ -9,69 +9,17 @@
 ## v1.7: доводка
 
 - [ ] **Pump: визуализация облаков** на SVG (два hull расширяющихся навстречу)
-- [ ] **Pump в autorun** для Scout mode (автономный поиск мостов между далёкими нодами)
+- [x] **Horizon: плавные переходы** — полный гистерезис для всех 4 состояний + debounce (2 тика). Расширение до 7 состояний (+STABILIZE/SHIFT/CONFLICT) — вместе с HRV в v5
 
 ---
 
-## v2: алгебра режимов
+## ~~v2: алгебра режимов~~ ✅ реализовано
 
-Реализация оставшихся 11 режимов из [README](README.md). Цель — один tick, 12 конфигов.
+Goal structured object, stop conditions (finite/repeatable/open), tick dispatcher по примитивам (none/focus/and/or/xor), multi-goal ввод (subgoals), UI selector с примерами и динамической формой. Детали → [docs/tick-design.md](docs/tick-design.md)
 
-### Шаг 1: инфраструктура конфига
-
-- [ ] **Mode config в goal-ноде** — dict с `(mode, primitive, strategy, goals, goal_type, fields)`:
-  - `primitive`: `none / and / or / xor` (четыре примитива)
-  - `strategy`: `unordered / seq / priority / balance` (для AND) или `comparative / dialectical` (для XOR) или `null`
-  - `goal_type`: `finite / repeatable / open`
-- [ ] **Goal-нода как structured object** — сейчас только text, нужны дополнительные поля
-- [ ] **Stop condition framework** — функции `(graph_state) → bool | snapshot`. По типу цели:
-  - finite: `confidence ≥ threshold` → RESOLVED
-  - repeatable: `step_complete + trigger` → SCHEDULED
-  - open: `diminishing_returns ИЛИ budget` → PARKED
-- [ ] **Goal evaluation** — LLM-as-judge: "достигли цели или нет?", сравнение goal↔result
-
-### Шаг 2: диспетчер tick
-
-- [ ] **tick(config, graph)** — читает `primitive` + `strategy` и вызывает реализацию
-
-Четыре примитива:
-- [ ] **none** (Scout) — без целей, дивергентное блуждание
-- [ ] **AND** — все цели должны быть verified
-- [ ] **OR** — первая достигнутая завершает цикл
-- [ ] **XOR** — выбрать ровно одну из множества
-
-Стратегии обхода AND (четыре режима):
-- [ ] **unordered** — Конструктор: любой порядок
-- [ ] **SEQ** — Конвейер: по зависимостям
-- [ ] **PRIORITY** — Каскад: по важности
-- [ ] **BALANCE** — Весы: пропорциональная аллокация над нефинитными
-
-Стратегии разрешения XOR (два режима):
-- [ ] **comparative** — Турнир: сравнение независимых опций
-- [ ] **dialectical** — Диспут: синтез противоречивых утверждений через SmartDC-on-graph
-
-Варианты OR (по типу цели):
-- [ ] **OR finite** — Гонка (первая цель завершает)
-- [ ] **OR open** — Веер (уже работает как текущий цикл)
-
-### Шаг 3: режимы single-goal по типу цели
-
-- [ ] **Вектор** (finite) — один фокус, сходится к RESOLVED
-- [ ] **Ритм** (repeatable) — heartbeat, snapshot evaluation, streak/trend
-- [ ] **Горизонт** (open) — уже работает как текущий цикл
-
-### Шаг 4: UI
-
-- [ ] **Селектор режима** — 12 опций с подсказками
-- [ ] **Динамическая форма** — поля ввода из `config.fields` под режим
-- [ ] **Display целей** — goal-нода показывает структуру (список целей + оператор)
-- [ ] **Snapshot для repeatable** — виджет streak/today/trend вместо sparkline сходимости
-
-### Шаг 5: персистентность
-
-- [ ] **State beyond session** — Ритм работает днями/неделями, Вектор — месяцами
-- [ ] **History log** — timestamps, changes, confidence evolution
-- [ ] **Автосохранение** — уже есть, нужна проверка для long-running режимов
+Доработки:
+- [ ] **Snapshot для repeatable** — виджет streak/today/trend
+- [ ] **Персистентность** — state beyond session для Ритм (дни/недели), history log
 
 ---
 
@@ -93,14 +41,28 @@
 
 ---
 
-## v5: автономность
+## v5: автономность + резонансный режим
 
-- [ ] **Автономное блуждание** — ночной режим, целенаправленный обход, поиск мостов
+### 5a: Автономное блуждание
+
+- [ ] **Scout mode: ночной режим** — cron job, автосохранение, seed из последнего графа
 - [ ] **`watchdog.py`** — проактивный помощник, уведомления по триггерам
 - [ ] **Консолидация** — прунинг слабых веток, "забывание" как фича
-- [ ] **Данные с девайсов** — HRV, сон, шаги → для режима Ритм
 
-### Бесцелевое сознание (Default Mode Network для графа)
+### 5b: HRV-интеграция (резонансный режим)
+
+Тело как источник сигналов для конуса. Детали → [docs/hrv-design.md](docs/hrv-design.md)
+
+- [ ] **MVP: Polar H10 → RR** — bleak BLE клиент, парсинг RR-интервалов, вывод в консоль
+- [ ] **Метрики** — RMSSD, SDNN, HRV-coherence, LF/HF из окна RR-интервалов
+- [ ] **θ из HRV** — coherence → theta (ширина конуса), RMSSD → коррекция
+- [ ] **φ из LF/HF** — разрешение/блокировка поворота конуса по балансу симпатика/парасимпатика
+- [ ] **5 состояний** — STABILIZE/FOCUSED/EXPLORE/SHIFT/CONFLICT с гистерезисом и debounce
+- [ ] **Калибровка** — 10-минутная сессия, персональные пороги, сохранение в конфиг
+- [ ] **Режим hybrid** — фоновый HRV-монитор + автономный tick, предложение переключиться при падении coherence
+- [ ] **UI** — визуализация конуса с θ/φ, цветовая кодировка состояний, HRV-метрики в реальном времени
+
+### 5c: Бесцелевое сознание (Default Mode Network для графа)
 
 Запуск без цели пользователя — система развивается автономно, как сознание младенца.
 
@@ -143,11 +105,8 @@ Pump между далёкими нодами может породить мет
 
 - [ ] **Layout** — d3/dagre/ELK вместо плоской линии
 - [ ] **Тесты** — unit + integration
-- [ ] **Параллельные API-запросы** — threading, ускорение цикла
-- [ ] **Timeline player** — ⏮▶⏸⏭ по timestamps
 - [ ] **Экспорт** — PNG / SVG / markdown / Obsidian
-- [ ] **EXE-установщик** — PyInstaller, ~15-20 MB
-- [ ] **Graph Store** — маркетплейс графов знаний
-- [ ] **Git Verify** — MR для знаний, review, рейтинги
+- [ ] **EXE-установщик** — PyInstaller
+- [ ] **Graph Store** — маркетплейс графов, review, рейтинги
 - [ ] **Извлечение графа из текста** — статья → граф
 

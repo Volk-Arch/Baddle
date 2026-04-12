@@ -28,7 +28,7 @@ MODES = {
         "placeholder_en": "Topic or thought...",
         "description": "Ручной режим. Все инструменты доступны, autorun выключен.",
         "description_en": "Manual mode. All tools available, no autorun.",
-        "tooltip": "ручной · без autorun · все инструменты",
+        "tooltip": "Всё вручную, без автопилота. Все инструменты доступны",
     },
 
     # ── 0 goals ──────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ MODES = {
         "placeholder_en": "Just start thinking...",
         "description": "Свободное блуждание без цели. Поиск неожиданных связей.",
         "description_en": "Free exploration without a goal. Serendipity search.",
-        "tooltip": "0 целей · бесконечный · без стоп-условия",
+        "tooltip": "Без цели. Система блуждает и ищет неожиданные связи",
     },
 
     # ── 1 goal ───────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ MODES = {
         "placeholder_en": "Goal: what to achieve?",
         "description": "Одна конечная цель. Фокус до достижения.",
         "description_en": "Single finite goal. Focus until achieved.",
-        "tooltip": "1 цель · конечная · стоп: confidence ≥ threshold",
+        "tooltip": "Одна цель, работаем пока не достигнем",
     },
     "rhythm": {
         "name": "Привычка",
@@ -74,7 +74,7 @@ MODES = {
         "placeholder_en": "Habit: what to do regularly?",
         "description": "Повторяемая цель. Streak, тренд, snapshot.",
         "description_en": "Repeatable goal. Streak, trend, snapshot evaluation.",
-        "tooltip": "1 цель · повторяемая · streak + тренд · бесконечный",
+        "tooltip": "Повторяемое действие. Отслеживает streak и тренд",
     },
     "horizon": {
         "name": "Исследование",
@@ -88,7 +88,7 @@ MODES = {
         "placeholder_en": "Topic: what to explore?",
         "description": "Открытая цель. Бесконечное уточнение до исчерпания новизны.",
         "description_en": "Open-ended goal. Infinite refinement until novelty exhaustion.",
-        "tooltip": "1 цель · открытая · стоп: исчерпание новизны",
+        "tooltip": "Изучаем тему вглубь, пока не исчерпаем новизну",
     },
 
     # ── AND ──────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ MODES = {
         "placeholder_en": "Subtasks (all required):",
         "description": "Все подцели обязательны, порядок неважен.",
         "description_en": "All subgoals required, any order.",
-        "tooltip": "AND · все обязательны · любой порядок · конечная",
+        "tooltip": "Все части обязательны, порядок неважен",
     },
     "pipeline": {
         "name": "По шагам",
@@ -118,7 +118,7 @@ MODES = {
         "placeholder_en": "Steps in order:",
         "description": "Все подцели по порядку. Каждая после предыдущей.",
         "description_en": "All subgoals in order. Each after previous.",
-        "tooltip": "AND · последовательно · по зависимостям · конечная",
+        "tooltip": "Строго по порядку, каждый шаг после предыдущего",
     },
     "cascade": {
         "name": "Приоритеты",
@@ -132,7 +132,7 @@ MODES = {
         "placeholder_en": "Tasks by priority:",
         "description": "Все подцели по приоритету. Срочное первым.",
         "description_en": "All subgoals by priority. Urgent first.",
-        "tooltip": "AND · по приоритету · срочное первым · конечная",
+        "tooltip": "Всё нужно, но срочное и важное первым",
     },
     "scales": {
         "name": "Баланс",
@@ -146,7 +146,7 @@ MODES = {
         "placeholder_en": "What to balance between?",
         "description": "Пропорциональное распределение между целями. Бюджет, баланс.",
         "description_en": "Proportional allocation between goals. Budget, balance.",
-        "tooltip": "AND · пропорции · бесконечный · snapshot",
+        "tooltip": "Распределяем внимание между несколькими целями поровну",
     },
 
     # ── OR ───────────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ MODES = {
         "placeholder_en": "Options (any will do):",
         "description": "Любая одна цель достаточна. Первая выигрывает.",
         "description_en": "Any one goal suffices. First to finish wins.",
-        "tooltip": "OR · любой достаточен · конечная",
+        "tooltip": "Подойдёт любой вариант, берём первый найденный",
     },
     "fan": {
         "name": "Мозговой штурм",
@@ -176,7 +176,7 @@ MODES = {
         "placeholder_en": "Topic for brainstorming:",
         "description": "Набор идей без ограничений. Мозговой штурм.",
         "description_en": "Open-ended idea generation. Brainstorm.",
-        "tooltip": "OR · открытый · стоп: исчерпание новизны",
+        "tooltip": "Набрасываем максимум идей без ограничений",
     },
 
     # ── XOR ──────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ MODES = {
         "placeholder_en": "Options to compare:",
         "description": "Выбрать ровно одну из нескольких. Сравнение вариантов.",
         "description_en": "Pick exactly one from several. Compare options.",
-        "tooltip": "XOR · выбрать одну · сравнение · конечная",
+        "tooltip": "Сравниваем варианты и выбираем лучший",
     },
     "dispute": {
         "name": "Дебаты",
@@ -206,7 +206,7 @@ MODES = {
         "placeholder_en": "Contradictory positions:",
         "description": "Противоречивые утверждения. Диалектический синтез.",
         "description_en": "Contradictory claims. Dialectical synthesis.",
-        "tooltip": "XOR · диалектика · синтез · конечная",
+        "tooltip": "Сталкиваем позиции, ищем синтез",
     },
 }
 
@@ -220,6 +220,72 @@ def get_mode(mode_id: str) -> dict:
     return MODES.get(mode_id, MODES[DEFAULT_MODE])
 
 
+def get_elaborate_hint(goal_node: dict, lang: str = "ru") -> str:
+    """Get context hint for elaborate prompt based on goal's primitive."""
+    primitive = goal_node.get("primitive")
+    goal_text = goal_node.get("text", "")
+    if not primitive:
+        return ""
+
+    hints = {
+        "xor": {
+            "ru": f"Контекст: мы сравниваем варианты для выбора '{goal_text}'. Раскрой плюсы, минусы, особенности этого варианта.",
+            "en": f"Context: we are comparing options to choose '{goal_text}'. Reveal pros, cons, specifics of this option.",
+        },
+        "and": {
+            "ru": f"Контекст: это часть задачи '{goal_text}'. Углуби детали реализации.",
+            "en": f"Context: this is part of task '{goal_text}'. Elaborate on implementation details.",
+        },
+        "or": {
+            "ru": f"Контекст: это один из вариантов для '{goal_text}'. Раскрой что делает его подходящим.",
+            "en": f"Context: this is one option for '{goal_text}'. Reveal what makes it suitable.",
+        },
+        "focus": {
+            "ru": f"Контекст: цель — '{goal_text}'. Углуби этот аспект.",
+            "en": f"Context: goal is '{goal_text}'. Elaborate on this aspect.",
+        },
+    }
+    h = hints.get(primitive, {})
+    return h.get(lang, h.get("ru", ""))
+
+
 def list_modes() -> list[dict]:
     """List all modes with IDs for UI selector."""
     return [{"id": k, **v} for k, v in MODES.items()]
+
+
+def check_stop(goal_node: dict, cl: dict, graph: dict) -> dict:
+    """Check if goal is reached based on goal_type.
+
+    Returns {"resolved": bool, "reason": str}.
+    cl = classify_nodes() result from thinking.py.
+    """
+    goal_type = goal_node.get("goal_type")
+
+    if goal_type == "finite":
+        # All hypotheses verified → RESOLVED
+        if cl["hypotheses"] and not cl["unverified"]:
+            return {"resolved": True, "reason": "All hypotheses verified"}
+        # High average confidence with enough verified
+        if cl["hypotheses"] and cl["verified"] and len(cl["verified"]) >= 3:
+            avg = sum(n.get("confidence", 0.5) for _, n in cl["hypotheses"]) / len(cl["hypotheses"])
+            if avg > 0.85:
+                return {"resolved": True, "reason": f"High avg confidence: {avg:.0%}"}
+        return {"resolved": False, "reason": ""}
+
+    elif goal_type == "repeatable":
+        # One cycle done → snapshot, system can restart
+        if cl["hypotheses"] and not cl["unverified"] and cl["verified"]:
+            return {"resolved": True, "reason": "Cycle complete, snapshot"}
+        return {"resolved": False, "reason": ""}
+
+    elif goal_type == "open":
+        # Novelty exhaustion — model is repeating itself
+        horizon_data = graph.get("_horizon", {})
+        precision = horizon_data.get("precision", 0.5)
+        if precision > 0.85 and not cl["bare"] and not cl["unverified"]:
+            return {"resolved": True, "reason": "Diminishing returns"}
+        return {"resolved": False, "reason": ""}
+
+    # None (free/scout) — never auto-stop
+    return {"resolved": False, "reason": ""}
