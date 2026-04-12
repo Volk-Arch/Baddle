@@ -879,7 +879,6 @@ function graphShowContextMenu(e, idx) {
     ]},
     { label: 'Structural', icon: '✎', items: [
       { label: 'Rephrase', action: 'openStudio("rephrase")' },
-      { label: '+ Evidence', action: 'graphShowAddEvidence()', show: nodeType === 'hypothesis' || nodeType === 'thought' },
       { label: 'Edit', action: 'graphDetailEdit()' },
     ]},
     { label: 'Navigation', icon: '🔍', items: [
@@ -1366,9 +1365,6 @@ function graphShowDetail(idx) {
   // Node type selector
   const typeSelect = document.getElementById('graph-detail-type');
   typeSelect.value = node.type || 'thought';
-  // Show "+ Evidence" for hypothesis and thought types (auto-converts to hypothesis)
-  const canAddEvidence = (node.type === 'hypothesis' || node.type === 'thought');
-  document.getElementById('graph-add-evidence-btn').style.display = canAddEvidence ? '' : 'none';
   // Show α/β for hypothesis nodes
   let abDiv = document.getElementById('graph-detail-ab');
   if (!abDiv) {
@@ -1519,6 +1515,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'cascade': '— например "список дел на неделю"', 'scales': '— например "работа / семья / здоровье"',
         'race': '— например "найти подарок"', 'fan': '— например "идеи для стартапа"',
         'tournament': '— например "какую машину купить"', 'dispute': '— например "ИИ заменит программистов?"',
+        'bayes': '— например "вероятность дождя"',
       };
       opt.textContent = m.name + (examples[m.id] ? ' ' + examples[m.id] : '');
       sel.appendChild(opt);
@@ -1690,6 +1687,16 @@ async function graphAutoRun() {
     }
   }
   // goalsCount === 0 (free/scout) — no goal needed, proceed
+
+  // Bayesian mode: Run = suggest observations instead of autorun
+  if (currentMode === 'bayes') {
+    if (_bayesHypIdx >= 0) {
+      await _bayesSuggest();
+    } else {
+      alert('Сначала добавь гипотезу');
+    }
+    return;
+  }
 
   _autoRunning = true;
   _autoRunAbort = new AbortController();
@@ -2199,6 +2206,128 @@ async function _autoRunCompare(indices, hp) {
   }
 }
 
+// ── Bayesian mode ────────────────────────────────────────────────────────
+var _bayesHypIdx = -1;
+
+async function _bayesAddHypothesis() {
+  const input = document.getElementById('graph-topic-top');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+  const prior = parseFloat(document.getElementById('bayes-prior').value) || 0.5;
+  const params = graphGetParams();
+  const r = await fetch('/graph/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ text: text, node_type: 'hypothesis', ...params })
+  });
+  const d = await r.json();
+  if (d.error) { alert(d.error); return; }
+  graphSaveUndo();
+  graphUpdateView(d);
+  _bayesHypIdx = graphData.nodes.length - 1;
+  // Set initial confidence = prior
+  await fetch('/graph/confidence', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ index: _bayesHypIdx, value: prior })
+  }).catch(() => {});
+  // Show evidence area
+  document.getElementById('bayes-evidence-area').style.display = '';
+  document.getElementById('bayes-posterior').textContent = 'P(H) = ' + (prior * 100).toFixed(0) + '%';
+}
+
+async function _bayesAddEvidence() {
+  if (_bayesHypIdx < 0) return;
+  const text = document.getElementById('bayes-evidence-text').value.trim();
+  if (!text) return;
+  const relation = document.getElementById('bayes-relation').value;
+  const strength = parseFloat(document.getElementById('bayes-strength').value) || 0.7;
+  const params = graphGetParams();
+  const r = await fetch('/graph/add-evidence', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ hypothesis: _bayesHypIdx, text: text, relation: relation, strength: strength, ...params })
+  });
+  const d = await r.json();
+  if (d.error) { alert(d.error); return; }
+  graphSaveUndo();
+  graphUpdateView(d);
+  // Show updated posterior
+  const bu = d.bayes_update;
+  if (bu) {
+    const pct = (bu.posterior * 100).toFixed(0);
+    const color = bu.posterior > 0.7 ? '#10b981' : bu.posterior < 0.3 ? '#ef4444' : '#f59e0b';
+    document.getElementById('bayes-posterior').innerHTML =
+      '<span style="color:' + color + ';font-size:16px">P(H) = ' + pct + '%</span>'
+      + ' <span style="color:var(--text-tertiary);font-size:11px">(было ' + (bu.prior * 100).toFixed(0) + '% → стало ' + pct + '%)</span>';
+  }
+  // Keep evidence text for reference
+}
+
+async function _bayesEstimatePrior() {
+  const input = document.getElementById('graph-topic-top');
+  const text = input ? input.value.trim() : '';
+  if (!text) { alert('Введи гипотезу'); return; }
+  const resultDiv = document.getElementById('bayes-llm-result') || document.getElementById('graph-mode-description');
+  resultDiv.innerHTML = '<span style="color:var(--text-tertiary)">Оцениваю prior...</span>';
+  const params = graphGetParams();
+  const r = await fetch('/graph/bayes-estimate-prior', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ hypothesis: text, lang: params.lang || 'ru', temp: 0.3, top_k: 40 })
+  });
+  const d = await r.json();
+  if (d.error) { resultDiv.textContent = d.error; return; }
+  document.getElementById('bayes-prior').value = d.prior;
+  resultDiv.innerHTML = '<span style="color:#6366f1">Prior: ' + (d.prior * 100).toFixed(0) + '%</span>'
+    + (d.why ? ' — <span style="color:var(--text-tertiary)">' + d.why + '</span>' : '');
+}
+
+async function _bayesEstimate() {
+  if (_bayesHypIdx < 0) return;
+  const hyp = graphData.nodes[_bayesHypIdx];
+  const obs = document.getElementById('bayes-evidence-text').value.trim();
+  if (!obs || !hyp) return;
+  const resultDiv = document.getElementById('bayes-llm-result');
+  resultDiv.innerHTML = '<span style="color:var(--text-tertiary)">Оцениваю...</span>';
+  const params = graphGetParams();
+  const r = await fetch('/graph/bayes-estimate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ hypothesis: hyp.text, observation: obs, lang: params.lang || 'ru', temp: 0.3, top_k: 40 })
+  });
+  const d = await r.json();
+  if (d.error) { resultDiv.textContent = d.error; return; }
+  // Auto-fill relation and strength
+  document.getElementById('bayes-relation').value = d.relation;
+  document.getElementById('bayes-strength').value = d.strength;
+  const relLabel = d.relation === 'supports' ? 'подтверждает' : 'опровергает';
+  resultDiv.innerHTML = '<span style="color:#6366f1">' + relLabel + ', сила ' + d.strength + '</span>'
+    + (d.why ? ' — <span style="color:var(--text-tertiary)">' + d.why + '</span>' : '');
+}
+
+async function _bayesSuggest() {
+  if (_bayesHypIdx < 0) return;
+  const hyp = graphData.nodes[_bayesHypIdx];
+  if (!hyp) return;
+  const resultDiv = document.getElementById('bayes-llm-result');
+  resultDiv.innerHTML = '<span style="color:var(--text-tertiary)">Думаю...</span>';
+  // Collect existing evidence texts
+  const existing = graphData.nodes
+    .filter(n => n.evidence_target === _bayesHypIdx)
+    .map(n => n.text);
+  const params = graphGetParams();
+  const r = await fetch('/graph/bayes-suggest', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ hypothesis: hyp.text, existing: existing, lang: params.lang || 'ru', temp: 0.7, top_k: 40 })
+  });
+  const d = await r.json();
+  if (d.error) { resultDiv.textContent = d.error; return; }
+  resultDiv.innerHTML = '<div style="color:#059669;font-weight:500;margin-bottom:2px">Что проверить:</div>'
+    + '<div style="white-space:pre-wrap;color:var(--text-primary);font-size:11px">' + d.suggestions + '</div>';
+}
+
 function graphSetNodeType(nodeType) {
   const idx = graphSelectedNode;
   if (idx < 0) return;
@@ -2542,7 +2671,6 @@ async function graphAddThought() {
   const d = await r.json();
   if (d.error) { alert(d.error); return; }
   graphSaveUndo();
-  input.value = '';
   graphUpdateView(d);
 }
 
@@ -2557,7 +2685,6 @@ async function graphToGraphAdd() {
   const d = await r.json();
   if (d.error) { alert(d.error); return; }
   graphSaveUndo();
-  input.value = '';
   graphUpdateView(d);
 }
 
@@ -2933,7 +3060,33 @@ function onGraphModeChange() {
   const addType = (mode.goals_count === 1 || isMulti) ? 'goal' : 'auto';
   const typeLabel = addType === 'goal' ? 'goal' : 'thought';
 
-  if (isMulti) {
+  if (mode.primitive === 'bayes') {
+    // Bayesian mode: hypothesis + evidence inputs
+    container.innerHTML =
+      '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+      + '<input id="graph-topic-top" type="text" placeholder="' + ph + '" style="flex:1" class="modal-input">'
+      + '<span style="color:var(--text-tertiary);font-size:10px">hypothesis</span>'
+      + '<label style="color:var(--text-tertiary);font-size:11px;display:flex;align-items:center;gap:4px">prior <input id="bayes-prior" type="number" value="0.5" min="0.01" max="0.99" step="0.05" style="width:55px;padding:3px" class="modal-input"></label>'
+      + '<button onclick="_bayesEstimatePrior()" class="btn-secondary" style="padding:5px 10px;font-size:11px;color:#6366f1;border-color:#6366f1" title="LLM оценит начальную вероятность">Оценить</button>'
+      + '<button onclick="_bayesAddHypothesis()" class="btn-secondary" style="padding:5px 14px;font-size:12px">+ Гипотеза</button>'
+      + '</div>'
+      + '<div id="bayes-evidence-area" style="display:none;border-top:1px solid var(--border);padding-top:6px">'
+      + '<div style="color:var(--text-tertiary);font-size:11px;margin-bottom:4px">Добавь наблюдения — каждое обновит вероятность:</div>'
+      + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+      + '<input id="bayes-evidence-text" type="text" placeholder="Наблюдение..." style="flex:1;min-width:150px" class="modal-input">'
+      + '<select id="bayes-relation" class="modal-select" style="width:auto;padding:3px 6px;font-size:11px">'
+      + '<option value="supports">подтверждает</option><option value="contradicts">опровергает</option></select>'
+      + '<label style="color:var(--text-tertiary);font-size:11px;display:flex;align-items:center;gap:4px">сила <input id="bayes-strength" type="number" value="0.7" min="0.1" max="0.99" step="0.05" style="width:50px;padding:3px" class="modal-input"></label>'
+      + '<button onclick="_bayesAddEvidence()" class="btn-secondary" style="padding:5px 10px;font-size:11px">+ Добавить</button>'
+      + '<button onclick="_bayesEstimate()" class="btn-secondary" style="padding:5px 10px;font-size:11px;color:#6366f1;border-color:#6366f1" title="LLM оценит relation и силу">Оценить</button>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px;margin-top:6px">'
+      + '<button onclick="_bayesSuggest()" class="btn-secondary" style="padding:4px 10px;font-size:11px;color:#059669;border-color:#059669" title="LLM предложит какие наблюдения искать">Подсказать наблюдения</button>'
+      + '</div>'
+      + '<div id="bayes-posterior" style="margin-top:6px;font-size:13px;font-weight:600;color:var(--accent)"></div>'
+      + '<div id="bayes-llm-result" style="margin-top:4px;font-size:12px;color:var(--text-primary)"></div>'
+      + '</div>';
+  } else if (isMulti) {
     // Multi-goal: separate input fields with + button
     const fieldLabel = mode.fields && mode.fields[0] || 'goals';
     const itemName = fieldLabel === 'options' ? 'Вариант' : fieldLabel === 'positions' ? 'Позиция' : 'Подзадача';
@@ -2992,9 +3145,7 @@ function _submitMultiGoal() {
   document.getElementById('graph-add-type-top').value = 'goal';
   graphAddThought();
 
-  // Clear fields
-  if (title) title.value = '';
-  inputs.forEach(inp => inp.value = '');
+  // Keep fields for reference — don't clear
 }
 
 function graphReset() {

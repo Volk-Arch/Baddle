@@ -264,6 +264,7 @@ def create_horizon(mode_id: str) -> CognitiveHorizon:
         "fan":        {"precision": 0.3, "policy": {"generate": 0.5,  "merge": 0.1,  "elaborate": 0.1,  "doubt": 0.3},  "target": 0.5},
         "tournament": {"precision": 0.7, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.3,  "doubt": 0.5},  "target": 0.15},
         "dispute":    {"precision": 0.5, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.2,  "doubt": 0.6},  "target": 0.25},
+        "bayes":      {"precision": 0.6, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.3,  "doubt": 0.5},  "target": 0.2},
     }
 
     preset = PRESETS.get(mode_id, PRESETS["horizon"])
