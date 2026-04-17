@@ -67,8 +67,9 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     horizon_params = horizon.to_llm_params()
     tau_in = horizon.tau_in
     tau_out = horizon.tau_out
+    camera_mode = bool(getattr(horizon, "llm_disabled", False))
     log.info(f"[tick-nand] state={horizon.state} p={horizon.precision:.2f} γ={horizon.gamma:.2f} "
-             f"τ_in={tau_in:.2f} τ_out={tau_out:.2f}")
+             f"τ_in={tau_in:.2f} τ_out={tau_out:.2f} camera={camera_mode}")
 
     hypotheses = cl["hypotheses"]
     bare = cl["bare"]
@@ -94,6 +95,31 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         action_dict["horizon_metrics"] = horizon.get_metrics()
         action_dict["tick_engine"] = "nand"
         graph["_horizon"] = horizon.to_dict()
+
+        # ── State graph append (v5e) ──
+        # Record every tick emission as a state_node. Non-blocking, best-effort.
+        try:
+            from .state_graph import get_state_graph
+            sg = get_state_graph()
+            target = action_dict.get("target")
+            if isinstance(target, list):
+                content_touched = list(target)
+            elif isinstance(target, int):
+                content_touched = [target]
+            else:
+                content_touched = []
+            sg.append(
+                action=action_dict.get("action", "unknown"),
+                phase=action_dict.get("phase", ""),
+                user_initiated=bool(kwargs.get("user_initiated", False)),
+                content_touched=content_touched,
+                state_snapshot=horizon.get_metrics(),
+                reason=action_dict.get("reason", ""),
+                state_origin=getattr(horizon, "state_origin_hint", "1_rest"),
+            )
+        except Exception as e:
+            log.debug(f"[tick-nand] state_graph append failed: {e}")
+
         return action_dict
 
     # ── STOP CHECK: universal should_stop via distinct zones ──
@@ -107,10 +133,31 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                 "reason": f"GOAL REACHED: {stop['reason']}",
             })
 
-    # ── 1. Not enough nodes? GENERATE ──
+    # ── ASK CHECK: high uncertainty + low NE → pause for user clarification (v2) ──
+    # Conditions: enough nodes exist, sync_error growing, not a FREEZE state
+    try:
+        from .horizon import PROTECTIVE_FREEZE
+        ne_low = getattr(horizon, "NE", 0.5) < 0.35
+        high_sync_err = getattr(horizon, "sync_error", 0.0) > 0.6
+        many_uncertain = len(unverified) >= 3 and len(verified) == 0
+        not_frozen = horizon.state != PROTECTIVE_FREEZE
+        ask_counter = graph.get("_ask_count", 0)
+        if not_frozen and ask_counter < 1 and (high_sync_err or (ne_low and many_uncertain)):
+            graph["_ask_count"] = ask_counter + 1
+            return _emit({
+                "action": "ask",
+                "target": goal_idx or 0,
+                "phase": "dialogue",
+                "reason": "EMERGENT[ask]: uncertainty high, system needs user input",
+                "text": goal_text,
+            })
+    except Exception as e:
+        log.debug(f"[tick-nand] ask check failed: {e}")
+
+    # ── 1. Not enough nodes? GENERATE (skipped in Camera mode) ──
     generated = graph.get("_generated", False)
     need_generate = not generated and len(hypotheses) < min_hyp
-    if need_generate:
+    if need_generate and not camera_mode:
         return _emit({
             "action": "think_toward",
             "target": goal_idx or 0,
@@ -180,8 +227,8 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                 "text": ", ".join(nodes[g]["text"][:25] for g in group[:3]) + "...",
             })
 
-    # Bare nodes → ELABORATE (no emergent logic, same as before)
-    if bare:
+    # Bare nodes → ELABORATE (skipped in Camera mode — elaborate needs LLM)
+    if bare and not camera_mode:
         target = _pick_target(bare, goal_idx, edges)
         if target:
             return _emit({
@@ -192,8 +239,8 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                 "text": target[1]["text"][:80],
             })
 
-    # CONFLICT zone → DOUBT
-    if conflict_pairs:
+    # CONFLICT zone → DOUBT (skipped in Camera mode — smartdc needs LLM)
+    if conflict_pairs and not camera_mode:
         # Pick a node from conflict that is also unverified
         unverified_ids = {i for i, _ in unverified}
         for i, j, d in conflict_pairs:

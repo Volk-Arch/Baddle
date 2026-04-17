@@ -96,7 +96,8 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
     return ("supports", 0.7)
 
 
-def _bayesian_update_distinct(prior: float, d: float, gamma: float = 2.0) -> float:
+def _bayesian_update_distinct(prior: float, d: float, gamma: float = 2.0,
+                               state=None) -> float:
     """NAND Bayesian update in log-odds via distinct distance.
 
     d ∈ [0,1]: dissimilarity between evidence (E) and hypothesis (H).
@@ -104,11 +105,16 @@ def _bayesian_update_distinct(prior: float, d: float, gamma: float = 2.0) -> flo
       d=0.5 (neutral)         → no update
       d=1   (orthogonal/neg)  → −γ reduction
 
-    logit(post) = logit(prior) + γ · (1 − 2d)
+    logit(post) = logit(prior) + γ_eff · (1 − 2d)
 
-    Replaces classic Bayes P(H|E)=P(E|H)P(H)/P(E) — same effect via log-odds,
-    no need for p_e_h / p_e_nh bookkeeping. See docs/nand-architecture.md
+    If `state` (CognitiveState) is passed, delegates to state.apply_to_bayes(),
+    which uses γ_eff = γ·S (plasticity-gated) and respects PROTECTIVE_FREEZE.
+    Fallback path uses plain γ for tests and bootstrap.
+
+    See TODO v5d, docs/nand-architecture.md
     """
+    if state is not None:
+        return state.apply_to_bayes(prior, d)
     import math
     prior = max(0.01, min(0.99, prior))
     log_prior = math.log(prior / (1 - prior))
@@ -177,17 +183,24 @@ def _beta_mean_ci(alpha: float, beta: float) -> dict:
 
 def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
                entropy: dict | None = None, confidence: float = 0.5,
-               node_type: str = "thought") -> dict:
-    """Create a node dict with all required fields."""
+               node_type: str = "thought",
+               embedding: list | None = None) -> dict:
+    """Create a node dict with all required fields.
+
+    v8b: embeddings-first — embedding field is primary. Text stays for display.
+    If `embedding` is None, it'll be populated by _ensure_embeddings on next pass.
+    distinct() can read from node["embedding"] directly, no LLM hop required.
+    """
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": node_id,
         "text": text,
+        "embedding": embedding,   # v8b: primary — populated on create or on _ensure_embeddings
         "entropy": entropy or {"avg": 0.0, "unc": 0.0},
         "depth": depth,
         "topic": topic,
         "confidence": round(confidence, 2),
-        "type": node_type,  # "thought", "hypothesis", "evidence", "fact", "question"
+        "type": node_type,
         "created_at": now,
         "last_accessed": now,
     }
@@ -345,16 +358,33 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
 # ── similarity & clustering ──────────────────────────────────────────────────
 
 def _ensure_embeddings(texts: list[str]):
-    """Compute and cache embeddings for all texts via API backend."""
+    """Compute and cache embeddings. v8b: mirror into node["embedding"] too.
+
+    Camera mode (v8c): if CognitiveState.llm_disabled is True and an API call
+    would be needed, fall back to None (system keeps thinking on existing
+    embeddings only, no new fetches).
+    """
     from .api_backend import api_get_embedding
+    try:
+        from .horizon import get_global_state
+        llm_off = get_global_state().llm_disabled
+    except Exception:
+        llm_off = False
 
     cache = _graph.setdefault("embeddings", [])
+    nodes = _graph.get("nodes", [])
     while len(cache) < len(texts):
         idx = len(cache)
-        emb = api_get_embedding(texts[idx])
+        emb = None if llm_off else api_get_embedding(texts[idx])
         cache.append(emb if emb else None)
     while len(cache) > len(texts):
         cache.pop()
+
+    # v8b: mirror cache into node.embedding so downstream distinct() reads
+    # directly off the node, no parallel-list juggling.
+    for i, n in enumerate(nodes):
+        if i < len(cache) and cache[i] and not n.get("embedding"):
+            n["embedding"] = cache[i]
 
 
 def _jaccard(i: int, j: int, texts: list[str]) -> float:

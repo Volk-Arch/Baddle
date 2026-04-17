@@ -563,6 +563,204 @@ select {
   color: #10b981;
 }
 
+/* Neurochem panel (v5d) */
+.assist-neurochem {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.neuro-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.neuro-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 80px;
+}
+.neuro-label {
+  font-size: 10px;
+  color: #71717a;
+  font-weight: 600;
+  min-width: 70px;
+  letter-spacing: 0.3px;
+}
+.neuro-track {
+  flex: 1;
+  height: 6px;
+  background: #27272a;
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+.neuro-fill {
+  height: 100%;
+  width: 50%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.neuro-phasic {
+  position: absolute;
+  top: -10px;
+  font-size: 8px;
+  transition: left 0.3s ease, color 0.3s ease;
+}
+.neuro-val {
+  font-size: 10px;
+  color: #a1a1aa;
+  min-width: 30px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.neuro-secondary {
+  font-size: 10px;
+  color: #71717a;
+}
+.neuro-mode-badge, .neuro-action-badge, .neuro-origin-badge, .neuro-camera-badge {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+.neuro-mode-badge {
+  background: #1e1b4b;
+  color: #a5b4fc;
+  border: 1px solid #3730a3;
+}
+.neuro-mode-badge.freeze {
+  background: #450a0a;
+  color: #fca5a5;
+  border-color: #991b1b;
+  animation: neuro-freeze-pulse 2s ease-in-out infinite;
+}
+@keyframes neuro-freeze-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.neuro-action-badge {
+  background: #1c1917;
+  color: #fbbf24;
+  border: 1px solid #78350f;
+}
+.neuro-origin-badge {
+  background: #052e16;
+  color: #86efac;
+  border: 1px solid #166534;
+}
+.neuro-camera-badge {
+  background: #312e81;
+  color: #c4b5fd;
+}
+.neuro-toggle-btn {
+  background: #18181b;
+  color: #71717a;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.neuro-toggle-btn:hover {
+  color: #a1a1aa;
+  border-color: #3f3f46;
+}
+.neuro-toggle-btn.active {
+  background: #312e81;
+  color: #c4b5fd;
+  border-color: #4338ca;
+}
+/* State-graph timeline (FE-2) */
+.neuro-timeline {
+  margin-top: 6px;
+  padding: 8px;
+  background: #0f0f11;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.neuro-timeline-header {
+  font-size: 10px;
+  color: #71717a;
+  font-weight: 600;
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.neuro-timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.neuro-timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: #18181b;
+}
+.neuro-timeline-item:hover { background: #27272a; }
+.neuro-timeline-action {
+  color: #fbbf24;
+  min-width: 80px;
+  font-weight: 500;
+}
+.neuro-timeline-time { color: #52525b; font-size: 9px; font-variant-numeric: tabular-nums; }
+.neuro-timeline-origin {
+  padding: 1px 5px;
+  background: #052e16;
+  color: #86efac;
+  border-radius: 3px;
+  font-size: 9px;
+}
+.neuro-timeline-origin.held {
+  background: #1c1917;
+  color: #fdba74;
+}
+.neuro-timeline-reason {
+  color: #a1a1aa;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* User feedback buttons on cards (FE-5) */
+.assist-feedback-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #27272a;
+  justify-content: flex-end;
+}
+.assist-fb-btn {
+  background: #27272a;
+  color: #a1a1aa;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.assist-fb-btn:hover { background: #3f3f46; color: #e4e4e7; }
+.assist-fb-accept:hover { background: #052e16; color: #10b981; border-color: #166534; }
+.assist-fb-reject:hover { background: #450a0a; color: #ef4444; border-color: #991b1b; }
+
 /* HRV simulator panel */
 .assist-sim-panel {
   background: #18181b;

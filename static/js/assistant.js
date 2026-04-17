@@ -146,6 +146,7 @@ function assistRenderCard(card) {
           <div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:4px;">SYNTHESIS${card.confidence ? ` · confidence ${Math.round(card.confidence*100)}%` : ''}</div>
           <div style="font-size:13px;color:#e4e4e7;">${_esc(card.synthesis)}</div>
         </div>
+        ${_feedbackButtons()}
       </div>`;
   }
   else if (card.type === 'comparison') {
@@ -164,6 +165,7 @@ function assistRenderCard(card) {
         ${optionsHtml}
         ${card.reason ? `<div style="margin-top:10px;font-size:12px;color:#a1a1aa;"><b style="color:#818cf8;">Почему:</b> ${_esc(card.reason)}</div>` : ''}
         ${card.risk ? `<div style="margin-top:6px;font-size:12px;color:#f59e0b;"><b>⚠ Риск:</b> ${_esc(card.risk)}</div>` : ''}
+        ${_feedbackButtons()}
       </div>`;
   }
   else if (card.type === 'bayesian') {
@@ -195,6 +197,29 @@ function assistRenderCard(card) {
       <div style="padding:14px;background:#1f1f23;border-radius:14px;">
         ${ideasHtml}
         ${verifiedHtml}
+        ${_feedbackButtons()}
+      </div>`;
+  }
+  else if (card.type === 'decompose_suggestion') {
+    const cta = _esc(card.cta || 'Разбить');
+    const hint = _esc(card.hint || 'Разбить на подзадачи?');
+    const msgEsc = _esc(card.message || '');
+    wrapper.innerHTML = `
+      <div style="padding:10px 14px;background:#1e1b4b;border:1px solid #4338ca;border-radius:12px;display:flex;align-items:center;gap:12px;">
+        <span style="font-size:18px;">↯</span>
+        <div style="flex:1;font-size:13px;color:#c7d2fe;">${hint}</div>
+        <button onclick="_assistInlineDecompose(this, ${JSON.stringify(card.message || '').replace(/"/g, '&quot;')})"
+          style="background:#4f46e5;color:white;border:0;padding:6px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:500;">
+          ${cta}
+        </button>
+      </div>`;
+  }
+  else if (card.type === 'clarify') {
+    wrapper.innerHTML = `
+      <div style="padding:14px;background:#1c1917;border:1px solid #78350f;border-radius:12px;">
+        <div style="font-size:10px;color:#f59e0b;font-weight:600;margin-bottom:6px;letter-spacing:0.5px;">УТОЧНЯЮ</div>
+        <div style="font-size:14px;color:#fbbf24;">${_esc(card.question)}</div>
+        <div style="font-size:11px;color:#a1a1aa;margin-top:8px;">Ответь — я пойму что ты имел в виду.</div>
       </div>`;
   }
   else if (card.type === 'habit') {
@@ -220,6 +245,34 @@ function assistRenderCard(card) {
 function _esc(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── User feedback buttons on cards (FE-5) ──────────────────────────────
+// Sends feedback to CognitiveState → DA_phasic + S drift.
+async function assistFeedback(kind) {
+  try {
+    const r = await fetch('/assist/feedback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ feedback: kind })
+    });
+    const d = await r.json();
+    // Immediate visual hint — refresh neurochem panel
+    if (d.ok) {
+      fetch('/assist/state').then(r => r.json()).then(_updateNeurochemPanel).catch(()=>{});
+    }
+    return d;
+  } catch(e) {
+    console.warn('[feedback] failed:', e);
+  }
+}
+
+function _feedbackButtons() {
+  return `<div class="assist-feedback-row">
+    <button onclick="assistFeedback('accepted')" class="assist-fb-btn assist-fb-accept" title="Полезно: +DA, S↑">👍</button>
+    <button onclick="assistFeedback('rejected')" class="assist-fb-btn assist-fb-reject" title="Не то: −DA, S↓">👎</button>
+    <button onclick="assistFeedback('ignored')" class="assist-fb-btn" title="Нейтрально">—</button>
+  </div>`;
 }
 
 // ── Steps rendering (visible thinking) ─────────────────────────────
@@ -335,6 +388,9 @@ async function assistSend() {
 function _assistShowResponse(d, originalText, lang) {
   // Main text
   assistAddMsg('assistant', d.text, { mode: d.mode, mode_name: d.mode_name });
+
+  // Update action indicator with last system action (if any)
+  if (d.mode_name) _updateNeurochemAction(d.mode, d.mode_name);
 
   // Cards
   if (d.cards && d.cards.length) {
@@ -531,6 +587,59 @@ async function assistDecomposeUI() {
   }
 }
 
+// Inline decompose from suggestion card (FE replace of ↯ button)
+async function _assistInlineDecompose(btnEl, message) {
+  if (!message) return;
+  btnEl.disabled = true;
+  btnEl.textContent = '...';
+  const lang = (document.getElementById('lang-select') || {}).value || 'ru';
+  try {
+    const r = await fetch('/assist/decompose', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ message: message, lang: lang })
+    });
+    const d = await r.json();
+    if (d.error) { alert('Ошибка: ' + d.error); return; }
+    // Render editable subgoals card — reuses existing flow visually
+    const container = document.getElementById('assist-messages');
+    const card = document.createElement('div');
+    card.className = 'assist-card';
+    card.style.cssText = 'align-self:stretch;margin-bottom:12px;';
+    const id = 'decomp-' + Date.now();
+    card.id = id;
+    card.innerHTML = `
+      <div style="padding:14px;background:#1f1f23;border-radius:14px;">
+        <div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:8px;">DECOMPOSITION</div>
+        ${(d.subgoals || []).map((s, i) => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="color:#52525b;font-size:11px;">${i+1}.</span>
+            <input type="text" value="${_esc(s)}" class="decomp-sg"
+              style="flex:1;background:#27272a;border:1px solid #3f3f46;border-radius:6px;
+              padding:6px 8px;color:#e4e4e7;font-size:13px;"/>
+          </div>`).join('')}
+        <div style="margin-top:10px;display:flex;gap:8px;">
+          <button onclick="_assistConfirmDecompose('${id}', ${JSON.stringify(message).replace(/"/g, '&quot;')})"
+            style="background:#4f46e5;color:white;border:0;padding:6px 12px;border-radius:6px;font-size:13px;cursor:pointer;">
+            Создать цель + подзадачи
+          </button>
+          <button onclick="this.parentElement.parentElement.parentElement.remove()"
+            style="background:#27272a;color:#a1a1aa;border:1px solid #3f3f46;padding:6px 12px;border-radius:6px;font-size:13px;cursor:pointer;">
+            Отмена
+          </button>
+        </div>
+      </div>`;
+    container.appendChild(card);
+    container.scrollTop = container.scrollHeight;
+    // Remove the suggestion card itself
+    btnEl.closest('.assist-card').remove();
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+    btnEl.disabled = false;
+    btnEl.textContent = 'Разбить';
+  }
+}
+
 async function _assistConfirmDecompose(cardId, goalText) {
   const card = document.getElementById(cardId);
   if (!card) return;
@@ -638,6 +747,249 @@ function assistUpdateHeader() {
       hrvBtn.textContent = 'Start HRV';
       hrvBtn.classList.remove('running');
     }
+  }
+}
+
+// ── Neurochem panel polling (v5d) ──────────────────────────────────────
+
+let _neurochemPolling = false;
+let _lastCameraState = false;
+
+// Human-readable labels — technical terms stay in tooltips
+const _MODE_LABELS = {
+  exploration: 'исследует',
+  execution: 'фокус',
+  recovery: 'восстанавливается',
+  integration: 'собирает',
+  stabilize: 'стабилизация',
+  conflict: 'конфликт',
+  protective_freeze: 'защитный режим',
+  shift: 'сдвиг',
+};
+const _ACTION_LABELS = {
+  smartdc: 'проверка',
+  elaborate: 'углубляю',
+  think_toward: 'генерирую',
+  collapse: 'объединяю',
+  compare: 'сравниваю',
+  pump: 'ищу мост',
+  stable: 'готово',
+  ask: 'спрашиваю',
+  synthesize: 'синтез',
+  none: '—',
+};
+const _ORIGIN_LABELS = {
+  '1_rest': '◌ покой',
+  '1_held': '● в работе',
+};
+
+async function assistPollNeurochem() {
+  if (!_neurochemPolling) return;
+  try {
+    const r = await fetch('/assist/state');
+    const d = await r.json();
+    _updateNeurochemPanel(d);
+  } catch(e) { /* silent */ }
+  // Also refresh timeline when open (cheaper than fetching /graph/self every time)
+  if (_timelineOpen) _refreshTimeline();
+  setTimeout(assistPollNeurochem, 3000);
+}
+
+function assistStartNeurochemPolling() {
+  if (_neurochemPolling) return;
+  _neurochemPolling = true;
+  assistPollNeurochem();
+}
+
+function _updateNeurochemPanel(metrics) {
+  if (!metrics) return;
+  const neuro = metrics.neurochem || {};
+  const setBar = (fillId, valId, value, isBurnout) => {
+    const fill = document.getElementById(fillId);
+    const val = document.getElementById(valId);
+    if (!fill || !val) return;
+    const v = typeof value === 'number' ? value : 0;
+    fill.style.width = (v * 100).toFixed(0) + '%';
+    val.textContent = v.toFixed(2);
+    if (isBurnout && v > 0.35) {
+      fill.style.background = '#dc2626';  // darker red when over threshold
+    }
+  };
+  setBar('neuro-s-fill', 'neuro-s-val', neuro.S);
+  setBar('neuro-ne-fill', 'neuro-ne-val', neuro.NE);
+  setBar('neuro-da-fill', 'neuro-da-val', neuro.DA_tonic);
+  setBar('neuro-burn-fill', 'neuro-burn-val', neuro.burnout_idx, true);
+
+  // DA phasic arrow
+  const phasic = neuro.DA_phasic || 0;
+  const phasicEl = document.getElementById('neuro-da-phasic');
+  if (phasicEl) {
+    if (Math.abs(phasic) > 0.05) {
+      phasicEl.style.display = 'block';
+      phasicEl.textContent = phasic > 0 ? '▲' : '▼';
+      phasicEl.style.color = phasic > 0 ? '#10b981' : '#ef4444';
+      // Position proportional to tonic
+      const leftPct = Math.max(0, Math.min(100, (neuro.DA_tonic || 0.5) * 100));
+      phasicEl.style.left = leftPct + '%';
+    } else {
+      phasicEl.style.display = 'none';
+    }
+  }
+
+  // Mode badge + freeze animation
+  const modeEl = document.getElementById('neuro-mode');
+  if (modeEl) {
+    const state = metrics.state || 'exploration';
+    modeEl.textContent = _MODE_LABELS[state] || state;
+    modeEl.title = 'Режим: ' + state;  // techy hint in tooltip
+    modeEl.classList.toggle('freeze', state === 'protective_freeze');
+  }
+
+  // State origin badge
+  const originEl = document.getElementById('neuro-origin');
+  if (originEl) {
+    const origin = neuro.state_origin || '1_rest';
+    originEl.textContent = _ORIGIN_LABELS[origin] || origin;
+    originEl.title = 'state_origin: ' + origin;
+  }
+
+  // Camera mode badge + button
+  const camBadge = document.getElementById('neuro-camera');
+  const camBtn = document.getElementById('neuro-camera-btn');
+  const camOn = !!metrics.llm_disabled;
+  if (camBadge) camBadge.style.display = camOn ? 'inline-block' : 'none';
+  if (camBtn) camBtn.classList.toggle('active', camOn);
+  _lastCameraState = camOn;
+}
+
+function _updateNeurochemAction(action, reason) {
+  const el = document.getElementById('neuro-action');
+  if (!el) return;
+  if (!action || action === 'idle' || action === 'none') {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'inline-block';
+  el.textContent = _ACTION_LABELS[action] || action;
+  el.title = reason || ('action: ' + action);
+}
+
+// Timeline toggle + render (FE-2)
+let _timelineOpen = false;
+
+async function assistToggleTimeline() {
+  const panel = document.getElementById('neuro-timeline');
+  const btn = document.getElementById('neuro-timeline-btn');
+  if (!panel) return;
+  _timelineOpen = panel.style.display === 'none';
+  panel.style.display = _timelineOpen ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', _timelineOpen);
+  if (_timelineOpen) await _refreshTimeline();
+}
+
+async function _refreshTimeline() {
+  try {
+    const r = await fetch('/graph/self?limit=20&tail=true');
+    const d = await r.json();
+    const list = document.getElementById('neuro-timeline-list');
+    const count = document.getElementById('neuro-timeline-count');
+    if (count) count.textContent = d.total || 0;
+    if (!list) return;
+    if (!d.entries || !d.entries.length) {
+      list.innerHTML = '<div style="color:#52525b;font-size:11px">No actions yet — start the chat or Run.</div>';
+      return;
+    }
+    list.innerHTML = d.entries.reverse().map(e => {
+      const t = (e.timestamp || '').substring(11, 19);
+      const originRaw = e.state_origin || '1_rest';
+      const originLabel = originRaw === '1_held' ? '● работа' : '◌ покой';
+      const actionLabel = _ACTION_LABELS[e.action] || (e.action || '?');
+      const reason = (e.reason || '').substring(0, 60);
+      return `<div class="neuro-timeline-item" title="${_esc(e.action)} · ${_esc(originRaw)}">
+        <span class="neuro-timeline-time">${t}</span>
+        <span class="neuro-timeline-action">${_esc(actionLabel)}</span>
+        <span class="neuro-timeline-origin ${originRaw === '1_held' ? 'held' : ''}">${originLabel}</span>
+        <span class="neuro-timeline-reason">${_esc(reason)}</span>
+      </div>`;
+    }).join('');
+  } catch(e) { /* silent */ }
+}
+
+async function assistToggleCamera() {
+  const next = !_lastCameraState;
+  try {
+    await fetch('/assist/camera', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ enabled: next })
+    });
+    _lastCameraState = next;
+    // Immediate refresh
+    fetch('/assist/state').then(r => r.json()).then(_updateNeurochemPanel).catch(()=>{});
+  } catch(e) {
+    console.warn('[camera] toggle failed:', e);
+  }
+}
+
+// ── Workspace tabs (FE-4) ──────────────────────────────────────────────
+
+async function workspaceRefresh() {
+  try {
+    const r = await fetch('/workspace/list');
+    const d = await r.json();
+    const sel = document.getElementById('workspace-select');
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = (d.workspaces || []).map(w =>
+      `<option value="${w.id}">${_esc(w.title || w.id)} (${w.node_count || 0})</option>`
+    ).join('');
+    sel.value = d.active || 'main';
+  } catch(e) { /* silent */ }
+}
+
+async function workspaceSwitch(wsId) {
+  if (!wsId) return;
+  try {
+    const r = await fetch('/workspace/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id: wsId })
+    });
+    const d = await r.json();
+    if (d.error) {
+      alert('Ошибка: ' + d.error);
+      return;
+    }
+    // Full UI refresh: graph reloaded, state reset
+    if (typeof graphDrawSvg === 'function') {
+      // Graph data gets loaded fresh from server on next call
+      setTimeout(() => window.location.reload(), 200);
+    } else {
+      window.location.reload();
+    }
+  } catch(e) {
+    alert('Switch failed: ' + e.message);
+  }
+}
+
+async function workspaceNewPrompt() {
+  const title = prompt('Название нового workspace?');
+  if (!title) return;
+  const id = title.toLowerCase().replace(/[^a-z0-9_]/g, '_').substring(0, 20);
+  try {
+    const r = await fetch('/workspace/create', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id: id, title: title })
+    });
+    const d = await r.json();
+    if (d.error) { alert('Ошибка: ' + d.error); return; }
+    await workspaceRefresh();
+    if (confirm(`Workspace "${title}" создан. Переключиться?`)) {
+      workspaceSwitch(id);
+    }
+  } catch(e) {
+    alert('Create failed: ' + e.message);
   }
 }
 
@@ -850,6 +1202,12 @@ function assistInit() {
 
   // Start alert polling
   assistStartAlertPolling();
+
+  // Start neurochem polling (v5d panel)
+  assistStartNeurochemPolling();
+
+  // Populate workspace selector (v4)
+  workspaceRefresh();
 }
 
 // Auto-init when DOM ready

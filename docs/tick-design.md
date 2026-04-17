@@ -80,39 +80,75 @@ surprise = 1 - confidence
 → следующий tick использует новые параметры
 ```
 
-## Dispatcher по примитивам
+## NAND-emergent (единственный путь, с v8d)
 
-tick() читает `primitive`, `strategy`, `goal_type` из goal ноды и маршрутизирует:
+Classic tick с `if primitive == "xor"` удалён. Все 14 режимов проходят через
+**один tick** (`tick_emergent` в `src/tick_nand.py`). Логика возникает из зон
+distinct:
 
-### Stop conditions (`check_stop()` в modes.py)
+```
+Compute distinct matrix on hypothesis pairs (за O(n²) с embeddings):
+  d < τ_in    → CONFIRM-zone  → collapse (merge)
+  τ_in ≤ d ≤ τ_out → EXPLORE-zone → pump / elaborate
+  d > τ_out   → CONFLICT-zone → smartdc (doubt)
 
-| goal_type | Условие остановки |
-|-----------|------------------|
-| finite | Все hypotheses verified ИЛИ avg confidence > 85% |
-| repeatable | Цикл завершён → snapshot |
-| open | precision > 0.85 и нет bare/unverified → diminishing returns |
-| None (free/scout) | Никогда не останавливается автоматически |
+Emergent compare:
+  Несколько verified + conflict_pairs между ними → action = "compare"
+  (LLM-judge выбирает лучший)
 
-### Примитивы
+Scout / DMN (mode_id == "scout"):
+  Pump между furthest-pair, записать bridge
+```
 
-| Primitive | Логика |
-|-----------|--------|
-| **none** (Scout, Free) | Текущее поведение, без stop condition |
-| **focus** (Vector, Rhythm, Horizon) | Одна цель, check_stop() по goal_type |
-| **or** | Первая verified hypothesis → стоп |
-| **xor comparative** | Все doubted → "ready to compare" |
-| **xor dialectical** | Пропускает elaborate, сразу doubt |
-| **and unordered** | Все должны быть verified, любой порядок |
-| **and seq** | Только первая unverified нода обрабатывается |
-| **and priority** | По расстоянию до goal (через _pick_target) |
-| **and balance** | Round-robin (random каждый 3-й) |
-| **bayes** | Ручной режим: гипотеза + наблюдения → Bayes update. Run = LLM подсказывает наблюдения |
+### Stop conditions (`should_stop()` в modes.py)
+
+Единая функция, не зависит от primitive. См. `docs/nand-architecture.md`:
+
+| Case | Условие остановки |
+|------|------------------|
+| 1 | Goal с subgoals: `avg_d(subgoals)` решает AND (все нужны) vs OR (первый) |
+| 2 | `d(goal, best_verified) < τ_in` → цель достигнута |
+| 3 | Convergence: 3+ verified, avg confidence > 85%, нет pending |
+| 4 | Novelty exhaustion: precision > 0.85 и нет работы |
+
+### Mode как preset
+
+`primitive`/`strategy`/`goal_type` всё ещё в `modes.py` MODES dict как
+**UI-metadata**, но runtime на них не switch-ит. Mode влияет только через
+`create_horizon(mode_id)` — preset `(precision, policy, target_surprise)` в
+начале сессии.
+
+### Pause-on-question (v2)
+
+Tick может эмитить `action: "ask"` когда:
+- `sync_error > 0.6` (система не понимает юзера), ИЛИ
+- `NE < 0.35` + много unverified (система блуждает в неопределённости)
+
+Autorun в `graph.js` ловит это, делает `fetch /graph/assist` (запрос вопроса),
+показывает через alert и останавливается. Юзер отвечает → NE spike + answer
+становится нодой.
+
+### Camera mode (v8c)
+
+Если `cs.llm_disabled == True`, tick пропускает generate/elaborate/smartdc
+(они требуют LLM-вызов) и работает только на distinct между существующими
+нодами: collapse / compare / pump. Режим «сенсорной депривации» — найти
+паттерны в том что уже есть.
 
 ### Multi-goal (subgoals)
 
-Для режимов с `goals_count: "2+"` (AND, OR, XOR): при создании goal ноды multiline текст разбивается на строки. Первая строка = goal text, остальные = hypothesis ноды (subgoals). Goal хранит `subgoals: [idx1, idx2, ...]`.
+Для режимов с `goals_count: "2+"` (AND/OR/XOR-like): при создании goal ноды
+multiline текст разбивается на строки. Первая строка = goal text, остальные =
+hypothesis-ноды (subgoals). Goal хранит `subgoals: [idx1, idx2, ...]`.
 
-tick() фильтрует classify только по subgoal нодам — stop conditions и dispatcher работают с отфильтрованными списками.
+tick_emergent фильтрует classify только по subgoal нодам.
+
+### Hook в State-граф
+
+После каждого emit результата, в state_graph.jsonl добавляется запись:
+`{action, phase, content_touched, state_snapshot (CognitiveState), state_origin}`.
+Это Git-аудит + эпизодическая память в одной структуре (см.
+[state-graph-design.md](state-graph-design.md)).
 
 ## Защита от циклов
 
@@ -123,6 +159,9 @@ tick() фильтрует classify только по subgoal нодам — stop
 
 ## Файлы
 
-- `src/thinking.py` — `tick()`, `classify_nodes()`, `_find_similar_group()`, `_pick_target()`
-- `src/horizon.py` — `select_phase()`, `update()`, `to_llm_params()`
-- `src/graph_routes.py` — autorun loop вызывает tick и исполняет actions
+- `src/tick_nand.py` — `tick_emergent()` (единственный tick engine)
+- `src/thinking.py` — helpers: `classify_nodes`, `_find_similar_group`, `_pick_target`, `_pick_distant_pair`, `_tick_force_collapse`
+- `src/horizon.py` — `CognitiveState` (`select_phase`, `update`, `to_llm_params`, `apply_to_bayes`, и все neurochem методы)
+- `src/state_graph.py` — `StateGraph` с hook'ом на каждый tick emit
+- `src/graph_routes.py` — `/graph/tick` endpoint, autorun executes actions
+- `static/js/graph.js` — autorun с обработкой `action: "ask"` (pause-on-question) и cone viz

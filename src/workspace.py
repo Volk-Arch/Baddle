@@ -1,0 +1,409 @@
+"""Workspace — multi-graph support (v4).
+
+Layout:
+  graphs/
+    main/
+      graph.json            existing Baddle graph dump (nodes, edges, meta)
+      state_graph.jsonl     state-graph for this workspace
+      state_embeddings.jsonl
+      meta.json             title, tags, created, last_active
+    work/
+      ...
+    personal/
+      ...
+  workspaces/
+    index.json              list of workspaces + cross_edges + active id
+
+CognitiveState stays global (one neurochem per person — see prime directive).
+user_state.json and settings.json are also global (not per workspace).
+
+Cross-graph edges are discovered periodically by DMN walks that compare
+node embeddings across different workspaces; stored in index.json as
+  {"from_graph": str, "from_node": int, "to_graph": str, "to_node": int,
+   "d": float, "ts": str}
+
+Meta-graph is a derived view — not separate storage. Built from cross_edges:
+each workspace = super-node, cross_edge density = weight.
+"""
+
+import json
+import logging
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+log = logging.getLogger(__name__)
+
+
+# ── Paths ───────────────────────────────────────────────────────────────────
+
+_ROOT = Path(__file__).parent.parent
+_GRAPHS_DIR = _ROOT / "graphs"
+_WORKSPACES_DIR = _ROOT / "workspaces"
+_INDEX_FILE = _WORKSPACES_DIR / "index.json"
+
+
+# ── WorkspaceManager ────────────────────────────────────────────────────────
+
+class WorkspaceManager:
+    """Singleton manager of multi-graph workspaces.
+
+    Active workspace is the one currently mapped into graph_logic._graph.
+    On switch, current is flushed to disk; target is loaded.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.active_id: str = "main"
+        self._index: dict = {
+            "active_id": "main",
+            "workspaces": {},
+            "cross_edges": [],
+        }
+        self._loaded = False
+
+    # ── Index load/save ─────────────────────────────────────────────────────
+
+    def _ensure_dirs(self):
+        _GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
+        _WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+
+    def load_index(self):
+        """Load workspace index or create default with 'main'."""
+        if self._loaded:
+            return
+        self._ensure_dirs()
+        if _INDEX_FILE.exists():
+            try:
+                self._index = json.loads(_INDEX_FILE.read_text(encoding="utf-8"))
+            except Exception as e:
+                log.warning(f"[workspace] index load failed: {e}")
+                self._index = {"active_id": "main", "workspaces": {}, "cross_edges": []}
+        # Ensure 'main' exists
+        if "main" not in self._index.get("workspaces", {}):
+            self._index.setdefault("workspaces", {})["main"] = {
+                "id": "main",
+                "title": "Main",
+                "tags": [],
+                "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "last_active": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+        self.active_id = self._index.get("active_id", "main")
+        self._loaded = True
+
+    def save_index(self):
+        self._ensure_dirs()
+        with self._lock:
+            _INDEX_FILE.write_text(
+                json.dumps(self._index, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+    # ── Workspace paths ─────────────────────────────────────────────────────
+
+    def workspace_dir(self, ws_id: str) -> Path:
+        return _GRAPHS_DIR / ws_id
+
+    def graph_file(self, ws_id: str) -> Path:
+        return self.workspace_dir(ws_id) / "graph.json"
+
+    def state_graph_dir(self, ws_id: str) -> Path:
+        """Directory StateGraph uses as base_dir for its JSONL files."""
+        return self.workspace_dir(ws_id)
+
+    def meta_file(self, ws_id: str) -> Path:
+        return self.workspace_dir(ws_id) / "meta.json"
+
+    # ── CRUD ───────────────────────────────────────────────────────────────
+
+    def list_workspaces(self) -> list[dict]:
+        self.load_index()
+        ws = self._index.get("workspaces", {})
+        result = []
+        for wid, info in ws.items():
+            info = dict(info)
+            info["active"] = (wid == self.active_id)
+            # Count nodes if graph file exists
+            gf = self.graph_file(wid)
+            if gf.exists():
+                try:
+                    data = json.loads(gf.read_text(encoding="utf-8"))
+                    info["node_count"] = len(data.get("nodes", []))
+                except Exception:
+                    info["node_count"] = 0
+            else:
+                info["node_count"] = 0
+            result.append(info)
+        return result
+
+    def create(self, ws_id: str, title: str = "", tags: list = None) -> dict:
+        """Create a new workspace (directory + meta). Doesn't switch."""
+        self.load_index()
+        ws_id = ws_id.strip().lower().replace(" ", "_")
+        if not ws_id:
+            raise ValueError("empty workspace id")
+        if ws_id in self._index.get("workspaces", {}):
+            raise ValueError(f"workspace '{ws_id}' already exists")
+        self.workspace_dir(ws_id).mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        info = {
+            "id": ws_id,
+            "title": title or ws_id,
+            "tags": tags or [],
+            "created": now,
+            "last_active": now,
+        }
+        self._index.setdefault("workspaces", {})[ws_id] = info
+        self.meta_file(ws_id).write_text(
+            json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        self.save_index()
+        return info
+
+    def switch(self, ws_id: str):
+        """Switch active workspace. Flushes current _graph to disk, loads target.
+
+        Also rebinds global StateGraph to target workspace.
+        """
+        from .graph_logic import _graph, reset_graph
+        from .state_graph import StateGraph, set_state_graph
+
+        self.load_index()
+        if ws_id not in self._index.get("workspaces", {}):
+            raise ValueError(f"workspace '{ws_id}' does not exist")
+
+        # Flush current
+        self._flush_active(_graph)
+
+        # Load target
+        target_gf = self.graph_file(ws_id)
+        if target_gf.exists():
+            try:
+                data = json.loads(target_gf.read_text(encoding="utf-8"))
+                # Replace _graph contents in-place (preserve references)
+                reset_graph()
+                _graph["nodes"] = data.get("nodes", [])
+                _graph["edges"] = data.get("edges", {
+                    "manual_links": [], "manual_unlinks": [], "directed": []
+                })
+                _graph["meta"] = data.get("meta", {"topic": "", "hub_nodes": set(), "mode": "horizon"})
+                # hub_nodes may be serialized as list — coerce back to set
+                if isinstance(_graph["meta"].get("hub_nodes"), list):
+                    _graph["meta"]["hub_nodes"] = set(_graph["meta"]["hub_nodes"])
+                _graph["embeddings"] = data.get("embeddings", [])
+                _graph["tp_overrides"] = data.get("tp_overrides", {})
+                if "_horizon" in data:
+                    _graph["_horizon"] = data["_horizon"]
+            except Exception as e:
+                log.warning(f"[workspace] failed to load {ws_id}: {e}")
+                reset_graph()
+        else:
+            reset_graph()
+
+        # Rebind state graph to target directory
+        set_state_graph(StateGraph(base_dir=self.state_graph_dir(ws_id), graph_id=ws_id))
+
+        # Update index
+        self.active_id = ws_id
+        self._index["active_id"] = ws_id
+        self._index["workspaces"][ws_id]["last_active"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.save_index()
+        log.info(f"[workspace] switched to {ws_id}")
+
+    def _flush_active(self, graph_obj):
+        """Save current _graph to the active workspace's graph.json."""
+        try:
+            self._ensure_dirs()
+            self.workspace_dir(self.active_id).mkdir(parents=True, exist_ok=True)
+            # hub_nodes is a set — coerce to list for JSON
+            meta = dict(graph_obj.get("meta", {}))
+            if isinstance(meta.get("hub_nodes"), set):
+                meta["hub_nodes"] = sorted(meta["hub_nodes"])
+            data = {
+                "nodes": graph_obj.get("nodes", []),
+                "edges": graph_obj.get("edges", {}),
+                "meta": meta,
+                "embeddings": graph_obj.get("embeddings", []),
+                "tp_overrides": graph_obj.get("tp_overrides", {}),
+            }
+            if "_horizon" in graph_obj:
+                data["_horizon"] = graph_obj["_horizon"]
+            self.graph_file(self.active_id).write_text(
+                json.dumps(data, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            log.warning(f"[workspace] flush {self.active_id} failed: {e}")
+
+    def save_active(self):
+        """Public save — call before shutdown or for periodic persistence."""
+        from .graph_logic import _graph
+        self._flush_active(_graph)
+        self.save_index()
+
+    def delete(self, ws_id: str):
+        """Delete workspace. Can't delete active or 'main'."""
+        self.load_index()
+        if ws_id == self.active_id:
+            raise ValueError("cannot delete active workspace")
+        if ws_id == "main":
+            raise ValueError("cannot delete 'main' workspace")
+        if ws_id not in self._index.get("workspaces", {}):
+            raise ValueError(f"workspace '{ws_id}' does not exist")
+        import shutil
+        shutil.rmtree(self.workspace_dir(ws_id), ignore_errors=True)
+        del self._index["workspaces"][ws_id]
+        # Drop cross_edges involving this workspace
+        self._index["cross_edges"] = [
+            e for e in self._index.get("cross_edges", [])
+            if e.get("from_graph") != ws_id and e.get("to_graph") != ws_id
+        ]
+        self.save_index()
+
+    # ── Cross-graph edges ───────────────────────────────────────────────────
+
+    def add_cross_edge(self, from_graph: str, from_node: int,
+                       to_graph: str, to_node: int, d: float):
+        """Register a serendipity bridge between workspaces."""
+        self.load_index()
+        entry = {
+            "from_graph": from_graph, "from_node": from_node,
+            "to_graph": to_graph, "to_node": to_node,
+            "d": round(d, 3),
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        edges = self._index.setdefault("cross_edges", [])
+        # Dedupe on (from,to) pair direction-agnostic
+        for e in edges:
+            if ({e.get("from_graph"), e.get("to_graph")} == {from_graph, to_graph}
+                    and {e.get("from_node"), e.get("to_node")} == {from_node, to_node}):
+                return False
+        edges.append(entry)
+        # Cap size
+        if len(edges) > 500:
+            edges.sort(key=lambda x: x.get("ts", ""))
+            self._index["cross_edges"] = edges[-500:]
+        self.save_index()
+        return True
+
+    def list_cross_edges(self, workspace_id: Optional[str] = None) -> list[dict]:
+        self.load_index()
+        edges = self._index.get("cross_edges", [])
+        if workspace_id:
+            edges = [e for e in edges
+                     if e.get("from_graph") == workspace_id
+                     or e.get("to_graph") == workspace_id]
+        return edges
+
+    def find_cross_candidates(self, k: int = 5, tau_in: float = 0.3) -> list[dict]:
+        """Scan random node pairs from OTHER workspaces, return those within τ_in.
+
+        Expensive (reads all workspace files). Intended to be called from DMN tick.
+        Only considers workspaces with embeddings cached on nodes (v8b).
+        """
+        import random
+        import numpy as np
+        from .main import distinct
+        from .graph_logic import _graph
+
+        self.load_index()
+        others = [wid for wid in self._index.get("workspaces", {}) if wid != self.active_id]
+        if not others:
+            return []
+
+        current_nodes = _graph.get("nodes", [])
+        current_embs = _graph.get("embeddings", [])
+        if len(current_nodes) < 2:
+            return []
+
+        # Randomly sample 3 anchors from current
+        sample_n = min(3, len(current_nodes))
+        anchors = random.sample(range(len(current_nodes)), sample_n)
+        anchor_vecs = []
+        for ai in anchors:
+            emb = None
+            if ai < len(current_embs) and current_embs[ai]:
+                emb = current_embs[ai]
+            elif current_nodes[ai].get("embedding"):
+                emb = current_nodes[ai]["embedding"]
+            if emb:
+                anchor_vecs.append((ai, np.array(emb, dtype=np.float32)))
+        if not anchor_vecs:
+            return []
+
+        hits = []
+        for wid in others:
+            gf = self.graph_file(wid)
+            if not gf.exists():
+                continue
+            try:
+                data = json.loads(gf.read_text(encoding="utf-8"))
+                other_nodes = data.get("nodes", [])
+                other_embs = data.get("embeddings", [])
+            except Exception:
+                continue
+            # Random sample from other
+            if not other_nodes:
+                continue
+            sample_other = random.sample(range(len(other_nodes)), min(5, len(other_nodes)))
+            for oi in sample_other:
+                other_emb = None
+                if oi < len(other_embs) and other_embs[oi]:
+                    other_emb = other_embs[oi]
+                elif other_nodes[oi].get("embedding"):
+                    other_emb = other_nodes[oi]["embedding"]
+                if not other_emb:
+                    continue
+                o_vec = np.array(other_emb, dtype=np.float32)
+                for ai, a_vec in anchor_vecs:
+                    d = distinct(a_vec, o_vec)
+                    if d < tau_in:
+                        hits.append({
+                            "from_graph": self.active_id, "from_node": ai,
+                            "to_graph": wid, "to_node": oi,
+                            "d": round(d, 3),
+                            "from_text": current_nodes[ai].get("text", "")[:60],
+                            "to_text": other_nodes[oi].get("text", "")[:60],
+                        })
+        hits.sort(key=lambda x: x["d"])
+        return hits[:k]
+
+    # ── Meta-graph (derived view) ───────────────────────────────────────────
+
+    def meta_graph(self) -> dict:
+        """Derived view: graph-of-graphs. Each workspace = node, cross-edge
+        frequency = weight between workspace-nodes."""
+        self.load_index()
+        ws_list = list(self._index.get("workspaces", {}).values())
+        edges = self._index.get("cross_edges", [])
+        # Count edges per unordered (a,b)
+        counts: dict[frozenset, int] = {}
+        for e in edges:
+            key = frozenset({e["from_graph"], e["to_graph"]})
+            counts[key] = counts.get(key, 0) + 1
+        meta_edges = []
+        for key, count in counts.items():
+            if len(key) != 2:
+                continue
+            a, b = list(key)
+            meta_edges.append({"a": a, "b": b, "weight": count})
+        return {
+            "nodes": [{"id": w["id"], "title": w.get("title", w["id"]),
+                       "tags": w.get("tags", [])} for w in ws_list],
+            "edges": meta_edges,
+            "active": self.active_id,
+        }
+
+
+# ── Singleton ───────────────────────────────────────────────────────────────
+
+_manager: Optional[WorkspaceManager] = None
+
+
+def get_workspace_manager() -> WorkspaceManager:
+    global _manager
+    if _manager is None:
+        _manager = WorkspaceManager()
+        _manager.load_index()
+    return _manager

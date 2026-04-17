@@ -137,6 +137,160 @@ def _response_for_mode(mode_id: str, message: str, lang: str = "ru") -> Dict:
     return {"mode": mode_id, "mode_name": name, "intro": intro}
 
 
+# ── Intent & mode classification (single LLM call, keyword fallback) ─
+
+_MODE_DESCRIPTIONS_RU = """
+- dispute: дебаты, за/против, диалектика противоречий
+- tournament: сравнение вариантов, выбор одного лучшего
+- bayes: вероятностная гипотеза, проверка наблюдениями
+- fan: мозговой штурм, много идей без фильтра
+- rhythm: ежедневная привычка, регулярное действие
+- horizon: глубокое исследование темы
+- vector: одна конкретная задача с финалом
+- scout: блуждание без цели, серендипити
+- builder: многокомпонентная сборка, все части нужны
+- pipeline: последовательные шаги в строгом порядке
+- cascade: приоритеты, срочное первым
+- scales: баланс между несколькими областями
+- race: любой подходящий вариант из нескольких
+- free: ручной режим, не ясно что делать
+"""
+
+_FALLBACK_COMPLEX_MARKERS = [
+    " и ", " потом ", " затем ", " сначала ", " шаг", " этап", " пункт",
+    " список", " во-первых", " план", "\n-", "\n•", "\n1.", "\n2.",
+]
+_FALLBACK_AMBIGUOUS_MARKERS = ["не знаю", "не уверен", "помоги", "не пойму"]
+
+
+def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
+                        lang: str = "ru") -> dict:
+    """Один LLM-вызов: mode + intent + confidence. Заменяет detect_mode+detect_intent.
+
+    LLM получает:
+      - текущее сообщение
+      - краткий контекст (последние turns, опционально)
+      - state_hint (текущее состояние CognitiveState — если система устала,
+        юзер давно молчит, sync_error растёт — это влияет на интерпретацию)
+
+    Возвращает:
+      {
+        "mode": "tournament" | ... | "free",
+        "intent": "direct" | "complex_goal" | "ambiguous" | "simple_note",
+        "confidence": 0.0-1.0,
+        "source": "llm" | "fallback"
+      }
+    """
+    from .graph_logic import _graph_generate
+
+    if not message.strip():
+        return {"mode": "free", "intent": "direct", "confidence": 1.0, "source": "empty"}
+
+    # Short path for crystal-clear ambiguous markers (saves LLM call)
+    lower = message.lower().strip()
+    if len(lower) < 4 or lower in ("?", "что?", "как?", "почему?", "помоги"):
+        return {"mode": "free", "intent": "ambiguous", "confidence": 0.95, "source": "fast"}
+
+    # Build LLM prompt
+    if lang == "ru":
+        system = ("/no_think\nТы классификатор намерений. Получаешь сообщение пользователя "
+                  "и возвращаешь СТРОГО одну строку в формате:\n"
+                  "mode=<id> intent=<id> confidence=<0.0-1.0>\n\n"
+                  "mode — один из:" + _MODE_DESCRIPTIONS_RU + "\n"
+                  "intent — один из:\n"
+                  "  direct: обычный прямой запрос\n"
+                  "  complex_goal: сложная цель, нужна декомпозиция на подзадачи\n"
+                  "  ambiguous: неясно что хочет юзер, нужно уточнить\n"
+                  "  simple_note: короткая заметка, просто записать\n\n"
+                  "Без объяснений. Только одна строка.")
+    else:
+        system = ("/no_think\nClassify user message. Return STRICTLY one line:\n"
+                  "mode=<id> intent=<id> confidence=<0.0-1.0>\n\n"
+                  "mode: dispute|tournament|bayes|fan|rhythm|horizon|vector|scout|builder|pipeline|cascade|scales|race|free\n"
+                  "intent: direct|complex_goal|ambiguous|simple_note\n"
+                  "No explanation. One line.")
+
+    user = f"Сообщение: {message[:300]}"
+    if context:
+        user += f"\nКонтекст: {context[:200]}"
+    if state_hint:
+        user += f"\nСостояние системы: {state_hint}"
+
+    try:
+        result, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user}],
+            max_tokens=80, temp=0.2, top_k=10,
+        )
+        parsed = _parse_classify_output(result)
+        if parsed:
+            parsed["source"] = "llm"
+            return parsed
+    except Exception as e:
+        log.warning(f"[classify] LLM failed: {e}")
+
+    # Fallback: keyword heuristic
+    return _classify_fallback(message)
+
+
+def _parse_classify_output(text: str) -> Optional[dict]:
+    """Parse 'mode=X intent=Y confidence=Z' line from LLM output."""
+    valid_modes = {"dispute", "tournament", "bayes", "fan", "rhythm", "horizon",
+                   "vector", "scout", "builder", "pipeline", "cascade", "scales",
+                   "race", "free"}
+    valid_intents = {"direct", "complex_goal", "ambiguous", "simple_note"}
+    mode = None
+    intent = None
+    confidence = 0.5
+    for part in text.replace("\n", " ").split():
+        if "=" not in part:
+            continue
+        k, _, v = part.partition("=")
+        k = k.strip().lower()
+        v = v.strip().strip(",").lower()
+        if k == "mode" and v in valid_modes:
+            mode = v
+        elif k == "intent" and v in valid_intents:
+            intent = v
+        elif k == "confidence":
+            try:
+                confidence = max(0.0, min(1.0, float(v)))
+            except ValueError:
+                pass
+    if mode and intent:
+        return {"mode": mode, "intent": intent, "confidence": confidence}
+    return None
+
+
+def _classify_fallback(message: str) -> dict:
+    """Keyword heuristic fallback when LLM unavailable/fails."""
+    lower = message.lower()
+    lines = [l for l in message.split("\n") if l.strip()]
+    length = len(message)
+
+    # Mode: reuse existing detect_mode
+    mode = detect_mode(message, "ru")
+
+    # Intent:
+    complex_hits = sum(1 for m in _FALLBACK_COMPLEX_MARKERS if m in lower)
+    ambig_hits = sum(1 for m in _FALLBACK_AMBIGUOUS_MARKERS if m in lower)
+    multi_step_modes = {"builder", "pipeline", "cascade", "scales", "tournament", "race"}
+    is_complex = (len(lines) >= 3 or (length > 180 and complex_hits >= 2)
+                  or (mode in multi_step_modes and complex_hits >= 1))
+    is_ambig = (ambig_hits >= 2 or (length < 8))
+
+    if is_ambig:
+        intent = "ambiguous"
+    elif is_complex:
+        intent = "complex_goal"
+    elif length < 30:
+        intent = "simple_note"
+    else:
+        intent = "direct"
+
+    return {"mode": mode, "intent": intent, "confidence": 0.5, "source": "fallback"}
+
+
 # ── Main /assist endpoint ──────────────────────────────────────────────
 
 @assistant_bp.route("/assist", methods=["POST"])
@@ -164,11 +318,36 @@ def assist():
     if not message:
         return jsonify({"error": "empty message"})
 
+    # Inject NE spike — user engagement = Horizon takes budget from DMN (v5a/v5d)
+    from .horizon import get_global_state
+    cs = get_global_state()
+    cs.inject_ne(0.4)
+
     ctx = _get_context()
     state, hrv_state, energy = ctx["state"], ctx["hrv"], ctx["energy"]
 
-    # Detect mode from intent
-    mode_id = detect_mode(message, lang)
+    # Build state hint for classifier (brief CognitiveState summary)
+    neuro = cs.get_metrics().get("neurochem", {})
+    state_hint = (f"state={cs.state} NE={neuro.get('NE', 0):.2f} "
+                  f"DA={neuro.get('DA_tonic', 0):.2f} burnout={neuro.get('burnout_idx', 0):.2f}")
+
+    # Recent context from state_graph (last 3 user-initiated actions)
+    context_parts = []
+    try:
+        from .state_graph import get_state_graph
+        sg = get_state_graph()
+        recent = [e for e in sg.tail(10) if e.get("user_initiated")][-3:]
+        for e in recent:
+            context_parts.append(e.get("reason", "")[:60])
+    except Exception:
+        pass
+    context = " | ".join(context_parts)
+
+    # ── ONE LLM call: mode + intent + confidence ──
+    classification = classify_intent_llm(message, context=context, state_hint=state_hint, lang=lang)
+    mode_id = classification.get("mode", "free")
+    intent = classification.get("intent", "direct")
+    confidence = classification.get("confidence", 0.5)
     response = _response_for_mode(mode_id, message, lang)
 
     # Check energy — warn if low
@@ -186,14 +365,64 @@ def assist():
                     else "Coherence dropping — consider a break.",
         })
 
+    # Ambiguous → задать clarifying question вместо полноценного execute
+    if intent == "ambiguous" or confidence < 0.4:
+        from .graph_logic import _graph_generate
+        if lang == "ru":
+            sys_prompt = ("/no_think\nПользователь написал короткое/неясное сообщение. "
+                          "Задай ОДИН уточняющий вопрос (максимум 20 слов) чтобы понять что он хочет. "
+                          "Без вступления. Один вопрос.")
+            fallback_q = "Что именно ты хочешь — подумать, сравнить, решить?"
+        else:
+            sys_prompt = ("/no_think\nUser sent short/ambiguous message. "
+                          "Ask ONE clarifying question (max 20 words). No preamble.")
+            fallback_q = "What do you want — think, compare, decide?"
+        try:
+            q_text, _ = _graph_generate(
+                [{"role": "system", "content": sys_prompt},
+                 {"role": "user", "content": message}],
+                max_tokens=60, temp=0.5, top_k=40,
+            )
+            clarify_q = (q_text or fallback_q).strip().split("\n")[0]
+        except Exception:
+            clarify_q = fallback_q
+        _log_decision(state, kind="assist_clarify", meta={"mode": mode_id, "message": message[:200]})
+        _save_state(state)
+        return jsonify({
+            "text": clarify_q,
+            "intro": clarify_q,
+            "mode": mode_id,
+            "mode_name": "уточнение",
+            "message_echo": message,
+            "cards": [{"type": "clarify", "question": clarify_q, "prompt_user": True}],
+            "steps": [f"Неопределённость (conf={confidence:.2f}) — спрашиваю" if lang == "ru"
+                      else f"Ambiguity (conf={confidence:.2f}) — asking back"],
+            "energy": energy, "hrv": hrv_state, "warnings": warnings,
+            "awaiting_input": True, "graph_updated": False,
+            "lang": lang, "intent": intent, "confidence": confidence,
+            "classify_source": classification.get("source"),
+        })
+
     # ── Actually execute the mode ──
     exec_result = execute_mode(mode_id, message, lang)
     response_text = exec_result.get("text") or response["intro"]
     cards = exec_result.get("cards", [])
     steps = exec_result.get("steps", [])
 
+    # Complex goal → inline decompose-suggestion card (после основного ответа)
+    if intent == "complex_goal":
+        cards = list(cards)
+        cards.append({
+            "type": "decompose_suggestion",
+            "message": message,
+            "hint": ("Задача выглядит сложной. Разбить на подзадачи?" if lang == "ru"
+                     else "Task looks complex. Split into subtasks?"),
+            "cta": "Разбить" if lang == "ru" else "Split",
+        })
+
     # Log this interaction
-    _log_decision(state, kind="assist", meta={"mode": mode_id, "message": message[:200]})
+    _log_decision(state, kind="assist", meta={"mode": mode_id, "message": message[:200],
+                                                "intent": intent, "confidence": confidence})
     _save_state(state)
 
     return jsonify({
@@ -210,6 +439,9 @@ def assist():
         "awaiting_input": exec_result.get("awaiting_input", False),
         "graph_updated": len(cards) > 0,
         "lang": lang,
+        "intent": intent,
+        "confidence": confidence,
+        "classify_source": classification.get("source"),
         "error": exec_result.get("error"),
     })
 
@@ -228,6 +460,48 @@ def assist_status():
         "streaks": state.get("streaks", {}),
         "last_interaction": state.get("last_interaction"),
     })
+
+
+@assistant_bp.route("/assist/feedback", methods=["POST"])
+def assist_feedback():
+    """User feedback on a system response — updates DA_phasic + S (v5d).
+
+    Body: { "feedback": "accepted" | "rejected" | "ignored" }
+    """
+    from .horizon import get_global_state
+    d = request.get_json(force=True) or {}
+    kind = d.get("feedback", "").strip()
+    if kind not in ("accepted", "rejected", "ignored"):
+        return jsonify({"error": "invalid feedback"})
+    cs = get_global_state()
+    # Positive for accepted, negative for rejected, neutral for ignored
+    rpe = {"accepted": +0.3, "rejected": -0.3, "ignored": 0.0}.get(kind, 0.0)
+    cs.update_neurochem(rpe=rpe, user_feedback=kind)
+    return jsonify({"ok": True, "neurochem": cs.get_metrics().get("neurochem", {})})
+
+
+@assistant_bp.route("/assist/camera", methods=["POST"])
+def assist_camera():
+    """Toggle Camera mode (v8c) — sensory deprivation.
+
+    Body: { "enabled": true/false }
+    When enabled, llm_disabled=True: tick works only on existing embeddings,
+    no new LLM calls. Useful for reflection + finding hidden patterns in
+    what's already there.
+    """
+    from .horizon import get_global_state
+    d = request.get_json(force=True) or {}
+    enabled = bool(d.get("enabled", False))
+    cs = get_global_state()
+    cs.llm_disabled = enabled
+    return jsonify({"ok": True, "camera": enabled})
+
+
+@assistant_bp.route("/assist/state", methods=["GET"])
+def assist_state():
+    """Return full CognitiveState metrics (for UI panel, diagnostics)."""
+    from .horizon import get_global_state
+    return jsonify(get_global_state().get_metrics())
 
 
 @assistant_bp.route("/assist/detect-mode", methods=["POST"])
@@ -274,6 +548,14 @@ def graph_assist():
     goal_idx, goal_node = goal_nodes[0] if goal_nodes else (None, None)
     mode_id = requested_mode or (goal_node.get("mode") if goal_node else None) or \
               _graph.get("meta", {}).get("mode", "horizon")
+
+    # NE spike on any /graph/assist activity (dialogical loop is engagement too)
+    from .horizon import get_global_state
+    cs = get_global_state()
+    cs.inject_ne(0.3)
+    # Answer = user feedback → positive DA spike (engagement reward)
+    if answer:
+        cs.update_neurochem(rpe=+0.2, user_feedback="accepted")
 
     # ── Materialize path: user answered, add node of appropriate type ──
     if answer:

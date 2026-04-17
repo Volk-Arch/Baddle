@@ -1740,9 +1740,46 @@ async function graphAutoRun() {
     // Live metrics overlay
     _updateRunOverlay(step + 1, d.phase || d.action, d.horizon_metrics);
 
+    // Cognitive cone: dual cones when tick emits pump
+    try {
+      const hm = d.horizon_metrics || {};
+      if (d.action === 'pump') {
+        graphRenderCone({
+          precision: hm.precision, state: hm.state,
+          gamma_eff: hm.gamma_eff || hm.gamma, pump: true,
+        });
+      }
+    } catch(e) {}
+
     if (d.action === 'none' || d.action === 'stable') {
       _autoRunLog.push({step: step + 1, action: 'STABLE', reason: d.reason});
       break;
+    }
+
+    // Pause-on-question (v2): tick asks user for clarification
+    if (d.action === 'ask') {
+      _autoRunLog.push({step: step + 1, action: 'ASK', reason: d.reason});
+      console.log('[autorun] Pause-on-question: system asks user');
+      // Fire /graph/assist to generate the question
+      try {
+        const lang = (document.getElementById('lang-select') || {}).value || 'ru';
+        const qres = await fetch('/graph/assist', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ lang: lang }),
+        });
+        const qd = await qres.json();
+        if (qd.question) {
+          _autoRunLog.push({step: step + 1, action: 'QUESTION', reason: qd.question});
+          // Surface in UI — show the question prominently and pause autorun
+          alert('Baddle спрашивает:\n\n' + qd.question + '\n\n(Ответ добавится как ' + qd.answer_kind + ')');
+          // Stop autorun — user needs to answer via chat
+          _autoRunLog.push({step: step + 1, action: 'PAUSED', reason: 'Waiting for user answer'});
+        }
+      } catch(e) {
+        console.warn('[autorun] /graph/assist failed:', e);
+      }
+      break;  // stop autorun, resume on next user input
     }
 
     // 2. Execute action automatically
@@ -1960,6 +1997,157 @@ async function graphAutoRun() {
     ).join('');
 }
 
+// ── Cognitive cone viz (FE-3, v5b) ──
+
+/**
+ * Render cognitive cone into #graph-cone-viz.
+ *
+ * Single cone: apex at top, opens downward (wide horizon) or narrows (focus).
+ *   - Half-angle scaled from (1 − precision): high precision → narrow cone.
+ *   - Fill color by state: exploration=indigo, execution=green, freeze=red, etc.
+ *   - Inner circle = γ_eff as sensitivity ring.
+ *
+ * Dual cones (Pump): two apexes facing each other, overlap zone highlighted.
+ *
+ * @param {object} opts
+ *   precision: 0..1
+ *   state:    "exploration"|"execution"|"recovery"|"integration"|"stabilize"|"conflict"|"protective_freeze"
+ *   gamma_eff: γ·S for sensitivity ring
+ *   pump:     true|false — render two cones (for Pump action)
+ */
+function graphRenderCone(opts = {}) {
+  const svg = document.getElementById('graph-cone-viz');
+  if (!svg) return;
+  const w = 180, h = 180;
+  const precision = typeof opts.precision === 'number' ? opts.precision : 0.5;
+  const state = opts.state || 'exploration';
+  const gammaEff = typeof opts.gamma_eff === 'number' ? opts.gamma_eff : 1.2;
+  const pump = !!opts.pump;
+
+  // Half-angle from precision — narrow when focused, wide when exploring
+  const halfAngleDeg = 10 + (1 - precision) * 50;  // 10° at p=1, 60° at p=0
+
+  // State → color map
+  const stateColors = {
+    exploration:       { stroke: '#6366f1', fill: 'rgba(99,102,241,0.12)' },
+    execution:         { stroke: '#10b981', fill: 'rgba(16,185,129,0.12)' },
+    recovery:          { stroke: '#f59e0b', fill: 'rgba(245,158,11,0.12)' },
+    integration:       { stroke: '#8b5cf6', fill: 'rgba(139,92,246,0.12)' },
+    stabilize:         { stroke: '#06b6d4', fill: 'rgba(6,182,212,0.12)' },
+    conflict:          { stroke: '#ef4444', fill: 'rgba(239,68,68,0.15)' },
+    protective_freeze: { stroke: '#dc2626', fill: 'rgba(220,38,38,0.25)' },
+  };
+  const c = stateColors[state] || stateColors.exploration;
+
+  // Clear
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const NS = 'http://www.w3.org/2000/svg';
+
+  function conePath(apexX, apexY, dirX, dirY, length, halfAngle) {
+    // apex = point, dir = unit vector outward, halfAngle in radians
+    const dx = dirX, dy = dirY;
+    // Perpendicular
+    const px = -dy, py = dx;
+    const baseCx = apexX + dx * length;
+    const baseCy = apexY + dy * length;
+    const spread = length * Math.tan(halfAngle);
+    const leftX = baseCx + px * spread, leftY = baseCy + py * spread;
+    const rightX = baseCx - px * spread, rightY = baseCy - py * spread;
+    return `M${apexX},${apexY} L${leftX},${leftY} L${rightX},${rightY} Z`;
+  }
+
+  function makeEl(tag, attrs = {}) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  // Background subtle
+  svg.appendChild(makeEl('rect', {
+    x: 0, y: 0, width: w, height: h,
+    fill: 'rgba(255,255,255,0.5)', rx: 8,
+  }));
+
+  const rad = halfAngleDeg * Math.PI / 180;
+
+  if (pump) {
+    // Two cones facing each other horizontally
+    const apex1 = [w * 0.18, h / 2];
+    const apex2 = [w * 0.82, h / 2];
+    const coneLen = w * 0.55;
+
+    svg.appendChild(makeEl('path', {
+      d: conePath(apex1[0], apex1[1], 1, 0, coneLen, rad),
+      fill: c.fill, stroke: c.stroke, 'stroke-width': 1.5,
+    }));
+    svg.appendChild(makeEl('path', {
+      d: conePath(apex2[0], apex2[1], -1, 0, coneLen, rad),
+      fill: c.fill, stroke: c.stroke, 'stroke-width': 1.5,
+    }));
+    // Apex markers
+    svg.appendChild(makeEl('circle', { cx: apex1[0], cy: apex1[1], r: 4, fill: c.stroke }));
+    svg.appendChild(makeEl('circle', { cx: apex2[0], cy: apex2[1], r: 4, fill: c.stroke }));
+    // Overlap zone — diamond in middle where cones meet
+    const overlapW = Math.max(10, coneLen * Math.tan(rad));
+    const cx = w / 2, cy = h / 2;
+    svg.appendChild(makeEl('path', {
+      d: `M${cx - overlapW / 2},${cy} L${cx},${cy - overlapW / 2} L${cx + overlapW / 2},${cy} L${cx},${cy + overlapW / 2} Z`,
+      fill: 'rgba(16,185,129,0.25)', stroke: '#10b981', 'stroke-width': 1, 'stroke-dasharray': '3,2',
+    }));
+    // Label
+    const label = makeEl('text', {
+      x: w / 2, y: h - 8, 'text-anchor': 'middle',
+      fill: c.stroke, 'font-size': 10, 'font-weight': 600,
+    });
+    label.textContent = 'ищу мост · зона пересечения';
+    const tt = makeEl('title');
+    tt.textContent = 'Pump: двойной конус. Зона в середине = где могут встретиться далёкие идеи.';
+    label.appendChild(tt);
+    svg.appendChild(label);
+  } else {
+    // Single cone pointing down from apex at top
+    const apex = [w / 2, 20];
+    const coneLen = h * 0.65;
+    svg.appendChild(makeEl('path', {
+      d: conePath(apex[0], apex[1], 0, 1, coneLen, rad),
+      fill: c.fill, stroke: c.stroke, 'stroke-width': 1.5,
+    }));
+    svg.appendChild(makeEl('circle', { cx: apex[0], cy: apex[1], r: 5, fill: c.stroke }));
+    // γ_eff sensitivity ring at ~40% down
+    const ringY = apex[1] + coneLen * 0.4;
+    const ringR = Math.max(6, gammaEff * 5);
+    svg.appendChild(makeEl('circle', {
+      cx: apex[0], cy: ringY, r: ringR,
+      fill: 'none', stroke: c.stroke, 'stroke-width': 0.8,
+      'stroke-dasharray': '2,2', opacity: 0.6,
+    }));
+    // State label (human-readable, tech in tooltip via <title>)
+    const stateLabels = {
+      exploration: 'исследует', execution: 'фокус', recovery: 'восстанавливается',
+      integration: 'собирает', stabilize: 'стабилизация', conflict: 'конфликт',
+      protective_freeze: 'защита',
+    };
+    const widthPct = Math.round((1 - precision) * 100);
+    const label = makeEl('text', {
+      x: w / 2, y: h - 8, 'text-anchor': 'middle',
+      fill: c.stroke, 'font-size': 10, 'font-weight': 600,
+    });
+    label.textContent = (stateLabels[state] || state) + ` · ширина ${widthPct}%`;
+    const titleEl = makeEl('title');
+    titleEl.textContent = `${state} · Π=${precision.toFixed(2)} · γ_eff=${gammaEff.toFixed(2)}`;
+    label.appendChild(titleEl);
+    svg.appendChild(label);
+  }
+}
+
+// Initial render with defaults
+if (typeof window !== 'undefined') {
+  window.addEventListener('DOMContentLoaded', () => {
+    try { graphRenderCone({ precision: 0.4, state: 'exploration', gamma_eff: 1.2 }); } catch(e) {}
+  });
+}
+
 // ── Run overlay: live convergence metrics ──
 let _autoRunSparkline = [];
 
@@ -1984,6 +2172,16 @@ function _updateRunOverlay(step, phase, horizonMetrics) {
   document.getElementById('graph-run-avg').textContent = Math.round(avgConf * 100) + '%' + precisionStr;
   document.getElementById('graph-run-status').textContent = phase === 'synthesize' ? '✓ Converged' : '⟳' + stateStr;
   document.getElementById('graph-run-status').style.color = phase === 'synthesize' ? '#10b981' : '#6d28d9';
+
+  // Render cognitive cone (FE-3)
+  try {
+    graphRenderCone({
+      precision: hm.precision,
+      state: hm.state || 'exploration',
+      gamma_eff: hm.gamma_eff || hm.gamma,
+      pump: phase === 'generate' && (hm.tick_engine === 'nand' || false),
+    });
+  } catch(e) { /* silent */ }
 
   // Sparkline: track verified ratio over time
   _autoRunSparkline.push(ratio);

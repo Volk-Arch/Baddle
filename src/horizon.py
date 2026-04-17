@@ -1,46 +1,75 @@
-"""CognitiveHorizon — adaptive controller for the thinking cycle.
+"""CognitiveState — unified adaptive controller for the thinking cycle.
 
-Sits between tick() and LLM calls. Does not generate content — controls
-HOW to generate: temperature, top_k, top_p based on precision.
+Replaces the former CognitiveHorizon + Neurochem split (v12 collapse, pre-emptive).
+One object, one to_dict, one UI panel. Holds:
 
-Three parameters:
-  Π (precision)      : 0.0–1.0. Confidence in current model. Higher = narrower cone.
-  Λ (policy_weights) : {generate, merge, elaborate, doubt}. Which phase to pick.
-  Γ (context_frame)  : Active prompt/rules. Switches on high novelty.
+  • Horizon layer (precision, policy, γ, τ, temperature_nand, state machine)
+  • Neurochem layer (S pliability, NE arousal, DA_tonic/phasic, burnout_idx)
+  • HRV layer (coherence, stress, rmssd — inputs)
+  • Mode flags (llm_disabled for v8c Camera, PROTECTIVE_FREEZE)
 
-Four states:
-  EXPLORATION  : precision 0.3–0.5, wide search
-  EXECUTION    : precision 0.7–0.9, narrow focus
-  RECOVERY     : precision drops after surprise spike
-  INTEGRATION  : precision 0.5–0.6, balanced synthesis
+Key formulas (docs/nand-architecture.md, TODO v5d):
+  γ_eff = γ · S                            pliability gates Bayesian sensitivity
+  logit(post) = logit(prior) + γ_eff·(1−2d)    signed NAND Bayes
+  T_eff = T₀ · (1 − κ·NE) + T_floor        arousal sharpens choice
+  burnout_idx = EMA(max(0, d − τ_stable)) · (1 − S)
+  PROTECTIVE_FREEZE when burnout_idx > θ_burnout; recovery gated by DA_tonic
 
-One mechanism drives everything: prediction error.
-  ε = surprise - target_surprise
-  ε > 0 → too chaotic → precision ↑ → cone narrows
-  ε < 0 → too predictable → precision ↓ → cone widens
-  ε ≈ 0 → flow zone → system moves forward
+States (hysteresis + debounce):
+  EXPLORATION  (precision 0.3–0.5, wide)
+  EXECUTION    (0.7–0.9, narrow)
+  RECOVERY     (post-surprise drop)
+  INTEGRATION  (0.5–0.6, synthesis)
+  STABILIZE    (HRV coherence < 0.3)
+  CONFLICT     (sync_error spike)
+  PROTECTIVE_FREEZE (burnout trip)
+
+`CognitiveHorizon` is kept as a backward-compat alias at the bottom.
 """
 
 import math
+import random
 
 
-# ── States ──────────────────────────────────────────────────────────────────
+# ── State constants ─────────────────────────────────────────────────────────
 
 EXPLORATION = "exploration"
 EXECUTION = "execution"
 RECOVERY = "recovery"
 INTEGRATION = "integration"
 
-# Extended states (used when HRV is connected)
-STABILIZE = "stabilize"  # coherence < 0.3, calibration / noise reset
-SHIFT = "shift"          # context switch, φ change detected
-CONFLICT = "conflict"    # incompatible priors, merge fail
+# Extended states (HRV / burnout driven)
+STABILIZE = "stabilize"
+SHIFT = "shift"
+CONFLICT = "conflict"
+PROTECTIVE_FREEZE = "protective_freeze"
 
 
-# ── CognitiveHorizon ────────────────────────────────────────────────────────
+# ── Neurochem tuning knobs (override via settings.json later) ──────────────
 
-class CognitiveHorizon:
-    """Adaptive controller: precision → LLM params, policy → phase selection."""
+# EMA decay lambdas (per update step)
+LAMBDA_NE = 0.3          # fast
+LAMBDA_S = 0.1           # medium
+LAMBDA_DA_FAST = 0.4     # fast phasic
+LAMBDA_DA_SLOW = 0.02    # slow tonic
+LAMBDA_BURNOUT = 0.05    # slow accumulation
+
+# Thresholds
+D_BASELINE = 0.4
+TAU_STABLE = 0.6
+THETA_BURNOUT = 0.35
+THETA_RECOVERY = 0.2
+THETA_DA_RECOVERY = 0.45
+KAPPA_NE_TEMP = 0.8
+T_FLOOR = 0.05
+DA_TONIC_BASELINE = 0.5
+S_BASELINE = 0.6
+
+
+# ── CognitiveState ──────────────────────────────────────────────────────────
+
+class CognitiveState:
+    """Unified Horizon + Neurochem. One adaptive controller for the whole loop."""
 
     def __init__(self,
                  precision: float = 0.4,
@@ -48,36 +77,55 @@ class CognitiveHorizon:
                  target_surprise: float = 0.3,
                  alpha: float = 0.1,
                  beta: float = 0.2):
+        # ── Horizon layer ───────────────────────────────────────────────
         self.precision = max(0.05, min(0.95, precision))
         self.policy_weights = policy_weights or {
             "generate": 0.3, "merge": 0.2, "elaborate": 0.2, "doubt": 0.3,
         }
         self.target_surprise = target_surprise
-        self.alpha = alpha  # precision learning rate
-        self.beta = beta    # policy learning rate
+        self.alpha = alpha
+        self.beta = beta
         self.state = EXPLORATION
-        self._history = []  # last N surprises for state detection
-        self._pending_state = None  # debounce: target state waiting confirmation
-        self._pending_count = 0     # debounce: consecutive ticks wanting same state
+        self._prev_state = None           # remember pre-FREEZE state for recovery
+        self._history = []
+        self._pending_state = None
+        self._pending_count = 0
 
-        # NAND-architecture additions
-        self.gamma = 2.0            # Bayesian sensitivity (auto-calibrated)
-        self.gamma_0 = 2.0          # baseline
-        self.temperature_nand = 0.1  # NAND temperature (separate from LLM temp)
-        self.temperature_nand_0 = 0.1  # baseline T₀
-        self._d_self_history = []   # EMA basis for γ calibration
-        self.sync_error = 0.0       # how bad system predicts user (0=perfect, 1=lost)
-        self._prev_policy_weights = None  # snapshot for KL(W_t ‖ W_{t-1})
-        self.kl_divergence = 0.0    # latest KL, diagnostic metric
+        # NAND core parameters
+        self.gamma = 2.0
+        self.gamma_0 = 2.0
+        self.temperature_nand = 0.1
+        self.temperature_nand_0 = 0.1
+        self._d_self_history = []
+        self.sync_error = 0.0
+        self._prev_policy_weights = None
+        self.kl_divergence = 0.0
 
-        # HRV state (set by update_from_hrv)
-        self.hrv_coherence = None   # 0-1, None if no sensor
-        self.hrv_stress = None      # 0-1, from 1/RMSSD
-        self.hrv_rmssd = None       # ms
-
-        # Body-computed thresholds (defaults, overridden by HRV)
+        # Thresholds for distinct-zone decisions (can be nudged by HRV)
         self.tau_in = 0.3
         self.tau_out = 0.7
+
+        # ── HRV layer ───────────────────────────────────────────────────
+        self.hrv_coherence = None
+        self.hrv_stress = None
+        self.hrv_rmssd = None
+
+        # ── Neurochem layer ─────────────────────────────────────────────
+        # S (серотонин) — plasticity / cost of update
+        self.S = S_BASELINE
+        # NE (норадреналин) — arousal / attention budget
+        self.NE = 0.3
+        self._ne_d_ema = 0.0              # rolling EMA of (d − baseline) for NE
+        # DA (дофамин) — reward/drive. Tonic = mood, phasic = event response
+        self.DA_tonic = DA_TONIC_BASELINE
+        self.DA_phasic = 0.0
+        # Burnout — protective index
+        self.burnout_idx = 0.0
+        self._burnout_trip_count = 0
+
+        # ── Mode flags ──────────────────────────────────────────────────
+        self.llm_disabled = False         # v8c camera (sensory deprivation)
+        self.state_origin_hint = "1_rest" # last computed state_origin (v8c)
 
     # ── LLM params ──────────────────────────────────────────────────────────
 
@@ -222,6 +270,131 @@ class CognitiveHorizon:
             delta = (self.hrv_coherence - 0.5) * 0.1
             self.precision = max(0.05, min(0.95, self.precision + delta))
 
+            # Neurochem coupling (v5d):
+            # Coherence → pliability S (calm body → system easier to update)
+            self.S = max(0.2, min(1.0,
+                LAMBDA_S * (0.4 + 0.6 * self.hrv_coherence) + (1 - LAMBDA_S) * self.S
+            ))
+            # Coherence → DA_tonic (sustained calm = contentment baseline)
+            self.DA_tonic = max(0.0, min(1.0,
+                LAMBDA_DA_SLOW * self.hrv_coherence + (1 - LAMBDA_DA_SLOW) * self.DA_tonic
+            ))
+            # Stress → NE baseline push
+            self.NE = max(0.0, min(1.0, 0.5 * self.NE + 0.5 * (0.3 + 0.5 * self.hrv_stress)))
+
+    # ── Neurochem: NE, S, DA, burnout ───────────────────────────────────────
+
+    def inject_ne(self, amount: float = 0.3):
+        """User input arrives → NE spike. Shifts budget toward Horizon, away from DMN."""
+        self.NE = max(0.0, min(1.0, self.NE + amount))
+
+    def update_neurochem(self,
+                         d: float = None,
+                         rpe: float = None,
+                         d_self: float = None,
+                         user_feedback: str = None,
+                         time_delta: float = 1.0):
+        """EMA update of S, NE, DA, burnout. Call after each cognitive step.
+
+        d           : last distinct distance (drives NE via |d − baseline|)
+        rpe         : reward prediction error (signed, drives DA_phasic)
+        d_self      : distinct between predicted and actual (self-consistency, drives S)
+        user_feedback: "accepted" | "rejected" | "ignored" | None (drives DA, S)
+        time_delta  : seconds since last update (for decay calibration, advisory)
+        """
+        # NE: driven by recent surprise (|d − baseline|)
+        if d is not None:
+            surprise_mag = max(0.0, abs(d - D_BASELINE))
+            self._ne_d_ema = LAMBDA_NE * surprise_mag + (1 - LAMBDA_NE) * self._ne_d_ema
+            # NE decays toward _ne_d_ema + small baseline pull
+            target_ne = min(1.0, self._ne_d_ema * 2.0)
+            self.NE = LAMBDA_NE * target_ne + (1 - LAMBDA_NE) * self.NE
+            self.NE = max(0.0, min(1.0, self.NE))
+
+        # DA_phasic: fast-response to RPE
+        if rpe is not None:
+            self.DA_phasic = LAMBDA_DA_FAST * rpe + (1 - LAMBDA_DA_FAST) * self.DA_phasic
+            self.DA_phasic = max(-1.0, min(1.0, self.DA_phasic))
+        else:
+            # Phasic decays toward 0 in absence of events
+            self.DA_phasic *= (1 - LAMBDA_DA_FAST)
+
+        # DA_tonic: slow integration of phasic (mood)
+        self.DA_tonic = LAMBDA_DA_SLOW * (DA_TONIC_BASELINE + self.DA_phasic * 0.5) \
+                        + (1 - LAMBDA_DA_SLOW) * self.DA_tonic
+        self.DA_tonic = max(0.0, min(1.0, self.DA_tonic))
+
+        # S: feedback-driven plasticity
+        #   accepted → higher S (we're learning successfully, stay open)
+        #   rejected → lower S (step back, use priors more)
+        #   d_self large → lower S (we're inconsistent, be rigid)
+        if user_feedback == "accepted":
+            target_s = 0.85
+            self.S = LAMBDA_S * target_s + (1 - LAMBDA_S) * self.S
+        elif user_feedback == "rejected":
+            target_s = 0.35
+            self.S = LAMBDA_S * target_s + (1 - LAMBDA_S) * self.S
+        if d_self is not None:
+            target_s = max(0.2, 1.0 - d_self)
+            self.S = LAMBDA_S * target_s + (1 - LAMBDA_S) * self.S
+        self.S = max(0.2, min(1.0, self.S))
+
+        # Burnout: chronic conflict × low plasticity
+        if d is not None:
+            conflict_signal = max(0.0, d - TAU_STABLE)
+            plasticity_deficit = (1.0 - self.S)
+            burn_increment = conflict_signal * plasticity_deficit
+            self.burnout_idx = LAMBDA_BURNOUT * burn_increment \
+                              + (1 - LAMBDA_BURNOUT) * self.burnout_idx
+            self.burnout_idx = max(0.0, min(1.0, self.burnout_idx))
+
+        # Mode transitions: PROTECTIVE_FREEZE entry / recovery
+        if self.state != PROTECTIVE_FREEZE and self.burnout_idx > THETA_BURNOUT:
+            self._prev_state = self.state
+            self.state = PROTECTIVE_FREEZE
+            self._burnout_trip_count += 1
+        elif self.state == PROTECTIVE_FREEZE:
+            # Recovery requires low burnout AND restored DA_tonic
+            if self.burnout_idx < THETA_RECOVERY and self.DA_tonic > THETA_DA_RECOVERY:
+                self.state = self._prev_state or EXPLORATION
+
+        # Update state_origin (v8c)
+        if self.NE > 0.55 or self.burnout_idx > 0.2:
+            self.state_origin_hint = "1_held"
+        else:
+            self.state_origin_hint = "1_rest"
+
+    def apply_to_bayes(self, prior: float, d: float) -> float:
+        """NAND Bayes update through CognitiveState: uses γ_eff = γ·S.
+
+        If PROTECTIVE_FREEZE: return prior unchanged (ΔlogW = 0).
+
+        logit(post) = logit(prior) + γ_eff · (1 − 2d)
+        γ_eff = γ · S (plasticity gates Bayesian sensitivity)
+
+        See TODO v5d, docs/nand-architecture.md
+        """
+        if self.state == PROTECTIVE_FREEZE:
+            return prior
+        prior = max(0.01, min(0.99, prior))
+        gamma_eff = self.gamma * self.S
+        log_prior = math.log(prior / (1 - prior))
+        signed = gamma_eff * (1 - 2 * d)
+        log_posterior = log_prior + signed
+        posterior = 1.0 / (1.0 + math.exp(-log_posterior))
+        return round(max(0.01, min(0.99, posterior)), 3)
+
+    def effective_temperature(self) -> float:
+        """T_eff = T₀ · (1 − κ·NE) + T_floor. Higher NE → sharper choice."""
+        return max(T_FLOOR, self.temperature_nand_0 * (1 - KAPPA_NE_TEMP * self.NE) + T_FLOOR)
+
+    def horizon_budget(self) -> float:
+        """Share of cognitive budget given to Horizon (vs DMN). budget_H = f(NE)."""
+        # clamp(0.8·NE + 0.2, 0.2, 0.95)
+        if self.state == PROTECTIVE_FREEZE:
+            return 0.3   # minimal active processing during freeze
+        return max(0.2, min(0.95, 0.8 * self.NE + 0.2))
+
     # ── Update (feedback loop) ──────────────────────────────────────────────
 
     def update(self, surprise: float = None, gradient: float = None,
@@ -306,9 +479,14 @@ class CognitiveHorizon:
     def _target_state(self, p: float, novelty: float = None) -> str:
         """Determine target state using hysteresis thresholds.
 
-        With HRV: extended state machine (7 states).
-        Without HRV: original 4 states (EXPLORATION/EXECUTION/RECOVERY/INTEGRATION).
+        State priority: PROTECTIVE_FREEZE > HRV-driven (STABILIZE/CONFLICT)
+        > precision-driven (EXPLORATION/EXECUTION/INTEGRATION).
         """
+        # Highest priority: burnout trip → PROTECTIVE_FREEZE (handled in update_neurochem,
+        # but honor it here too for external callers)
+        if self.state == PROTECTIVE_FREEZE and self.burnout_idx > THETA_RECOVERY:
+            return PROTECTIVE_FREEZE
+
         # HRV-driven states (if HRV sensor connected)
         if self.hrv_coherence is not None:
             # Very low coherence → STABILIZE (reset/calibrate)
@@ -360,6 +538,7 @@ class CognitiveHorizon:
             "policy": {k: round(v, 3) for k, v in weights.items()},
             "params": self.to_llm_params(),
             "gamma": round(self.gamma, 3),
+            "gamma_eff": round(self.gamma * self.S, 3),
             "temperature_nand": round(self.temperature_nand, 3),
             "kl_divergence": round(self.kl_divergence, 4),
             "sync_error": round(self.sync_error, 3),
@@ -370,6 +549,18 @@ class CognitiveHorizon:
                 "rmssd": self.hrv_rmssd,
                 "stress": self.hrv_stress,
             } if self.hrv_coherence is not None else None,
+            # Neurochem layer (v5d)
+            "neurochem": {
+                "S": round(self.S, 3),
+                "NE": round(self.NE, 3),
+                "DA_tonic": round(self.DA_tonic, 3),
+                "DA_phasic": round(self.DA_phasic, 3),
+                "burnout_idx": round(self.burnout_idx, 3),
+                "state_origin": self.state_origin_hint,
+            },
+            "llm_disabled": self.llm_disabled,
+            "horizon_budget": round(self.horizon_budget(), 3),
+            "t_effective": round(self.effective_temperature(), 3),
         }
 
     # ── Serialization ───────────────────────────────────────────────────────
@@ -383,6 +574,7 @@ class CognitiveHorizon:
             "alpha": self.alpha,
             "beta": self.beta,
             "state": self.state,
+            "_prev_state": self._prev_state,
             "_history": list(self._history),
             "gamma": self.gamma,
             "gamma_0": self.gamma_0,
@@ -396,11 +588,21 @@ class CognitiveHorizon:
             "hrv_coherence": self.hrv_coherence,
             "hrv_stress": self.hrv_stress,
             "hrv_rmssd": self.hrv_rmssd,
+            # Neurochem (v5d)
+            "S": self.S,
+            "NE": self.NE,
+            "_ne_d_ema": self._ne_d_ema,
+            "DA_tonic": self.DA_tonic,
+            "DA_phasic": self.DA_phasic,
+            "burnout_idx": self.burnout_idx,
+            "_burnout_trip_count": self._burnout_trip_count,
+            "llm_disabled": self.llm_disabled,
+            "state_origin_hint": self.state_origin_hint,
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "CognitiveHorizon":
-        """Restore from stored state."""
+    def from_dict(cls, d: dict) -> "CognitiveState":
+        """Restore from stored state. Backward-compatible with old Horizon dumps."""
         h = cls(
             precision=d.get("precision", 0.4),
             policy_weights=d.get("policy_weights"),
@@ -409,6 +611,7 @@ class CognitiveHorizon:
             beta=d.get("beta", 0.2),
         )
         h.state = d.get("state", EXPLORATION)
+        h._prev_state = d.get("_prev_state")
         h._history = d.get("_history", [])
         h.gamma = d.get("gamma", 2.0)
         h.gamma_0 = d.get("gamma_0", 2.0)
@@ -422,13 +625,57 @@ class CognitiveHorizon:
         h.hrv_coherence = d.get("hrv_coherence")
         h.hrv_stress = d.get("hrv_stress")
         h.hrv_rmssd = d.get("hrv_rmssd")
+        # Neurochem (v5d) with sensible defaults for old dumps
+        h.S = d.get("S", S_BASELINE)
+        h.NE = d.get("NE", 0.3)
+        h._ne_d_ema = d.get("_ne_d_ema", 0.0)
+        h.DA_tonic = d.get("DA_tonic", DA_TONIC_BASELINE)
+        h.DA_phasic = d.get("DA_phasic", 0.0)
+        h.burnout_idx = d.get("burnout_idx", 0.0)
+        h._burnout_trip_count = d.get("_burnout_trip_count", 0)
+        h.llm_disabled = d.get("llm_disabled", False)
+        h.state_origin_hint = d.get("state_origin_hint", "1_rest")
         return h
+
+
+# ── Backward-compat alias ─────────────────────────────────────────────────
+# Old code imports `CognitiveHorizon` — keep alias to avoid breaking callers.
+CognitiveHorizon = CognitiveState
+
+
+# ── Global state singleton (one neurochem per person, see TODO v5d prime) ──
+
+_global_state: "CognitiveState | None" = None
+
+
+def get_global_state() -> CognitiveState:
+    """Global CognitiveState — one per person, shared across all workspaces.
+
+    Per prime directive (sync with human): neurochem is the body-side scalar
+    that lives once, not per-graph. Workspaces can carry their own Horizon
+    snapshots later if needed, but for now there's one state for the system.
+    """
+    global _global_state
+    if _global_state is None:
+        _global_state = CognitiveState()
+    return _global_state
+
+
+def set_global_state(state: CognitiveState):
+    """Replace global state (for tests or restart)."""
+    global _global_state
+    _global_state = state
 
 
 # ── Factory ─────────────────────────────────────────────────────────────────
 
-def create_horizon(mode_id: str) -> CognitiveHorizon:
-    """Create a CognitiveHorizon with preset for given mode."""
+def create_horizon(mode_id: str) -> CognitiveState:
+    """Create a CognitiveState with preset for given mode.
+
+    Note: this creates a fresh CognitiveState; for the global singleton (one per
+    person), use get_global_state() instead. This factory is useful for
+    per-session Horizon snapshots stored in graph state.
+    """
     from .modes import get_mode
 
     PRESETS = {
@@ -449,7 +696,7 @@ def create_horizon(mode_id: str) -> CognitiveHorizon:
     }
 
     preset = PRESETS.get(mode_id, PRESETS["horizon"])
-    return CognitiveHorizon(
+    return CognitiveState(
         precision=preset["precision"],
         policy_weights=dict(preset["policy"]),
         target_surprise=preset["target"],

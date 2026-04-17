@@ -1,9 +1,11 @@
 {
-  "decisions_today": 15,
+  "decisions_today": 18,
   "last_reset_date": "2026-04-17",
-  "last_interaction": 1776434538.1068938,
-  "total_decisions": 15,
-  "streaks": {},
+  "last_interaction": 1776446794.9469879,
+  "total_decisions": 18,
+  "streaks": {
+    "Morning exercise": 1
+  },
   "history": [
     {
       "ts": 1776428618.0063941,
@@ -72,6 +74,59 @@
     {
       "ts": 1776434538.1068938,
       "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776446634.0075505,
+      "kind": "assist",
+      "mode": "vector",
+      "message": "BMW ili Tesla - chto kupit",
+      "intent": {
+        "is_complex": false,
+        "is_ambiguous": false,
+        "signals": {
+          "lines": 1,
+          "length": 26,
+          "complex_markers": 0,
+          "ambiguous_markers": 0
+        }
+      }
+    },
+    {
+      "ts": 1776446794.5868008,
+      "kind": "assist",
+      "mode": "tournament",
+      "message": "BMW ili Tesla - chto kupit",
+      "intent": "complex_goal",
+      "confidence": 0.85
+    },
+    {
+      "ts": 1776446794.9469888,
+      "kind": "assist_clarify",
+      "mode": "free",
+      "message": "?"
     }
-  ]
+  ],
+  "habit_history": {
+    "Morning exercise": [
+      {
+        "date": "2026-04-17",
+        "streak_at_time": 1,
+        "state": {
+          "NE": 0.3,
+          "DA_tonic": 0.5,
+          "S": 0.6,
+          "hrv_coherence": null
+        }
+      }
+    ]
+  },
+  "habit_snapshots": {
+    "Morning exercise": {
+      "last_update": "2026-04-17",
+      "trend": [
+        1
+      ],
+      "completion_7d": 1
+    }
+  }
 }

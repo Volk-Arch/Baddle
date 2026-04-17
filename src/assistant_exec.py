@@ -256,26 +256,71 @@ def execute_brainstorm(message: str, lang: str = "ru") -> Dict:
 # ═══ Rhythm (habit) ═════════════════════════════════════════════════
 
 def execute_rhythm(message: str, lang: str = "ru") -> Dict:
-    """Register a habit — simple tracking."""
-    # Use user_state.json for streak tracking
+    """Register a habit — tracks streak + snapshot history (v2 persistence).
+
+    Each call counts as a habit tick. If today's already tracked, streak stays.
+    Otherwise increments streak, appends to history, updates 7-day snapshot.
+    """
     from .assistant import _load_state, _save_state
+    from datetime import datetime
+
     state = _load_state()
     streaks = state.setdefault("streaks", {})
-    # Take first meaningful word as habit key (simplified)
+    habit_history = state.setdefault("habit_history", {})
+    snapshots = state.setdefault("habit_snapshots", {})
+
     habit_key = message[:40]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    history = habit_history.setdefault(habit_key, [])
+    last_entry = history[-1] if history else None
     streak = streaks.get(habit_key, 0)
 
-    text = (f"Отмечено. Привычка: {habit_key}" if lang == "ru"
-            else f"Registered. Habit: {habit_key}")
+    if not last_entry or last_entry.get("date") != today:
+        streak += 1
+        streaks[habit_key] = streak
+        entry = {"date": today, "streak_at_time": streak}
+        # Snapshot CognitiveState for trend viz (v2)
+        try:
+            from .horizon import get_global_state
+            cs_metrics = get_global_state().get_metrics()
+            entry["state"] = {
+                "NE": cs_metrics.get("neurochem", {}).get("NE"),
+                "DA_tonic": cs_metrics.get("neurochem", {}).get("DA_tonic"),
+                "S": cs_metrics.get("neurochem", {}).get("S"),
+                "hrv_coherence": (cs_metrics.get("hrv") or {}).get("coherence"),
+            }
+        except Exception:
+            pass
+        history.append(entry)
+        # Bound history to ~1 year
+        if len(history) > 365:
+            history[:] = history[-365:]
+        # 7-day snapshot
+        last_7 = history[-7:]
+        snapshots[habit_key] = {
+            "last_update": today,
+            "trend": [h.get("streak_at_time", 0) for h in last_7],
+            "completion_7d": len(last_7),
+        }
+
+    _save_state(state)
+
+    text = (f"Отмечено. Streak {streaks[habit_key]}: {habit_key}" if lang == "ru"
+            else f"Registered. Streak {streaks[habit_key]}: {habit_key}")
 
     return {
         "text": text,
         "cards": [{
             "type": "habit",
             "habit": habit_key,
-            "streak": streak,
-            "message": ("Запускай Run каждый день чтобы вести streak."
-                        if lang == "ru" else "Run daily to track streak."),
+            "streak": streaks[habit_key],
+            "today": history[-1].get("date") if history else today,
+            "trend": snapshots.get(habit_key, {}).get("trend", []),
+            "completion_7d": snapshots.get(habit_key, {}).get("completion_7d", 0),
+            "message": ("7/7 дней подряд!" if snapshots.get(habit_key, {}).get("completion_7d", 0) >= 7
+                       else ("Продолжай — вернись завтра." if lang == "ru"
+                             else "Keep going — come back tomorrow.")),
         }],
         "steps": [],
     }
@@ -324,14 +369,34 @@ def _classify_zones(candidates: List[str], tau_in: float = 0.3, tau_out: float =
 
 
 def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") -> Dict:
-    """Generic executor: brainstorm candidates, classify by distinct zones, render.
+    """Единый путь для всех 14 режимов.
 
-    No primitive switching — rendering picked by detected zone density:
-      CONFIRM dense  → convergent synthesis card
-      CONFLICT dense → dialectic card on furthest pair
-      EXPLORE dense  → ideas_list with first-idea Smart DC
+    Алгоритм:
+      1. Brainstorm N кандидатов (N зависит от mode_id: vector=3, остальные=MAX_IDEAS)
+      2. Distinct-matrix → зоны CONFIRM / EXPLORE / CONFLICT
+      3. Renderer по паре (zone × style_preset из modes.py)
+         - style="dialectical" + CONFLICT → dialectic card (execute_dispute inline)
+         - style="comparative" + CONFLICT → comparison card (LLM-judge)
+         - style="cluster" + CONFIRM → synthesis-cluster
+         - style="ideas" → ideas_list с Smart DC на первой
+         - иначе: zone-driven default (fallback по плотности зон)
+
+    Specials не проходят через этот путь — они диспатчатся в execute():
+      - rhythm → execute_rhythm (habit external state)
+      - bayes → execute_bayes (уникальный prior/observation flow)
     """
     from .prompts import _p
+    from .modes import get_mode
+
+    mode = get_mode(mode_id)
+    style = mode.get("renderer_style", "ideas")
+
+    # Comparative style + explicit options in message → tournament прямо
+    # (юзер перечислил варианты сам, не надо генерить новые)
+    if style == "comparative":
+        explicit = _parse_options(message)
+        if len(explicit) >= 2:
+            return execute_tournament(message, lang)
 
     n_ideas = 3 if mode_id == "vector" else MAX_IDEAS
     system = _p(lang, "think")
@@ -349,7 +414,6 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
     ideas = [_clean_thought(l, "") for l in lines if len(l) > 5][:n_ideas]
 
     if len(ideas) < 2:
-        # Not enough to classify — fall back to plain list
         return {
             "text": ("Вот что нашёл:" if lang == "ru" else "Here's what I found:"),
             "cards": [{"type": "ideas_list", "ideas": ideas}],
@@ -360,35 +424,76 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
     steps_base = [
         f"Сгенерировал {len(ideas)} идей" if lang == "ru" else f"Generated {len(ideas)} ideas",
         (f"Зоны: confirm={zones['confirm_ratio']:.0%} explore={zones['explore_ratio']:.0%} "
-         f"conflict={zones['conflict_ratio']:.0%}"),
+         f"conflict={zones['conflict_ratio']:.0%} · style={style}"),
     ]
 
-    # CONFLICT dense → pick furthest pair, run dialectic
-    if zones["conflict"] and zones["conflict_ratio"] >= zones["confirm_ratio"] \
-       and zones["conflict_ratio"] >= zones["explore_ratio"]:
+    conflict_dominant = zones["conflict"] and zones["conflict_ratio"] >= max(
+        zones["confirm_ratio"], zones["explore_ratio"])
+    confirm_dominant = zones["confirm"] and zones["confirm_ratio"] >= zones["explore_ratio"]
+
+    # ── Style-driven rendering ──
+    # Style × zone определяет карточку. Приоритет: style-preset, если зона
+    # подходит. Иначе zone-driven default.
+
+    # dialectical style + CONFLICT → dispute (дебаты)
+    if style == "dialectical" and conflict_dominant:
         zones["conflict"].sort(key=lambda p: -p[2])
         i, j, d = zones["conflict"][0]
         dc = execute_dispute(f"{ideas[i]} vs {ideas[j]}", lang)
         dc["steps"] = steps_base + dc.get("steps", []) + [
-            f"CONFLICT[d={d:.2f}] → диалектика между #{i} и #{j}"
-            if lang == "ru" else f"CONFLICT[d={d:.2f}] → dialectic #{i} vs #{j}",
+            f"dialectical+CONFLICT[d={d:.2f}] → диалектика #{i}↔#{j}"
+            if lang == "ru" else f"dialectical+CONFLICT[d={d:.2f}] → dialectic #{i}↔#{j}",
         ]
         return dc
 
-    # CONFIRM dense → convergent synthesis
-    if zones["confirm"] and zones["confirm_ratio"] >= zones["explore_ratio"]:
-        agree_text = ("Идеи сходятся — они об одном:" if lang == "ru"
-                      else "Ideas converge — they agree:")
+    # comparative style + CONFLICT → tournament (LLM-judge)
+    if style == "comparative" and conflict_dominant and len(ideas) >= 2:
+        joined = ", ".join(ideas)
+        tn = execute_tournament(joined, lang)
+        tn["steps"] = steps_base + tn.get("steps", []) + [
+            f"comparative+CONFLICT → LLM-судья выбирает"
+            if lang == "ru" else "comparative+CONFLICT → LLM-judge picks",
+        ]
+        return tn
+
+    # cluster style + CONFIRM → convergent synthesis
+    if style == "cluster" and confirm_dominant:
         return {
-            "text": agree_text,
+            "text": ("Идеи собираются в одно:" if lang == "ru"
+                     else "Ideas converge:"),
             "cards": [{"type": "ideas_list", "ideas": ideas, "zone": "confirm"}],
             "steps": steps_base + [
-                f"CONFIRM-кластер: {len(zones['confirm'])} пар близких"
-                if lang == "ru" else f"CONFIRM cluster: {len(zones['confirm'])} close pairs",
+                f"cluster+CONFIRM: {len(zones['confirm'])} близких пар"
+                if lang == "ru" else f"cluster+CONFIRM: {len(zones['confirm'])} close pairs",
             ],
         }
 
-    # Default: EXPLORE dominant → ideas_list with Smart DC on first
+    # ── Zone-driven defaults (если style не совпал с доминирующей зоной) ──
+
+    # CONFLICT default → диалектика furthest
+    if conflict_dominant:
+        zones["conflict"].sort(key=lambda p: -p[2])
+        i, j, d = zones["conflict"][0]
+        dc = execute_dispute(f"{ideas[i]} vs {ideas[j]}", lang)
+        dc["steps"] = steps_base + dc.get("steps", []) + [
+            f"zone-default[CONFLICT d={d:.2f}] → диалектика #{i}↔#{j}"
+            if lang == "ru" else f"zone-default[CONFLICT d={d:.2f}] → dialectic",
+        ]
+        return dc
+
+    # CONFIRM default → синтез
+    if confirm_dominant:
+        return {
+            "text": ("Идеи сходятся — они об одном:" if lang == "ru"
+                     else "Ideas converge:"),
+            "cards": [{"type": "ideas_list", "ideas": ideas, "zone": "confirm"}],
+            "steps": steps_base + [
+                f"zone-default[CONFIRM]: {len(zones['confirm'])} близких"
+                if lang == "ru" else f"zone-default[CONFIRM]: {len(zones['confirm'])} close",
+            ],
+        }
+
+    # EXPLORE default → ideas_list с Smart DC на первой
     verified_first = None
     try:
         dc_result = execute_dispute(ideas[0], lang)
@@ -416,26 +521,21 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
 # ═══ Dispatcher ═════════════════════════════════════════════════════
 
 def execute(mode_id: str, message: str, lang: str = "ru") -> Dict:
-    """Mode → renderer map. Mode is a preset selector, not a primitive switch.
+    """Единый dispatcher. Все режимы → execute_via_zones кроме двух specials.
 
-    Each mode_id maps directly to a renderer. Behavior inside renderers is
-    distinct-based (zones), not primitive-branched.
+    Specials остались как pre-hooks потому что они трогают внешнее состояние
+    (habit history в user_state.json) или имеют уникальный multi-step flow
+    (bayes: prior → observations → posterior). Для этих двух renderer-dispatch
+    нерелевантен — у них собственная логика.
     """
     try:
-        if mode_id == "dispute":
-            return execute_dispute(message, lang)
-        if mode_id == "tournament":
-            return execute_tournament(message, lang)
-        if mode_id == "bayes":
-            return execute_bayes(message, lang)
-        if mode_id == "fan":
-            return execute_brainstorm(message, lang)
+        # Specials: external state or unique flow
         if mode_id == "rhythm":
             return execute_rhythm(message, lang)
-        # General case: generate candidates, classify via distinct zones, render by zone
-        if mode_id in ("horizon", "vector", "scout", "free", "scales",
-                       "builder", "cascade", "pipeline", "race"):
-            return execute_via_zones(message, lang, mode_id)
+        if mode_id == "bayes":
+            return execute_bayes(message, lang)
+        # Everything else: один путь через зоны + style preset
+        return execute_via_zones(message, lang, mode_id)
     except Exception as e:
         log.warning(f"[assist_exec] {mode_id} failed: {e}")
         return {
@@ -444,10 +544,3 @@ def execute(mode_id: str, message: str, lang: str = "ru") -> Dict:
             "steps": [],
             "error": str(e),
         }
-
-    # Fallback: just the intro (no execution)
-    return {
-        "text": None,
-        "cards": [],
-        "steps": [],
-    }

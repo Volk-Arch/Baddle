@@ -1,18 +1,43 @@
-# CognitiveHorizon — адаптивный контроллер
+# CognitiveState — адаптивный контроллер
+
+> С v8d/v5d класс называется **`CognitiveState`** (alias `CognitiveHorizon`
+> для backward compat). Это **единый объект**: Horizon-слой (precision, policy,
+> γ, τ) + нейрохимический слой (S, NE, DA, burnout). Спецификация нейрохимии →
+> [neurochem-design.md](neurochem-design.md).
 
 ## Идея
 
-Без Horizon все фазы tick используют одинаковые параметры: temperature=0.9, top_k=40. Brainstorm, SmartDC, Collapse — всё с одинаковой "шириной мышления". Это как ехать на одной передаче.
+Без контроллера все фазы tick'а использовали бы одинаковые LLM-параметры:
+temperature=0.9, top_k=40. Brainstorm, SmartDC, Collapse — всё с одинаковой
+«шириной мышления». Это как ехать на одной передаче.
 
-CognitiveHorizon (`src/horizon.py`) — контроллер между tick и LLM. Не генерирует контент — управляет **как** генерировать. Один параметр (precision) управляет всем сразу.
+`CognitiveState` (`src/horizon.py`) — контроллер между tick и LLM. Не
+генерирует контент — управляет **как** генерировать. Один параметр
+(precision) управляет Horizon-слоем; нейрохимия модулирует параметры
+динамически (γ·S в Байесе, NE → T, и т.д.).
 
-## Три параметра
+**Глобальный singleton** `get_global_state()` — один `CognitiveState` на систему
+(одна нейрохимия на человека, sync-prime). Workspace'ы имеют свой Horizon
+snapshot в graph state, но neurochem остаётся общим.
 
+## Параметры
+
+Horizon-слой:
 | Параметр | Что контролирует | Как обновляется |
 |----------|-----------------|-----------------|
-| **Π (precision)** | Уверенность в модели мира (0–1). Управляет температурой, top_k, novelty | Prediction error: `P += α·(target_surprise - surprise)` |
-| **Λ (policy_weights)** | Веса фаз {generate, merge, elaborate, doubt}. Какую фазу выбрать | Gradient: успешная фаза → вес ↑, неуспешная → вес ↓ |
-| **Γ (context_frame)** | Активная рамка, промпт, правила | Переключается при высокой novelty |
+| **Π (precision)** | Уверенность в модели мира (0–1). Управляет temp, top_k, novelty | Prediction error: `P += α·(target − surprise)` |
+| **Λ (policy_weights)** | Веса фаз {generate, merge, elaborate, doubt} | Gradient: успех → вес ↑, провал → вес ↓ |
+| **γ (gamma)** | Байесовская чувствительность (NAND) | Autocal через EMA(d(A,A)) + HRV nudge |
+| **T (temperature_nand)** | «Резкость» выбора в NAND | `T₀·(1−κ·NE) + T_floor` — NE обостряет |
+| **τ_in / τ_out** | Пороги distinct-зон CONFIRM/EXPLORE/CONFLICT | HRV nudge + S modulation |
+
+Нейрохимический слой (детально → [neurochem-design.md](neurochem-design.md)):
+| Скаляр | Роль | Влияние |
+|--------|------|---------|
+| **S** | Цена обновления, пластичность | `γ_eff = γ·S` — входит в Bayes |
+| **NE** | Arousal, Horizon/DMN бюджет | `T_eff`, `budget_H` |
+| **DA_tonic / phasic** | Мотивация, reward prediction | `β_eff`, intrinsic pull в DMN |
+| **burnout_idx** | Хронический конфликт | Триггер `PROTECTIVE_FREEZE` |
 
 ## Precision → параметры LLM
 
@@ -43,7 +68,7 @@ surprise ≈ target → зона потока
 
 target_surprise > 0 **всегда**. Система хочет чтобы реальность чуть не совпадала с ожиданием — иначе зачем думать.
 
-## Четыре состояния
+## Семь состояний (было 4, расширено)
 
 | Состояние | Precision | Триггер |
 |-----------|-----------|---------|
@@ -63,7 +88,13 @@ EXECUTION   → выход:  precision < 0.65 (не 0.70)
 
 Система "залипает" в текущем состоянии, пока precision не уйдёт достаточно далеко. Предотвращает колебания на границах.
 
-Планируется расширение до 7 состояний: +STABILIZE (сброс/калибровка), +SHIFT (поворот φ), +CONFLICT (несовместимые приоры). См. [hrv-design.md](hrv-design.md).
+**Расширенный набор (активен):**
+- EXPLORATION / EXECUTION / RECOVERY / INTEGRATION — базовые 4, precision-driven
+- STABILIZE — сработает при HRV coherence < 0.3 (сброс/калибровка)
+- CONFLICT — при sync_error > 0.75 (система не понимает юзера)
+- **PROTECTIVE_FREEZE** (новое, v5d) — при `burnout_idx > θ_burnout`. Блокирует
+  Bayes обновления (`apply_to_bayes` возвращает prior). Recovery гейтирован
+  `DA_tonic > θ_DA_recovery`. См. [neurochem-design.md](neurochem-design.md).
 
 ## Выбор фазы
 
@@ -104,6 +135,9 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`
 
 ## Файлы
 
-- `src/horizon.py` — CognitiveHorizon, create_horizon(), 13 presets
+- `src/horizon.py` — `CognitiveState` (alias `CognitiveHorizon`), `get_global_state()`,
+  `create_horizon()`, 14 presets. Методы: `apply_to_bayes`, `update_neurochem`,
+  `update_from_hrv`, `inject_ne`, `effective_temperature`, `horizon_budget`,
+  `get_metrics`, `to_dict`/`from_dict` с полным neurochem
 - `src/thinking.py` — tick() загружает/создаёт Horizon, вызывает select_phase(), передаёт horizon_params
 - `src/graph_routes.py` — autorun отправляет feedback через `/graph/horizon-feedback`

@@ -1181,6 +1181,167 @@ def graph_horizon_feedback():
 
 # --------------- tick() — phase-based automatic thinking ---------------
 
+@graph_bp.route("/workspace/list", methods=["GET"])
+def workspace_list():
+    """List all workspaces with active flag + node counts."""
+    from .workspace import get_workspace_manager
+    wm = get_workspace_manager()
+    return jsonify({
+        "workspaces": wm.list_workspaces(),
+        "active": wm.active_id,
+    })
+
+
+@graph_bp.route("/workspace/create", methods=["POST"])
+def workspace_create():
+    """Create a new workspace (directory + meta entry)."""
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    ws_id = (d.get("id") or "").strip().lower().replace(" ", "_")
+    title = d.get("title", ws_id)
+    tags = d.get("tags", [])
+    if not ws_id:
+        return jsonify({"error": "id required"})
+    try:
+        info = get_workspace_manager().create(ws_id, title, tags)
+        return jsonify({"ok": True, "workspace": info})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@graph_bp.route("/workspace/switch", methods=["POST"])
+def workspace_switch():
+    """Switch active workspace. Flushes current, loads target graph into _graph."""
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    ws_id = d.get("id", "").strip().lower()
+    if not ws_id:
+        return jsonify({"error": "id required"})
+    try:
+        get_workspace_manager().switch(ws_id)
+        return jsonify({"ok": True, "active": ws_id})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@graph_bp.route("/workspace/save", methods=["POST"])
+def workspace_save():
+    """Flush current _graph to active workspace's graph.json."""
+    from .workspace import get_workspace_manager
+    get_workspace_manager().save_active()
+    return jsonify({"ok": True})
+
+
+@graph_bp.route("/workspace/delete", methods=["POST"])
+def workspace_delete():
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    ws_id = d.get("id", "").strip().lower()
+    try:
+        get_workspace_manager().delete(ws_id)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@graph_bp.route("/workspace/cross-edges", methods=["GET"])
+def workspace_cross_edges():
+    from .workspace import get_workspace_manager
+    ws_filter = request.args.get("workspace")
+    return jsonify({
+        "edges": get_workspace_manager().list_cross_edges(ws_filter),
+    })
+
+
+@graph_bp.route("/workspace/find-cross", methods=["POST"])
+def workspace_find_cross():
+    """Scan other workspaces for distinct candidates. Saves matches as cross_edges."""
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    k = int(d.get("k", 5))
+    tau = float(d.get("tau_in", 0.3))
+    wm = get_workspace_manager()
+    hits = wm.find_cross_candidates(k=k, tau_in=tau)
+    saved = 0
+    for h in hits:
+        if wm.add_cross_edge(h["from_graph"], h["from_node"],
+                             h["to_graph"], h["to_node"], h["d"]):
+            saved += 1
+    return jsonify({"hits": hits, "saved": saved})
+
+
+@graph_bp.route("/workspace/meta", methods=["GET"])
+def workspace_meta():
+    """Meta-graph: derived view of graph-of-graphs."""
+    from .workspace import get_workspace_manager
+    return jsonify(get_workspace_manager().meta_graph())
+
+
+@graph_bp.route("/graph/self", methods=["GET"])
+def graph_self():
+    """Read state graph — system's history-as-graph.
+
+    Query params:
+      limit: int (default 50)
+      action: str (filter by action)
+      user_initiated: "true"/"false" (filter)
+      tail: "true" → last N instead of first N
+    """
+    from .state_graph import get_state_graph
+    sg = get_state_graph()
+    limit = int(request.args.get("limit", 50))
+    action = request.args.get("action")
+    ui_arg = request.args.get("user_initiated")
+    want_tail = request.args.get("tail", "true").lower() == "true"
+
+    def filt(entry):
+        if action and entry.get("action") != action:
+            return False
+        if ui_arg is not None:
+            want = ui_arg.lower() == "true"
+            if bool(entry.get("user_initiated")) != want:
+                return False
+        return True
+
+    entries = sg.read_all(filter_fn=filt)
+    total = len(entries)
+    if want_tail:
+        entries = entries[-limit:]
+    else:
+        entries = entries[:limit]
+
+    return jsonify({
+        "entries": entries,
+        "total": total,
+        "returned": len(entries),
+        "last_hash": sg._last_hash,
+    })
+
+
+@graph_bp.route("/graph/self/similar", methods=["POST"])
+def graph_self_similar():
+    """Episodic query: find k past state_nodes most similar to given text/state.
+
+    Body: { "query": "text to embed", "k": 5 } OR { "embedding": [...], "k": 5 }
+    """
+    from .state_graph import get_state_graph
+    from .api_backend import api_get_embedding
+    d = request.get_json(force=True) or {}
+    k = int(d.get("k", 5))
+    query_emb = d.get("embedding")
+    if not query_emb:
+        query_text = d.get("query", "").strip()
+        if not query_text:
+            return jsonify({"error": "missing query or embedding"})
+        try:
+            query_emb = api_get_embedding(query_text)
+        except Exception as e:
+            return jsonify({"error": f"embedding failed: {e}"})
+    sg = get_state_graph()
+    results = sg.query_similar(query_emb, k=k)
+    return jsonify({"results": results, "count": len(results)})
+
+
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
     """NAND emergent tick — distinct()-zone routing.

@@ -1,11 +1,15 @@
-"""Baddle Watchdog — proactive background triggers.
+"""Baddle CognitiveLoop — continuous background cognition.
 
-Runs in background thread. Triggers:
-  - Scout night: every N hours, run Pump between distant nodes
-  - DMN continuous: on each tick, 1 Pump attempt if no active task
-  - Alert generation: when conditions detected, add to alerts queue
+Formerly "Watchdog"; after v5a/v12 collapse the loop owns both:
+  - Scout/DMN (pump between distant nodes, bridge discovery)
+  - HRV alerts
+  - Continuous neurochem dynamics: NE decays, DA_phasic decays, S drifts, burnout updates
+  - NE-driven budget: low NE → DMN runs more often; high NE → DMN paused
+
+Still called `Watchdog` class for backward compat (existing /watchdog/* endpoints).
 
 Design: poll-based, non-blocking. UI polls /assist/alerts to see results.
+NE spike is injected by /assist and /graph/assist on user input.
 """
 import threading
 import time
@@ -94,15 +98,51 @@ class Watchdog:
             self._thread.join(timeout=3.0)
 
     def _loop(self):
-        """Main watchdog loop — non-blocking checks every tick_interval."""
+        """Main cognitive loop — NE-driven budget, continuous neurochem, Scout/DMN.
+
+        Each iteration:
+          1. Read global CognitiveState (NE, DA, S, burnout, HRV)
+          2. Update neurochem homeostasis (phasic DA decay, NE baseline pull)
+          3. If NE < 0.5 → DMN-tick eligible (pump between distant nodes)
+          4. If NE very low → Scout-tick eligible (long-interval pump with save)
+          5. Check HRV alerts
+          6. Sleep tick_interval (scaled by NE: high NE → quick checks, low NE → relaxed)
+        """
+        from .horizon import get_global_state, PROTECTIVE_FREEZE
         while self.is_running and not self._stop_event.is_set():
             try:
-                self._check_scout_night()
-                self._check_dmn_continuous()
+                state = get_global_state()
+
+                # 1. Continuous neurochem homeostasis (time-based decay)
+                # DA_phasic naturally decays toward 0; NE pulled toward baseline
+                state.DA_phasic *= 0.92   # ~8% decay per cognitive-loop tick
+                # NE decays toward 0.3 baseline slowly when no input
+                ne_decay = 0.05
+                state.NE = state.NE * (1 - ne_decay) + 0.3 * ne_decay
+                # Tonic DA slow drift
+                from .horizon import DA_TONIC_BASELINE
+                state.DA_tonic = state.DA_tonic * 0.998 + DA_TONIC_BASELINE * 0.002
+
+                # 2. NE-driven DMN gating
+                # High NE (user active) → skip DMN; Low NE → DMN more eager
+                if state.state != PROTECTIVE_FREEZE and state.NE < 0.55:
+                    # Under load boost DMN: shorter effective interval
+                    self._check_dmn_continuous()
+                    self._check_scout_night()
+
+                # 3. HRV alerts always checked
                 self._check_hrv_alerts()
             except Exception as e:
-                log.warning(f"[watchdog] error: {e}")
-            self._stop_event.wait(self.tick_interval)
+                log.warning(f"[cognitive_loop] error: {e}")
+
+            # Interval scales with NE: active user → shorter ticks (we're in sync),
+            # quiet → relaxed
+            try:
+                state = get_global_state()
+                scaled = self.tick_interval * max(0.5, 1.2 - state.NE)
+            except Exception:
+                scaled = self.tick_interval
+            self._stop_event.wait(scaled)
 
     # ── Scout night: Pump between distant nodes ────────────────────────
 
@@ -193,6 +233,17 @@ class Watchdog:
         if not bridges:
             return None
         best = bridges[0]
+
+        # Feed DMN result back into neurochem: good bridges → DA spike (curiosity reward)
+        try:
+            from .horizon import get_global_state
+            cs = get_global_state()
+            quality = best.get("quality", 0.0)
+            rpe = (quality - 0.5) * 0.6  # scale: q=1 → +0.3, q=0 → -0.3
+            # Approximate d as 1 - quality for state-update purposes
+            cs.update_neurochem(d=(1.0 - quality), rpe=rpe)
+        except Exception as e:
+            log.debug(f"[cognitive_loop] neurochem feedback failed: {e}")
 
         if save:
             try:

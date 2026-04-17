@@ -255,6 +255,32 @@ MODES = {
 }
 
 
+# Renderer style per mode — picks card type in execute_via_zones.
+# Один источник истины: какую карточку отдаёт режим.
+# Specials: "habit" (external state), "bayesian" (unique prior/posterior flow).
+RENDERER_STYLE = {
+    "free":       "ideas",
+    "scout":      "ideas",
+    "vector":     "ideas",
+    "horizon":    "ideas",
+    "fan":        "ideas",
+    "rhythm":     "habit",
+    "bayes":      "bayesian",
+    "tournament": "comparative",
+    "race":       "comparative",
+    "dispute":    "dialectical",
+    "builder":    "cluster",
+    "pipeline":   "cluster",
+    "cascade":    "cluster",
+    "scales":     "cluster",
+}
+
+# Splice into MODES dict so get_mode() returns it
+for _mid, _style in RENDERER_STYLE.items():
+    if _mid in MODES:
+        MODES[_mid]["renderer_style"] = _style
+
+
 # Default — free mode (manual, all tools, no autorun)
 DEFAULT_MODE = "free"
 
