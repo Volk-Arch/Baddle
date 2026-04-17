@@ -187,6 +187,7 @@ Baddle — не инструмент, а **второй мозг**, синхро
 | [convergence-divergence](docs/convergence-divergence.md) | Конвергенция/дивергенция — теоретический фундамент |
 | [life-assistant-design](docs/life-assistant-design.md) | Life Assistant — энергия, питание, задачи, HRV |
 | [origin-story](docs/origin-story.md) | Как пять проектов сошлись в одном |
+| [nand-architecture](docs/nand-architecture.md) | NAND — один примитив distinct(A,B) вместо всей логики |
 
 ---
 
