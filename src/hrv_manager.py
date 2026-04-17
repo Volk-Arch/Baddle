@@ -1,0 +1,158 @@
+"""HRV Manager — central access point for HRV data.
+
+Two modes:
+  - "simulator": synthetic RR intervals (demo, no hardware)
+  - "polar": real Polar H10 via BLE (requires bleak + bleakheart)
+
+Usage:
+    from .hrv_manager import get_manager
+    mgr = get_manager()
+    mgr.start(mode="simulator")
+    metrics = mgr.get_metrics()
+"""
+
+import threading
+import time
+import logging
+from typing import Dict, Optional, Callable
+from collections import deque
+
+from .hrv_metrics import calculate_hrv_metrics, hrv_to_baddle_state, HRVSimulator
+
+log = logging.getLogger(__name__)
+
+
+class HRVManager:
+    """Singleton HRV data manager. Thread-safe rolling buffer of RR intervals."""
+
+    def __init__(self):
+        self.mode = "off"  # off, simulator, polar
+        self.rr_buffer = deque(maxlen=240)  # ~2 min of beats at 70bpm
+        self.is_running = False
+        self._lock = threading.Lock()
+        self._simulator: Optional[HRVSimulator] = None
+        self._sim_thread: Optional[threading.Thread] = None
+        self._polar_reader = None
+        self._last_metrics: Dict = {}
+        self._baseline: Optional[Dict] = None  # calibration
+        self._listeners: list[Callable] = []
+
+    # ── Lifecycle ──────────────────────────────────────────────────────
+
+    def start(self, mode: str = "simulator", **kwargs) -> bool:
+        """Start HRV monitoring.
+
+        mode='simulator': synthetic data
+        mode='polar': real Polar H10 via BLE
+        """
+        if self.is_running:
+            self.stop()
+
+        self.mode = mode
+        self.is_running = True
+
+        if mode == "simulator":
+            return self._start_simulator(**kwargs)
+        elif mode == "polar":
+            return self._start_polar(**kwargs)
+        else:
+            log.warning(f"Unknown mode: {mode}")
+            self.is_running = False
+            return False
+
+    def stop(self):
+        self.is_running = False
+        if self._sim_thread:
+            self._sim_thread.join(timeout=2.0)
+            self._sim_thread = None
+        # Polar cleanup happens in its own thread
+        self.mode = "off"
+
+    def _start_simulator(self, target_hr: float = 70.0, target_coherence: float = 0.7, **_):
+        self._simulator = HRVSimulator(base_hr=target_hr, target_coherence=target_coherence)
+
+        def run():
+            while self.is_running:
+                rr = self._simulator.tick()
+                with self._lock:
+                    self.rr_buffer.append(rr)
+                # Wait approximately one beat
+                time.sleep(rr / 1000.0)
+
+        self._sim_thread = threading.Thread(target=run, daemon=True, name="hrv-simulator")
+        self._sim_thread.start()
+        log.info(f"[hrv] simulator started: hr={target_hr} coh={target_coherence}")
+        return True
+
+    def _start_polar(self, **kwargs):
+        # Polar support stubbed for now — would import bleak + bleakheart here
+        # For this implementation we focus on simulator; real Polar requires async BLE
+        log.warning("[hrv] polar mode not yet implemented — falling back to simulator")
+        return self._start_simulator(**kwargs)
+
+    # ── Simulator control ──────────────────────────────────────────────
+
+    def set_simulator_state(self, target_hr: float = None, target_coherence: float = None):
+        """Adjust simulator parameters at runtime (for demo sliders)."""
+        if self._simulator is not None:
+            self._simulator.set_state(target_hr=target_hr, target_coherence=target_coherence)
+
+    # ── Data access ────────────────────────────────────────────────────
+
+    def get_rr_intervals(self) -> list:
+        with self._lock:
+            return list(self.rr_buffer)
+
+    def get_metrics(self) -> Dict:
+        """Compute HRV metrics from current buffer."""
+        rr = self.get_rr_intervals()
+        if len(rr) < 2:
+            return {}
+        metrics = calculate_hrv_metrics(rr)
+        self._last_metrics = metrics
+        return metrics
+
+    def get_baddle_state(self) -> Dict:
+        """HRV normalized for Baddle Horizon integration."""
+        return hrv_to_baddle_state(self.get_metrics())
+
+    def get_status(self) -> Dict:
+        return {
+            "mode": self.mode,
+            "running": self.is_running,
+            "buffer_size": len(self.rr_buffer),
+            "has_baseline": self._baseline is not None,
+            "last_metrics": self._last_metrics,
+        }
+
+    # ── Calibration ────────────────────────────────────────────────────
+
+    def calibrate(self) -> Dict:
+        """Save current metrics as baseline."""
+        metrics = self.get_metrics()
+        if not metrics:
+            return {}
+        self._baseline = {
+            "rmssd": metrics.get("rmssd"),
+            "coherence": metrics.get("coherence"),
+            "heart_rate": metrics.get("heart_rate"),
+            "lf_hf_ratio": metrics.get("lf_hf_ratio"),
+            "timestamp": time.time(),
+        }
+        log.info(f"[hrv] calibrated: {self._baseline}")
+        return self._baseline
+
+    def get_baseline(self) -> Optional[Dict]:
+        return self._baseline
+
+
+# ── Global singleton ────────────────────────────────────────────────────
+
+_manager: Optional[HRVManager] = None
+
+
+def get_manager() -> HRVManager:
+    global _manager
+    if _manager is None:
+        _manager = HRVManager()
+    return _manager

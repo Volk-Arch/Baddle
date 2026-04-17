@@ -19,11 +19,17 @@ except ImportError:
 
 from src.graph_routes import graph_bp
 from src.chat import chat_bp
+from src.assistant import assistant_bp
 from src.api_backend import get_settings, update_settings, fetch_models
+from src.watchdog import get_watchdog
 
 app = Flask(__name__)
 app.register_blueprint(graph_bp)
 app.register_blueprint(chat_bp)
+app.register_blueprint(assistant_bp)
+
+# Start background watchdog (Scout, DMN, HRV alerts)
+get_watchdog().start()
 
 
 # ── Roles / Templates ────────────────────────────────────────────────────────

@@ -31,6 +31,11 @@ EXECUTION = "execution"
 RECOVERY = "recovery"
 INTEGRATION = "integration"
 
+# Extended states (used when HRV is connected)
+STABILIZE = "stabilize"  # coherence < 0.3, calibration / noise reset
+SHIFT = "shift"          # context switch, φ change detected
+CONFLICT = "conflict"    # incompatible priors, merge fail
+
 
 # ── CognitiveHorizon ────────────────────────────────────────────────────────
 
@@ -54,6 +59,25 @@ class CognitiveHorizon:
         self._history = []  # last N surprises for state detection
         self._pending_state = None  # debounce: target state waiting confirmation
         self._pending_count = 0     # debounce: consecutive ticks wanting same state
+
+        # NAND-architecture additions
+        self.gamma = 2.0            # Bayesian sensitivity (auto-calibrated)
+        self.gamma_0 = 2.0          # baseline
+        self.temperature_nand = 0.1  # NAND temperature (separate from LLM temp)
+        self.temperature_nand_0 = 0.1  # baseline T₀
+        self._d_self_history = []   # EMA basis for γ calibration
+        self.sync_error = 0.0       # how bad system predicts user (0=perfect, 1=lost)
+        self._prev_policy_weights = None  # snapshot for KL(W_t ‖ W_{t-1})
+        self.kl_divergence = 0.0    # latest KL, diagnostic metric
+
+        # HRV state (set by update_from_hrv)
+        self.hrv_coherence = None   # 0-1, None if no sensor
+        self.hrv_stress = None      # 0-1, from 1/RMSSD
+        self.hrv_rmssd = None       # ms
+
+        # Body-computed thresholds (defaults, overridden by HRV)
+        self.tau_in = 0.3
+        self.tau_out = 0.7
 
     # ── LLM params ──────────────────────────────────────────────────────────
 
@@ -95,6 +119,109 @@ class CognitiveHorizon:
 
         return best_phase
 
+    # ── NAND-architecture: γ autocalibration, sync_error ───────────────────
+
+    def update_gamma(self, d_self_value: float = None):
+        """Auto-calibrate γ based on self-distance (stability) history.
+
+        γ ← clip(γ₀ / (ε + EMA(d(A,A))), γ_min, γ_max)
+
+        Stable system → γ↑ (strict filtering)
+        Unstable system → γ↓ (more cautious)
+        """
+        if d_self_value is not None:
+            self._d_self_history.append(d_self_value)
+            if len(self._d_self_history) > 10:
+                self._d_self_history.pop(0)
+        if not self._d_self_history:
+            return
+        ema = sum(self._d_self_history) / len(self._d_self_history)
+        new_gamma = self.gamma_0 / (1e-6 + ema)
+        self.gamma = max(0.1, min(10.0, new_gamma))
+
+    def update_temperature(self, alpha: float = 0.5):
+        """Adapt T based on KL divergence between current and previous policy weights.
+
+        T ← T₀ · (1 + α · KL(W_t ‖ W_{t-1}))
+
+        Large belief shift (high KL) → T↑ → softer, more exploratory choices
+        Stable beliefs (low KL) → T↓ → sharper, more decisive choices
+
+        Called automatically after policy update. Diagnostic metric — not applied
+        to LLM temperature (which is driven by precision via to_llm_params()).
+
+        See docs/nand-architecture.md
+        """
+        if self._prev_policy_weights is None:
+            # First tick — snapshot and skip
+            self._prev_policy_weights = dict(self.policy_weights)
+            self.kl_divergence = 0.0
+            return
+
+        # KL(current ‖ previous) = Σ p_i · log(p_i / q_i)
+        # Clamp weights to avoid log(0)
+        kl = 0.0
+        for phase, p in self.policy_weights.items():
+            p = max(1e-6, p)
+            q = max(1e-6, self._prev_policy_weights.get(phase, 1e-6))
+            kl += p * math.log(p / q)
+        kl = max(0.0, kl)  # numerical floor
+
+        self.kl_divergence = round(kl, 4)
+        new_t = self.temperature_nand_0 * (1 + alpha * kl)
+        self.temperature_nand = max(0.05, min(2.0, new_t))
+
+        # Snapshot current as previous for next tick
+        self._prev_policy_weights = dict(self.policy_weights)
+
+    def update_sync_error(self, distance: float):
+        """Update sync_error — how well system predicts user.
+
+        distance: d(predicted_response, actual_response) in [0,1]
+        Low → system understands user. High → desync, needs clarification.
+        """
+        self.sync_error = max(0.0, min(1.0, distance))
+
+    def update_from_hrv(self, coherence: float = None, rmssd: float = None,
+                         stress: float = None, lf_hf: float = None):
+        """Map HRV metrics to γ, τ, α.
+
+        γ = γ₀ + η · (Stress - Coherence)       — stress → stricter, calm → gentler
+        τ_in  = τ₀ · (1 + k₁·Stress)             — stress → wider net
+        τ_out = τ₀ · (1 - k₂·Coherence)           — coherence → narrower horizon
+        α    = α₀ · Coherence                     — coherence → smoother learning
+
+        See docs/hrv-design.md, docs/nand-architecture.md
+        """
+        if coherence is not None:
+            self.hrv_coherence = max(0.0, min(1.0, coherence))
+        if rmssd is not None:
+            self.hrv_rmssd = rmssd
+            # Infer stress from RMSSD: lower RMSSD = higher stress
+            self.hrv_stress = max(0.0, min(1.0, 1.0 - (rmssd / 80.0)))
+        if stress is not None:
+            self.hrv_stress = max(0.0, min(1.0, stress))
+
+        # Apply if we have both metrics
+        if self.hrv_stress is not None and self.hrv_coherence is not None:
+            eta = 2.0
+            self.gamma = max(0.1, min(10.0,
+                self.gamma_0 + eta * (self.hrv_stress - self.hrv_coherence)
+            ))
+            self.tau_in = max(0.1, min(0.5,
+                0.3 * (1 + 0.5 * self.hrv_stress)
+            ))
+            self.tau_out = max(0.5, min(0.9,
+                0.7 * (1 - 0.2 * self.hrv_coherence)
+            ))
+            self.alpha = max(0.01, min(0.5,
+                0.1 * (0.5 + self.hrv_coherence)
+            ))
+
+            # Coherence also nudges precision: high coherence → steadier focus
+            delta = (self.hrv_coherence - 0.5) * 0.1
+            self.precision = max(0.05, min(0.95, self.precision + delta))
+
     # ── Update (feedback loop) ──────────────────────────────────────────────
 
     def update(self, surprise: float = None, gradient: float = None,
@@ -125,6 +252,8 @@ class CognitiveHorizon:
             total = sum(self.policy_weights.values())
             for k in self.policy_weights:
                 self.policy_weights[k] = round(self.policy_weights[k] / total, 3)
+            # 2b. Adapt T based on belief shift (KL divergence)
+            self.update_temperature()
 
         # 3. State transition
         self._update_state(novelty)
@@ -175,7 +304,20 @@ class CognitiveHorizon:
             self._pending_count = 0
 
     def _target_state(self, p: float, novelty: float = None) -> str:
-        """Determine target state using hysteresis thresholds."""
+        """Determine target state using hysteresis thresholds.
+
+        With HRV: extended state machine (7 states).
+        Without HRV: original 4 states (EXPLORATION/EXECUTION/RECOVERY/INTEGRATION).
+        """
+        # HRV-driven states (if HRV sensor connected)
+        if self.hrv_coherence is not None:
+            # Very low coherence → STABILIZE (reset/calibrate)
+            if self.hrv_coherence < 0.3:
+                return STABILIZE
+            # Sync error growing → CONFLICT (system doesn't understand user)
+            if self.sync_error > 0.75:
+                return CONFLICT
+
         # Exit thresholds (harder to leave current state)
         if self.state == EXPLORATION and p < 0.45:
             return EXPLORATION
@@ -185,6 +327,10 @@ class CognitiveHorizon:
             return RECOVERY
         if self.state == INTEGRATION and 0.45 < p < 0.65:
             return INTEGRATION
+        if self.state == STABILIZE and self.hrv_coherence is not None and self.hrv_coherence < 0.5:
+            return STABILIZE
+        if self.state == CONFLICT and self.sync_error > 0.5:
+            return CONFLICT
 
         # Entry thresholds (need clear signal to enter)
         if p < 0.4:
@@ -213,6 +359,17 @@ class CognitiveHorizon:
             "focus_entropy": round(entropy, 3),
             "policy": {k: round(v, 3) for k, v in weights.items()},
             "params": self.to_llm_params(),
+            "gamma": round(self.gamma, 3),
+            "temperature_nand": round(self.temperature_nand, 3),
+            "kl_divergence": round(self.kl_divergence, 4),
+            "sync_error": round(self.sync_error, 3),
+            "tau_in": round(self.tau_in, 3),
+            "tau_out": round(self.tau_out, 3),
+            "hrv": {
+                "coherence": self.hrv_coherence,
+                "rmssd": self.hrv_rmssd,
+                "stress": self.hrv_stress,
+            } if self.hrv_coherence is not None else None,
         }
 
     # ── Serialization ───────────────────────────────────────────────────────
@@ -227,6 +384,18 @@ class CognitiveHorizon:
             "beta": self.beta,
             "state": self.state,
             "_history": list(self._history),
+            "gamma": self.gamma,
+            "gamma_0": self.gamma_0,
+            "temperature_nand": self.temperature_nand,
+            "temperature_nand_0": self.temperature_nand_0,
+            "kl_divergence": self.kl_divergence,
+            "_prev_policy_weights": dict(self._prev_policy_weights) if self._prev_policy_weights else None,
+            "sync_error": self.sync_error,
+            "tau_in": self.tau_in,
+            "tau_out": self.tau_out,
+            "hrv_coherence": self.hrv_coherence,
+            "hrv_stress": self.hrv_stress,
+            "hrv_rmssd": self.hrv_rmssd,
         }
 
     @classmethod
@@ -241,6 +410,18 @@ class CognitiveHorizon:
         )
         h.state = d.get("state", EXPLORATION)
         h._history = d.get("_history", [])
+        h.gamma = d.get("gamma", 2.0)
+        h.gamma_0 = d.get("gamma_0", 2.0)
+        h.temperature_nand = d.get("temperature_nand", 0.1)
+        h.temperature_nand_0 = d.get("temperature_nand_0", 0.1)
+        h.kl_divergence = d.get("kl_divergence", 0.0)
+        h._prev_policy_weights = d.get("_prev_policy_weights")
+        h.sync_error = d.get("sync_error", 0.0)
+        h.tau_in = d.get("tau_in", 0.3)
+        h.tau_out = d.get("tau_out", 0.7)
+        h.hrv_coherence = d.get("hrv_coherence")
+        h.hrv_stress = d.get("hrv_stress")
+        h.hrv_rmssd = d.get("hrv_rmssd")
         return h
 
 

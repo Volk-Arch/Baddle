@@ -96,12 +96,81 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
     return ("supports", 0.7)
 
 
-def _bayesian_update(prior: float, p_e_h: float, p_e_nh: float) -> float:
-    """Compute Bayesian posterior: P(H|E) = P(E|H)*P(H) / P(E)."""
-    p_e = p_e_h * prior + p_e_nh * (1 - prior)
-    if p_e > 0:
-        return round(min(0.99, max(0.01, (p_e_h * prior) / p_e)), 3)
-    return prior
+def _bayesian_update_distinct(prior: float, d: float, gamma: float = 2.0) -> float:
+    """NAND Bayesian update in log-odds via distinct distance.
+
+    d ∈ [0,1]: dissimilarity between evidence (E) and hypothesis (H).
+      d=0   (perfect match)   → +γ boost
+      d=0.5 (neutral)         → no update
+      d=1   (orthogonal/neg)  → −γ reduction
+
+    logit(post) = logit(prior) + γ · (1 − 2d)
+
+    Replaces classic Bayes P(H|E)=P(E|H)P(H)/P(E) — same effect via log-odds,
+    no need for p_e_h / p_e_nh bookkeeping. See docs/nand-architecture.md
+    """
+    import math
+    prior = max(0.01, min(0.99, prior))
+    log_prior = math.log(prior / (1 - prior))
+    signed = gamma * (1 - 2 * d)
+    log_posterior = log_prior + signed
+    posterior = 1 / (1 + math.exp(-log_posterior))
+    return round(max(0.01, min(0.99, posterior)), 3)
+
+
+def _d_from_relation(relation: str, strength: float) -> float:
+    """Map (relation, strength) → distinct distance d.
+
+    supports,   strength s → d = 1 − s  (high s = low d = close to H)
+    contradicts,strength s → d = s      (high s = high d = far from H)
+    neutral,    any        → d = 0.5    (no update)
+    """
+    s = max(0.0, min(1.0, float(strength)))
+    if relation == "supports":
+        return 1.0 - s
+    if relation == "contradicts":
+        return s
+    return 0.5
+
+
+def _beta_prior_update(alpha: float, beta: float, supports: bool, strength: float = 1.0) -> tuple:
+    """Beta distribution prior update.
+
+    Prior: Beta(alpha, beta) → mean = alpha/(alpha+beta), confidence ~ alpha+beta
+    Observation: supports (True/False) with strength in [0,1]
+    Returns: (new_alpha, new_beta)
+
+    Gives both probability AND confidence in that probability.
+    See docs/nand-architecture.md
+    """
+    alpha = max(0.5, float(alpha))
+    beta = max(0.5, float(beta))
+    if supports:
+        alpha += strength
+    else:
+        beta += strength
+    return (round(alpha, 2), round(beta, 2))
+
+
+def _beta_mean_ci(alpha: float, beta: float) -> dict:
+    """Extract mean and 95% credible interval from Beta(alpha, beta)."""
+    import math
+    alpha = max(0.5, float(alpha))
+    beta = max(0.5, float(beta))
+    total = alpha + beta
+    mean = alpha / total if total > 0 else 0.5
+    # Approximation for variance/std
+    var = (alpha * beta) / ((total ** 2) * (total + 1)) if total > 1 else 0.25
+    std = math.sqrt(var)
+    ci_lower = max(0.0, mean - 1.96 * std)
+    ci_upper = min(1.0, mean + 1.96 * std)
+    return {
+        "mean": round(mean, 3),
+        "std": round(std, 3),
+        "ci_lower": round(ci_lower, 3),
+        "ci_upper": round(ci_upper, 3),
+        "confidence_strength": round(total, 2),  # higher = more certain
+    }
 
 
 # ── node helpers ─────────────────────────────────────────────────────────────

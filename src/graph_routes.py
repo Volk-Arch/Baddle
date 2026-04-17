@@ -9,15 +9,17 @@ import numpy as np
 from flask import Blueprint, request, jsonify
 
 from .prompts import _p
-from .main import cosine_similarity
+from .main import cosine_similarity, distinct, distinct_decision
 from .graph_logic import (
     _graph, graph_lock, reset_graph,
-    _auto_type_and_confidence, _auto_evidence_relation, _bayesian_update,
+    _auto_type_and_confidence, _auto_evidence_relation,
+    _bayesian_update_distinct, _d_from_relation,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
     _graph_generate, _clean_thought, _generate_thought,
     _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
     _detect_traps, _compute_alpha_beta,
 )
+from .hrv_manager import get_manager as get_hrv_manager
 
 graph_bp = Blueprint("graph", __name__)
 
@@ -246,14 +248,11 @@ def graph_add():
     manual_links = _graph["edges"]["manual_links"]
 
     if node_type == "goal":
-        # Store mode config on goal node and graph meta
+        # Store only mode_id — Horizon preset handles behavior (no primitive switches)
         from .modes import get_mode
         mode_id = d.get("mode", "horizon")
         mode_cfg = get_mode(mode_id)
         nodes[new_idx]["mode"] = mode_id
-        nodes[new_idx]["primitive"] = mode_cfg.get("primitive")
-        nodes[new_idx]["strategy"] = mode_cfg.get("strategy")
-        nodes[new_idx]["goal_type"] = mode_cfg.get("goal_type")
         _graph["meta"]["mode"] = mode_id
 
         # Parse subgoals from multiline text for multi-goal modes
@@ -598,10 +597,9 @@ def graph_expand():
             from .api_backend import _settings
             if _settings.get("live_bayes"):
                 old_conf = nodes[idx]["confidence"]
-                p_e_h = strength if rel == "supports" else (1 - strength)
-                p_e_nh = (1 - strength) if rel == "supports" else strength
-                nodes[idx]["confidence"] = _bayesian_update(old_conf, p_e_h, p_e_nh)
-                print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
+                d_val = _d_from_relation(rel, strength)
+                nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
 
@@ -689,10 +687,9 @@ def graph_elaborate():
             from .api_backend import _settings as _s2
             if _s2.get("live_bayes"):
                 old_conf = nodes[idx]["confidence"]
-                p_e_h = strength if rel == "supports" else (1 - strength)
-                p_e_nh = (1 - strength) if rel == "supports" else strength
-                nodes[idx]["confidence"] = _bayesian_update(old_conf, p_e_h, p_e_nh)
-                print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
+                d_val = _d_from_relation(rel, strength)
+                nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
 
@@ -846,32 +843,32 @@ def graph_smartdc():
             f"Найденный мост: {pump_context.get('bridge', '')}"
         )
 
-    # Phase 1: Divergence — generate 3 poles
+    # Phase 1: Divergence — generate 3 poles (shared with execute_dispute)
+    from .dialectic import generate_poles, synthesize
     context_block = ""
     if evidence_context:
         context_block = "\n\nExisting evidence:\n" + "\n".join(evidence_context[:5])
 
-    poles = []
-    for role_key in ["dc_thesis", "dc_antithesis", "dc_neutral"]:
-        messages = [
-            {"role": "system", "content": _p(d["lang"], role_key)},
-            {"role": "user", "content": f"{_p(d['lang'], 'dc_statement')}: {statement}{context_block}"},
-        ]
-        text, ent = _graph_generate(messages, max_tokens=200, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-        print(f"[smartdc] {role_key}: {text[:80]}...")
-        poles.append({"role": role_key, "text": text, "entropy": ent})
-
-    # Phase 2: Convergence — synthesize from 3 poles (BEFORE embeddings to keep KV cache clean)
-    synthesis_messages = [
-        {"role": "system", "content": _p(d["lang"], "dc_synthesis")},
-        {"role": "user", "content":
-            f"{_p(d['lang'], 'dc_statement')}: {statement}\n\n"
-            f"{_p(d['lang'], 'dc_for')}:\n{poles[0]['text']}\n\n"
-            f"{_p(d['lang'], 'dc_against')}:\n{poles[1]['text']}\n\n"
-            f"{_p(d['lang'], 'dc_context')}:\n{poles[2]['text']}"
-        },
+    poles_dict = generate_poles(
+        statement, lang=d["lang"], temp=d["temp"], top_k=d["top_k"],
+        seed=d["seed"], pole_tokens=200, context_block=context_block,
+        return_entropy=True,
+    )
+    poles = [
+        {"role": "dc_thesis", "text": poles_dict["thesis"]["text"], "entropy": poles_dict["thesis"]["entropy"]},
+        {"role": "dc_antithesis", "text": poles_dict["antithesis"]["text"], "entropy": poles_dict["antithesis"]["entropy"]},
+        {"role": "dc_neutral", "text": poles_dict["neutral"]["text"], "entropy": poles_dict["neutral"]["entropy"]},
     ]
-    synthesis_text, synthesis_ent = _graph_generate(synthesis_messages, max_tokens=300, temp=0.7, top_k=d["top_k"], seed=d["seed"])
+    for p in poles:
+        print(f"[smartdc] {p['role']}: {p['text'][:80]}...")
+
+    # Phase 2: Convergence — synthesize (not concise — full tokens for essay-grade output)
+    synthesis_text, synthesis_ent = synthesize(
+        statement,
+        poles[0]["text"], poles[1]["text"], poles[2]["text"],
+        lang=d["lang"], temp=0.7, top_k=d["top_k"], max_tokens=300,
+        concise=False, seed=d["seed"], return_entropy=True,
+    )
     print(f"[smartdc] synthesis: {synthesis_text[:80]}...")
 
     # Phase 3: Get embeddings for centroid confidence
@@ -1186,8 +1183,12 @@ def graph_horizon_feedback():
 
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
-    """Phase-based automatic thinking: EXPLORE → DEEPEN → VERIFY → META → SYNTHESIZE."""
-    from .thinking import tick
+    """NAND emergent tick — distinct()-zone routing.
+
+    Single tick engine (v8d). Mode config only tunes Horizon presets
+    (τ_in/τ_out/γ/policy), logic is mode-agnostic — it emerges from distinct zones.
+    """
+    from .tick_nand import tick_emergent
 
     d = _p_data()
     stable_threshold = float(d.get("stable_threshold", 0.8))
@@ -1198,10 +1199,10 @@ def graph_tick():
     nodes = _graph["nodes"]
     edges = _compute_edges(nodes, d["threshold"], d["sim_mode"])
 
-    result = tick(nodes, edges, _graph,
-                  threshold=d["threshold"], stable_threshold=stable_threshold,
-                  force_collapse=force_collapse,
-                  max_meta=max_meta, min_hyp=min_hyp)
+    result = tick_emergent(nodes, edges, _graph,
+                           threshold=d["threshold"], stable_threshold=stable_threshold,
+                           force_collapse=force_collapse,
+                           max_meta=max_meta, min_hyp=min_hyp)
     return jsonify(result)
 
 
@@ -1241,15 +1242,9 @@ def graph_add_evidence():
         hyp["type"] = "hypothesis"
     prior = hyp["confidence"]
 
-    # Bayesian update: P(H|E) = P(E|H) * P(H) / P(E)
-    if relation == "supports":
-        p_e_h = strength       # likely to see this evidence if H true
-        p_e_nh = 1 - strength  # unlikely if H false
-    else:
-        p_e_h = 1 - strength   # unlikely to see this evidence if H true
-        p_e_nh = strength      # likely if H false
-
-    posterior = _bayesian_update(prior, p_e_h, p_e_nh)
+    # NAND Bayesian update via distinct distance (d derived from relation+strength)
+    d_val = _d_from_relation(relation, strength)
+    posterior = _bayesian_update_distinct(prior, d_val)
 
     # Update hypothesis confidence
     old_conf = hyp["confidence"]
@@ -1498,3 +1493,76 @@ def graph_delete():
         path.unlink()
         return jsonify({"ok": True})
     return jsonify({"error": f"graph '{name}' not found"})
+
+
+# ═══ HRV integration ═══════════════════════════════════════════════════════
+
+@graph_bp.route("/hrv/start", methods=["POST"])
+def hrv_start():
+    """Start HRV monitoring. mode: simulator (default) or polar."""
+    d = request.get_json(force=True) if request.is_json else {}
+    mode = d.get("mode", "simulator")
+    kwargs = {}
+    if "target_hr" in d:
+        kwargs["target_hr"] = float(d["target_hr"])
+    if "target_coherence" in d:
+        kwargs["target_coherence"] = float(d["target_coherence"])
+    mgr = get_hrv_manager()
+    ok = mgr.start(mode=mode, **kwargs)
+    return jsonify({"ok": ok, "status": mgr.get_status()})
+
+
+@graph_bp.route("/hrv/stop", methods=["POST"])
+def hrv_stop():
+    mgr = get_hrv_manager()
+    mgr.stop()
+    return jsonify({"ok": True})
+
+
+@graph_bp.route("/hrv/status", methods=["GET"])
+def hrv_status():
+    mgr = get_hrv_manager()
+    return jsonify(mgr.get_status())
+
+
+@graph_bp.route("/hrv/metrics", methods=["GET"])
+def hrv_metrics():
+    mgr = get_hrv_manager()
+    metrics = mgr.get_metrics()
+    state = mgr.get_baddle_state()
+
+    # Push to Horizon if graph has one
+    horizon_data = _graph.get("_horizon")
+    if horizon_data:
+        from .horizon import CognitiveHorizon
+        horizon = CognitiveHorizon.from_dict(horizon_data)
+        horizon.update_from_hrv(
+            coherence=state.get("coherence"),
+            rmssd=state.get("rmssd"),
+            stress=state.get("stress"),
+        )
+        _graph["_horizon"] = horizon.to_dict()
+
+    return jsonify({
+        "metrics": metrics,
+        "baddle_state": state,
+    })
+
+
+@graph_bp.route("/hrv/calibrate", methods=["POST"])
+def hrv_calibrate():
+    mgr = get_hrv_manager()
+    baseline = mgr.calibrate()
+    return jsonify({"ok": bool(baseline), "baseline": baseline})
+
+
+@graph_bp.route("/hrv/simulate", methods=["POST"])
+def hrv_simulate():
+    """Adjust simulator params at runtime (for demo)."""
+    d = request.get_json(force=True)
+    mgr = get_hrv_manager()
+    mgr.set_simulator_state(
+        target_hr=d.get("hr"),
+        target_coherence=d.get("coherence"),
+    )
+    return jsonify({"ok": True, "status": mgr.get_status()})

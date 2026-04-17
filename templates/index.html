@@ -95,8 +95,10 @@
 
   <!-- Mode tabs + Load + Lang -->
   <div class="tab-bar flex items-center" style="margin:0 -12px;padding:0 12px;">
+    <button id="tab-assist"  onclick="setMode('assist')"
+      class="tab-active px-4 py-2 text-sm">baddle</button>
     <button id="tab-graph"   onclick="setMode('graph')"
-      class="tab-active px-4 py-2 text-sm">graph</button>
+      class="tab-inactive px-4 py-2 text-sm">graph</button>
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
     <span style="flex:1"></span>
@@ -111,8 +113,62 @@
     </select>
   </div>
 
-  <!-- ══ GRAPH mode ══ (first, visible by default) -->
-  <div id="cfg-graph">
+  <!-- ══ ASSISTANT mode ══ (default, mockup-styled) -->
+  <div id="cfg-assist" class="assist-root">
+    <!-- Header: Baddle brand + HRV status + Energy meter -->
+    <div class="assist-header">
+      <div class="assist-brand">
+        <div class="assist-logo">B</div>
+        <div>
+          <div class="assist-brand-name">Baddle</div>
+          <div id="assist-hrv-status" class="assist-brand-status">HRV off</div>
+        </div>
+      </div>
+
+      <div class="assist-hrv-chart" id="assist-hrv-chart" aria-hidden="true">
+        <!-- bars injected by JS when HRV running -->
+      </div>
+
+      <div class="assist-energy">
+        <div class="assist-energy-values">
+          <span id="assist-energy-value" class="assist-energy-big">100</span>
+          <span id="assist-energy-max" class="assist-energy-max">/100</span>
+        </div>
+        <div class="assist-energy-bar-bg">
+          <div id="assist-energy-bar" class="assist-energy-bar"></div>
+        </div>
+        <div class="assist-energy-label">daily energy</div>
+      </div>
+
+      <button onclick="assistHRVStart('simulator')" class="assist-hrv-btn">Start HRV</button>
+    </div>
+
+    <!-- HRV simulator controls (collapsible) -->
+    <details id="assist-sim-panel" class="assist-sim-panel">
+      <summary>⚙ HRV simulator</summary>
+      <div class="assist-sim-controls">
+        <label>HR <input id="sim-hr" type="range" min="50" max="120" value="70" oninput="assistHRVSimSliders()"></label>
+        <label>Coherence <input id="sim-coherence" type="range" min="0" max="1" step="0.05" value="0.7" oninput="assistHRVSimSliders()"></label>
+        <button onclick="assistHRVStart('simulator')">Restart</button>
+      </div>
+    </details>
+
+    <!-- Messages area -->
+    <div id="assist-messages" class="assist-messages">
+      <div class="assist-empty">Baddle готов. Напиши что угодно — цель, вопрос, гипотезу.</div>
+    </div>
+
+    <!-- Input -->
+    <div class="assist-input-row">
+      <textarea id="assist-input" placeholder="Спроси или поставь задачу..." rows="1"></textarea>
+      <button id="assist-ask-btn" onclick="assistAsk()" aria-label="Ask clarifying question" title="Спроси у системы уточняющий вопрос">?</button>
+      <button id="assist-decompose-btn" onclick="assistDecomposeUI()" aria-label="Decompose goal" title="Разложить цель на подзадачи">↯</button>
+      <button id="assist-send-btn" onclick="assistSend()" aria-label="Send">→</button>
+    </div>
+  </div>
+
+  <!-- ══ GRAPH mode ══ (advanced view) -->
+  <div id="cfg-graph" class="hidden" style="display:none">
     <!-- Mode + Topic + Add (BEFORE actions bar) -->
     <div class="card p-2 mb-1">
       <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
@@ -420,6 +476,7 @@
 <script src="/static/js/settings.js"></script>
 <script src="/static/js/chat.js"></script>
 <script src="/static/js/graph.js"></script>
+<script src="/static/js/assistant.js"></script>
 
 <!-- Generation Studio Modal -->
 <div id="studio-modal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.3);align-items:center;justify-content:center">

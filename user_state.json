@@ -1,0 +1,77 @@
+{
+  "decisions_today": 15,
+  "last_reset_date": "2026-04-17",
+  "last_interaction": 1776434538.1068938,
+  "total_decisions": 15,
+  "streaks": {},
+  "history": [
+    {
+      "ts": 1776428618.0063941,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776428785.8893738,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776428829.3126178,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776429321.4622855,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776430339.6301725,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776430629.414539,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776430657.600493,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776430710.8977823,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776430714.4802852,
+      "kind": "assist",
+      "mode": "rhythm",
+      "message": "Зарядка каждый день"
+    },
+    {
+      "ts": 1776430718.1640842,
+      "kind": "assist",
+      "mode": "tournament",
+      "message": "BMW или Tesla или Toyota"
+    },
+    {
+      "ts": 1776430730.5048175,
+      "kind": "assist",
+      "mode": "dispute",
+      "message": "Стоит ли программистам изучать Rust"
+    },
+    {
+      "ts": 1776432334.7328012,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776432723.6956205,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776432738.2068326,
+      "kind": "assist",
+      "mode": "tournament",
+      "message": "Tesla или BMW?"
+    },
+    {
+      "ts": 1776434538.1068938,
+      "kind": "morning_briefing"
+    }
+  ]
+}

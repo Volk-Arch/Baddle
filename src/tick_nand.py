@@ -1,0 +1,299 @@
+"""NAND emergent tick — logic emerges from distinct() zones, not primitives.
+
+v8 architecture: instead of switch(primitive) → hardcoded logic,
+compute distinct() between pairs, let zones decide actions:
+
+  d < tau_in             → CONFIRM  → merge similar (zone AND)
+  tau_in < d < tau_out   → EXPLORE  → elaborate / pump (zone XOR)
+  d > tau_out            → CONFLICT → doubt / branch / compare (zone NOR)
+
+No primitive switch. Same algorithm for all 14 modes — only thresholds differ.
+Stop condition: distinct(goal, best_verified) < τ_in, or subgoal-cluster
+convergence decided emergently by avg_d between subgoals.
+
+This is the single tick engine — exported as both `tick` and `tick_emergent`.
+"""
+import logging
+from typing import Optional
+
+from .thinking import classify_nodes, _find_similar_group, _pick_target, _pick_distant_pair, _tick_force_collapse
+from .main import distinct, distinct_decision
+
+log = logging.getLogger(__name__)
+
+
+def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
+                  force_collapse=False, max_meta=2, min_hyp=5, **kwargs):
+    """Emergent tick — action determined by distinct() zones, not primitives.
+
+    Uses Horizon thresholds tau_in/tau_out to classify pair distances into
+    CONFIRM/EXPLORE/CONFLICT zones, and routes to collapse/pump/smartdc/compare
+    accordingly.
+    """
+    if not nodes:
+        return {"action": "none", "reason": "Graph is empty.", "phase": "none"}
+
+    cl = classify_nodes(nodes, edges, graph, stable_threshold)
+    if not cl["active_nodes"]:
+        return {"action": "none", "reason": "No active nodes.", "phase": "none"}
+
+    goal_idx = cl["goal_idx"]
+    goal_text = cl["goal_text"]
+    goal_node = nodes[goal_idx] if goal_idx is not None else None
+
+    # Read mode from goal for Horizon preset (thresholds still matter)
+    mode_id = "horizon"
+    if goal_node is not None:
+        mode_id = goal_node.get("mode", "horizon")
+
+    # Load/create Horizon
+    from .horizon import CognitiveHorizon, create_horizon
+    horizon_data = graph.get("_horizon")
+    if horizon_data:
+        horizon = CognitiveHorizon.from_dict(horizon_data)
+    else:
+        horizon = create_horizon(mode_id)
+
+    # Feedback from previous step
+    last_feedback = graph.pop("_horizon_feedback", None)
+    if last_feedback:
+        horizon.update(
+            surprise=last_feedback.get("surprise"),
+            gradient=last_feedback.get("gradient"),
+            novelty=last_feedback.get("novelty"),
+            phase=last_feedback.get("phase"),
+        )
+
+    horizon_params = horizon.to_llm_params()
+    tau_in = horizon.tau_in
+    tau_out = horizon.tau_out
+    log.info(f"[tick-nand] state={horizon.state} p={horizon.precision:.2f} γ={horizon.gamma:.2f} "
+             f"τ_in={tau_in:.2f} τ_out={tau_out:.2f}")
+
+    hypotheses = cl["hypotheses"]
+    bare = cl["bare"]
+    unverified = cl["unverified"]
+    verified = cl["verified"]
+
+    # ── Subgoal filter ── if goal declares subgoals, scope everything to that cluster
+    subgoals = goal_node.get("subgoals", []) if goal_node else []
+    if subgoals:
+        sub_set = set(subgoals)
+        hypotheses = [(i, n) for i, n in hypotheses if i in sub_set]
+        unverified = [(i, n) for i, n in unverified if i in sub_set]
+        verified = [(i, n) for i, n in verified if i in sub_set]
+        bare = [(i, n) for i, n in bare if i in sub_set]
+        cl = {**cl, "hypotheses": hypotheses, "bare": bare,
+              "unverified": unverified, "verified": verified}
+
+    if force_collapse:
+        return _tick_force_collapse(cl["active_nodes"], stable_threshold)
+
+    def _emit(action_dict):
+        action_dict["horizon_params"] = horizon_params
+        action_dict["horizon_metrics"] = horizon.get_metrics()
+        action_dict["tick_engine"] = "nand"
+        graph["_horizon"] = horizon.to_dict()
+        return action_dict
+
+    # ── STOP CHECK: universal should_stop via distinct zones ──
+    if goal_node is not None:
+        from .modes import should_stop
+        stop = should_stop(cl, graph, horizon, goal_node=goal_node)
+        if stop["resolved"]:
+            log.info(f"[tick-nand] GOAL REACHED: {stop['reason']}")
+            return _emit({
+                "action": "stable", "phase": "synthesize",
+                "reason": f"GOAL REACHED: {stop['reason']}",
+            })
+
+    # ── 1. Not enough nodes? GENERATE ──
+    generated = graph.get("_generated", False)
+    need_generate = not generated and len(hypotheses) < min_hyp
+    if need_generate:
+        return _emit({
+            "action": "think_toward",
+            "target": goal_idx or 0,
+            "phase": "generate",
+            "reason": f"EMERGENT: {len(hypotheses)}/{min_hyp} nodes. Need mass.",
+            "text": goal_text,
+        })
+
+    if len(hypotheses) >= min_hyp:
+        graph["_generated"] = True
+
+    # ── 2. Compute distinct() between hypothesis pairs ──
+    # Collect zones using cached embeddings
+    import numpy as np
+    embeddings = graph.get("embeddings", [])
+    hyp_indices = [i for i, _ in hypotheses]
+
+    # Pairs with embeddings
+    confirm_pairs = []    # d < tau_in → merge candidates
+    explore_pairs = []    # tau_in < d < tau_out → pump/elaborate
+    conflict_pairs = []   # d > tau_out → doubt candidates
+
+    for ii in range(len(hyp_indices)):
+        for jj in range(ii + 1, len(hyp_indices)):
+            i = hyp_indices[ii]
+            j = hyp_indices[jj]
+            if i >= len(embeddings) or j >= len(embeddings):
+                continue
+            emb_a = embeddings[i]
+            emb_b = embeddings[j]
+            if emb_a is None or emb_b is None:
+                continue
+            emb_a = np.array(emb_a, dtype=np.float32)
+            emb_b = np.array(emb_b, dtype=np.float32)
+            if emb_a.size == 0 or emb_b.size == 0:
+                continue
+            d = distinct(emb_a, emb_b)
+            decision = distinct_decision(d, tau_in, tau_out)
+            if decision == "CONFIRM":
+                confirm_pairs.append((i, j, d))
+            elif decision == "EXPLORE":
+                explore_pairs.append((i, j, d))
+            else:  # CONFLICT
+                conflict_pairs.append((i, j, d))
+
+    # ── 3. Emergent routing by zone density ──
+
+    # CONFIRM zone dense → MERGE cluster
+    if confirm_pairs:
+        # Group into clusters: greedy
+        group = [confirm_pairs[0][0], confirm_pairs[0][1]]
+        seen = set(group)
+        for i, j, d in confirm_pairs[1:]:
+            if i in seen or j in seen:
+                if i not in seen:
+                    group.append(i); seen.add(i)
+                if j not in seen:
+                    group.append(j); seen.add(j)
+            if len(group) >= 4:
+                break
+        if len(group) >= 2:
+            return _emit({
+                "action": "collapse",
+                "target": group,
+                "phase": "merge",
+                "reason": f"EMERGENT[CONFIRM zone]: {len(confirm_pairs)} agreeing pairs → merge",
+                "text": ", ".join(nodes[g]["text"][:25] for g in group[:3]) + "...",
+            })
+
+    # Bare nodes → ELABORATE (no emergent logic, same as before)
+    if bare:
+        target = _pick_target(bare, goal_idx, edges)
+        if target:
+            return _emit({
+                "action": "elaborate",
+                "target": target[0],
+                "phase": "elaborate",
+                "reason": f"EMERGENT: #{target[0]} bare — need evidence before comparison",
+                "text": target[1]["text"][:80],
+            })
+
+    # CONFLICT zone → DOUBT
+    if conflict_pairs:
+        # Pick a node from conflict that is also unverified
+        unverified_ids = {i for i, _ in unverified}
+        for i, j, d in conflict_pairs:
+            if i in unverified_ids:
+                target_idx = i
+                break
+            if j in unverified_ids:
+                target_idx = j
+                break
+        else:
+            target_idx = conflict_pairs[0][0]
+        n = nodes[target_idx]
+        return _emit({
+            "action": "smartdc",
+            "target": target_idx,
+            "phase": "doubt",
+            "reason": f"EMERGENT[CONFLICT zone]: d>{tau_out:.2f} ({len(conflict_pairs)} pairs) → doubt",
+            "text": n["text"][:80],
+        })
+
+    # EXPLORE zone dense → PUMP between most distant pair
+    if explore_pairs and len(hypotheses) >= 4:
+        pump_count = graph.get("_pump_count", 0)
+        if pump_count < 3:
+            # Pick pair closest to tau_out (most distant within EXPLORE zone)
+            explore_pairs.sort(key=lambda p: -p[2])
+            i, j, d = explore_pairs[0]
+            graph["_pump_count"] = pump_count + 1
+            return _emit({
+                "action": "pump",
+                "target": [i, j],
+                "phase": "generate",
+                "reason": f"EMERGENT[EXPLORE zone]: d={d:.2f} → find hidden axis",
+                "text": f"{nodes[i]['text'][:30]} ↔ {nodes[j]['text'][:30]}",
+            })
+
+    # ── 4. Unverified remaining → DOUBT them ──
+    doubt_candidates = [u for u in unverified if u[0] not in {i for i, _ in bare}]
+    if doubt_candidates:
+        target = _pick_target(doubt_candidates, goal_idx, edges)
+        if target:
+            return _emit({
+                "action": "smartdc",
+                "target": target[0],
+                "phase": "doubt",
+                "reason": f"EMERGENT: #{target[0]} unverified — standard doubt",
+                "text": target[1]["text"][:80],
+            })
+
+    # ── 5. Multiple verified + CONFLICT-zone → COMPARE (XOR-like, emergent) ──
+    if len(verified) >= 2:
+        # Do verified nodes conflict? If so, external judge needed to pick one
+        verified_conflict = [
+            (i, j, d) for i, j, d in conflict_pairs
+            if any(v[0] == i for v in verified) and any(v[0] == j for v in verified)
+        ]
+        if verified_conflict and not unverified:
+            target_ids = [v[0] for v in verified]
+            return _emit({
+                "action": "compare",
+                "target": target_ids,
+                "phase": "synthesize",
+                "reason": f"EMERGENT[CONFLICT+verified]: {len(verified)} verified in conflict — compare",
+                "text": ", ".join(nodes[i]["text"][:30] for i in target_ids[:3]),
+            })
+
+    # ── 6. META ──
+    meta_count = graph.get("_meta_count", 0)
+    can_meta = meta_count < max_meta and len(verified) >= 3
+    if can_meta:
+        graph["_meta_count"] = meta_count + 1
+        return _emit({
+            "action": "think_toward",
+            "target": goal_idx or 0,
+            "phase": "generate",
+            "reason": f"EMERGENT META: {len(verified)} verified. Search for gaps.",
+            "text": goal_text,
+        })
+
+    # ── 7. Scout: PUMP between most distant pair (DMN mode) ──
+    if mode_id == "scout" and len(hypotheses) >= 4:
+        pump_count = graph.get("_pump_count", 0)
+        if pump_count < 3:
+            pair = _pick_distant_pair(hypotheses, edges)
+            if pair:
+                graph["_pump_count"] = pump_count + 1
+                return _emit({
+                    "action": "pump", "target": list(pair), "phase": "generate",
+                    "reason": f"EMERGENT[SCOUT]: pump #{pair[0]}↔#{pair[1]}",
+                    "text": f"{nodes[pair[0]]['text'][:30]} ↔ {nodes[pair[1]]['text'][:30]}",
+                })
+
+    # ── 8. SYNTHESIZE ──
+    avg = sum(n.get("confidence", 0.5) for _, n in cl["active_nodes"]) / max(len(cl["active_nodes"]), 1)
+    return _emit({
+        "action": "stable",
+        "phase": "synthesize",
+        "reason": f"EMERGENT SYNTHESIZE: {len(hypotheses)} ideas, {len(verified)} verified, avg {avg:.0%}",
+    })
+
+
+# Alias — NAND emergent is the single tick engine
+tick = tick_emergent

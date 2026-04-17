@@ -135,9 +135,17 @@ function heatmapRescale() {}
 // ── Tab switching ──────────────────────────────────────────────────────────
 function setMode(m) {
   mode = m;
-  ['chat', 'graph'].forEach(t => {
+  ['assist', 'chat', 'graph'].forEach(t => {
     const el = document.getElementById('cfg-' + t);
-    if (el) el.classList.toggle('hidden', t !== m);
+    if (el) {
+      if (t === m) {
+        el.classList.remove('hidden');
+        el.style.display = '';
+      } else {
+        el.classList.add('hidden');
+        el.style.display = 'none';
+      }
+    }
     const tab = document.getElementById('tab-' + t);
     if (tab) tab.className = (t === m ? 'tab-active' : 'tab-inactive') + ' px-4 py-2 text-sm';
   });
