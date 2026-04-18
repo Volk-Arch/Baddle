@@ -100,11 +100,18 @@ def _bayesian_update_distinct(prior: float, d: float) -> float:
     """NAND Bayes update через глобальную нейрохимию (γ derived).
 
     d ∈ [0,1]: дистанция между evidence и hypothesis. Делегирует в
-    `CognitiveState.apply_to_bayes`, который использует текущее γ из
-    `self.neuro.gamma` и блокируется при PROTECTIVE_FREEZE.
+    `CognitiveState.apply_to_bayes` (γ из neuro.gamma, блокируется при
+    PROTECTIVE_FREEZE), затем кормит **RPE** (prior, posterior) в neurochem
+    — автономный dopamine drift по неожиданности Δconfidence (без юзера).
     """
     from .horizon import get_global_state
-    return get_global_state().apply_to_bayes(prior, d)
+    cs = get_global_state()
+    posterior = cs.apply_to_bayes(prior, d)
+    try:
+        cs.neuro.record_outcome(prior, posterior)
+    except Exception as e:
+        log.debug(f"[bayes] RPE record failed: {e}")
+    return posterior
 
 
 def _d_from_relation(relation: str, strength: float) -> float:

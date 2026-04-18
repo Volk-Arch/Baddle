@@ -26,12 +26,6 @@
 - [ ] **Консолидация** — прунинг слабых веток content-графа и state-графа.
   Без этого файлы растут линейно, мусор не отфильтровывается. Аналог
   «забывания» как феномена, не бага.
-- [ ] **Intrinsic pull в DMN** — `target = argmax(dopamine · novelty · relevance)`
-  в `_find_distant_pair`/pump выборе. Сейчас рандом. Без этого нет куриoсити
-  как эмерджентного свойства.
-- [ ] **RPE автоматически** — сейчас только manual через feedback endpoint.
-  Нужно хранить `predicted_confidence_change` при doubt/elaborate и сравнивать
-  с фактом → автономный dopamine drift без юзера.
 - [ ] **Meta-tick на state-графе** — tick читает хвост (20 последних),
   адаптирует policy. Пример: 10 шагов в EXECUTION с неизменным sync_error →
   emit "ask" (уже триггерится по простым условиям, но не по паттернам).
@@ -251,6 +245,80 @@ GET /graph/self?limit=5 → {entries: [...], total: N, last_hash: ...}
 **Красный флаг.**
 - Parent chain сломан (несколько корней) → concurrent write без lock
 - State_origin всегда `1_rest` → NE и burnout не читаются в state_origin_hint
+
+## RPE — автономный dopamine drift из Bayes-обновлений
+
+**Что.** Каждый Bayes update (`_bayesian_update_distinct` в graph_logic.py)
+кормит **reward prediction error** в нейрохимию: `actual = |posterior −
+prior|` сравнивается со скользящим baseline (mean последних 20 Δ).
+Положительный RPE (больше информации чем обычно) → фазовый bump dopamine
+(+0.15·RPE). Отрицательный → слабый dip. Dopamine теперь сдвигается от
+**неожиданности** изменений в графе, а не просто от новизны. Автономно,
+без фидбэка юзера. Реализовано в [src/neurochem.py](src/neurochem.py)
+`Neurochem.record_outcome`.
+
+**Проверка.**
+```
+GET /assist/state → {neurochem: {recent_rpe: 0.0-ish, dopamine: ...}}
+```
+После прогона `/graph/add-evidence` или `/graph/expand` (с live_bayes) —
+`recent_rpe` отражает последнюю Δconfidence vs baseline.
+
+**Влияет на:** dopamine как сигнал неожиданности. Baddle теперь сама
+«расстраивается» если ожидала сильное уточнение а получила слабое.
+Intrinsic pull (см. ниже) использует этот dopamine для выбора DMN-пары —
+это замыкает петлю: удачные мосты → DA spike → сильнее тянет к новому.
+
+**Живые тесты.**
+- Добавь серию слабых evidence (strength=0.3) → baseline запомнит малые Δ.
+  Потом добавь сильную evidence (strength=0.9) → `recent_rpe > 0`, dopamine
+  подпрыгнет.
+- Подряд одинаково-сильные evidence → RPE≈0 после baseline (привыкание).
+- Smart DC который сильно не сдвинул confidence → отрицательный RPE,
+  dopamine слегка упадёт.
+
+**Красный флаг.**
+- `recent_rpe` всегда 0 → `record_outcome` не вызывается из
+  `_bayesian_update_distinct`.
+- Dopamine убегает к 0 или 1 за несколько шагов → `RPE_GAIN` слишком высок,
+  или baseline не обновляется (проверить `_delta_history` растёт).
+
+## Intrinsic pull — DMN тянет туда где любопытно
+
+**Что.** DMN (и Scout) выбирают пару нод не случайным pivot'ом, а по
+`score = novelty(a,b) · relevance(a) · relevance(b)`, где `relevance(n) =
+recency(n) · uncertainty(n)` (недавно тронутое + неочевидное с
+confidence≈0.5). Выбор через softmax с температурой `T = 1.1 − dopamine`:
+высокий DA → резкий argmax (любопытство), низкий DA → плоский выбор
+(ангедония). Реализовано в [src/cognitive_loop.py](src/cognitive_loop.py)
+`_find_distant_pair`.
+
+**Проверка.**
+```python
+from src.cognitive_loop import _find_distant_pair
+from src.horizon import get_global_state
+cs = get_global_state()
+cs.neuro.dopamine = 0.9   # острый argmax
+pair = _find_distant_pair(nodes)
+# Под high DA стабильные (conf>0.9) ноды почти не попадают в pair
+```
+
+**Влияет на:** куриосити как эмерджентное свойство. Граф сам тянет Baddle
+к новым связям между неочевидными нодами; стабильные, давно не тронутые,
+игнорируются. Без этого DMN блуждал рандомно — любопытство было только
+в имени.
+
+**Живые тесты.**
+- Пусти `/graph/tick` на графе где часть нод имеет `confidence=0.95` →
+  Scout через 3ч выберет пары между `conf≈0.5` нодами.
+- Установи `neurochem.dopamine=0.05` → Scout начнёт брать и «скучные»
+  пары (система в ангедонии, любопытство выключено).
+
+**Красный флаг.**
+- Scout всё время берёт одну и ту же пару → softmax не работает, чекни что
+  `np.random.choice(p=probs)` вызывается, а не argmax руками.
+- Под high DA выбираются стабильные ноды с conf>0.9 → `relevance` не
+  падает на стабильных → проверь формулу `uncertainty = 1 − |conf−0.5|·2`.
 
 ## Когнитивный цикл — CognitiveLoop с NE-бюджетом
 

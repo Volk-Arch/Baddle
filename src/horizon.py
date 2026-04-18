@@ -435,6 +435,7 @@ class CognitiveState:
                 "burnout":        round(self.freeze.conflict_accumulator, 3),
                 "freeze_active":  self.freeze.active,
                 "state_origin":   self.state_origin_hint,
+                "recent_rpe":     neuro_dict.get("recent_rpe", 0.0),
             },
             "user_state": user_dict,
             "llm_disabled": self.llm_disabled,

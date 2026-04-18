@@ -30,14 +30,27 @@ log = logging.getLogger(__name__)
 
 
 def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
-    """Find two most distant hypothesis/thought nodes in the graph.
+    """Intrinsic pull — dopamine-modulated curiosity вместо случайного pivot.
 
-    Uses embedding cosine distance. Returns (idx_a, idx_b) or None.
-    Sampling: random pivot, find furthest (O(n), fine for DMN).
+    score(a, b) = novelty(a, b) · relevance(a) · relevance(b)
+
+        novelty(a, b)  = distinct(emb_a, emb_b) — дистанция между идеями
+        relevance(n)   = recency(n) · uncertainty(n) — недавно тронутое +
+                         непроверенное (confidence около 0.5)
+
+    Выбор пары: softmax по score с температурой T = 1.1 − dopamine.
+    Высокий dopamine → резкий argmax (любопытство ведёт в самую новую связь).
+    Низкий dopamine → мягкое распределение (ангедония, выбор ближе к рандому).
+
+    Ограничение O(K²): берём top-K по relevance (K=20), пары только среди них.
     """
-    from .main import cosine_similarity
+    from .main import distinct
+    from .horizon import get_global_state
+    from datetime import datetime, timezone
+    import math
     import numpy as np
 
+    # Filter candidates: active hypothesis/thought nodes with embeddings
     candidates = []
     for i, n in enumerate(nodes):
         if n.get("depth", 0) < 0:
@@ -51,24 +64,63 @@ def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
     if len(candidates) < 2:
         return None
 
-    pivot_idx = random.choice(candidates)
-    pivot_emb = np.array(nodes[pivot_idx]["embedding"], dtype=np.float32)
+    def _recency(ts_iso) -> float:
+        if not ts_iso:
+            return 0.5
+        try:
+            ts = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+            hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+            return float(math.exp(-max(0.0, hours) / 24.0))   # e-decay, half-life ≈ 17ч
+        except Exception:
+            return 0.5
 
-    best_idx = None
-    best_dist = -1.0
-    for i in candidates:
-        if i == pivot_idx:
-            continue
-        emb = np.array(nodes[i]["embedding"], dtype=np.float32)
-        sim = cosine_similarity(pivot_emb, emb)
-        dist = 1.0 - sim
-        if dist > best_dist:
-            best_dist = dist
-            best_idx = i
+    def _relevance(node) -> float:
+        # Недавно тронутая нода + неочевидная (confidence около 0.5 = макс любопытство)
+        r = _recency(node.get("last_accessed") or node.get("created_at"))
+        conf = node.get("confidence", 0.5)
+        uncertainty = 1.0 - abs(conf - 0.5) * 2.0   # пик 1.0 при conf=0.5
+        return 0.5 * r + 0.5 * uncertainty
 
-    if best_idx is None:
+    relevance = {i: _relevance(nodes[i]) for i in candidates}
+
+    # Top-K по relevance — O(n log n) вместо полного O(n²) перебора
+    K = min(20, len(candidates))
+    top_k = sorted(candidates, key=lambda i: relevance[i], reverse=True)[:K]
+
+    # Compute pair scores (O(K²))
+    scores = []
+    for ii in range(len(top_k)):
+        for jj in range(ii + 1, len(top_k)):
+            i, j = top_k[ii], top_k[jj]
+            emb_a = np.array(nodes[i]["embedding"], dtype=np.float32)
+            emb_b = np.array(nodes[j]["embedding"], dtype=np.float32)
+            if emb_a.size == 0 or emb_b.size == 0:
+                continue
+            novelty = float(distinct(emb_a, emb_b))
+            score = novelty * relevance[i] * relevance[j]
+            scores.append((i, j, score))
+
+    if not scores:
         return None
-    return (pivot_idx, best_idx)
+
+    # Dopamine → sampling temperature
+    try:
+        dopamine = float(get_global_state().neuro.dopamine)
+    except Exception:
+        dopamine = 0.5
+    T = max(0.1, 1.1 - dopamine)   # DA=0 → T=1.1 (flat); DA=1 → T=0.1 (sharp)
+
+    score_vec = np.asarray([s[2] for s in scores], dtype=np.float64)
+    score_vec = score_vec / T
+    score_vec -= score_vec.max()                 # числовая стабильность softmax
+    probs = np.exp(score_vec)
+    total = float(probs.sum())
+    if total <= 0 or not np.isfinite(total):
+        pick = random.randrange(len(scores))
+    else:
+        probs /= total
+        pick = int(np.random.choice(len(scores), p=probs))
+    return (scores[pick][0], scores[pick][1])
 
 
 class CognitiveLoop:

@@ -34,6 +34,9 @@ import numpy as np
 class Neurochem:
     """Три скаляра. Реагируют на динамику графа, не на юзера напрямую."""
 
+    RPE_WINDOW = 20    # скользящее окно для baseline Δconfidence
+    RPE_GAIN = 0.15    # как сильно dopamine сдвигается на единицу RPE
+
     def __init__(self,
                  dopamine: float = 0.5,
                  serotonin: float = 0.5,
@@ -41,6 +44,8 @@ class Neurochem:
         self.dopamine = dopamine
         self.serotonin = serotonin
         self.norepinephrine = norepinephrine
+        self._delta_history: list = []
+        self.recent_rpe: float = 0.0
 
     # ── Updates ─────────────────────────────────────────────────────────
 
@@ -91,6 +96,34 @@ class Neurochem:
         """γ = 2.0 + 3.0 · NE · (1 − S). Напряжение + нестабильность → чувствительность."""
         return 2.0 + 3.0 * self.norepinephrine * (1.0 - self.serotonin)
 
+    # ── RPE: автономный dopamine drift без юзера ────────────────────────
+
+    def record_outcome(self, prior: float, posterior: float) -> float:
+        """Reward prediction error из Bayes-обновления.
+
+        actual    = |posterior − prior|  — сколько информации реально получили
+        predicted = mean(recent_deltas)   — сколько обычно получаем (baseline)
+        rpe       = actual − predicted
+
+        Положительный RPE (больше изменений чем обычно) → фазовый bump dopamine.
+        Отрицательный (меньше чем обычно) → dopamine слегка падает.
+        Это делает dopamine модуляцией **неожиданности**, а не просто новизны.
+
+        Возвращает RPE (для логов / метрик).
+        """
+        actual = abs(float(posterior) - float(prior))
+        if self._delta_history:
+            predicted = sum(self._delta_history) / len(self._delta_history)
+        else:
+            predicted = actual   # первый раз — RPE=0, просто записываем
+        rpe = actual - predicted
+        self.dopamine = max(0.0, min(1.0, self.dopamine + self.RPE_GAIN * rpe))
+        self.recent_rpe = rpe
+        self._delta_history.append(actual)
+        if len(self._delta_history) > self.RPE_WINDOW:
+            self._delta_history = self._delta_history[-self.RPE_WINDOW:]
+        return rpe
+
     # ── Bayesian step через distinct ────────────────────────────────────
 
     def apply_to_bayes(self, prior: float, d: float) -> float:
@@ -109,15 +142,20 @@ class Neurochem:
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
             "gamma": round(self.gamma, 3),
+            "recent_rpe": round(self.recent_rpe, 3),
+            "_delta_history": [round(x, 3) for x in self._delta_history],
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Neurochem":
-        return cls(
+        n = cls(
             dopamine=d.get("dopamine", 0.5),
             serotonin=d.get("serotonin", 0.5),
             norepinephrine=d.get("norepinephrine", 0.5),
         )
+        n.recent_rpe = d.get("recent_rpe", 0.0)
+        n._delta_history = list(d.get("_delta_history", []))
+        return n
 
 
 class ProtectiveFreeze:
