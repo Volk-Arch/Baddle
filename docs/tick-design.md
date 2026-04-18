@@ -2,7 +2,7 @@
 
 ## Идея
 
-Tick — один шаг автономного мышления. Не "запусти всё и жди результат", а **один атомарный шаг**: сгенерируй / объедини / углуби / проверь. Какой именно шаг — решает CognitiveHorizon на основе текущего состояния графа.
+Tick — один шаг автономного мышления. Не "запусти всё и жди результат", а **один атомарный шаг**: сгенерируй / объедини / углуби / проверь. Какой именно шаг — решает CognitiveState на основе текущего состояния графа.
 
 Аналогия: один вдох-выдох мышления. Autorun = серия вдохов.
 
@@ -113,10 +113,13 @@ Scout / DMN (mode_id == "scout"):
 
 ### Mode как preset
 
-`primitive`/`strategy`/`goal_type` всё ещё в `modes.py` MODES dict как
-**UI-metadata**, но runtime на них не switch-ит. Mode влияет только через
-`create_horizon(mode_id)` — preset `(precision, policy, target_surprise)` в
-начале сессии.
+Поля `primitive`/`strategy`/`goal_type` полностью удалены из `modes.py`
+(dead после v8d). Mode сейчас — компактный кортеж `(name, name_en,
+goals_count, fields, placeholder*, intro*, renderer_style, preset)`.
+`preset` читается из одного источника истины через `get_mode(mode_id)`;
+`create_horizon(mode_id)` забирает `(precision, policy, target_surprise)`
+оттуда. Runtime не свитчится на mode — логика эмерджентна из distinct
+зон. См. «Collapse 14 modes + 5 renderers» в TODO.md.
 
 ### Pause-on-question (v2)
 

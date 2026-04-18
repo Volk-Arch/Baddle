@@ -134,8 +134,10 @@ class CognitiveLoop:
     DMN_INTERVAL = 600                # 10 минут между DMN continuous (content pump)
     STATE_WALK_INTERVAL = 20 * 60     # 20 минут между эпизодическими запросами к state_graph
     NIGHT_CYCLE_INTERVAL = 24 * 3600  # раз в сутки: Scout + REM + Consolidation единым блоком
+    BRIEFING_INTERVAL = 20 * 3600     # раз в ~сутки: утренний briefing (< чем night чтобы не совпадать)
     TICK_INTERVAL = 60                # частота бэкграунд-проверок
     FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
+    DEFAULT_WAKE_HOUR = 7             # если profile.context.wake_hour не задан
 
     # NE gating
     NE_BASELINE = 0.3            # baseline к которому дрейфует NE
@@ -156,6 +158,7 @@ class CognitiveLoop:
         self._last_dmn = 0.0
         self._last_state_walk = 0.0
         self._last_night_cycle = 0.0
+        self._last_briefing = 0.0
         self._last_foreground_tick = 0.0
         self._alerts_queue: list = []
         self._lock = threading.Lock()
@@ -241,8 +244,10 @@ class CognitiveLoop:
                     self._check_state_walk()
                     self._check_night_cycle()
 
-                # 3. HRV alerts всегда
+                # 3. HRV alerts + morning briefing всегда (не гейтим NE —
+                # briefing проактивный, срабатывает когда юзер проснулся)
                 self._check_hrv_alerts()
+                self._check_daily_briefing()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -675,6 +680,106 @@ class CognitiveLoop:
         }, dedupe=True)
         log.info(f"[state_walk] episodic recall: {ts_disp} {action} — {reason[:60]}")
 
+    # ── Morning briefing push (once per day, after wake_hour) ───────────
+
+    def _check_daily_briefing(self):
+        """Push morning-briefing alert в очередь раз в сутки после wake_hour.
+
+        Условия:
+          • прошло >= BRIEFING_INTERVAL с прошлого briefing
+          • текущий локальный час >= wake_hour (из profile.context, default 7)
+        Первый запуск при чистом `_last_briefing=0` тоже сработает только
+        после wake_hour.
+        """
+        import datetime as _dt
+        now = time.time()
+        if now - self._last_briefing < self.BRIEFING_INTERVAL:
+            return
+
+        try:
+            from .user_profile import load_profile
+            ctx = (load_profile().get("context") or {})
+            wake_hour = int(ctx.get("wake_hour", self.DEFAULT_WAKE_HOUR))
+        except Exception:
+            wake_hour = self.DEFAULT_WAKE_HOUR
+
+        local_hour = _dt.datetime.now().hour
+        if local_hour < wake_hour:
+            return
+
+        self._last_briefing = now
+        try:
+            text = self._build_morning_briefing_text()
+        except Exception as e:
+            log.warning(f"[cognitive_loop] briefing text failed: {e}")
+            return
+
+        self._add_alert({
+            "type": "morning_briefing",
+            "severity": "info",
+            "text": text,
+            "text_en": text,
+            "hour": local_hour,
+        }, dedupe=True)
+        log.info(f"[cognitive_loop] morning briefing pushed @ {local_hour}:00")
+
+    def _build_morning_briefing_text(self) -> str:
+        """Собрать короткий morning-briefing из HRV + energy + open goals + profile.
+
+        Не вызывает LLM — быстрая агрегация из state. UI показывает как alert;
+        если юзер откроет /assist/morning — получит расширенную LLM-версию.
+        """
+        from .horizon import get_global_state
+        from .hrv_manager import get_manager as get_hrv_manager
+        from .goals_store import list_goals
+
+        bits = ["Доброе утро."]
+
+        # HRV recovery
+        mgr = get_hrv_manager()
+        recovery_pct = None
+        if mgr.is_running:
+            state = mgr.get_baddle_state() or {}
+            rec = state.get("energy_recovery")
+            if rec is not None:
+                recovery_pct = int(rec * 100)
+                bits.append(f"Восстановление {recovery_pct}%.")
+
+        # User state (named region)
+        try:
+            cs = get_global_state()
+            metrics = cs.get_metrics()
+            user = metrics.get("user_state") or {}
+            named = user.get("named_state") or {}
+            if named.get("label"):
+                bits.append(f"Состояние: {named['label'].lower()}.")
+            long_reserve = user.get("long_reserve")
+            if isinstance(long_reserve, (int, float)):
+                pct = long_reserve / 2000.0 * 100
+                bits.append(f"Долгий резерв {int(pct)}%.")
+        except Exception:
+            pass
+
+        # Open goals
+        try:
+            open_goals = list_goals(status="open", limit=3)
+            if open_goals:
+                bits.append(f"Открытых целей: {len(open_goals)}. "
+                            f"Первая: «{open_goals[0].get('text', '')[:60]}».")
+        except Exception:
+            pass
+
+        # Advice by recovery
+        if recovery_pct is not None:
+            if recovery_pct >= 80:
+                bits.append("Хороший день для сложных задач.")
+            elif recovery_pct >= 60:
+                bits.append("Средний день — начни с важного.")
+            else:
+                bits.append("Береги энергию, лёгкие задачи первыми.")
+
+        return " ".join(bits)
+
     # ── HRV alerts ─────────────────────────────────────────────────────
 
     def _check_hrv_alerts(self):
@@ -720,6 +825,7 @@ class CognitiveLoop:
             "last_dmn": self._last_dmn,
             "last_state_walk": self._last_state_walk,
             "last_night_cycle": self._last_night_cycle,
+            "last_briefing": self._last_briefing,
             "last_foreground_tick": self._last_foreground_tick,
         }
 

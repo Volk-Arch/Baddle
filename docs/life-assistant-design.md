@@ -75,7 +75,7 @@ calculate_frequency_domain(rr_intervals) # LF, HF, LF/HF ratio через FFT
                                                      │
                                                      ▼
 ┌─────────────────────┐              ┌──────────────────────────┐
-│  MindBalance        │──→ ID/IP/T/A │  Baddle CognitiveHorizon │
+│  MindBalance        │──→ ID/IP/T/A │  Baddle CognitiveState   │
 │  (энергия, решения) │              │  θ = f(coherence, rmssd)  │
 └─────────────────────┘              │  φ = f(lf_hf_ratio)       │
                                      │  energy = f(daily, reserve)│

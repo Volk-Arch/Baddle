@@ -57,7 +57,7 @@
 
 Мозг **всегда ожидает чуть больше** чем получает (predictive processing, Фристон). Несоответствие (`ε > 0`) — двигатель внимания, обучения, любопытства.
 
-В Baddle: `target_surprise` в CognitiveHorizon:
+В Baddle: `target_surprise` в CognitiveState:
 
 ```
 surprise = 1 - confidence_после_SmartDC

@@ -515,8 +515,9 @@ def assist():
     # Если категория распознана, но в профиле по ней пусто — сначала спросим
     # предпочтения/ограничения и **сохраним в profile**, чтобы следующий раз
     # не переспрашивать. Это замыкает цикл: state + profile + goals + info.
-    if (detected_category and is_category_empty(detected_category, _user_profile)
-            and intent != "ambiguous"):
+    # (Работает и при intent=ambiguous — category keyword match сам по себе
+    # уже даёт достаточный сигнал что юзер хочет вопрос именно в этой теме.)
+    if (detected_category and is_category_empty(detected_category, _user_profile)):
         from .user_profile import CATEGORY_LABELS_RU
         label = (CATEGORY_LABELS_RU.get(detected_category, detected_category)
                  if lang == "ru" else detected_category)

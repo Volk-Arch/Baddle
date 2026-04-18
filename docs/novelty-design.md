@@ -30,7 +30,7 @@ Embeddings вычисляются через API (`api_get_embedding`), кеши
 
 ### 3. Адаптивный threshold через Horizon
 
-Порог novelty — не фиксированный. CognitiveHorizon управляет им через precision:
+Порог novelty — не фиксированный. CognitiveState управляет им через precision:
 
 ```python
 novelty_threshold = 0.85 + 0.1 * precision

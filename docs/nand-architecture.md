@@ -117,7 +117,7 @@ d > τ_out → CONFLICT (конфликт, ветвление или архив)
   γ     = γ₀ + η · (Stress − Coherence)    # стресс → жёстче проверка
   α     = α₀ · Coherence                   # когерентность → плавнее обучение
 
-Выход: динамические параметры CognitiveHorizon
+Выход: динамические параметры CognitiveState
 ```
 
 Адаптация под состояние:
@@ -229,7 +229,7 @@ sync_error = d(model_prediction, user_action)
 
 ## Два режима мышления
 
-### CognitiveHorizon (активный фокус)
+### CognitiveState (активный фокус)
 ```
 d < τ_in  → вход в Horizon (обработка)
 d > τ_out → выход (архив)

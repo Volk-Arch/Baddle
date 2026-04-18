@@ -1,9 +1,10 @@
 # CognitiveState — адаптивный контроллер
 
-> С v8d/v5d класс называется **`CognitiveState`** (alias `CognitiveHorizon`
-> для backward compat). Это **единый объект**: Horizon-слой (precision, policy,
-> γ, τ) + нейрохимический слой (S, NE, DA, burnout). Спецификация нейрохимии →
-> [neurochem-design.md](neurochem-design.md).
+> Класс называется **`CognitiveState`** (legacy alias `CognitiveHorizon`
+> удалён). Это **единый объект**: Horizon-слой (precision, policy, γ, τ)
+> + нейрохимический слой через композицию с `Neurochem` (dopamine /
+> serotonin / norepinephrine) и `ProtectiveFreeze`. Спецификация
+> нейрохимии → [neurochem-design.md](neurochem-design.md).
 
 ## Идея
 

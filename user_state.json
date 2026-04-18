@@ -1,8 +1,8 @@
 {
-  "decisions_today": 4,
+  "decisions_today": 7,
   "last_reset_date": "2026-04-18",
-  "last_interaction": 1776499229.4807389,
-  "total_decisions": 22,
+  "last_interaction": 1776504626.0882037,
+  "total_decisions": 25,
   "streaks": {
     "Morning exercise": 1
   },
@@ -134,6 +134,36 @@
       "message": "BMW vs Tesla какую выбрать",
       "intent": "simple_note",
       "confidence": 0.95
+    },
+    {
+      "ts": 1776504464.0055485,
+      "kind": "assist",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "mode": "fan",
+      "message": "Хочу покушать что-то простое",
+      "intent": "simple_note",
+      "confidence": 0.95
+    },
+    {
+      "ts": 1776504539.2583802,
+      "kind": "assist_clarify",
+      "cost": 6,
+      "daily_used": 6,
+      "long_used": 0.0,
+      "mode": "horizon",
+      "message": "Хочу изучить новую тему"
+    },
+    {
+      "ts": 1776504626.0882154,
+      "kind": "profile_ask",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "category": "health",
+      "mode": "scout",
+      "message": "Помоги разобраться с тренировками"
     }
   ],
   "habit_history": {
@@ -159,7 +189,7 @@
       "completion_7d": 1
     }
   },
-  "daily_spent": 24.0,
+  "daily_spent": 36.0,
   "user_state_dump": {
     "dopamine": 0.5,
     "serotonin": 0.5,

@@ -21,10 +21,14 @@
       "constraints": []
     },
     "learning": {
-      "preferences": [],
-      "constraints": []
+      "preferences": [
+        "короткие курсы"
+      ],
+      "constraints": [
+        "учебники"
+      ]
     }
   },
   "context": {},
-  "updated_at": 1776503844.9637504
+  "updated_at": 1776504539.953679
 }

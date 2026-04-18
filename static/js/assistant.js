@@ -1118,7 +1118,27 @@ async function _refreshProfile() {
     const profile = d.profile || {};
     const cats = d.categories || [];
     const labels = d.labels_ru || {};
-    body.innerHTML = cats.map(cat => {
+    const ctx = profile.context || {};
+    // Context block (wake/sleep/profession) — в начале
+    const ctxHtml = `<div class="profile-category">
+      <div class="profile-cat-title">Контекст</div>
+      <div class="profile-add" style="margin-bottom:6px">
+        <span style="font-size:11px;color:#a1a1aa;align-self:center;width:95px">Подъём (час)</span>
+        <input type="number" min="0" max="23" id="profile-wake-hour" value="${ctx.wake_hour ?? 7}">
+        <button onclick="profileSetContext('wake_hour', parseInt(document.getElementById('profile-wake-hour').value))">OK</button>
+      </div>
+      <div class="profile-add" style="margin-bottom:6px">
+        <span style="font-size:11px;color:#a1a1aa;align-self:center;width:95px">Отбой (час)</span>
+        <input type="number" min="0" max="23" id="profile-sleep-hour" value="${ctx.sleep_hour ?? 23}">
+        <button onclick="profileSetContext('sleep_hour', parseInt(document.getElementById('profile-sleep-hour').value))">OK</button>
+      </div>
+      <div class="profile-add">
+        <span style="font-size:11px;color:#a1a1aa;align-self:center;width:95px">Профессия</span>
+        <input type="text" id="profile-profession" value="${_esc(ctx.profession || '')}" placeholder="разработчик, врач, ...">
+        <button onclick="profileSetContext('profession', document.getElementById('profile-profession').value)">OK</button>
+      </div>
+    </div>`;
+    body.innerHTML = ctxHtml + cats.map(cat => {
       const entry = (profile.categories || {})[cat] || {preferences:[], constraints:[]};
       const prefs = entry.preferences || [];
       const cons = entry.constraints || [];
@@ -1171,6 +1191,16 @@ async function profileRemove(cat, kind, text) {
     });
     await _refreshProfile();
   } catch(e) { console.warn('[profile] remove failed:', e); }
+}
+
+async function profileSetContext(key, value) {
+  try {
+    await fetch('/profile/context', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, value}),
+    });
+    await _refreshProfile();
+  } catch(e) { console.warn('[profile] context set failed:', e); }
 }
 
 // ── Goals modal ──────────────────────────────────────────────────────
@@ -1531,6 +1561,15 @@ async function assistPollAlerts() {
       const lang = (document.getElementById('lang-select') || {}).value || 'ru';
       d.alerts.forEach(a => {
         // Scout/DMN bridges — render as chat message with card
+        // Morning briefing — render as primary assistant message
+        if (a.type === 'morning_briefing') {
+          const key = 'morning_briefing:' + (a.hour || 0) + ':' + new Date().toDateString();
+          if (_assistLastAlertTypes.has(key)) return;
+          _assistLastAlertTypes.add(key);
+          const text = lang === 'ru' ? (a.text || 'Доброе утро.') : (a.text_en || a.text || 'Good morning.');
+          assistAddMsg('assistant', text, { mode_name: lang === 'ru' ? 'Утро' : 'Morning' });
+          return;
+        }
         if ((a.type === 'scout_bridge' || a.type === 'dmn_bridge') && a.bridge) {
           const key = a.type + ':' + (a.bridge.text || '').substring(0, 30);
           if (_assistLastAlertTypes.has(key)) return;

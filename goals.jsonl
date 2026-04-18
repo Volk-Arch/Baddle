@@ -1,1 +1,3 @@
 {"action": "create", "id": "6698dfd578d8", "workspace": "main", "text": "тестовая цель", "mode": "horizon", "priority": null, "deadline": null, "category": null, "ts": 1776503845.2707298}
+{"action": "create", "id": "c1efd751d136", "workspace": "main", "text": "выбрать фреймворк для нового проекта\nReact\nVue\nSvelte", "mode": "tournament", "priority": null, "deadline": null, "category": null, "ts": 1776504483.492514}
+{"action": "complete", "id": "c1efd751d136", "reason": "avg_d(subgoals)=0.78>τ_out: first verified (3/3)", "snapshot_ref": "1776504512_c1efd751d136_80ce16", "energy_pct": null, "ts": 1776504512.0518296}

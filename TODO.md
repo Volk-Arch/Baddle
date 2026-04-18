@@ -65,6 +65,45 @@
 Формат каждого блока: **что делает** → **как проверить** → **на что влияет** →
 **красный флаг если сломано**.
 
+## Morning briefing push + wake/sleep context
+
+**Что.** `CognitiveLoop._check_daily_briefing()` раз в ~сутки (после
+`profile.context.wake_hour`, default 7) генерит короткий morning-briefing
+и кладёт в alert queue. Текст собирается без LLM из:
+- HRV energy_recovery % (если HRV запущен)
+- `UserState.named_state` label (лёгкая оценка)
+- `long_reserve` процент
+- Кол-во open goals + первая
+- Совет по recovery (сложные задачи / беречь энергию)
+
+Alert type `morning_briefing` рендерится UI как normal assistant-сообщение
+с `mode_name: "Утро"`. Dedupe по типу — один раз в сутки.
+
+Editor wake/sleep/profession добавлен в 👤 Profile modal (блок «Контекст»).
+
+**Проверка.**
+```
+GET /loop/status → last_briefing > 0 после первого тика после wake_hour
+/assist/alerts → содержит {type: "morning_briefing", text, hour}
+Profile modal → блок «Контекст»: wake (0-23) / sleep (0-23) / профессия
+```
+
+**Живые тесты.**
+- Поставь `wake_hour=23` → briefing не триггерится ночью.
+- Поставь `wake_hour=5`, перезапусти → в 5:00 утра cognitive_loop
+  эмитит alert, UI показывает: «Доброе утро. Восстановление 82%.
+  Состояние: поток. Долгий резерв 75%. Открытых целей: 3. ...»
+- dedupe: второй вызов `_check_daily_briefing()` в тот же день не
+  добавляет повтор.
+
+**Красный флаг.**
+- `/loop/status.last_briefing = 0` спустя час после wake_hour →
+  `_check_daily_briefing` не вызывается (проверь что он в `_loop`
+  независимо от NE-гейтинга).
+- Briefing срабатывает каждый раз после рестарта → BRIEFING_INTERVAL
+  (20h) не соблюдается при `last_briefing=0` + локальный час > wake_hour.
+  Это by-design: fresh start после дня молчания → уместно показать briefing.
+
 ## Static storage — Profile / Goals / Archive + uncertainty-learning
 
 **Что.** До этого Baddle была только динамикой (tick, sync, neurochem).
