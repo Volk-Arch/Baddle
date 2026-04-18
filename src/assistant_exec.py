@@ -369,22 +369,89 @@ def _classify_zones(candidates: List[str], tau_in: float = 0.3, tau_out: float =
     }
 
 
+def _resolve_renderer(style: str, zones: dict) -> str:
+    """Zone × style → final renderer pick.
+
+    Priority: style-preset если подходит доминирующей зоне; иначе zone-default.
+    Returns one of: "dialectical" | "comparative" | "cluster" | "explore".
+    """
+    conflict_dom = zones["conflict"] and zones["conflict_ratio"] >= max(
+        zones["confirm_ratio"], zones["explore_ratio"])
+    confirm_dom = zones["confirm"] and zones["confirm_ratio"] >= zones["explore_ratio"]
+
+    if style == "dialectical" and conflict_dom:  return "dialectical"
+    if style == "comparative" and conflict_dom:  return "comparative"
+    if style == "cluster"     and confirm_dom:   return "cluster"
+    if conflict_dom:  return "dialectical"       # zone default
+    if confirm_dom:   return "cluster"
+    return "explore"
+
+
+def _render_card(renderer: str, ideas: list, zones: dict, lang: str,
+                 steps_base: list) -> Dict:
+    """Единая точка сборки карточки. 4 renderer'а, одна диспетчеризация.
+
+    Любая ветка возвращает {text, cards:[...], steps:[...]}.
+    """
+    if renderer == "dialectical":
+        zones["conflict"].sort(key=lambda p: -p[2])
+        i, j, d = zones["conflict"][0]
+        dc = execute_dispute(f"{ideas[i]} vs {ideas[j]}", lang)
+        dc["steps"] = steps_base + dc.get("steps", []) + [
+            f"CONFLICT d={d:.2f} → диалектика #{i}↔#{j}" if lang == "ru"
+            else f"CONFLICT d={d:.2f} → dialectic #{i}↔#{j}",
+        ]
+        return dc
+
+    if renderer == "comparative":
+        tn = execute_tournament(", ".join(ideas), lang)
+        tn["steps"] = steps_base + tn.get("steps", []) + [
+            "CONFLICT → LLM-судья выбирает" if lang == "ru"
+            else "CONFLICT → LLM-judge picks",
+        ]
+        return tn
+
+    if renderer == "cluster":
+        return {
+            "text": "Идеи собираются в одно:" if lang == "ru" else "Ideas converge:",
+            "cards": [{"type": "ideas_list", "ideas": ideas, "zone": "confirm"}],
+            "steps": steps_base + [
+                f"CONFIRM: {len(zones['confirm'])} близких пар" if lang == "ru"
+                else f"CONFIRM: {len(zones['confirm'])} close pairs",
+            ],
+        }
+
+    # explore (default): ideas_list с Smart DC на первой
+    verified_first = None
+    try:
+        dc_result = execute_dispute(ideas[0], lang)
+        verified_first = {
+            "text": ideas[0],
+            "synthesis": dc_result["cards"][0].get("synthesis", "") if dc_result.get("cards") else "",
+        }
+    except Exception as e:
+        log.warning(f"[via_zones] DC on first idea failed: {e}")
+
+    return {
+        "text": "Вот что нашёл:" if lang == "ru" else "Here's what I found:",
+        "cards": [{"type": "ideas_list", "ideas": ideas,
+                   "verified_first": verified_first, "zone": "explore"}],
+        "steps": steps_base + [
+            "Smart DC на первой идее" if lang == "ru" else "Smart DC on first idea",
+        ],
+    }
+
+
 def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") -> Dict:
     """Единый путь для всех 14 режимов.
 
     Алгоритм:
-      1. Brainstorm N кандидатов (N зависит от mode_id: vector=3, остальные=MAX_IDEAS)
+      1. Brainstorm N кандидатов (vector=3, остальные=MAX_IDEAS)
       2. Distinct-matrix → зоны CONFIRM / EXPLORE / CONFLICT
-      3. Renderer по паре (zone × style_preset из modes.py)
-         - style="dialectical" + CONFLICT → dialectic card (execute_dispute inline)
-         - style="comparative" + CONFLICT → comparison card (LLM-judge)
-         - style="cluster" + CONFIRM → synthesis-cluster
-         - style="ideas" → ideas_list с Smart DC на первой
-         - иначе: zone-driven default (fallback по плотности зон)
+      3. `_resolve_renderer(style, zones)` → выбор финального рендерера
+      4. `_render_card(renderer, ideas, zones, lang)` → карточка
 
-    Specials не проходят через этот путь — они диспатчатся в execute():
-      - rhythm → execute_rhythm (habit external state)
-      - bayes → execute_bayes (уникальный prior/observation flow)
+    Specials (rhythm, bayes) не проходят сюда — они диспатчатся в execute().
     """
     from .prompts import _p
     from .modes import get_mode
@@ -392,8 +459,7 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
     mode = get_mode(mode_id)
     style = mode.get("renderer_style", "ideas")
 
-    # Comparative style + explicit options in message → tournament прямо
-    # (юзер перечислил варианты сам, не надо генерить новые)
+    # Comparative style + explicit options → tournament напрямую
     if style == "comparative":
         explicit = _parse_options(message)
         if len(explicit) >= 2:
@@ -416,9 +482,10 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
 
     if len(ideas) < 2:
         return {
-            "text": ("Вот что нашёл:" if lang == "ru" else "Here's what I found:"),
+            "text": "Вот что нашёл:" if lang == "ru" else "Here's what I found:",
             "cards": [{"type": "ideas_list", "ideas": ideas}],
-            "steps": [f"Сгенерировал {len(ideas)} идей" if lang == "ru" else f"Generated {len(ideas)} ideas"],
+            "steps": [f"Сгенерировал {len(ideas)} идей" if lang == "ru"
+                      else f"Generated {len(ideas)} ideas"],
         }
 
     zones = _classify_zones(ideas)
@@ -427,96 +494,8 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
         (f"Зоны: confirm={zones['confirm_ratio']:.0%} explore={zones['explore_ratio']:.0%} "
          f"conflict={zones['conflict_ratio']:.0%} · style={style}"),
     ]
-
-    conflict_dominant = zones["conflict"] and zones["conflict_ratio"] >= max(
-        zones["confirm_ratio"], zones["explore_ratio"])
-    confirm_dominant = zones["confirm"] and zones["confirm_ratio"] >= zones["explore_ratio"]
-
-    # ── Style-driven rendering ──
-    # Style × zone определяет карточку. Приоритет: style-preset, если зона
-    # подходит. Иначе zone-driven default.
-
-    # dialectical style + CONFLICT → dispute (дебаты)
-    if style == "dialectical" and conflict_dominant:
-        zones["conflict"].sort(key=lambda p: -p[2])
-        i, j, d = zones["conflict"][0]
-        dc = execute_dispute(f"{ideas[i]} vs {ideas[j]}", lang)
-        dc["steps"] = steps_base + dc.get("steps", []) + [
-            f"dialectical+CONFLICT[d={d:.2f}] → диалектика #{i}↔#{j}"
-            if lang == "ru" else f"dialectical+CONFLICT[d={d:.2f}] → dialectic #{i}↔#{j}",
-        ]
-        return dc
-
-    # comparative style + CONFLICT → tournament (LLM-judge)
-    if style == "comparative" and conflict_dominant and len(ideas) >= 2:
-        joined = ", ".join(ideas)
-        tn = execute_tournament(joined, lang)
-        tn["steps"] = steps_base + tn.get("steps", []) + [
-            f"comparative+CONFLICT → LLM-судья выбирает"
-            if lang == "ru" else "comparative+CONFLICT → LLM-judge picks",
-        ]
-        return tn
-
-    # cluster style + CONFIRM → convergent synthesis
-    if style == "cluster" and confirm_dominant:
-        return {
-            "text": ("Идеи собираются в одно:" if lang == "ru"
-                     else "Ideas converge:"),
-            "cards": [{"type": "ideas_list", "ideas": ideas, "zone": "confirm"}],
-            "steps": steps_base + [
-                f"cluster+CONFIRM: {len(zones['confirm'])} близких пар"
-                if lang == "ru" else f"cluster+CONFIRM: {len(zones['confirm'])} close pairs",
-            ],
-        }
-
-    # ── Zone-driven defaults (если style не совпал с доминирующей зоной) ──
-
-    # CONFLICT default → диалектика furthest
-    if conflict_dominant:
-        zones["conflict"].sort(key=lambda p: -p[2])
-        i, j, d = zones["conflict"][0]
-        dc = execute_dispute(f"{ideas[i]} vs {ideas[j]}", lang)
-        dc["steps"] = steps_base + dc.get("steps", []) + [
-            f"zone-default[CONFLICT d={d:.2f}] → диалектика #{i}↔#{j}"
-            if lang == "ru" else f"zone-default[CONFLICT d={d:.2f}] → dialectic",
-        ]
-        return dc
-
-    # CONFIRM default → синтез
-    if confirm_dominant:
-        return {
-            "text": ("Идеи сходятся — они об одном:" if lang == "ru"
-                     else "Ideas converge:"),
-            "cards": [{"type": "ideas_list", "ideas": ideas, "zone": "confirm"}],
-            "steps": steps_base + [
-                f"zone-default[CONFIRM]: {len(zones['confirm'])} близких"
-                if lang == "ru" else f"zone-default[CONFIRM]: {len(zones['confirm'])} close",
-            ],
-        }
-
-    # EXPLORE default → ideas_list с Smart DC на первой
-    verified_first = None
-    try:
-        dc_result = execute_dispute(ideas[0], lang)
-        verified_first = {
-            "text": ideas[0],
-            "synthesis": dc_result["cards"][0].get("synthesis", "") if dc_result.get("cards") else "",
-        }
-    except Exception as e:
-        log.warning(f"[via_zones] DC on first idea failed: {e}")
-
-    return {
-        "text": ("Вот что нашёл:" if lang == "ru" else "Here's what I found:"),
-        "cards": [{
-            "type": "ideas_list",
-            "ideas": ideas,
-            "verified_first": verified_first,
-            "zone": "explore",
-        }],
-        "steps": steps_base + [
-            "Smart DC на первой идее" if lang == "ru" else "Smart DC on first idea",
-        ],
-    }
+    renderer = _resolve_renderer(style, zones)
+    return _render_card(renderer, ideas, zones, lang, steps_base)
 
 
 # ═══ Dispatcher ═════════════════════════════════════════════════════

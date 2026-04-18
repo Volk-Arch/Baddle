@@ -567,32 +567,14 @@ def set_global_state(state: CognitiveState):
 # ── Factory ─────────────────────────────────────────────────────────────────
 
 def create_horizon(mode_id: str) -> CognitiveState:
-    """Create a CognitiveState with preset for given mode.
+    """Create a fresh CognitiveState with preset for given mode.
 
-    Note: this creates a fresh CognitiveState; for the global singleton (one per
-    person), use get_global_state() instead. This factory is useful for
-    per-session Horizon snapshots stored in graph state.
+    Preset (precision, policy, target_surprise) читается из
+    `modes.get_mode(mode_id).preset` — один источник истины. Для глобального
+    singleton per-person используй get_global_state().
     """
     from .modes import get_mode
-
-    PRESETS = {
-        "free":       {"precision": 0.5, "policy": {"generate": 0.25, "merge": 0.25, "elaborate": 0.25, "doubt": 0.25}, "target": 0.3},
-        "scout":      {"precision": 0.3, "policy": {"generate": 0.5,  "merge": 0.1,  "elaborate": 0.1,  "doubt": 0.3},  "target": 0.5},
-        "vector":     {"precision": 0.7, "policy": {"generate": 0.1,  "merge": 0.2,  "elaborate": 0.2,  "doubt": 0.5},  "target": 0.15},
-        "rhythm":     {"precision": 0.5, "policy": {"generate": 0.2,  "merge": 0.2,  "elaborate": 0.3,  "doubt": 0.3},  "target": 0.2},
-        "horizon":    {"precision": 0.4, "policy": {"generate": 0.3,  "merge": 0.2,  "elaborate": 0.2,  "doubt": 0.3},  "target": 0.3},
-        "builder":    {"precision": 0.6, "policy": {"generate": 0.1,  "merge": 0.2,  "elaborate": 0.3,  "doubt": 0.4},  "target": 0.2},
-        "pipeline":   {"precision": 0.6, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.4,  "doubt": 0.4},  "target": 0.15},
-        "cascade":    {"precision": 0.6, "policy": {"generate": 0.1,  "merge": 0.2,  "elaborate": 0.3,  "doubt": 0.4},  "target": 0.2},
-        "scales":     {"precision": 0.5, "policy": {"generate": 0.2,  "merge": 0.3,  "elaborate": 0.2,  "doubt": 0.3},  "target": 0.25},
-        "race":       {"precision": 0.5, "policy": {"generate": 0.3,  "merge": 0.1,  "elaborate": 0.2,  "doubt": 0.4},  "target": 0.3},
-        "fan":        {"precision": 0.3, "policy": {"generate": 0.5,  "merge": 0.1,  "elaborate": 0.1,  "doubt": 0.3},  "target": 0.5},
-        "tournament": {"precision": 0.7, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.3,  "doubt": 0.5},  "target": 0.15},
-        "dispute":    {"precision": 0.5, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.2,  "doubt": 0.6},  "target": 0.25},
-        "bayes":      {"precision": 0.6, "policy": {"generate": 0.1,  "merge": 0.1,  "elaborate": 0.3,  "doubt": 0.5},  "target": 0.2},
-    }
-
-    preset = PRESETS.get(mode_id, PRESETS["horizon"])
+    preset = get_mode(mode_id).get("preset") or get_mode("horizon")["preset"]
     return CognitiveState(
         precision=preset["precision"],
         policy_weights=dict(preset["policy"]),

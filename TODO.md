@@ -31,13 +31,6 @@
 
 ## Ум расширенный
 
-- [ ] **Генерация в embedding space** — brainstorm без текста, только векторы.
-  Текст рендерится по клику. Ускорение + чистота distinct-routing.
-- [ ] **Text on-demand для нод** — сейчас текст всегда есть при создании.
-  Лениво генерировать когда юзер смотрит ноду.
-- [ ] **Cross-graph seed**: выводы одной сессии → seed следующей через
-  state-граф. Continuity между днями.
-
 ## UI / визуализация
 
 - [ ] **Sync-dashboard** — график sync_error во времени + топ-3 области
@@ -88,12 +81,6 @@
 Эти не блокеры. Делать только когда тестовая нагрузка покажет что стоит.
 По духу — то же что v8d сделал с primitive-switches: **слить две штуки в одну**.
 
-- [ ] **14 modes → parameter presets**. Сейчас `modes.py` ~300 строк с
-  primitive/strategy полями (мёртвые после v8d). Свести к кортежу
-  `(S₀, NE₀, τ_in, τ_out, policy, renderer_key)`. 300 → 60 строк.
-- [ ] **5 renderers → 1 `render_card(zone, style)`**. dispute/tournament/bayesian/
-  ideas_list/habit — похожие карточки. Шаблон + параметры стиля = −150 строк.
-
 ---
 ---
 
@@ -101,6 +88,65 @@
 
 Формат каждого блока: **что делает** → **как проверить** → **на что влияет** →
 **красный флаг если сломано**.
+
+## Предиктивная user-модель (prototype integration из MindBalance)
+
+**Что.** UserState обогащён четырьмя концептами из прототипов Игоря:
+
+1. **Signed prediction error.** `UserState.expectation` (медленный EMA
+   reality), `surprise = reality − expectation` signed ∈ [−1, 1],
+   `imbalance = |surprise|` (MindBalance ID). Направление ошибки
+   сохраняется — подъём ≠ спад.
+2. **Named user-states.** [src/user_state_map.py](src/user_state_map.py)
+   содержит 10 регионов в (T=serotonin, A=(D+N)/2) пространстве:
+   flow, inspiration, curiosity, gratitude, neutral, meditation, apathy,
+   stress, disappointment, burnout. `user.named_state` — derived @property.
+3. **Dual-pool energy.** `long_reserve` (2000-capacity) в UserState,
+   cascading debit: при daily<20 налог 30% уходит в long. Ночное
+   восстановление через HRV. `burnout_risk = 1 − long/max`.
+4. **Decision cost by mode.** `_MODE_COST` таблица: simple (fan/scout/free=3)
+   → critical (tournament/dispute=12). `_log_decision` списывает по mode_id.
+
+Plus: **`POST /assist/simulate-day`** endpoint для прогноза «если я
+запланирую X, Y, Z — что будет к концу дня» (clones UserState, шагает,
+возвращает predicted named_state + burnout_risk).
+Details → [docs/user-model-design.md](docs/user-model-design.md).
+
+**Проверка.**
+```
+GET /assist/state
+  → user_state.expectation/reality/surprise/imbalance/named_state/long_reserve
+
+POST /assist/simulate-day {"plan":[{"mode":"tournament"}×9]}
+  → {end_of_day: {daily_remaining:0, long_reserve:~1495,
+                   predicted_named_state: {...}}}
+
+GET /assist/named-states
+  → {states: [10 regions...]}
+```
+
+**Влияет на:** UserState stops being "just a sync partner" — она теперь
+**физическая система** со своей энергетикой, прогнозами и узнаваемыми
+эмоциональными паттернами. Ключевое: `surprise` signed (знает: реальность
+лучше/хуже ожиданий), `named_state` даёт UX-читаемую метку вместо 4
+скаляров, `long_reserve` моделирует хронический износ.
+
+**Живые тесты.**
+- Тратя 9 решений mode=tournament (12 каждое) → `daily_remaining=0`,
+  `long_reserve` тапается на ~6 единиц (tax 30% при low daily).
+- Юзер в состоянии dopamine=0.85, serotonin=0.85, norepinephrine=0.9 →
+  `named_state.key == "flow"`.
+- После полуночи (`last_reset_date` < today) → `long_reserve` +=
+  ~110·hrv_recovery (ночное восстановление).
+- Перезапуск сервера → UserState сохраняется (user_state.json).
+
+**Красный флаг.**
+- `surprise` всегда 0 → `tick_expectation` не вызывается (проверь, что
+  хуки после _clamp в update_from_* стоят).
+- `named_state.key` всегда "neutral" → T/A координаты не меняются (все
+  скаляры застряли на 0.5).
+- `long_reserve` не восстанавливается после сна → `recover_long_reserve`
+  не зовётся в `_ensure_daily_reset`.
 
 ## Симбиоз — UserState ↕ SystemState + sync_regime
 
@@ -234,6 +280,139 @@ GET /graph/self?limit=5 → {entries: [...], total: N, last_hash: ...}
 **Красный флаг.**
 - Parent chain сломан (несколько корней) → concurrent write без lock
 - State_origin всегда `1_rest` → NE и burnout не читаются в state_origin_hint
+
+## Архитектурный collapse — modes + renderers
+
+**Что.** Две параллельные чистки:
+
+1. **14 modes → compact tuples.** MODES dict теперь — кортеж на режим
+   `(name_ru, name_en, goals, fields, placeholder_ru, placeholder_en,
+   intro_ru, intro_en, renderer_style, preset)`. Убраны неиспользуемые
+   поля (`description*`, `tooltip`). Политики вынесены в `_P_*` константы
+   (4 базовых шаблона покрывают все 14). Presets (precision/policy/target)
+   фолдированы в MODES — **один источник истины**; дубликат PRESETS dict
+   в `create_horizon` удалён. `get_mode(id)` собирает flat-dict из кортежа
+   (backward compat для callers).
+
+2. **5 renderers → `_resolve_renderer()` + `_render_card()`.** В
+   `execute_via_zones` убрана дупликация style×zone branching.
+   `_resolve_renderer(style, zones)` → final renderer ∈
+   {dialectical, comparative, cluster, explore}. `_render_card(renderer,
+   ideas, zones, lang)` — одна функция собирает карточку. Не трогает
+   `card.type` значения (dialectic/comparison/ideas_list остаются
+   теми же, frontend не ломается).
+
+**Проверка.**
+- `list_modes()` → 14 records, UI селектор показывает все 14 опций.
+- `POST /graph/add {mode: "tournament", node_type: "goal"}` → нода с
+  `mode="tournament"` сохранена, subgoals парсятся если `goals_count=="2+"`.
+- `POST /graph/tick` на нём → `tick_engine="nand"`, preset применяется.
+- `/assist {message: "BMW vs Tesla"}` → classify выбирает tournament,
+  card.type="comparison" приходит на фронт.
+
+**Влияет на:** код-квалитет, не поведение. Меньше повторяющихся строк,
+один источник истины для preset'ов. Frontend invariants нетронуты.
+
+**Красный флаг.**
+- Селектор UI пустой / < 14 → MODES dict порядок сломан или
+  `list_modes()` не возвращает нужного формата.
+- `create_horizon(mode_id)` даёт странные precision — значит `_preset`
+  helper вернул не тот dict (`preset["precision"]` vs `preset.precision`).
+- `execute_via_zones` возвращает `card.type` отличный от ожидаемых
+  (dialectic/comparison/ideas_list) → frontend потеряется.
+
+## Cross-graph seed — continuity между сессиями
+
+**Что.** Выводы прошлых сессий (записанные как tick-entries в state_graph)
+извлекаются и инжектятся в новый content-граф как **seed-ноды** с
+унаследованными embedding'ами. Модуль [src/cross_graph.py](src/cross_graph.py)
+фильтрует state_graph по приоритету action'ов (stable GOAL REACHED →
+collapse → pump-bridge → smartdc → compare), дедупит по content_touched,
+сортирует по важности/свежести. `seed_from_history()` создаёт ноды с
+`rendered=False`, `seeded_from=<state_hash>`, `seeded_timestamp=...` для
+провенанса.
+
+**Проверка.**
+```
+POST /workspace/seed-from-history
+     {"days": 7, "limit": 5, "graph_id": "main"}
+  → {created: [idx, ...], skipped_dup, skipped_no_emb, total_considered}
+
+POST /workspace/switch {"id": "work"}
+  → если target пустой, auto_seed=true (по умолчанию) подбросит 3 seed'а
+```
+
+**Влияет на:** жизнь между днями. Новая сессия не с пустого листа —
+система помнит «что решила вчера», даже если юзер открыл workspace
+впервые за неделю. Embedding'и из state_embeddings переживают в новый
+граф, distinct/tick работают поверх них сразу. Текст seed-ноды — stub
+"💭 reason...", разворачивается через `/graph/render-node`.
+
+**Живые тесты.**
+- Закрой Baddle, подожди день, открой новый workspace на ту же тему →
+  `POST /workspace/seed-from-history` покажет conclusions из старых
+  sessions.
+- `/workspace/switch` на пустой workspace → автоматически 3 seeds.
+  `auto_seed=false` в body отключает.
+- Второй вызов `seed-from-history` не дублирует — проверяет `seeded_from`
+  в существующих нодах.
+
+**Красный флаг.**
+- `skipped_no_emb` равен `total_considered` → embedding cache пуст
+  (не было `ensure_embedding` у старых entries → проверь api_get_embedding).
+- `created: []` при непустом state_graph → возможно `graph_id` не
+  совпадает, или все conclusions старше `days`.
+
+## Embedding-first brainstorm + text-on-demand
+
+**Что.** Два связанных endpoint'а:
+
+1. **`POST /graph/brainstorm-seed`** — принимает topic, embeddит его один
+   раз, затем генерирует N **vector-seeds** через Gaussian perturbation в
+   embedding space (dimension-invariant: `sigma` — desired L2 norm шума).
+   Novelty-фильтрация против существующих embeddings + уже принятых.
+   Создаёт ноды с `text="💭", rendered=false, embedding=<perturbed>`. **LLM
+   текстовой генерации нет** — только 1 embed-call на seed.
+2. **`POST /graph/render-node`** — разворачивает unrendered-ноду в текст
+   лениво, когда юзер её открыл. Контекст для LLM: topic + до 3 соседних
+   rendered текстов. Idempotent (возвращает cached если уже rendered).
+
+Плюс `rendered: bool` в каждой node (default `True` для backward compat).
+distinct/routing работают сразу поверх unrendered — embedding есть.
+
+Реализация: `sample_in_embedding_space()` в [src/graph_logic.py](src/graph_logic.py)
++ endpoints в [src/graph_routes.py](src/graph_routes.py).
+
+**Проверка.**
+```
+POST /graph/brainstorm-seed {"topic":"...","n":5}
+  → {created: [idx1, ...], n_sampled: 5}
+
+POST /graph/render-node {"index": idx1, "lang":"ru"}
+  → {text: "...", cached: false}
+POST /graph/render-node {"index": idx1}
+  → {cached: true}
+```
+
+**Влияет на:** скорость brainstorm-фаз. Вместо N LLM-генераций +
+N embed-calls + novelty-reject: 1 embed + N perturbation + novelty
+геометрически + LLM текст только для кликнутых (≈20% при типовом use).
+Также чистота distinct-routing: embedding не смещён lexical choice,
+он исходит из геометрии.
+
+**Живые тесты.**
+- `POST /graph/brainstorm-seed {"topic":"экономика","n":5}` → 5 нод
+  с 💭, все с embedding. `/graph/recalc` покажет распределение сходств.
+- `POST /graph/render-node {"index":0}` → реальный текст одним LLM-call.
+  Повторный вызов → cached:true, тот же текст.
+- `distinct` между seed-нодами: большинство пар в 0.4–0.5 диапазоне
+  (новизна соблюдена).
+
+**Красный флаг.**
+- `n_sampled` всегда < `n_requested` → novelty_threshold слишком жёсткий
+  или max_distance_from_seed слишком маленький.
+- Ноды сохраняют `💭` после render-node → endpoint не обновляет
+  `node["text"]` + `node["rendered"] = true`.
 
 ## Horizon precision drift — младенец → зрелый
 

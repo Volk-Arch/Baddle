@@ -37,6 +37,13 @@ SYNC_HIGH_THRESHOLD = 0.3      # error < 0.3 → sync высокий (в L2-norm
 STATE_HIGH_THRESHOLD = 0.55    # mean(D,S) > 0.55 → state высокий
 STATE_LOW_THRESHOLD = 0.35     # mean(D,S) < 0.35 → state низкий
 
+# Параметры предиктивной модели (MindBalance intuition)
+EXPECTATION_EMA_DECAY = 0.98   # медленный baseline — выживает через дни, не часы
+LONG_RESERVE_MAX = 2000        # общий резерв (как в MindBalance v2)
+LONG_RESERVE_DEFAULT = 1500    # стартовое значение (можно восстановить от hrv)
+DAILY_ENERGY_MAX = 100
+LONG_RESERVE_TAP_THRESHOLD = 20  # ниже daily → начинаем тратить long reserve
+
 
 class UserState:
     """Зеркало Neurochem для пользователя. Питается наблюдаемыми сигналами."""
@@ -55,6 +62,14 @@ class UserState:
         self.hrv_coherence: Optional[float] = None
         self.hrv_stress: Optional[float] = None
         self.hrv_rmssd: Optional[float] = None
+
+        # Предиктивная модель (signed prediction error)
+        # expectation = медленный EMA state_level (baseline ожидания)
+        # surprise = (current state_level) − expectation, signed в [−1, 1]
+        self.expectation: float = 0.5
+
+        # Dual-pool energy (MindBalance v2): daily + долгосрочный резерв
+        self.long_reserve: float = LONG_RESERVE_DEFAULT
 
         # Rolling state для timing/message variance
         self._last_input_ts: Optional[float] = None
@@ -84,6 +99,7 @@ class UserState:
             self.hrv_stress = max(0.0, min(1.0, float(stress)))
             self.norepinephrine = 0.9 * self.norepinephrine + 0.1 * self.hrv_stress
         self._clamp()
+        self.tick_expectation()
 
     # ── Timing / engagement ────────────────────────────────────────────────
 
@@ -106,6 +122,7 @@ class UserState:
             self.dopamine = 0.9 * self.dopamine + 0.1 * signal
         self._last_input_ts = now
         self._clamp()
+        self.tick_expectation()
 
     def update_from_message(self, text: str):
         """Variance длины сообщений → serotonin (стабильный юзер = уверенный).
@@ -126,6 +143,7 @@ class UserState:
                 stability = max(0.0, 1.0 - min(1.0, rel_std))
                 self.serotonin = 0.95 * self.serotonin + 0.05 * stability
         self._clamp()
+        self.tick_expectation()
 
     # ── Feedback → dopamine + burnout ──────────────────────────────────────
 
@@ -140,6 +158,7 @@ class UserState:
             self.dopamine = 0.9 * self.dopamine + 0.1 * 0.2
             self.burnout = min(1.0, self.burnout + 0.05)
         self._clamp()
+        self.tick_expectation()
 
     # ── Energy → burnout ───────────────────────────────────────────────────
 
@@ -153,6 +172,7 @@ class UserState:
         usage = min(1.0, max(0.0, decisions_today * 6.0 / max_budget))
         self.burnout = 0.9 * self.burnout + 0.1 * usage
         self._clamp()
+        self.tick_expectation()
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -161,6 +181,8 @@ class UserState:
         self.serotonin = max(0.0, min(1.0, self.serotonin))
         self.norepinephrine = max(0.0, min(1.0, self.norepinephrine))
         self.burnout = max(0.0, min(1.0, self.burnout))
+        self.expectation = max(0.0, min(1.0, self.expectation))
+        self.long_reserve = max(0.0, min(float(LONG_RESERVE_MAX), self.long_reserve))
 
     def vector(self) -> np.ndarray:
         """4-мерная точка состояния для sync-метрики."""
@@ -174,12 +196,125 @@ class UserState:
         """
         return float((self.dopamine + self.serotonin) / 2.0)
 
+    # ── Предиктивная модель: expectation EMA + surprise ────────────────────
+
+    def tick_expectation(self):
+        """Медленный EMA reality → expectation.
+
+        Вызывается автоматически после каждого `update_from_*` сигнала
+        (через _clamp + этот метод в обёртках). Decay 0.98 значит baseline
+        переживает ~50 обновлений — дни, не минуты. Это делает surprise
+        осмысленным: «против чего именно неожиданность».
+        """
+        reality = self.state_level()
+        self.expectation = (EXPECTATION_EMA_DECAY * self.expectation
+                            + (1 - EXPECTATION_EMA_DECAY) * reality)
+        self.expectation = max(0.0, min(1.0, self.expectation))
+
+    @property
+    def reality(self) -> float:
+        """Current observed state_level (для симметрии с MindBalance ID/IP)."""
+        return self.state_level()
+
+    @property
+    def surprise(self) -> float:
+        """Signed prediction error: reality − expectation. [−1, 1].
+
+        Положительный → реальность лучше ожиданий (подъём).
+        Отрицательный → реальность хуже (спад, разочарование).
+        Магнитуда — это MindBalance ID (Index of Disbalance).
+        """
+        return float(self.reality - self.expectation)
+
+    @property
+    def imbalance(self) -> float:
+        """|surprise| — магнитуда ошибки, эквивалент MindBalance ID."""
+        return abs(self.surprise)
+
+    # ── Named state (Voronoi) ──────────────────────────────────────────────
+
+    @property
+    def named_state(self) -> dict:
+        """Ближайший именованный регион в (T, A) пространстве.
+
+        T (emotional tone) = serotonin (стабильность, валентность)
+        A (activation) = mean(dopamine, norepinephrine) (arousal)
+
+        Возвращает {key, label, advice, distance, coord}. 10 регионов
+        из MindBalance v4 (flow / stress / burnout / curiosity / ...).
+        """
+        from .user_state_map import nearest_named_state
+        t = self.serotonin
+        a = (self.dopamine + self.norepinephrine) / 2.0
+        return nearest_named_state(t, a)
+
+    # ── Dual-pool energy ───────────────────────────────────────────────────
+
+    def energy_snapshot(self, decisions_today: int) -> dict:
+        """Мгновенный срез дуальной энергетики.
+
+        daily_energy   = max − decisions_today · avg_cost (рассчитывается в assistant.py)
+        long_reserve   = self.long_reserve (медленный пул)
+        burnout_risk   = 1 − long_reserve/LONG_RESERVE_MAX
+        Возвращает dict для API + UI.
+        """
+        long_pct = self.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX > 0 else 0.0
+        return {
+            "decisions_today": decisions_today,
+            "long_reserve": round(self.long_reserve, 1),
+            "long_reserve_max": LONG_RESERVE_MAX,
+            "long_reserve_pct": round(long_pct, 3),
+            "burnout_risk": round(1.0 - long_pct, 3),
+        }
+
+    def debit_energy(self, cost: float, daily_remaining: float) -> dict:
+        """Списание cost из дневной энергии. Если daily < 20 → часть уходит в long.
+
+        cost: стоимость решения (определяется mode в assistant.py)
+        daily_remaining: сколько осталось daily перед этим решением
+        Возвращает {daily_used, long_used} — что реально списалось откуда.
+        """
+        daily_used = min(cost, max(0.0, daily_remaining))
+        overflow = cost - daily_used
+        long_used = 0.0
+        if overflow > 0 or daily_remaining < LONG_RESERVE_TAP_THRESHOLD:
+            # cascading: если daily был мал, часть уходит из long
+            # + full overflow идёт из long
+            extra = overflow
+            if daily_remaining < LONG_RESERVE_TAP_THRESHOLD and cost > 0:
+                # Дополнительный tax: при low daily расход дороже
+                extra += cost * 0.3
+            long_used = min(extra, self.long_reserve)
+            self.long_reserve -= long_used
+        self._clamp()
+        return {"daily_used": daily_used, "long_used": long_used}
+
+    def recover_long_reserve(self, hrv_recovery: Optional[float] = None):
+        """Ночное восстановление long_reserve (вызывается консолидацией).
+
+        hrv_recovery ∈ [0, 1] (из energy_recovery HRV) — скейлит amount.
+        Без HRV — консервативно восстанавливаем как при среднем сне (0.7).
+        """
+        recovery = hrv_recovery if hrv_recovery is not None else 0.7
+        # MindBalance v2 defaults: sleep_recovery=90, rest_bonus=20
+        amount = 90.0 * recovery + 20.0 * recovery
+        self.long_reserve = min(float(LONG_RESERVE_MAX), self.long_reserve + amount)
+        self._clamp()
+
     def to_dict(self) -> dict:
+        ns = self.named_state
         return {
             "dopamine": round(self.dopamine, 3),
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
             "burnout": round(self.burnout, 3),
+            "expectation": round(self.expectation, 3),
+            "reality": round(self.reality, 3),
+            "surprise": round(self.surprise, 3),
+            "imbalance": round(self.imbalance, 3),
+            "long_reserve": round(self.long_reserve, 1),
+            "named_state": {"key": ns["key"], "label": ns["label"],
+                            "advice": ns["advice"]},
             "hrv": {
                 "coherence": self.hrv_coherence,
                 "stress": self.hrv_stress,
@@ -195,6 +330,8 @@ class UserState:
             norepinephrine=d.get("norepinephrine", 0.5),
             burnout=d.get("burnout", 0.0),
         )
+        u.expectation = float(d.get("expectation", 0.5))
+        u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
         hrv = d.get("hrv") or {}
         u.hrv_coherence = hrv.get("coherence")
         u.hrv_stress = hrv.get("stress")

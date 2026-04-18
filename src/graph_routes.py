@@ -18,6 +18,7 @@ from .graph_logic import (
     _graph_generate, _clean_thought, _generate_thought,
     _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
     _detect_traps, _compute_alpha_beta,
+    sample_in_embedding_space,
 )
 from .hrv_manager import get_manager as get_hrv_manager
 
@@ -1211,17 +1212,31 @@ def workspace_create():
 
 @graph_bp.route("/workspace/switch", methods=["POST"])
 def workspace_switch():
-    """Switch active workspace. Flushes current, loads target graph into _graph."""
+    """Switch active workspace. Flushes current, loads target graph into _graph.
+
+    Cross-graph auto-seed: если target content-граф пустой И есть history
+    за последние 7 дней по этому graph_id — подбросим 3 seed-ноды.
+    """
     from .workspace import get_workspace_manager
     d = request.get_json(force=True) or {}
     ws_id = d.get("id", "").strip().lower()
+    auto_seed = bool(d.get("auto_seed", True))
     if not ws_id:
         return jsonify({"error": "id required"})
     try:
         get_workspace_manager().switch(ws_id)
-        return jsonify({"ok": True, "active": ws_id})
     except Exception as e:
         return jsonify({"error": str(e)})
+
+    seeded = None
+    if auto_seed and not _graph.get("nodes"):
+        try:
+            from .cross_graph import seed_from_history
+            seeded = seed_from_history(days=7, limit=3, graph_id=ws_id)
+        except Exception as e:
+            print(f"[workspace/switch] auto-seed failed: {e}")
+
+    return jsonify({"ok": True, "active": ws_id, "seeded": seeded})
 
 
 @graph_bp.route("/workspace/save", methods=["POST"])
@@ -1268,6 +1283,32 @@ def workspace_find_cross():
                              h["to_graph"], h["to_node"], h["d"]):
             saved += 1
     return jsonify({"hits": hits, "saved": saved})
+
+
+@graph_bp.route("/workspace/seed-from-history", methods=["POST"])
+def workspace_seed_from_history():
+    """Continuity между сессиями: выводы из state_graph → seeds в текущем графе.
+
+    Body (всё опционально):
+      {
+        "days": 7,            # окно истории
+        "limit": 5,            # максимум seeds
+        "graph_id": "main",    # фильтр по workspace (пусто = любой)
+        "topic_hint": ""       # топик для новых нод
+      }
+
+    Создаёт `rendered=false` ноды с embedding'ами из state_embeddings.
+    provenance: `node.seeded_from = <state_hash>`.
+    """
+    from .cross_graph import seed_from_history
+    d = request.get_json(force=True) or {}
+    result = seed_from_history(
+        days=float(d.get("days", 7)),
+        limit=int(d.get("limit", 5)),
+        graph_id=d.get("graph_id"),
+        topic_hint=(d.get("topic_hint") or "").strip(),
+    )
+    return jsonify(result)
 
 
 @graph_bp.route("/workspace/meta", methods=["GET"])
@@ -1340,6 +1381,125 @@ def graph_self_similar():
     sg = get_state_graph()
     results = sg.query_similar(query_emb, k=k)
     return jsonify({"results": results, "count": len(results)})
+
+
+@graph_bp.route("/graph/brainstorm-seed", methods=["POST"])
+def graph_brainstorm_seed():
+    """Embedding-first brainstorm: topic → N пертурбированных векторов без LLM текста.
+
+    Для каждого seed создаётся node с `rendered=false, text='💭'`, но с
+    реальным embedding'ом. distinct/routing работают сразу. Текст
+    рендерится лениво через POST /graph/render-node когда юзер откроет.
+
+    Body: { "topic": "...", "n": 5, "sigma": 0.15, "novelty_threshold": 0.25 }
+    """
+    from .api_backend import api_get_embedding
+    d = request.get_json(force=True) or {}
+    topic = (d.get("topic") or "").strip()
+    n = int(d.get("n", 5))
+    sigma = float(d.get("sigma", 1.0))
+    novelty = float(d.get("novelty_threshold", 0.2))
+    if not topic:
+        return jsonify({"error": "empty topic"})
+
+    try:
+        seed_emb = api_get_embedding(topic)
+    except Exception as e:
+        return jsonify({"error": f"seed embedding failed: {e}"})
+    if not seed_emb:
+        return jsonify({"error": "seed embedding returned empty"})
+
+    existing = [nd.get("embedding") for nd in _graph["nodes"] if nd.get("embedding")]
+    samples = sample_in_embedding_space(
+        seed_emb, n=n, sigma=sigma,
+        novelty_threshold=novelty,
+        existing_embeddings=existing,
+    )
+
+    created = []
+    for emb in samples:
+        idx = _add_node(
+            text="💭",
+            depth=0,
+            topic=topic,
+            node_type="hypothesis",
+            embedding=emb,
+            rendered=False,
+        )
+        created.append(idx)
+
+    _graph["meta"].setdefault("topic", topic)
+    return jsonify({
+        "created": created,
+        "n_requested": n,
+        "n_sampled": len(samples),
+        "topic": topic,
+    })
+
+
+@graph_bp.route("/graph/render-node", methods=["POST"])
+def graph_render_node():
+    """Text-on-demand: разворачиваем unrendered-ноду в текст через LLM.
+
+    Использует топик + тексты соседей (incoming directed) как контекст.
+    Idempotent: если нода уже rendered, возвращает cached text.
+
+    Body: { "index": N, "lang": "ru" }
+    """
+    d = request.get_json(force=True) or {}
+    idx = int(d.get("index", -1))
+    lang = d.get("lang", "ru")
+    nodes = _graph["nodes"]
+    if idx < 0 or idx >= len(nodes):
+        return jsonify({"error": "invalid index"})
+
+    node = nodes[idx]
+    if node.get("rendered", True) and node.get("text") and node["text"] != "💭":
+        return jsonify({"ok": True, "text": node["text"], "cached": True, "index": idx})
+
+    topic = _graph["meta"].get("topic", "") or node.get("topic", "")
+    neighbor_texts: list[str] = []
+    for pair in _graph["edges"].get("directed", []):
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            continue
+        src, dst = pair
+        if dst == idx and 0 <= src < len(nodes):
+            t = nodes[src].get("text", "")
+            if t and nodes[src].get("rendered", True):
+                neighbor_texts.append(t[:80])
+
+    if lang == "ru":
+        system = ("/no_think\nРазверни seed-идею в одно короткое предложение "
+                  "по теме. Без вступлений. Одно предложение.")
+        user = f"Тема: {topic or '(не задана)'}"
+        if neighbor_texts:
+            user += "\nСоседние мысли:\n" + "\n".join(f"- {t}" for t in neighbor_texts[:3])
+        user += "\n\nСформулируй новую идею одним предложением:"
+    else:
+        system = ("/no_think\nExpand the seed into one short sentence on topic. "
+                  "No preamble. One sentence.")
+        user = f"Topic: {topic or '(unset)'}"
+        if neighbor_texts:
+            user += "\nNeighbor thoughts:\n" + "\n".join(f"- {t}" for t in neighbor_texts[:3])
+        user += "\n\nOne-sentence new idea:"
+
+    try:
+        text, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user}],
+            max_tokens=80, temp=0.7, top_k=40,
+        )
+    except Exception as e:
+        return jsonify({"error": f"generation failed: {e}"})
+
+    rendered_text = _clean_thought(text or "", topic) or "[unable to render]"
+    node["text"] = rendered_text
+    node["rendered"] = True
+    node["last_accessed"] = datetime.now(timezone.utc).isoformat()
+    # Embedding cache может стать stale: новый текст ≠ seed perturbation.
+    # Оставляем старый embedding — он всё ещё описывает позицию ноды в
+    # пространстве мыслей (rendered text подстроен под эту позицию).
+    return jsonify({"ok": True, "text": rendered_text, "cached": False, "index": idx})
 
 
 @graph_bp.route("/graph/consolidate", methods=["POST"])

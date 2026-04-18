@@ -19,6 +19,30 @@ from .hrv_manager import get_manager as get_hrv_manager
 from .cognitive_loop import get_cognitive_loop
 from .assistant_exec import execute as execute_mode
 
+
+# ── Decision cost by mode complexity (MindBalance intuition) ────────────────
+
+# Сложность режима определяет энергоёмкость решения. Разные моды тратят
+# разные объёмы — простой brainstorm ≠ tournament с LLM-судейством.
+_MODE_COST = {
+    # simple — быстрые, почти free flow
+    "free": 3, "scout": 3, "fan": 3,
+    # moderate — направленные, один LLM-путь
+    "vector": 6, "horizon": 6, "rhythm": 4, "bayes": 7,
+    # complex — multi-step, AND/OR cluster
+    "builder": 10, "pipeline": 10, "cascade": 10, "scales": 8,
+    # critical — XOR с LLM-judge + смысловая ответственность
+    "tournament": 12, "dispute": 12,
+    # race — быстрее XOR
+    "race": 6,
+}
+_DEFAULT_COST = 6
+
+
+def _decision_cost(mode_id: str) -> int:
+    """Стоимость решения в daily energy единицах по mode_id."""
+    return _MODE_COST.get(mode_id, _DEFAULT_COST)
+
 assistant_bp = Blueprint("assistant", __name__)
 
 
@@ -30,20 +54,39 @@ _STATE_FILE = Path(__file__).parent.parent / "user_state.json"
 def _load_state() -> dict:
     if _STATE_FILE.exists():
         try:
-            return json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+            data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
-            pass
-    return {
-        "decisions_today": 0,
-        "last_reset_date": None,
-        "last_interaction": None,
-        "total_decisions": 0,
-        "streaks": {},       # habit_name → consecutive_days
-        "history": [],       # last 100 interactions (trimmed)
-    }
+            data = None
+    else:
+        data = None
+    if not data:
+        data = {
+            "decisions_today": 0,
+            "daily_spent": 0.0,   # сумма энергии потраченной за сегодня (дробная)
+            "last_reset_date": None,
+            "last_interaction": None,
+            "total_decisions": 0,
+            "streaks": {},       # habit_name → consecutive_days
+            "history": [],       # last 100 interactions (trimmed)
+        }
+    # Восстановим UserState из блока в файле (persistence между сессиями)
+    try:
+        from .user_state import UserState, set_user_state
+        us_dump = data.get("user_state_dump")
+        if isinstance(us_dump, dict):
+            set_user_state(UserState.from_dict(us_dump))
+    except Exception as e:
+        print(f"[assistant] user_state restore error: {e}")
+    return data
 
 
 def _save_state(state: dict):
+    # Сериализуем текущий UserState вместе с остальным для continuity
+    try:
+        from .user_state import get_user_state
+        state["user_state_dump"] = get_user_state().to_dict()
+    except Exception:
+        pass
     try:
         _STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
@@ -55,45 +98,83 @@ def _today_date() -> str:
 
 
 def _ensure_daily_reset(state: dict) -> dict:
-    """Reset daily counters if date changed."""
+    """Reset daily counters if date changed. Полуночный хук восстанавливает
+    long_reserve (ночное восстановление из MindBalance v2)."""
     today = _today_date()
     if state.get("last_reset_date") != today:
+        # Ночь прошла — восстановим long reserve через HRV (если был)
+        prev_date = state.get("last_reset_date")
         state["decisions_today"] = 0
+        state["daily_spent"] = 0.0
         state["last_reset_date"] = today
+        if prev_date:
+            try:
+                from .user_state import get_user_state
+                hrv_mgr = get_hrv_manager()
+                rec = None
+                if hrv_mgr.is_running:
+                    rec = (hrv_mgr.get_baddle_state() or {}).get("energy_recovery")
+                get_user_state().recover_long_reserve(hrv_recovery=rec)
+            except Exception as e:
+                print(f"[assistant] overnight recovery error: {e}")
     return state
 
 
 def _compute_energy(state: dict, hrv_recovery: Optional[float] = None) -> dict:
-    """Compute current energy level 0-100.
+    """Compute current energy level. Dual-pool: daily + long_reserve.
 
-    Base: 100 decrementing by decisions_today * 6.
-    HRV modulation: recovery affects daily max.
+    daily_spent — фактически потраченная сегодня энергия (модально-взвешенная,
+    см. _decision_cost). Ceiling модулируется HRV recovery.
+    long_reserve — медленный пул, тратится при daily<20 как подстраховка.
     """
-    decisions = state.get("decisions_today", 0)
+    daily_spent = float(state.get("daily_spent", 0.0))
     base_max = 100.0
-
-    # If HRV available and shows poor recovery, lower the ceiling
     if hrv_recovery is not None:
-        base_max = 40 + 60 * hrv_recovery  # 40-100 range
+        base_max = 40 + 60 * hrv_recovery
+    daily_remaining = max(0.0, base_max - daily_spent)
 
-    energy = max(0.0, base_max - decisions * 6.0)
+    from .user_state import get_user_state
+    user = get_user_state()
+    pool = user.energy_snapshot(state.get("decisions_today", 0))
     return {
-        "energy": round(energy, 0),
+        "energy": round(daily_remaining, 0),
         "max": round(base_max, 0),
-        "decisions_today": decisions,
+        "decisions_today": state.get("decisions_today", 0),
+        "daily_spent": round(daily_spent, 1),
         "recovery": hrv_recovery,
+        "long_reserve": pool["long_reserve"],
+        "long_reserve_max": pool["long_reserve_max"],
+        "long_reserve_pct": pool["long_reserve_pct"],
+        "burnout_risk": pool["burnout_risk"],
     }
 
 
-def _log_decision(state: dict, kind: str, meta: dict = None):
-    """Record a decision/interaction in history."""
+def _log_decision(state: dict, kind: str, meta: dict = None, mode_id: str = None,
+                  hrv_recovery: Optional[float] = None):
+    """Record decision. Debits energy по сложности mode_id (MindBalance intuition).
+
+    Dual-pool: если daily<20 → cascade в long_reserve (см. UserState.debit_energy).
+    """
+    cost = _decision_cost(mode_id) if mode_id else _DEFAULT_COST
     state["decisions_today"] = state.get("decisions_today", 0) + 1
     state["total_decisions"] = state.get("total_decisions", 0) + 1
     state["last_interaction"] = time.time()
 
+    # Dual-pool debit
+    base_max = 40 + 60 * hrv_recovery if hrv_recovery is not None else 100.0
+    daily_remaining = max(0.0, base_max - float(state.get("daily_spent", 0.0)))
+    debit = {"daily_used": cost, "long_used": 0.0}
+    try:
+        from .user_state import get_user_state
+        debit = get_user_state().debit_energy(cost, daily_remaining)
+    except Exception as e:
+        print(f"[assistant] debit error: {e}")
+    state["daily_spent"] = float(state.get("daily_spent", 0.0)) + debit["daily_used"]
+
     entry = {
-        "ts": time.time(),
-        "kind": kind,
+        "ts": time.time(), "kind": kind,
+        "cost": cost, "daily_used": round(debit["daily_used"], 1),
+        "long_used": round(debit["long_used"], 1),
     }
     if meta:
         entry.update(meta)
@@ -362,7 +443,10 @@ def assist():
             clarify_q = (q_text or fallback_q).strip().split("\n")[0]
         except Exception:
             clarify_q = fallback_q
-        _log_decision(state, kind="assist_clarify", meta={"mode": mode_id, "message": message[:200]})
+        _log_decision(state, kind="assist_clarify",
+                      meta={"mode": mode_id, "message": message[:200]},
+                      mode_id=mode_id,
+                      hrv_recovery=(hrv_state or {}).get("energy_recovery"))
         _save_state(state)
         return jsonify({
             "text": clarify_q,
@@ -397,8 +481,11 @@ def assist():
         })
 
     # Log this interaction
-    _log_decision(state, kind="assist", meta={"mode": mode_id, "message": message[:200],
-                                                "intent": intent, "confidence": confidence})
+    _log_decision(state, kind="assist",
+                  meta={"mode": mode_id, "message": message[:200],
+                        "intent": intent, "confidence": confidence},
+                  mode_id=mode_id,
+                  hrv_recovery=(hrv_state or {}).get("energy_recovery"))
     _save_state(state)
 
     return jsonify({
@@ -485,9 +572,101 @@ def assist_camera():
 
 @assistant_bp.route("/assist/state", methods=["GET"])
 def assist_state():
-    """Return full CognitiveState metrics (for UI panel, diagnostics)."""
+    """Return full CognitiveState metrics (for UI panel, diagnostics).
+
+    UserState через `user_state` ключ уже включает: dopamine/serotonin/
+    norepinephrine/burnout, expectation/reality/surprise/imbalance (signed
+    prediction error), named_state (Voronoi region), long_reserve (dual-pool).
+    """
     from .horizon import get_global_state
     return jsonify(get_global_state().get_metrics())
+
+
+@assistant_bp.route("/assist/simulate-day", methods=["POST"])
+def assist_simulate_day():
+    """Day planning simulator — предсказать end-of-day state от плана решений.
+
+    Body: {
+      "plan": [{"mode": "tournament"}, {"mode": "fan"}, ...]
+      "hrv_recovery": 0.7   (optional, 0..1; если не задан — текущий HRV)
+    }
+
+    Симулирует по порядку: списывает cost из daily/long через UserState.debit_energy,
+    прокачивает (decisions_today, daily_spent). Возвращает прогноз:
+    end-of-day energy, long_reserve после, burnout_risk, predicted named_state.
+    """
+    from .user_state import UserState, get_user_state
+
+    d = request.get_json(force=True) or {}
+    plan = d.get("plan") or []
+    hrv_mgr = get_hrv_manager()
+    live_recovery = None
+    if hrv_mgr.is_running:
+        live_recovery = (hrv_mgr.get_baddle_state() or {}).get("energy_recovery")
+    hrv_recovery = d.get("hrv_recovery", live_recovery)
+
+    # Клонируем UserState чтобы симуляция не изменила живой
+    current = get_user_state()
+    sim = UserState.from_dict(current.to_dict())
+
+    # Стартовое daily_remaining — текущий reseted ceiling минус реально потраченное
+    state = _load_state()
+    state = _ensure_daily_reset(state)
+    base_max = 40 + 60 * hrv_recovery if hrv_recovery is not None else 100.0
+    daily_spent = float(state.get("daily_spent", 0.0))
+
+    steps = []
+    for step in plan:
+        mode = step.get("mode") or "free"
+        cost = _decision_cost(mode)
+        daily_rem = max(0.0, base_max - daily_spent)
+        debit = sim.debit_energy(cost, daily_rem)
+        daily_spent += debit["daily_used"]
+        steps.append({
+            "mode": mode, "cost": cost,
+            "daily_used": round(debit["daily_used"], 1),
+            "long_used": round(debit["long_used"], 1),
+            "daily_remaining_after": round(max(0.0, base_max - daily_spent), 1),
+            "long_reserve_after": round(sim.long_reserve, 1),
+        })
+        # Burnout каждое решение накапливает — приблизим update_from_energy
+        sim.burnout = min(1.0, sim.burnout + 0.005)
+
+    sim._clamp()
+    ns = sim.named_state
+    long_pct = sim.long_reserve / 2000.0
+    total_cost = sum(s["cost"] for s in steps)
+    total_daily = sum(s["daily_used"] for s in steps)
+    total_long = sum(s["long_used"] for s in steps)
+
+    return jsonify({
+        "plan_size": len(plan),
+        "total_cost": total_cost,
+        "total_daily_used": round(total_daily, 1),
+        "total_long_used": round(total_long, 1),
+        "steps": steps,
+        "end_of_day": {
+            "daily_remaining": round(max(0.0, base_max - daily_spent), 1),
+            "daily_max": round(base_max, 1),
+            "long_reserve": round(sim.long_reserve, 1),
+            "long_reserve_pct": round(long_pct, 3),
+            "burnout_risk": round(1.0 - long_pct, 3),
+            "predicted_named_state": {
+                "key": ns["key"], "label": ns["label"], "advice": ns["advice"],
+            },
+            "dopamine": round(sim.dopamine, 3),
+            "serotonin": round(sim.serotonin, 3),
+            "norepinephrine": round(sim.norepinephrine, 3),
+            "burnout": round(sim.burnout, 3),
+        },
+    })
+
+
+@assistant_bp.route("/assist/named-states", methods=["GET"])
+def assist_named_states():
+    """UI map: 10 регионов из MindBalance-Voronoi с координатами и advice."""
+    from .user_state_map import list_named_states
+    return jsonify({"states": list_named_states()})
 
 
 @assistant_bp.route("/graph/assist", methods=["POST"])

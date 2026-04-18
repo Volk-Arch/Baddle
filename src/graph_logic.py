@@ -120,6 +120,65 @@ def _bayesian_update_distinct(prior: float, d: float) -> float:
     return posterior
 
 
+def sample_in_embedding_space(
+    seed_embedding: list[float],
+    n: int = 5,
+    sigma: float = 1.0,
+    novelty_threshold: float = 0.2,
+    max_distance_from_seed: float = 0.6,
+    existing_embeddings: list | None = None,
+    max_attempts: int = 100,
+) -> list[list[float]]:
+    """Brainstorm в embedding space — N перturb'овских векторов без LLM текста.
+
+    sigma = desired L2 norm шума (dimension-invariant, scaled per-dim как
+    sigma/sqrt(dim)). sigma=1.0 → distinct(candidate, seed) ≈ 0.25. Больше
+    sigma → дальше от seed.
+
+    Returns unit-normalized candidate embeddings, каждый:
+      • distinct(candidate, seed) < max_distance_from_seed  (не улетел в область)
+      • distinct(candidate, e) > novelty_threshold ∀ e ∈ existing + accepted
+        (новизна относительно графа + уже принятых sample'ов)
+
+    Используется в /graph/brainstorm-seed: дешёвая генерация идей в виде
+    векторов; текст рендерится лениво только для тех что пользователь откроет.
+    Экономит токены (не генерируем текст до вычисления novelty).
+    """
+    import numpy as np
+    from .main import distinct
+
+    seed_vec = np.asarray(seed_embedding, dtype=np.float32)
+    if seed_vec.size == 0:
+        return []
+
+    existing = [np.asarray(e, dtype=np.float32) for e in (existing_embeddings or []) if e]
+    results: list[np.ndarray] = []
+    attempts = 0
+    rng = np.random.default_rng()
+    # Scale noise stddev с размерностью: expected ‖noise‖ ≈ sigma независимо от dim.
+    # Без этого в 768-d noise тонет/доминирует — dimension-invariance важна.
+    per_dim = float(sigma) / (seed_vec.size ** 0.5)
+
+    while len(results) < n and attempts < max_attempts:
+        attempts += 1
+        noise = rng.normal(0.0, per_dim, size=seed_vec.shape).astype(np.float32)
+        cand = seed_vec + noise
+        norm = float(np.linalg.norm(cand))
+        if norm < 1e-6:
+            continue
+        cand = cand / norm   # unit-normalize как настоящие embeddings
+
+        if distinct(cand, seed_vec) > max_distance_from_seed:
+            continue
+        if any(distinct(cand, e) < novelty_threshold for e in existing):
+            continue
+        if any(distinct(cand, r) < novelty_threshold for r in results):
+            continue
+        results.append(cand)
+
+    return [r.tolist() for r in results]
+
+
 def _d_from_relation(relation: str, strength: float) -> float:
     """Map (relation, strength) → distinct distance d.
 
@@ -180,23 +239,29 @@ def _beta_mean_ci(alpha: float, beta: float) -> dict:
 def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
                entropy: dict | None = None, confidence: float = 0.5,
                node_type: str = "thought",
-               embedding: list | None = None) -> dict:
+               embedding: list | None = None,
+               rendered: bool = True) -> dict:
     """Create a node dict with all required fields.
 
-    v8b: embeddings-first — embedding field is primary. Text stays for display.
+    embeddings-first: embedding field is primary. Text stays for display.
     If `embedding` is None, it'll be populated by _ensure_embeddings on next pass.
     distinct() can read from node["embedding"] directly, no LLM hop required.
+
+    `rendered=False` обозначает ноду созданную через embedding-first путь
+    (brainstorm-seed: perturbed vectors без текста). UI рендерит text только
+    по клику через /graph/render-node — text-on-demand.
     """
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": node_id,
         "text": text,
-        "embedding": embedding,   # v8b: primary — populated on create or on _ensure_embeddings
+        "embedding": embedding,
         "entropy": entropy or {"avg": 0.0, "unc": 0.0},
         "depth": depth,
         "topic": topic,
         "confidence": round(confidence, 2),
         "type": node_type,
+        "rendered": rendered,
         "created_at": now,
         "last_accessed": now,
     }
@@ -212,6 +277,7 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("topic", "")
         node.setdefault("confidence", 0.5)
         node.setdefault("type", "thought")
+        node.setdefault("rendered", True)    # legacy nodes считаются уже отрендеренными
         node.setdefault("created_at", None)
         node.setdefault("last_accessed", None)
 
@@ -225,12 +291,19 @@ def _get_texts(nodes: list[dict] | None = None) -> list[str]:
 
 def _add_node(text: str, depth: int = 0, topic: str = "",
               entropy: dict | None = None, confidence: float = 0.5,
-              node_type: str = "thought") -> int:
-    """Create node with next id, append to graph, return new index."""
+              node_type: str = "thought",
+              embedding: list | None = None,
+              rendered: bool = True) -> int:
+    """Create node with next id, append to graph, return new index.
+
+    embedding/rendered передаются в _make_node — для embedding-first brainstorm
+    (unrendered seed с perturbed embedding без реального текста).
+    """
     with graph_lock:
         nodes = _graph["nodes"]
         new_id = len(nodes)
-        nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence, node_type))
+        nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence,
+                                node_type, embedding=embedding, rendered=rendered))
         _graph.pop("_tick_tried", None)
         return new_id
 
