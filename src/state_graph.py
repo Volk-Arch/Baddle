@@ -189,7 +189,13 @@ class StateGraph:
         if origin:
             bits.append(origin)
         if neuro:
-            bits.append(f"S={neuro.get('S', '?')} NE={neuro.get('NE', '?')} DA={neuro.get('DA_tonic', '?')}")
+            def _fmt(v):
+                return f"{v:.2f}" if isinstance(v, (int, float)) else "?"
+            bits.append(
+                f"S={_fmt(neuro.get('serotonin'))} "
+                f"NE={_fmt(neuro.get('norepinephrine'))} "
+                f"DA={_fmt(neuro.get('dopamine'))}"
+            )
         if reason:
             bits.append(reason)
         return " | ".join(bits)

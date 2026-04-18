@@ -1,17 +1,13 @@
-"""baddle — 12 thinking modes built from 4 primitives.
+"""baddle — 14 режимов мышления как UI-пресеты.
 
-Algebra of thinking:
-  4 primitives: none / AND / OR / XOR
-  + strategies: unordered / seq / priority / balance (over AND)
-                comparative / dialectical (over XOR)
-  + goal types: finite / repeatable / open
-  = 12 modes
+Runtime на режимы не switch-ится (всё через NAND-зоны в tick_nand.py). MODES
+нужны для:
+  - UI: что показать в селекторе, какие поля на форме, placeholder, intro
+  - execute_via_zones: `renderer_style` определяет какую карточку вернуть
+  - create_horizon(mode_id): preset precision + policy weights
 
-Each mode config defines:
-  - primitive + strategy → how to process goals
-  - goal_type → when to stop
-  - fields → what UI fields to show
-  - description → human-readable explanation
+Классификация режима из сообщения юзера — через `classify_intent_llm`
+в assistant.py (один короткий LLM-вызов, не keyword-эвристики).
 """
 
 MODES = {
@@ -19,9 +15,6 @@ MODES = {
     "free": {
         "name": "Свободный",
         "name_en": "Free (manual)",
-        "primitive": None,
-        "strategy": None,
-        "goal_type": None,
         "goals_count": 0,
         "fields": ["topic"],
         "placeholder": "Тема или мысль...",
@@ -37,9 +30,6 @@ MODES = {
     "scout": {
         "name": "Блуждание",
         "name_en": "Wander",
-        "primitive": None,
-        "strategy": None,
-        "goal_type": None,
         "goals_count": 0,
         "fields": [],
         "placeholder": "Просто начни думать...",
@@ -55,9 +45,6 @@ MODES = {
     "vector": {
         "name": "Фокус",
         "name_en": "Focus",
-        "primitive": "focus",
-        "strategy": None,
-        "goal_type": "finite",
         "goals_count": 1,
         "fields": ["goal"],
         "placeholder": "Цель: что нужно достичь?",
@@ -71,9 +58,6 @@ MODES = {
     "rhythm": {
         "name": "Привычка",
         "name_en": "Habit",
-        "primitive": "focus",
-        "strategy": None,
-        "goal_type": "repeatable",
         "goals_count": 1,
         "fields": ["goal", "interval"],
         "placeholder": "Привычка: что делать регулярно?",
@@ -87,9 +71,6 @@ MODES = {
     "horizon": {
         "name": "Исследование",
         "name_en": "Research",
-        "primitive": "focus",
-        "strategy": None,
-        "goal_type": "open",
         "goals_count": 1,
         "fields": ["goal"],
         "placeholder": "Тема: что исследовать?",
@@ -105,9 +86,6 @@ MODES = {
     "builder": {
         "name": "Сборка",
         "name_en": "Assembly",
-        "primitive": "and",
-        "strategy": "unordered",
-        "goal_type": "finite",
         "goals_count": "2+",
         "fields": ["goals"],
         "placeholder": "Подзадачи (все обязательны):",
@@ -121,9 +99,6 @@ MODES = {
     "pipeline": {
         "name": "По шагам",
         "name_en": "Step by step",
-        "primitive": "and",
-        "strategy": "seq",
-        "goal_type": "finite",
         "goals_count": "2+",
         "fields": ["goals"],
         "placeholder": "Шаги по порядку:",
@@ -137,9 +112,6 @@ MODES = {
     "cascade": {
         "name": "Приоритеты",
         "name_en": "Priorities",
-        "primitive": "and",
-        "strategy": "priority",
-        "goal_type": "finite",
         "goals_count": "2+",
         "fields": ["goals"],
         "placeholder": "Задачи по приоритету:",
@@ -153,9 +125,6 @@ MODES = {
     "scales": {
         "name": "Баланс",
         "name_en": "Balance",
-        "primitive": "and",
-        "strategy": "balance",
-        "goal_type": "open",
         "goals_count": "2+",
         "fields": ["goals"],
         "placeholder": "Между чем балансировать?",
@@ -171,9 +140,6 @@ MODES = {
     "race": {
         "name": "Любой вариант",
         "name_en": "Any option",
-        "primitive": "or",
-        "strategy": None,
-        "goal_type": "finite",
         "goals_count": "2+",
         "fields": ["goals"],
         "placeholder": "Варианты (любой подойдёт):",
@@ -187,9 +153,6 @@ MODES = {
     "fan": {
         "name": "Мозговой штурм",
         "name_en": "Brainstorm",
-        "primitive": "or",
-        "strategy": None,
-        "goal_type": "open",
         "goals_count": "2+",
         "fields": ["goal"],
         "placeholder": "Тема для мозгового штурма:",
@@ -205,9 +168,6 @@ MODES = {
     "tournament": {
         "name": "Выбор",
         "name_en": "Choice",
-        "primitive": "xor",
-        "strategy": "comparative",
-        "goal_type": "finite",
         "goals_count": "2+",
         "fields": ["options", "criteria"],
         "placeholder": "Варианты для сравнения:",
@@ -221,9 +181,6 @@ MODES = {
     "dispute": {
         "name": "Дебаты",
         "name_en": "Debate",
-        "primitive": "xor",
-        "strategy": "dialectical",
-        "goal_type": "finite",
         "goals_count": "2+",
         "fields": ["positions"],
         "placeholder": "Противоречивые позиции:",
@@ -239,9 +196,6 @@ MODES = {
     "bayes": {
         "name": "Байесовский",
         "name_en": "Bayesian",
-        "primitive": "bayes",
-        "strategy": None,
-        "goal_type": "open",
         "goals_count": 1,
         "fields": ["hypothesis"],
         "placeholder": "Гипотеза (что проверяем?):",
@@ -424,96 +378,3 @@ def should_stop(cl: dict, graph: dict, horizon, goal_node: dict = None) -> dict:
     return {"resolved": False, "reason": ""}
 
 
-def detect_mode(text: str, lang: str = "ru") -> str:
-    """Determine the best mode for a user message.
-
-    Uses keyword heuristics first (fast). Falls back to LLM classification if ambiguous.
-
-    Returns mode_id from MODES.
-    """
-    if not text:
-        return "free"
-
-    t = text.lower().strip()
-
-    # Heuristic keyword matching
-    # XOR — comparing / choosing one
-    xor_kw = ["или ", "vs", " vs ", "выбрать из", "какой из", "какую ", "какой ",
-              "что лучше", "what's better", "choose between", "or should i",
-              "which one", "купить", "to buy"]
-    if any(k in t for k in xor_kw):
-        return "tournament"
-
-    # Debate — pros/cons, opposing positions
-    debate_kw = ["за и против", "pros and cons", "debate", "стоит ли", "should i",
-                 "правильно ли", "аргументы"]
-    if any(k in t for k in debate_kw):
-        return "dispute"
-
-    # Bayesian — probability, hypothesis testing
-    bayes_kw = ["вероятность", "probability", "шанс", "probable", "likely",
-                "гипотеза", "hypothesis", "проверить можно ли"]
-    if any(k in t for k in bayes_kw):
-        return "bayes"
-
-    # Rhythm — daily/regular habits
-    rhythm_kw = ["каждый день", "every day", "ежедневно", "daily", "привычка", "habit",
-                 "регулярно", "по утрам", "по вечерам"]
-    if any(k in t for k in rhythm_kw):
-        return "rhythm"
-
-    # Pipeline — step by step, in order
-    pipeline_kw = ["по шагам", "step by step", "рецепт", "recipe", "инструкция",
-                   "пошагово", "сначала", "first then", "в порядке"]
-    if any(k in t for k in pipeline_kw):
-        return "pipeline"
-
-    # Cascade — priorities, urgent first
-    cascade_kw = ["приоритет", "priority", "срочное", "urgent", "первую очередь",
-                  "сначала важное"]
-    if any(k in t for k in cascade_kw):
-        return "cascade"
-
-    # Balance — multiple ongoing areas
-    balance_kw = ["баланс", "balance", "между", "/ ", "семья/работа", "work/life"]
-    if any(k in t for k in balance_kw):
-        return "scales"
-
-    # Brainstorm / fan — idea generation
-    fan_kw = ["идеи", "ideas", "брейншторм", "brainstorm", "придумать", "варианты"]
-    if any(k in t for k in fan_kw):
-        return "fan"
-
-    # Race — any option works
-    race_kw = ["любой вариант", "any option", "хоть что", "whatever", "неважно какой",
-               "первый попавшийся"]
-    if any(k in t for k in race_kw):
-        return "race"
-
-    # Builder — all parts required, any order
-    builder_kw = ["все части", "all parts", "подготовить", "prepare", "собрать"]
-    if any(k in t for k in builder_kw):
-        return "builder"
-
-    # Research — explore topic deeply
-    research_kw = ["изучить", "explore", "разобраться", "understand", "понять как",
-                   "как работает", "how does", "что такое"]
-    if any(k in t for k in research_kw):
-        return "horizon"
-
-    # Focus — single concrete goal
-    focus_kw = ["написать", "write", "сделать", "make", "создать", "create",
-                "задача", "task", "нужно", "need to", "должен", "must"]
-    if any(k in t for k in focus_kw):
-        return "vector"
-
-    # Wander — just thinking
-    wander_kw = ["просто подумать", "just think", "блуждать", "wander", "размышление"]
-    if any(k in t for k in wander_kw):
-        return "scout"
-
-    # Default: research mode for open questions
-    if t.endswith("?") or t.startswith("почему") or t.startswith("why"):
-        return "horizon"
-
-    return "vector"  # default to focused

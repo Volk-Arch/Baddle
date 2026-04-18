@@ -12,6 +12,132 @@
 
 # ⬆ НЕ СДЕЛАНО
 
+## Симбиоз — два state-вектора (формализация прайм-директивы)
+
+Переводит прайм-директиву из декларации в архитектуру. Сейчас `sync_error` —
+абстрактный скаляр в `CognitiveState`, который никак не вычисляется. Правильно —
+это **геометрическое расстояние между двумя 4-мерными точками состояния**:
+системы и пользователя.
+
+### Идея
+
+Два state-вектора одинаковой структуры:
+
+```
+UserState:   {dopamine, serotonin, norepinephrine, burnout}  ← ты
+SystemState: {dopamine, serotonin, norepinephrine, burnout}  ← Baddle
+                                                 (уже есть)
+```
+
+**UserState питается** наблюдаемыми сигналами юзера: HRV, тайминги ответов,
+длина сообщений, feedback, energy counter. **SystemState** — динамикой графа
+(как сейчас).
+
+```
+sync_error = ||user_vec − system_vec||
+```
+
+### Режимы симбиоза (derived)
+
+Из комбинации `(sync_error, user_state, system_state)` возникают 4 режима
+адаптивного поведения:
+
+| Режим | Условие | Поведение |
+|-------|---------|-----------|
+| **FLOW** | sync высокий, оба state высокие | Полный объём, сложные задачи, активные вопросы |
+| **REST** | sync высокий, оба state низкие | Предлагает паузу, лёгкие карточки, не грузит |
+| **PROTECT** | sync низкий, user low, system high | Берёт на себя: сама предлагает, меньше спрашивает, откладывает сложное |
+| **CONFESS** | sync низкий, user high, system low | «Дай мне время, я в процессе» — честное признание |
+
+Это **третий контур (диалог)** замкнутый через sync-метрику: до сих пор он
+был просто «задаю вопрос», теперь — адаптивное поведение на основе взаимного
+состояния.
+
+### Компоненты реализации
+
+- [ ] **`src/user_state.py`** — зеркальная структура `neurochem.py`.
+  Класс `UserState` с теми же тремя скалярами + burnout, теми же EMA-формулами.
+  Отличие — в источниках сигналов.
+
+- [ ] **UserState signals** — откуда питаются скаляры:
+  - HRV coherence → `user.serotonin` (спокойствие = стабильность)
+  - HRV stress → `user.norepinephrine` (напряжение)
+  - Тайминг: скорость ответа юзера → `user.dopamine` (быстро = интерес)
+  - Gap с последнего ввода → `user.dopamine` decay (молчание = охлаждение)
+  - Variance длины сообщений → `user.serotonin` (стабильные по длине = уверенный)
+  - feedback accept/reject rate → `user.dopamine` (accept) / `user.burnout` (rejects копятся)
+  - `energy counter` (decisions_today) → `user.burnout`
+
+- [ ] **`CognitiveState.sync_error`** → **derived property** вместо скаляра:
+  ```python
+  @property
+  def sync_error(self):
+      u = user_state.vector()
+      s = self.neuro.vector()
+      return np.linalg.norm(u - s)
+  ```
+  Текущее `update_sync_error(distance)` удаляется как legacy.
+
+- [ ] **`sync_regime`** → derived enum `FLOW | REST | PROTECT | CONFESS`
+  из (sync_error, user_state, system_state). Пороги:
+  - высокий state = mean(dopamine, serotonin) > 0.55
+  - низкий = < 0.35
+  - sync высокий = error < 0.3
+
+- [ ] **Advice-слой использует sync_regime** — заменяет текущие alerts
+  в `assistant.py` (low_energy / low_coherence warnings):
+  - PROTECT → короткие простые ответы, clarify-questions не задавать
+  - CONFESS → «мне нужно подумать», возможно emit `action: "ask"` автоматически
+  - FLOW → полный execute_via_zones с максимумом кандидатов
+  - REST → предлагает отложить, показывает энергию и coherence
+
+- [ ] **UI: две симметричные панели** в header `baddle`-таба:
+  ```
+  ┌────────────────────────────────────────┐
+  │ ТЫ:   Интерес │ Стабильность │ ...      │
+  │                                          │
+  │           ⚡ синхронизация 78%  · FLOW    │
+  │                                          │
+  │ BADDLE: Интерес │ Стабильность │ ...      │
+  └────────────────────────────────────────┘
+  ```
+  Симметричная вёрстка + одинаковый цветовой код = визуально видно
+  **где расходимся и куда тянет**. Режим (FLOW/REST/PROTECT/CONFESS) —
+  подпись к sync-индикатору.
+
+- [ ] **`/assist/state`** возвращает `{user_state, system_state, sync_error, sync_regime}`.
+
+- [ ] **HRV полностью переезжает в UserState**. Сейчас `update_from_hrv`
+  живёт в `CognitiveState`, хотя ничего не трогает (после утреннего
+  decouple). Убрать оттуда совсем — HRV читает UserState. В CognitiveState
+  могут остаться только hrv-поля для совместимости с endpoint'ом, если
+  UI читает их отдельно.
+
+### Следствия для существующих решений
+
+- `CognitiveState.sync_error` scalar → derived. `update_sync_error` удаляется.
+- HRV-decouple (утро) был half-fix: правильно что ушёл из system-нейрохимии,
+  но без UserState сигнал повис в воздухе. Теперь полная картина.
+- Alerts (`low_energy`, `low_coherence` в `/assist/alerts`) становятся
+  сайд-эффектом `sync_regime`: вместо hardcoded порогов — выводятся из режима.
+
+### Риски и ответы
+
+| Риск | Ответ |
+|------|-------|
+| UserState нужно время набрать сигналы | Default regime = FLOW до стабилизации EMA |
+| Тайминги шумные | Aggressive decay (λ=0.1) + медианная фильтрация |
+| Двойная панель перегружает UI | Collapse по умолчанию, expand on click |
+| Без HRV половина UserState сигналов нет | Работает на активности/фидбэке, хуже но работает |
+
+### Scope
+
+**~2-3 часа** фокусной работы. Не блокер для demo-first релиза, но
+**архитектурное завершение prime-directive в коде** — делает её реальной,
+а не декларативной. Рассматривать после LM-smoke или параллельно.
+
+---
+
 ## Тело и сенсоры
 
 - [ ] **Polar H10 BLE** — реальный RR-поток вместо симулятора. `bleak` клиент,
@@ -26,12 +152,12 @@
 - [ ] **Консолидация** — прунинг слабых веток content-графа и state-графа.
   Без этого файлы растут линейно, мусор не отфильтровывается. Аналог
   «забывания» как феномена, не бага.
-- [ ] **Intrinsic pull в DMN** — `target = argmax(DA_tonic · novelty · relevance)`
+- [ ] **Intrinsic pull в DMN** — `target = argmax(dopamine · novelty · relevance)`
   в `_find_distant_pair`/pump выборе. Сейчас рандом. Без этого нет куриoсити
   как эмерджентного свойства.
 - [ ] **RPE автоматически** — сейчас только manual через feedback endpoint.
   Нужно хранить `predicted_confidence_change` при doubt/elaborate и сравнивать
-  с фактом → автономный DA_phasic drift без юзера.
+  с фактом → автономный dopamine drift без юзера.
 - [ ] **Meta-tick на state-графе** — tick читает хвост (20 последних),
   адаптирует policy. Пример: 10 шагов в EXECUTION с неизменным sync_error →
   emit "ask" (уже триггерится по простым условиям, но не по паттернам).
@@ -143,39 +269,50 @@ POST /graph/tick {"threshold":0.91,"sim_mode":"embedding"}
 - `action: "compare"` не триггерится при нескольких verified в CONFLICT-зоне
 - subgoals передаются но hypothesis-фильтр их не применяет
 
-## Нейрохимия — S / NE / DA / burnout
+## Нейрохимия — dopamine / serotonin / norepinephrine / burnout
 
-**Что.** Четыре глобальных скаляра модулируют ядро: γ_eff=γ·S в Байесе,
-T_eff через NE, β_eff через DA, PROTECTIVE_FREEZE при burnout > θ.
+**Что.** Три скаляра + защитный режим. `Neurochem` EMA:
+dopamine (новизна) ← d, serotonin (стабильность) ← 1−std(ΔW),
+norepinephrine (неопределённость) ← entropy(W). γ derived:
+`γ = 2.0 + 3.0·NE·(1−S)`. `ProtectiveFreeze` накапливает при d > 0.6
+и низкой стабильности, триггерит PROTECTIVE_FREEZE при accumulator > 0.15,
+выход при < 0.08 (гистерезис).
 Детали → [docs/neurochem-design.md](docs/neurochem-design.md).
 
 **Проверка.**
 ```
-GET /assist/state → {neurochem: {S, NE, DA_tonic, DA_phasic, burnout_idx, state_origin}}
+GET /assist/state → {neurochem: {dopamine, serotonin, norepinephrine,
+                                 burnout, freeze_active, state_origin}}
 ```
-Все поля присутствуют. При рестарте сервера значения сбрасываются к defaults
-(S=0.6, NE=0.3, DA_tonic=0.5, burnout=0).
+Все поля присутствуют. При рестарте сервера значения = defaults
+(все 0.5, burnout=0, freeze_active=false).
 
 **Влияет на:**
-- **S**: скорость обучения. Низкий → ригидность. Высокий → быстрая адаптация
-- **NE**: выбор фокус vs DMN. Высокий → Horizon работает. Низкий → DMN гуляет
-- **DA_tonic**: мотивация. Низкий → ангедония, нет фоновых инсайтов
-- **Burnout**: защита от runaway. PROTECTIVE_FREEZE блокирует Bayes update
+- **serotonin**: стабильность. Низкий → γ растёт → резче Bayes
+- **norepinephrine**: внимание. Высокий → Horizon budget, T_eff обостряется
+- **dopamine**: новизна. В DMN тянет к нестандартным парам (todo)
+- **burnout** (`freeze.accumulator`): PROTECTIVE_FREEZE блокирует Bayes update
 
 **Живые тесты.**
-- **NE spike**: отправь любое сообщение в `/assist` → NE должен скачок к
-  0.5-0.7. Подожди 30 сек → NE decay к 0.3.
-- **DA feedback**: нажми 👍 на карточке → DA_phasic spike +0.3. Нажми 👎 → −0.3.
-- **Burnout**: симулируй высокий d подряд (batch `update_neurochem(d=0.9)` 30+
-  раз) → burnout_idx растёт, при 0.35 state→`protective_freeze`. `apply_to_bayes`
-  возвращает prior без изменений.
-- **Recovery**: после FREEZE подай высокие RPE (user_feedback=accepted) →
-  DA_tonic поднимется, burnout упадёт → выход из FREEZE.
+- **NE spike**: отправь любое сообщение в `/assist` → `norepinephrine`
+  скачок к 0.5-0.7 (inject_ne(0.4) в `assist()`). Подожди несколько minutes →
+  decay к 0.3 (watchdog loop).
+- **Dopamine feedback**: нажми 👍 на карточке → `d=0.2` подаётся в EMA,
+  dopamine слабо смещается к низу. Нажми 👎 → `d=0.8`, dopamine растёт +
+  `freeze.accumulator` растёт.
+- **Freeze**: симулируй высокий d подряд (batch `update_neurochem(d=0.9)`
+  30+ раз при низком serotonin) → `freeze.accumulator > 0.15`, state →
+  `protective_freeze`, `apply_to_bayes` возвращает prior без изменений.
+- **Recovery**: после FREEZE подай низкий d несколько раз → accumulator
+  упадёт < 0.08 → выход из FREEZE (гистерезис).
+- **Tick feeds chem**: сделай `/graph/tick` на графе с 5+ hypothesis →
+  `dopamine` обновляется от mean_d, `norepinephrine` от entropy(confidences).
 
 **Красный флаг.**
-- S застрял на 0.6 после feedback → EMA не применяется
-- NE не падает со временем → watchdog loop не идёт
-- PROTECTIVE_FREEZE не выходит даже при DA_tonic > 0.5 → recovery gate сломан
+- `serotonin` застрял на 0.5 после feedback → EMA не применяется
+- `norepinephrine` не падает со временем → watchdog loop не идёт (AttributeError на legacy ключи)
+- PROTECTIVE_FREEZE не выходит даже при низком d → гистерезис сломан
+- `/assist/state` возвращает legacy ключи `S/NE/DA_tonic` — значит где-то остался старый путь
 
 ## State-граф — история жизни системы
 
@@ -216,12 +353,13 @@ GET /watchdog/status → {running: true, alerts_pending: N, last_scout: ts, last
 **Влияет на:**
 - Фоновые инсайты (Scout bridges)
 - DMN-цикл пока юзер не смотрит
-- DA_phasic спайки от качественных bridges
+- Feedback в dopamine от качественных bridges (низкое d при найденном мосте)
 
 **Живые тесты.**
 - Добавь 5+ hypothesis в граф, подожди 10 минут → watchdog должен
   запустить DMN, найти bridge. Появится в `/assist/alerts`.
-- При NE > 0.7 (только что был input) DMN на паузе. При NE < 0.4 активен.
+- При `norepinephrine > 0.55` (только что был input) DMN на паузе.
+  При `< 0.55` активен.
 
 **Красный флаг.**
 - `last_dmn` не обновляется → background thread не идёт
@@ -241,7 +379,7 @@ POST /graph/assist {lang:"ru", answer:"...", mode:"bayes"} → {ok, node_idx, ki
 
 **Влияет на:**
 - Sync с юзером (главный канал пересинхрона)
-- DA_phasic spike на ответ юзера (engagement)
+- dopamine EMA на ответ юзера (engagement: answer → d=0.2 feed)
 - Pause-on-question во время autorun
 
 **Живые тесты.**
@@ -257,8 +395,10 @@ POST /graph/assist {lang:"ru", answer:"...", mode:"bayes"} → {ok, node_idx, ki
 
 ## HRV — тело как вход
 
-**Что.** Симулятор RR-интервалов с RSA-модуляцией. Coherence → S + DA_tonic,
-stress → NE, через `update_from_hrv`.
+**Что.** Симулятор RR-интервалов с RSA-модуляцией. HRV хранится в
+`CognitiveState.hrv_*` полях (coherence/rmssd/stress), **не** модулирует
+внутреннюю химию системы. Используется в: советы юзеру (`/assist/alerts`),
+расчёт energy recovery, UI-индикаторы.
 
 **Проверка.**
 ```
@@ -267,18 +407,22 @@ GET /hrv/status → {running: true}
 GET /hrv/metrics → {baddle_state: {coherence, rmssd, stress, energy_recovery}}
 ```
 
-**Влияет на:** Все параметры горизонта + нейрохимии. Без HRV всё работает,
-но с default baselines, не с телом.
+**Влияет на:** советы юзеру + energy. Внутренняя нейрохимия системы
+эволюционирует по собственным сигналам графа. См. docs/neurochem-design.md
+секция «HRV НЕ влияет на нейрохимию».
 
 **Живые тесты.**
 - Запусти HRV → panel в header должен показать coherence/RMSSD
-- Передвинь слайдер coherence вниз к 0.2 → через ~10с NE в panel растёт,
-  S падает
-- Прокачай HR до 110 → stress растёт → γ увеличивается (в `/assist/state`)
+- Передвинь слайдер coherence вниз к 0.2 → через ~10с в `/assist/alerts`
+  появится low_coherence, в `/assist/state.hrv` coherence обновлён
+- Низкая coherence + burnout → совет «сделай паузу», но внутренние
+  скаляры (dopamine/serotonin/norepinephrine) не меняются
 
 **Красный флаг.**
-- Изменения слайдеров не отражаются в neurochem через 10-15с → `update_from_hrv`
-  не вызывается в loop
+- Изменения слайдеров не отражаются в `/assist/state.hrv` через 10-15с →
+  HRV manager не пишет в CognitiveState
+- При низкой coherence меняются `dopamine/serotonin/norepinephrine` —
+  значит HRV decouple откатили, надо чинить
 
 ## Multi-graph workspaces
 
@@ -349,10 +493,10 @@ POST /assist/camera {enabled: true} → {ok: true, camera: true}
 глаза. Демо-эффект на показе.
 
 **Живые тесты.**
-- Отправь сообщение → NE bar должен визуально скакнуть
+- Отправь сообщение → `Напряжение` bar должен визуально скакнуть
 - Запусти Run → cone меняет цвет при смене state
 - При pump action → cone становится dual
-- Нажми 👍 на карточке → на панели DA_phasic показывает стрелку ▲ зелёным
+- Нажми 👍 на карточке → `Интерес` (dopamine) и `Стабильность` (serotonin) сдвинутся в сторону низкого d
 
 **Красный флаг.**
 - Консоль browser'а с ошибками → JS сломан

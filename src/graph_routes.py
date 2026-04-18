@@ -980,10 +980,10 @@ def graph_pump():
 @graph_bp.route("/graph/horizon-params")
 def graph_horizon_params():
     """Get current Horizon LLM params for manual operations."""
-    from .horizon import CognitiveHorizon, create_horizon
+    from .horizon import CognitiveState, create_horizon
     horizon_data = _graph.get("_horizon")
     if horizon_data:
-        h = CognitiveHorizon.from_dict(horizon_data)
+        h = CognitiveState.from_dict(horizon_data)
     else:
         mode_id = _graph["meta"].get("mode", "horizon")
         h = create_horizon(mode_id)
@@ -1168,7 +1168,7 @@ def graph_bayes_suggest():
 
 @graph_bp.route("/graph/horizon-feedback", methods=["POST"])
 def graph_horizon_feedback():
-    """Store feedback for CognitiveHorizon. Applied on next tick."""
+    """Store feedback for CognitiveState. Applied on next tick."""
     data = request.get_json(force=True)
     _graph["_horizon_feedback"] = {
         "surprise": data.get("surprise"),
@@ -1695,8 +1695,8 @@ def hrv_metrics():
     # Push to Horizon if graph has one
     horizon_data = _graph.get("_horizon")
     if horizon_data:
-        from .horizon import CognitiveHorizon
-        horizon = CognitiveHorizon.from_dict(horizon_data)
+        from .horizon import CognitiveState
+        horizon = CognitiveState.from_dict(horizon_data)
         horizon.update_from_hrv(
             coherence=state.get("coherence"),
             rmssd=state.get("rmssd"),

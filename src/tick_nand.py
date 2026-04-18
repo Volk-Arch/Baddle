@@ -47,10 +47,10 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         mode_id = goal_node.get("mode", "horizon")
 
     # Load/create Horizon
-    from .horizon import CognitiveHorizon, create_horizon
+    from .horizon import CognitiveState, create_horizon
     horizon_data = graph.get("_horizon")
     if horizon_data:
-        horizon = CognitiveHorizon.from_dict(horizon_data)
+        horizon = CognitiveState.from_dict(horizon_data)
     else:
         horizon = create_horizon(mode_id)
 
@@ -89,6 +89,56 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
 
     if force_collapse:
         return _tick_force_collapse(cl["active_nodes"], stable_threshold)
+
+    # ── Distinct-matrix: compute once, reuse for neurochem feed + routing ──
+    import numpy as np
+    embeddings = graph.get("embeddings", [])
+    hyp_indices = [i for i, _ in hypotheses]
+
+    confirm_pairs = []    # d < tau_in → merge candidates
+    explore_pairs = []    # tau_in < d < tau_out → pump/elaborate
+    conflict_pairs = []   # d > tau_out → doubt candidates
+    all_ds = []
+
+    for ii in range(len(hyp_indices)):
+        for jj in range(ii + 1, len(hyp_indices)):
+            i = hyp_indices[ii]
+            j = hyp_indices[jj]
+            if i >= len(embeddings) or j >= len(embeddings):
+                continue
+            emb_a = embeddings[i]
+            emb_b = embeddings[j]
+            if emb_a is None or emb_b is None:
+                continue
+            emb_a = np.array(emb_a, dtype=np.float32)
+            emb_b = np.array(emb_b, dtype=np.float32)
+            if emb_a.size == 0 or emb_b.size == 0:
+                continue
+            d_val = distinct(emb_a, emb_b)
+            all_ds.append(d_val)
+            decision = distinct_decision(d_val, tau_in, tau_out)
+            if decision == "CONFIRM":
+                confirm_pairs.append((i, j, d_val))
+            elif decision == "EXPLORE":
+                explore_pairs.append((i, j, d_val))
+            else:  # CONFLICT
+                conflict_pairs.append((i, j, d_val))
+
+    # ── Feed neurochem from tick signals (архитектурный контур замкнут) ──
+    # d     → dopamine EMA  (новизна: средняя дистанция между идеями)
+    # weights → norepinephrine EMA (энтропия распределения confidences)
+    # Обновляем и глобальную нейрохимию (singleton per-person), и локальный
+    # horizon который потом сохранится в graph["_horizon"] — чтобы get_metrics()
+    # в emit отразил свежие значения для state_graph.
+    try:
+        from .horizon import get_global_state
+        mean_d = sum(all_ds) / len(all_ds) if all_ds else None
+        confidences = [n.get("confidence", 0.5) for _, n in hypotheses]
+        signals = dict(d=mean_d, weights=confidences if confidences else None)
+        get_global_state().update_neurochem(**signals)
+        horizon.update_neurochem(**signals)
+    except Exception as e:
+        log.debug(f"[tick-nand] neurochem feed failed: {e}")
 
     def _emit(action_dict):
         action_dict["horizon_params"] = horizon_params
@@ -133,11 +183,11 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                 "reason": f"GOAL REACHED: {stop['reason']}",
             })
 
-    # ── ASK CHECK: high uncertainty + low NE → pause for user clarification (v2) ──
+    # ── ASK CHECK: high uncertainty + low norepinephrine → pause for user clarification ──
     # Conditions: enough nodes exist, sync_error growing, not a FREEZE state
     try:
         from .horizon import PROTECTIVE_FREEZE
-        ne_low = getattr(horizon, "NE", 0.5) < 0.35
+        ne_low = horizon.neuro.norepinephrine < 0.35
         high_sync_err = getattr(horizon, "sync_error", 0.0) > 0.6
         many_uncertain = len(unverified) >= 3 and len(verified) == 0
         not_frozen = horizon.state != PROTECTIVE_FREEZE
@@ -169,41 +219,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     if len(hypotheses) >= min_hyp:
         graph["_generated"] = True
 
-    # ── 2. Compute distinct() between hypothesis pairs ──
-    # Collect zones using cached embeddings
-    import numpy as np
-    embeddings = graph.get("embeddings", [])
-    hyp_indices = [i for i, _ in hypotheses]
-
-    # Pairs with embeddings
-    confirm_pairs = []    # d < tau_in → merge candidates
-    explore_pairs = []    # tau_in < d < tau_out → pump/elaborate
-    conflict_pairs = []   # d > tau_out → doubt candidates
-
-    for ii in range(len(hyp_indices)):
-        for jj in range(ii + 1, len(hyp_indices)):
-            i = hyp_indices[ii]
-            j = hyp_indices[jj]
-            if i >= len(embeddings) or j >= len(embeddings):
-                continue
-            emb_a = embeddings[i]
-            emb_b = embeddings[j]
-            if emb_a is None or emb_b is None:
-                continue
-            emb_a = np.array(emb_a, dtype=np.float32)
-            emb_b = np.array(emb_b, dtype=np.float32)
-            if emb_a.size == 0 or emb_b.size == 0:
-                continue
-            d = distinct(emb_a, emb_b)
-            decision = distinct_decision(d, tau_in, tau_out)
-            if decision == "CONFIRM":
-                confirm_pairs.append((i, j, d))
-            elif decision == "EXPLORE":
-                explore_pairs.append((i, j, d))
-            else:  # CONFLICT
-                conflict_pairs.append((i, j, d))
-
-    # ── 3. Emergent routing by zone density ──
+    # ── 2. Emergent routing by zone density (pairs precomputed above) ──
 
     # CONFIRM zone dense → MERGE cluster
     if confirm_pairs:

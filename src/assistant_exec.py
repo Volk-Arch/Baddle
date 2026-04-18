@@ -1,24 +1,23 @@
-"""Assistant mode execution — actually run the graph for user messages.
+"""Assistant mode execution — рендерит карточки из зон distinct.
 
-Each primitive has an executor that takes user message and returns
-a structured response with cards.
+Единый путь: `execute_via_zones` генерирует N кандидатов, считает distinct
+matrix, выбирает renderer по (zone × mode.renderer_style). Specials:
+rhythm (external habit state) и bayes (уникальный prior/observation flow).
 
-Response cards types:
-  - text      : plain markdown text
-  - dialectic : FOR/AGAINST/SYNTHESIS (from Smart DC)
-  - comparison: options with winner (from XOR tournament)
+Response card types:
+  - dialectic : FOR/AGAINST/SYNTHESIS (Smart DC)
+  - comparison: options with winner (LLM-judge)
   - bayesian  : prior → observations → posterior
-  - synthesis : final essay
-  - steps     : what the system did (visible thinking)
+  - ideas_list: список идей с первым через Smart DC
+  - habit     : streak + trend
+  - clarify   : встречный вопрос (из /assist при ambiguous)
+  - decompose_suggestion: inline предложение разбить на подзадачи
 """
 import logging
 import re
 from typing import List, Dict, Optional
 
-from .graph_logic import (
-    _graph, _add_node, _graph_generate, _clean_thought, _ensure_embeddings,
-    _bayesian_update_distinct, _d_from_relation,
-)
+from .graph_logic import _graph, _add_node, _graph_generate, _clean_thought, _ensure_embeddings
 from .modes import get_mode
 
 log = logging.getLogger(__name__)
@@ -280,14 +279,16 @@ def execute_rhythm(message: str, lang: str = "ru") -> Dict:
         streak += 1
         streaks[habit_key] = streak
         entry = {"date": today, "streak_at_time": streak}
-        # Snapshot CognitiveState for trend viz (v2)
+        # Snapshot CognitiveState for trend viz
         try:
             from .horizon import get_global_state
             cs_metrics = get_global_state().get_metrics()
+            chem = cs_metrics.get("neurochem", {})
             entry["state"] = {
-                "NE": cs_metrics.get("neurochem", {}).get("NE"),
-                "DA_tonic": cs_metrics.get("neurochem", {}).get("DA_tonic"),
-                "S": cs_metrics.get("neurochem", {}).get("S"),
+                "norepinephrine": chem.get("norepinephrine"),
+                "dopamine": chem.get("dopamine"),
+                "serotonin": chem.get("serotonin"),
+                "burnout": chem.get("burnout"),
                 "hrv_coherence": (cs_metrics.get("hrv") or {}).get("coherence"),
             }
         except Exception:

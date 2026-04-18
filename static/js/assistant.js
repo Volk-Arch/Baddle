@@ -804,6 +804,11 @@ function assistStartNeurochemPolling() {
 function _updateNeurochemPanel(metrics) {
   if (!metrics) return;
   const neuro = metrics.neurochem || {};
+  const serotonin = neuro.serotonin || 0;
+  const norepi    = neuro.norepinephrine || 0;
+  const dopamine  = neuro.dopamine || 0;
+  const burnout   = neuro.burnout || 0;
+
   const setBar = (fillId, valId, value, isBurnout) => {
     const fill = document.getElementById(fillId);
     const val = document.getElementById(valId);
@@ -811,30 +816,18 @@ function _updateNeurochemPanel(metrics) {
     const v = typeof value === 'number' ? value : 0;
     fill.style.width = (v * 100).toFixed(0) + '%';
     val.textContent = v.toFixed(2);
-    if (isBurnout && v > 0.35) {
-      fill.style.background = '#dc2626';  // darker red when over threshold
+    if (isBurnout && v > 0.15) {
+      fill.style.background = '#dc2626';  // darker red when over freeze threshold
     }
   };
-  setBar('neuro-s-fill', 'neuro-s-val', neuro.S);
-  setBar('neuro-ne-fill', 'neuro-ne-val', neuro.NE);
-  setBar('neuro-da-fill', 'neuro-da-val', neuro.DA_tonic);
-  setBar('neuro-burn-fill', 'neuro-burn-val', neuro.burnout_idx, true);
+  setBar('neuro-s-fill',    'neuro-s-val',    serotonin);
+  setBar('neuro-ne-fill',   'neuro-ne-val',   norepi);
+  setBar('neuro-da-fill',   'neuro-da-val',   dopamine);
+  setBar('neuro-burn-fill', 'neuro-burn-val', burnout, true);
 
-  // DA phasic arrow
-  const phasic = neuro.DA_phasic || 0;
+  // Dopamine phasic arrow (legacy — new dopamine is single scalar, so always hidden)
   const phasicEl = document.getElementById('neuro-da-phasic');
-  if (phasicEl) {
-    if (Math.abs(phasic) > 0.05) {
-      phasicEl.style.display = 'block';
-      phasicEl.textContent = phasic > 0 ? '▲' : '▼';
-      phasicEl.style.color = phasic > 0 ? '#10b981' : '#ef4444';
-      // Position proportional to tonic
-      const leftPct = Math.max(0, Math.min(100, (neuro.DA_tonic || 0.5) * 100));
-      phasicEl.style.left = leftPct + '%';
-    } else {
-      phasicEl.style.display = 'none';
-    }
-  }
+  if (phasicEl) phasicEl.style.display = 'none';
 
   // Mode badge + freeze animation
   const modeEl = document.getElementById('neuro-mode');

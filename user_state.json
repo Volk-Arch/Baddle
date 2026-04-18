@@ -1,8 +1,8 @@
 {
-  "decisions_today": 18,
-  "last_reset_date": "2026-04-17",
-  "last_interaction": 1776446794.9469879,
-  "total_decisions": 18,
+  "decisions_today": 2,
+  "last_reset_date": "2026-04-18",
+  "last_interaction": 1776489365.3739054,
+  "total_decisions": 20,
   "streaks": {
     "Morning exercise": 1
   },
@@ -104,6 +104,14 @@
       "kind": "assist_clarify",
       "mode": "free",
       "message": "?"
+    },
+    {
+      "ts": 1776489364.7114532,
+      "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776489365.373906,
+      "kind": "morning_briefing"
     }
   ],
   "habit_history": {

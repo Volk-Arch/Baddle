@@ -14,7 +14,7 @@ from flask import Blueprint, request, jsonify
 
 log = logging.getLogger(__name__)
 
-from .modes import detect_mode, get_mode
+from .modes import get_mode
 from .hrv_manager import get_manager as get_hrv_manager
 from .watchdog import get_watchdog
 from .assistant_exec import execute as execute_mode
@@ -156,13 +156,6 @@ _MODE_DESCRIPTIONS_RU = """
 - free: ручной режим, не ясно что делать
 """
 
-_FALLBACK_COMPLEX_MARKERS = [
-    " и ", " потом ", " затем ", " сначала ", " шаг", " этап", " пункт",
-    " список", " во-первых", " план", "\n-", "\n•", "\n1.", "\n2.",
-]
-_FALLBACK_AMBIGUOUS_MARKERS = ["не знаю", "не уверен", "помоги", "не пойму"]
-
-
 def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
                         lang: str = "ru") -> dict:
     """Один LLM-вызов: mode + intent + confidence. Заменяет detect_mode+detect_intent.
@@ -229,8 +222,8 @@ def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
     except Exception as e:
         log.warning(f"[classify] LLM failed: {e}")
 
-    # Fallback: keyword heuristic
-    return _classify_fallback(message)
+    # LLM недоступна или вернула мусор — safe default
+    return {"mode": "free", "intent": "direct", "confidence": 0.3, "source": "default"}
 
 
 def _parse_classify_output(text: str) -> Optional[dict]:
@@ -262,33 +255,6 @@ def _parse_classify_output(text: str) -> Optional[dict]:
     return None
 
 
-def _classify_fallback(message: str) -> dict:
-    """Keyword heuristic fallback when LLM unavailable/fails."""
-    lower = message.lower()
-    lines = [l for l in message.split("\n") if l.strip()]
-    length = len(message)
-
-    # Mode: reuse existing detect_mode
-    mode = detect_mode(message, "ru")
-
-    # Intent:
-    complex_hits = sum(1 for m in _FALLBACK_COMPLEX_MARKERS if m in lower)
-    ambig_hits = sum(1 for m in _FALLBACK_AMBIGUOUS_MARKERS if m in lower)
-    multi_step_modes = {"builder", "pipeline", "cascade", "scales", "tournament", "race"}
-    is_complex = (len(lines) >= 3 or (length > 180 and complex_hits >= 2)
-                  or (mode in multi_step_modes and complex_hits >= 1))
-    is_ambig = (ambig_hits >= 2 or (length < 8))
-
-    if is_ambig:
-        intent = "ambiguous"
-    elif is_complex:
-        intent = "complex_goal"
-    elif length < 30:
-        intent = "simple_note"
-    else:
-        intent = "direct"
-
-    return {"mode": mode, "intent": intent, "confidence": 0.5, "source": "fallback"}
 
 
 # ── Main /assist endpoint ──────────────────────────────────────────────
@@ -328,8 +294,11 @@ def assist():
 
     # Build state hint for classifier (brief CognitiveState summary)
     neuro = cs.get_metrics().get("neurochem", {})
-    state_hint = (f"state={cs.state} NE={neuro.get('NE', 0):.2f} "
-                  f"DA={neuro.get('DA_tonic', 0):.2f} burnout={neuro.get('burnout_idx', 0):.2f}")
+    state_hint = (f"state={cs.state} "
+                  f"NE={neuro.get('norepinephrine', 0):.2f} "
+                  f"DA={neuro.get('dopamine', 0):.2f} "
+                  f"S={neuro.get('serotonin', 0):.2f} "
+                  f"burnout={neuro.get('burnout', 0):.2f}")
 
     # Recent context from state_graph (last 3 user-initiated actions)
     context_parts = []
@@ -464,7 +433,11 @@ def assist_status():
 
 @assistant_bp.route("/assist/feedback", methods=["POST"])
 def assist_feedback():
-    """User feedback on a system response — updates DA_phasic + S (v5d).
+    """User feedback — converted to pseudo-d and fed into neurochem EMA.
+
+    accepted → d=0.2 (low distance = system guessed right, dopamine EMA drifts down toward confirmation)
+    rejected → d=0.8 (high distance = system was wrong, dopamine spike + freeze accumulator grows)
+    ignored  → no update
 
     Body: { "feedback": "accepted" | "rejected" | "ignored" }
     """
@@ -474,9 +447,12 @@ def assist_feedback():
     if kind not in ("accepted", "rejected", "ignored"):
         return jsonify({"error": "invalid feedback"})
     cs = get_global_state()
-    # Positive for accepted, negative for rejected, neutral for ignored
-    rpe = {"accepted": +0.3, "rejected": -0.3, "ignored": 0.0}.get(kind, 0.0)
-    cs.update_neurochem(rpe=rpe, user_feedback=kind)
+    # Feedback маппится в d: accepted (модель угадала) → низкое d,
+    # rejected (промах) → высокое d, ignored — ничего
+    d_map = {"accepted": 0.2, "rejected": 0.8, "ignored": None}
+    d_val = d_map.get(kind)
+    if d_val is not None:
+        cs.update_neurochem(d=d_val)
     return jsonify({"ok": True, "neurochem": cs.get_metrics().get("neurochem", {})})
 
 
@@ -502,19 +478,6 @@ def assist_state():
     """Return full CognitiveState metrics (for UI panel, diagnostics)."""
     from .horizon import get_global_state
     return jsonify(get_global_state().get_metrics())
-
-
-@assistant_bp.route("/assist/detect-mode", methods=["POST"])
-def assist_detect_mode():
-    """Public endpoint — just returns which mode would be picked."""
-    d = request.get_json(force=True)
-    message = d.get("message", "")
-    lang = d.get("lang", "ru")
-    mode_id = detect_mode(message, lang)
-    return jsonify({
-        "mode": mode_id,
-        "info": _response_for_mode(mode_id, message, lang),
-    })
 
 
 @assistant_bp.route("/graph/assist", methods=["POST"])
@@ -553,9 +516,9 @@ def graph_assist():
     from .horizon import get_global_state
     cs = get_global_state()
     cs.inject_ne(0.3)
-    # Answer = user feedback → positive DA spike (engagement reward)
+    # Answer = модель угадала запрос → низкое d = подтверждение
     if answer:
-        cs.update_neurochem(rpe=+0.2, user_feedback="accepted")
+        cs.update_neurochem(d=0.2)
 
     # ── Materialize path: user answered, add node of appropriate type ──
     if answer:

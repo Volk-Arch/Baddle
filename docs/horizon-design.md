@@ -34,10 +34,13 @@ Horizon-слой:
 Нейрохимический слой (детально → [neurochem-design.md](neurochem-design.md)):
 | Скаляр | Роль | Влияние |
 |--------|------|---------|
-| **S** | Цена обновления, пластичность | `γ_eff = γ·S` — входит в Bayes |
-| **NE** | Arousal, Horizon/DMN бюджет | `T_eff`, `budget_H` |
-| **DA_tonic / phasic** | Мотивация, reward prediction | `β_eff`, intrinsic pull в DMN |
-| **burnout_idx** | Хронический конфликт | Триггер `PROTECTIVE_FREEZE` |
+| **serotonin** | Стабильность весов, уверенность | входит в γ: низкий S → γ растёт |
+| **norepinephrine** | Arousal, Horizon/DMN бюджет | `T_eff`, `budget_H`, входит в γ |
+| **dopamine** | Новизна (EMA от distinct) | «тянет в сторону нового» в DMN |
+| **freeze.accumulator** | Хронический конфликт | Триггер `PROTECTIVE_FREEZE` |
+
+γ — derived property: `γ = 2.0 + 3.0 · norepinephrine · (1 − serotonin)`.
+Отдельного поля gamma нет.
 
 ## Precision → параметры LLM
 
@@ -92,9 +95,10 @@ EXECUTION   → выход:  precision < 0.65 (не 0.70)
 - EXPLORATION / EXECUTION / RECOVERY / INTEGRATION — базовые 4, precision-driven
 - STABILIZE — сработает при HRV coherence < 0.3 (сброс/калибровка)
 - CONFLICT — при sync_error > 0.75 (система не понимает юзера)
-- **PROTECTIVE_FREEZE** (новое, v5d) — при `burnout_idx > θ_burnout`. Блокирует
-  Bayes обновления (`apply_to_bayes` возвращает prior). Recovery гейтирован
-  `DA_tonic > θ_DA_recovery`. См. [neurochem-design.md](neurochem-design.md).
+- **PROTECTIVE_FREEZE** — при `freeze.accumulator > 0.15` (THETA_ACTIVE).
+  Блокирует Bayes обновления (`apply_to_bayes` возвращает prior). Recovery
+  гистерезисом: выход при `accumulator < 0.08` (THETA_RECOVERY).
+  См. [neurochem-design.md](neurochem-design.md).
 
 ## Выбор фазы
 
@@ -135,9 +139,12 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`
 
 ## Файлы
 
-- `src/horizon.py` — `CognitiveState` (alias `CognitiveHorizon`), `get_global_state()`,
-  `create_horizon()`, 14 presets. Методы: `apply_to_bayes`, `update_neurochem`,
-  `update_from_hrv`, `inject_ne`, `effective_temperature`, `horizon_budget`,
-  `get_metrics`, `to_dict`/`from_dict` с полным neurochem
-- `src/thinking.py` — tick() загружает/создаёт Horizon, вызывает select_phase(), передаёт horizon_params
+- `src/horizon.py` — `CognitiveState`, `get_global_state()`, `create_horizon()`,
+  14 presets. Методы: `apply_to_bayes`, `update_neurochem`, `update_from_hrv`,
+  `inject_ne`, `effective_temperature`, `horizon_budget`, `get_metrics`,
+  `to_dict`/`from_dict`. Композиция: `self.neuro` (Neurochem) + `self.freeze`
+  (ProtectiveFreeze)
+- `src/neurochem.py` — `Neurochem` + `ProtectiveFreeze`, 3 скаляра + derived γ
+- `src/tick_nand.py` — tick загружает/создаёт Horizon, считает distinct-matrix,
+  кормит нейрохимию (`update_neurochem(d, weights)`), маршрутизирует по зонам
 - `src/graph_routes.py` — autorun отправляет feedback через `/graph/horizon-feedback`

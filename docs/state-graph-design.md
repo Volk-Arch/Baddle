@@ -28,12 +28,12 @@
   "state_snapshot": {
     "precision": 0.72,
     "state": "execution",
-    "gamma": 2.4, "gamma_eff": 1.44,
+    "gamma": 2.4,
     "tau_in": 0.3, "tau_out": 0.7,
     "sync_error": 0.18,
     "neurochem": {
-      "S": 0.6, "NE": 0.72, "DA_tonic": 0.55, "DA_phasic": 0.12,
-      "burnout_idx": 0.05, "state_origin": "1_held"
+      "dopamine": 0.42, "serotonin": 0.6, "norepinephrine": 0.72,
+      "burnout": 0.05, "freeze_active": false, "state_origin": "1_held"
     },
     "hrv": {"coherence": 0.68, "stress": 0.22, "rmssd": 54}
   },

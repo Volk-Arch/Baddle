@@ -96,32 +96,15 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
     return ("supports", 0.7)
 
 
-def _bayesian_update_distinct(prior: float, d: float, gamma: float = 2.0,
-                               state=None) -> float:
-    """NAND Bayesian update in log-odds via distinct distance.
+def _bayesian_update_distinct(prior: float, d: float) -> float:
+    """NAND Bayes update через глобальную нейрохимию (γ derived).
 
-    d ∈ [0,1]: dissimilarity between evidence (E) and hypothesis (H).
-      d=0   (perfect match)   → +γ boost
-      d=0.5 (neutral)         → no update
-      d=1   (orthogonal/neg)  → −γ reduction
-
-    logit(post) = logit(prior) + γ_eff · (1 − 2d)
-
-    If `state` (CognitiveState) is passed, delegates to state.apply_to_bayes(),
-    which uses γ_eff = γ·S (plasticity-gated) and respects PROTECTIVE_FREEZE.
-    Fallback path uses plain γ for tests and bootstrap.
-
-    See TODO v5d, docs/nand-architecture.md
+    d ∈ [0,1]: дистанция между evidence и hypothesis. Делегирует в
+    `CognitiveState.apply_to_bayes`, который использует текущее γ из
+    `self.neuro.gamma` и блокируется при PROTECTIVE_FREEZE.
     """
-    if state is not None:
-        return state.apply_to_bayes(prior, d)
-    import math
-    prior = max(0.01, min(0.99, prior))
-    log_prior = math.log(prior / (1 - prior))
-    signed = gamma * (1 - 2 * d)
-    log_posterior = log_prior + signed
-    posterior = 1 / (1 + math.exp(-log_posterior))
-    return round(max(0.01, min(0.99, posterior)), 3)
+    from .horizon import get_global_state
+    return get_global_state().apply_to_bayes(prior, d)
 
 
 def _d_from_relation(relation: str, strength: float) -> float:
@@ -285,7 +268,7 @@ def reset_graph():
 
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1, horizon_params: dict = None) -> tuple[str, dict]:
     """Generate text from chat messages via OpenAI-compatible API backend.
-    If horizon_params provided, uses dynamic temperature/top_k from CognitiveHorizon.
+    If horizon_params provided, uses dynamic temperature/top_k from CognitiveState.
     Returns (text, entropy_info)."""
     from .api_backend import api_chat_completion
 
