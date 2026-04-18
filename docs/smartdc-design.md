@@ -81,3 +81,7 @@ combined_entropy = syn_entropy * 0.7 + avg_pole_entropy * 0.3
 - `src/graph_routes.py` — `/graph/smartdc` (строки ~789-920)
 - `src/prompts.py` — промпты dc_thesis/dc_antithesis/dc_neutral/dc_synthesis
 - `src/pump_logic.py` — `_verify_bridge()` использует тот же алгоритм
+
+---
+
+**Навигация:** [← Ontology](ontology.md)  ·  [Индекс](README.md)  ·  [Следующее: Pump →](pump-design.md)

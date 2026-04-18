@@ -17,6 +17,21 @@ _settings = {
     "api_model": "",                       # e.g. "qwen/qwen3-8b"
     "embedding_model": "",                 # e.g. "text-embedding-nomic-embed-text-v1.5"
     "local_ctx": 32768,                    # hint only, server enforces its own ctx
+    # Neural defaults — раньше жили только в graph tab. Теперь общие
+    # для baddle chat + DMN + graph. Если value задан — используется
+    # вместо hardcoded per-call defaults.
+    "neural_threshold": 0.91,              # distinct edge threshold
+    "neural_temp": 0.7,                    # LLM sampling temperature (дефолт)
+    "neural_top_k": 40,                    # LLM top-k sampling
+    "neural_seed": -1,                     # -1 = random
+    "neural_novelty": 0.85,                # novelty gate (distinct) for dedup
+    "neural_max_tokens": 3000,             # single-call упpер лимит
+    # Depth knobs — сколько циклов thinking на каждом уровне.
+    # Чем больше — тем глубже и дольше обрабатываем.
+    "deep_chat_steps":       3,            # execute_deep: brainstorm→elab→smartdc (+pairwise)
+    "dmn_converge_max_steps":   100,       # server-side autorun до stable
+    "dmn_converge_stall_window": 12,       # шагов без роста нод → stop
+    "dmn_converge_max_wall_s":   900,      # абсолютный лимит wall-time (15 мин)
     # Experimental
     "live_bayes": False,
 }
@@ -51,9 +66,38 @@ def get_settings():
     return dict(_settings)
 
 
+def get_neural_defaults() -> dict:
+    """Общие settings.json neural-дефолты. Используются execute_deep, DMN
+    executor и всеми эндпоинтами которым нужны temp/top_k/max_tokens.
+    Позволяет юзеру overrид'нуть без правки кода.
+    """
+    return {
+        "temperature": float(_settings.get("neural_temp", 0.7)),
+        "top_k": int(_settings.get("neural_top_k", 40)),
+        "max_tokens": int(_settings.get("neural_max_tokens", 3000)),
+        "threshold": float(_settings.get("neural_threshold", 0.91)),
+        "novelty": float(_settings.get("neural_novelty", 0.85)),
+        "seed": int(_settings.get("neural_seed", -1)),
+    }
+
+
+def get_depth_defaults() -> dict:
+    """Depth knobs — сколько циклов на каждом уровне мышления."""
+    return {
+        "deep_chat_steps":          int(_settings.get("deep_chat_steps", 3)),
+        "dmn_converge_max_steps":   int(_settings.get("dmn_converge_max_steps", 100)),
+        "dmn_converge_stall_window":int(_settings.get("dmn_converge_stall_window", 12)),
+        "dmn_converge_max_wall_s":  int(_settings.get("dmn_converge_max_wall_s", 900)),
+    }
+
+
 def update_settings(new: dict):
     for k in ("api_url", "api_key", "api_model",
-              "embedding_model", "local_ctx", "live_bayes"):
+              "embedding_model", "local_ctx", "live_bayes",
+              "neural_threshold", "neural_temp", "neural_top_k",
+              "neural_seed", "neural_novelty", "neural_max_tokens",
+              "deep_chat_steps", "dmn_converge_max_steps",
+              "dmn_converge_stall_window", "dmn_converge_max_wall_s"):
         if k in new:
             _settings[k] = new[k]
     _save_settings()

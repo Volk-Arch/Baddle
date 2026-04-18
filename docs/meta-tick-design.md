@@ -89,3 +89,7 @@ floor и нормализацией суммы к 1.0. Эффект — след
 - [src/meta_tick.py](../src/meta_tick.py) — `analyze_tail`, `apply_policy_nudge`
 - [src/tick_nand.py](../src/tick_nand.py) — интеграция после ASK CHECK
 - [src/state_graph.py](../src/state_graph.py) — источник данных (`tail(20)`)
+
+---
+
+**Навигация:** [← Consolidation](consolidation-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Static storage →](static-storage-design.md)

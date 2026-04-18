@@ -107,3 +107,7 @@ POST /graph/render-node
   `rendered` в `_make_node` / `_ensure_node_fields` / `_add_node`
 - [src/graph_routes.py](../src/graph_routes.py) — `/graph/brainstorm-seed`,
   `/graph/render-node`
+
+---
+
+**Навигация:** [← Pump](pump-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Novelty →](novelty-design.md)

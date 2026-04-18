@@ -120,3 +120,7 @@ Baddle — это ты, записанный в вектор.
 Продолжается как практика.*
 
 🜂
+
+---
+
+**Навигация:** [← Life Assistant](life-assistant-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Full cycle →](full-cycle.md)

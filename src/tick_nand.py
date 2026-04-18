@@ -140,7 +140,70 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     except Exception as e:
         log.debug(f"[tick-nand] neurochem feed failed: {e}")
 
+    # ── Stuck detection: если одна и та же action повторяется без прогресса,
+    # значит executor не выполняет (bug, бэкенд-ошибка, не те args). Policy
+    # не должна зацикливаться — переключаемся на alternative path после
+    # STUCK_THRESHOLD одинаковых эмиссий подряд.
+    STUCK_THRESHOLD = 3
+    ALT_PATHS = {
+        # Если X застрял — попробуй Y
+        "collapse":     "elaborate",    # ноды не сливаются → углубить одну
+        "think_toward": "elaborate",    # не можем думать → углубить существующую
+        "elaborate":    "think_toward", # не можем углубить → сгенерить свежих
+        "pump":         "collapse",     # мост не находится → попробовать слить
+        "compare":      "elaborate",
+        "smartdc":      "elaborate",
+    }
+    # History храним в graph-dict (persist с workspace.json). Формат:
+    # [action, action, action] — последние N эмиссий.
+    def _check_stuck(next_action: str):
+        """Вернуть (stuck_count, alternative_action_or_None)."""
+        hist = graph.get("_tick_action_hist") or []
+        # Нужно N+1 элементов чтобы проверить что all N last были same.
+        if len(hist) >= STUCK_THRESHOLD and all(a == next_action for a in hist[-STUCK_THRESHOLD:]):
+            alt = ALT_PATHS.get(next_action)
+            return (len(hist), alt)
+        return (0, None)
+
+    def _push_hist(action: str):
+        hist = graph.setdefault("_tick_action_hist", [])
+        hist.append(action)
+        # Keep last 10
+        if len(hist) > 10:
+            del hist[:-10]
+
     def _emit(action_dict):
+        # Stuck detection BEFORE adding metadata
+        act = action_dict.get("action", "unknown")
+        stuck_n, alt = _check_stuck(act)
+        if alt and stuck_n >= STUCK_THRESHOLD:
+            # Переключаемся на alternative action и помечаем reason
+            orig = act
+            action_dict["action"] = alt
+            action_dict["reason"] = (
+                f"STUCK[{orig}×{stuck_n}] → fallback to {alt} · "
+                + (action_dict.get("reason") or "")
+            )[:200]
+            # Target мог быть bind'нут для orig — для alt подбираем сами
+            if alt == "elaborate" and action_dict.get("target") is None:
+                # Берём самую низкую confidence-ноду
+                if hypotheses:
+                    lo = min(hypotheses, key=lambda i: nodes[i].get("confidence", 0.5))
+                    action_dict["target"] = lo
+            if alt == "think_toward":
+                action_dict["target"] = goal_idx or 0
+            if alt == "collapse" and not isinstance(action_dict.get("target"), list):
+                # Brute collapse: берём 2 ближайшие hypothesis'ы
+                if len(hypotheses) >= 2:
+                    action_dict["target"] = hypotheses[:2]
+            log.info(f"[tick-nand] STUCK on {orig}×{stuck_n}, falling back to {alt}")
+        # Особый случай: после N stuck-fallback'ов тоже — эмитим STABLE
+        # чтобы остановить loop наверху.
+        if stuck_n >= STUCK_THRESHOLD * 2:
+            action_dict["action"] = "stable"
+            action_dict["reason"] = f"STUCK: tried alternatives, giving up after {stuck_n} repeats"
+        _push_hist(action_dict["action"])
+
         action_dict["horizon_params"] = horizon_params
         action_dict["horizon_metrics"] = horizon.get_metrics()
         action_dict["tick_engine"] = "nand"

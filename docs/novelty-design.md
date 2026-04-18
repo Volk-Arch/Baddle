@@ -59,3 +59,7 @@ novelty_threshold = 0.85 + 0.1 * precision
 [think] novelty rephrase saved: 'оригинал...' → 'переформулировка...' sim 0.93→0.87
 [think] 5 new, 2 novelty-rejected
 ```
+
+---
+
+**Навигация:** [← Embedding-first](embedding-first-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Cross-graph →](cross-graph-design.md)

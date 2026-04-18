@@ -155,6 +155,16 @@ class CognitiveLoop:
     # Heartbeat: сводный снапшот в state_graph для DMN/scout substrate
     HEARTBEAT_INTERVAL = 300          # раз в 5 мин — пишет single state_node со стримами
 
+    # DMN autonomous deep-research: когда юзер idle давно и есть open-goal,
+    # запускаем реальный 3-step pipeline (brainstorm → elaborate → smartdc)
+    # на одной цели. Реальная работа мозга в фоне, не просто pump-bridge.
+    DMN_DEEP_INTERVAL = 30 * 60       # раз в 30 мин (реже обычного DMN)
+    DMN_CONVERGE_INTERVAL = 60 * 60   # раз в час — полный autorun loop до STABLE
+    DMN_CONVERGE_MAX_STEPS = 100      # глубокое исследование, не вечно
+    DMN_CONVERGE_MAX_WALL_S = 15 * 60 # но не дольше 15 минут wall-time
+    DMN_CONVERGE_STALL_WINDOW = 12    # если за 12 тиков ноды не выросли — стоп
+    DMN_CROSS_GRAPH_INTERVAL = 60 * 60 # раз в час — ищем мосты между workspaces
+
     # NE gating
     NE_BASELINE = 0.3            # baseline к которому дрейфует NE
     NE_HIGH_GATE = 0.55          # выше — юзер активен, DMN не лезет
@@ -185,6 +195,9 @@ class CognitiveLoop:
         self._reminded_plan_keys: set = set()  # "plan_id:YYYY-MM-DD" dedup
         self._last_evening_retro_date: str = ""  # YYYY-MM-DD последнего ретро
         self._last_heartbeat = 0.0
+        self._last_dmn_deep = 0.0  # таймер DMN autonomous deep-research
+        self._last_dmn_converge = 0.0  # таймер server-side tick-autorun до STABLE
+        self._last_dmn_cross = 0.0  # таймер cross-graph bridge scan
         # Persist overnight findings отдельно от alerts_queue — UI drain'ит очередь
         # быстрее чем briefing её читает. Briefing читает recent_bridges напрямую.
         self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
@@ -270,6 +283,9 @@ class CognitiveLoop:
 
                 if not_frozen and ne_quiet and idle_enough:
                     self._check_dmn_continuous()
+                    self._check_dmn_deep_research()
+                    self._check_dmn_converge()
+                    self._check_dmn_cross_graph()
                     self._check_state_walk()
                     self._check_night_cycle()
 
@@ -549,6 +565,325 @@ class CognitiveLoop:
                 "insights": insights}
 
     # ── DMN continuous (10 min: pump attempt, don't save) ───────────────
+
+    def _check_dmn_deep_research(self):
+        """DMN autonomous deep-research: раз в 30 мин (если idle + NE low)
+        запускает реальный 3-step pipeline (execute_deep) на одной open-goal.
+
+        Это отличается от `_check_dmn_continuous` (single pump-bridge) —
+        делает полноценное исследование силами того же engine что и chat.
+        Результат → alert «DMN_deep_research: сгенерил N нод + синтез».
+
+        Guard: только если есть хотя бы 1 open-goal + в графе меньше 30 нод
+        (иначе не спамим). Лимит: один deep run в 30 мин.
+        """
+        now = time.time()
+        if now - self._last_dmn_deep < self.DMN_DEEP_INTERVAL:
+            return
+        # Хотя бы 1 open goal и не слишком раздутый граф
+        try:
+            from .goals_store import list_goals
+            open_goals = list_goals(status="open", limit=5)
+        except Exception:
+            return
+        if not open_goals:
+            return
+        if len(_graph.get("nodes", [])) > 30:
+            return
+
+        self._last_dmn_deep = now
+        # Берём первую open goal (по порядку создания)
+        goal = open_goals[0]
+        goal_text = (goal.get("text") or "")[:200]
+        if not goal_text:
+            return
+
+        log.info(f"[cognitive_loop] DMN deep-research starting on goal: {goal_text[:60]}")
+        try:
+            from .assistant_exec import execute_deep
+            result = execute_deep(goal_text, lang="ru", mode_id="horizon",
+                                   profile_hint="")
+        except Exception as e:
+            log.warning(f"[cognitive_loop] DMN deep failed: {e}")
+            return
+
+        card = (result.get("cards") or [{}])[0]
+        synthesis = (card.get("synthesis") or "")[:150]
+        nodes_created = card.get("nodes_created") or 0
+        trace_len = len(card.get("trace") or [])
+
+        # Alert
+        self._add_alert({
+            "type": "dmn_deep_research",
+            "severity": "info",
+            "text": f"🧠 DMN автономно исследовала цель «{goal_text[:50]}»: "
+                    f"{nodes_created} нод, {trace_len} шагов."
+                    + (f" Синтез: {synthesis[:100]}" if synthesis else ""),
+            "text_en": f"DMN autonomous research on '{goal_text[:50]}': "
+                       f"{nodes_created} nodes, {trace_len} steps. "
+                       f"{synthesis[:100]}",
+            "goal_id": goal.get("id"),
+            "goal_text": goal_text,
+            "nodes_created": nodes_created,
+            "trace_len": trace_len,
+            "synthesis": synthesis,
+            "card": card,  # полная карточка для UI
+        })
+        # Регистрируем как bridge (чтобы morning briefing включил)
+        if synthesis:
+            self._recent_bridges.append({
+                "ts": time.time(),
+                "text": f"[deep-research] {goal_text[:40]}: {synthesis[:80]}",
+                "source": "dmn_deep",
+                "quality": 0.7,
+            })
+            self._recent_bridges = self._recent_bridges[-10:]
+        log.info(f"[cognitive_loop] DMN deep done: {nodes_created} nodes, synthesis={synthesis[:60]}")
+
+    def _check_dmn_converge(self):
+        """DMN server-side autorun loop до STABLE — аналог graph-tab Run button.
+
+        Раз в час (когда юзер idle + NE low), запускает tick→execute→tick-loop
+        на текущем workspace графе, максимум DMN_CONVERGE_MAX_STEPS шагов или
+        пока `action=stable`. Каждый action → вызов соответствующего
+        endpoint/функции server-side (без HTTP round-trip).
+
+        Результат: alert + entry в `_recent_bridges` → morning briefing.
+        """
+        now = time.time()
+        if now - self._last_dmn_converge < self.DMN_CONVERGE_INTERVAL:
+            return
+        nodes_n = len(_graph.get("nodes", []))
+        if nodes_n < 5 or nodes_n > 40:
+            # Слишком пусто или слишком большой граф — не запускаем
+            return
+        self._last_dmn_converge = now
+        # Depth config из settings — юзер может override дефолты
+        try:
+            from .api_backend import get_depth_defaults
+            _dd = get_depth_defaults()
+            max_steps = _dd.get("dmn_converge_max_steps", max_steps)
+            stall_window = _dd.get("dmn_converge_stall_window", stall_window)
+            max_wall_s = _dd.get("dmn_converge_max_wall_s", max_wall_s)
+        except Exception:
+            max_steps = max_steps
+            stall_window = stall_window
+            max_wall_s = max_wall_s
+        log.info(f"[cognitive_loop] DMN converge-loop starting "
+                 f"(nodes={nodes_n} max_steps={max_steps} max_wall={max_wall_s}s stall={stall_window})")
+
+        from .tick_nand import tick_emergent
+        from .graph_logic import _compute_edges, _add_node, _graph_generate
+        # executor dispatcher server-side
+        steps_taken = 0
+        actions_log = []
+        final_action = None
+        wall_start = time.time()
+        last_growth_step = 0
+        last_node_count = len(_graph.get("nodes", []))
+        exit_reason = "converged"
+        for step in range(max_steps):
+            # Wall-time guard — не жжём LM дольше лимита
+            if time.time() - wall_start > max_wall_s:
+                exit_reason = "wall_time_limit"
+                break
+            # Progress guard — если STALL_WINDOW тиков без роста нод, стоп
+            cur_n = len(_graph.get("nodes", []))
+            if cur_n > last_node_count:
+                last_node_count = cur_n
+                last_growth_step = step
+            elif step - last_growth_step >= stall_window:
+                exit_reason = "stalled_no_growth"
+                break
+
+            nodes = _graph.get("nodes", [])
+            edges = _compute_edges(nodes, 0.91, "embedding")
+            tick_result = tick_emergent(nodes, edges, _graph,
+                                         threshold=0.91, stable_threshold=0.8,
+                                         min_hyp=5, user_initiated=False)
+            action = tick_result.get("action", "?")
+            actions_log.append(action)
+            steps_taken += 1
+            final_action = action
+            if action in ("stable", "done", "none"):
+                exit_reason = "converged"
+                break
+            # Dispatch action server-side (минимальный executor)
+            target = tick_result.get("target")
+            try:
+                if action == "think_toward":
+                    goal_idx = next((i for i, n in enumerate(nodes)
+                                     if n.get("type") == "goal"), None)
+                    if goal_idx is None:
+                        break
+                    goal_text = nodes[goal_idx].get("text", "")
+                    res, _ = _graph_generate(
+                        [{"role": "system", "content": "/no_think"},
+                         {"role": "user",
+                          "content": f"Тема: {goal_text}\nСгенерируй 3 гипотезы, по одной на строке."}],
+                        max_tokens=2000, temp=0.7, top_k=40,
+                    )
+                    for line in res.split("\n"):
+                        t = line.strip(" -•*1234567890.")
+                        if len(t) > 8:
+                            _add_node(t, depth=1, node_type="hypothesis", confidence=0.5)
+                elif action == "elaborate" and isinstance(target, int):
+                    if 0 <= target < len(nodes):
+                        t_text = nodes[target].get("text", "")
+                        res, _ = _graph_generate(
+                            [{"role": "system", "content": "/no_think"},
+                             {"role": "user",
+                              "content": f"Углуби: «{t_text}». Дай 2 evidence."}],
+                            max_tokens=2000, temp=0.5, top_k=30,
+                        )
+                        for line in res.split("\n"):
+                            t = line.strip(" -•*1234567890.")
+                            if len(t) > 8:
+                                eidx = _add_node(t, depth=2, node_type="evidence", confidence=0.65)
+                                _graph["edges"].setdefault("directed", []).append([target, eidx])
+                elif action == "collapse" and isinstance(target, list) and len(target) >= 2:
+                    # Server-side minimal collapse: mark first as hub, drop similar
+                    # Упрощённо: просто поднимаем confidence первого, не удаляем — safer.
+                    if 0 <= target[0] < len(nodes):
+                        nodes[target[0]]["confidence"] = min(0.95,
+                            nodes[target[0]].get("confidence", 0.5) + 0.1)
+                elif action == "smartdc" and isinstance(target, int):
+                    if 0 <= target < len(nodes):
+                        t_text = nodes[target].get("text", "")
+                        res, _ = _graph_generate(
+                            [{"role": "system", "content": "/no_think"},
+                             {"role": "user",
+                              "content": f"Гипотеза: {t_text}\nFOR/AGAINST/SYNTHESIS. 3 строки."}],
+                            max_tokens=2000, temp=0.4, top_k=20,
+                        )
+                        # Confidence-update по длинам
+                        fr = ag = sy = ""
+                        for l in res.split("\n"):
+                            L = l.strip()
+                            if L.upper().startswith(("FOR:", "ЗА:")):
+                                fr = L.split(":",1)[1].strip()
+                            elif L.upper().startswith(("AGAINST:","ПРОТИВ:")):
+                                ag = L.split(":",1)[1].strip()
+                            elif L.upper().startswith(("SYNTHESIS:","СИНТЕЗ:")):
+                                sy = L.split(":",1)[1].strip()
+                        if fr and ag:
+                            nodes[target]["confidence"] = (
+                                0.75 if len(fr) >= len(ag) else 0.35)
+                elif action == "pump":
+                    bridge = self._run_pump_bridge(max_iterations=1, save=True)
+                    if bridge:
+                        self._recent_bridges.append({
+                            "ts": time.time(),
+                            "text": (bridge.get("text") or "")[:100],
+                            "source": "converge_loop",
+                            "quality": bridge.get("quality", 0),
+                        })
+                        self._recent_bridges = self._recent_bridges[-10:]
+            except Exception as e:
+                log.debug(f"[cognitive_loop] converge step {step} {action}: {e}")
+                break
+
+        final_nodes = len(_graph.get("nodes", []))
+        from collections import Counter
+        actions_count = Counter(actions_log)
+
+        # Forced synthesis — общий helper `force_synthesize_top` из
+        # graph_logic. Один source of truth для DMN + graph-tab autorun.
+        forced_synthesis = None
+        forced_confidence = None
+        try:
+            from .graph_logic import force_synthesize_top
+            syn = force_synthesize_top(n=5, lang="ru", max_tokens=3000)
+            if syn:
+                forced_synthesis = syn["text"]
+                forced_confidence = syn["confidence"]
+                self._recent_bridges.append({
+                    "ts": time.time(),
+                    "text": f"[converge synthesis] {forced_synthesis[:100]}",
+                    "source": "dmn_converge",
+                    "quality": forced_confidence or 0.5,
+                })
+                self._recent_bridges = self._recent_bridges[-10:]
+                log.info(f"[cognitive_loop] forced synth node #{syn.get('node_idx')} conf {forced_confidence}")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] forced synth failed: {e}")
+
+        wall_s = round(time.time() - wall_start, 1)
+        if exit_reason == "converged" and final_action in ("stable", "done"):
+            status_emoji = "✓"
+            status_text = f"сошлось за {steps_taken} шагов ({wall_s}s)"
+        elif exit_reason == "wall_time_limit":
+            status_emoji = "⏱"
+            status_text = f"wall-time лимит ({wall_s}s, {steps_taken} шагов)"
+        elif exit_reason == "stalled_no_growth":
+            status_emoji = "⊘"
+            status_text = f"stall — нет роста {stall_window} шагов подряд ({steps_taken} total)"
+        else:
+            status_emoji = "⋯"
+            status_text = f"MAX_STEPS {max_steps} ({wall_s}s)"
+        summary_txt = (f"🔁 DMN converge: {status_emoji} {status_text}. "
+                       f"Актов: {dict(actions_count)}. Нод стало: {final_nodes}.")
+        if forced_synthesis:
+            summary_txt += f"\n💡 Синтез (conf {forced_confidence}): {forced_synthesis[:150]}"
+        self._add_alert({
+            "type": "dmn_converge",
+            "severity": "info",
+            "text": summary_txt,
+            "text_en": summary_txt,
+            "steps_taken": steps_taken,
+            "final_action": final_action,
+            "exit_reason": exit_reason,
+            "wall_s": wall_s,
+            "actions_count": dict(actions_count),
+            "final_node_count": final_nodes,
+            "synthesis": forced_synthesis,
+            "synthesis_confidence": forced_confidence,
+        })
+        log.info(f"[cognitive_loop] DMN converge done: {summary_txt}")
+
+    def _check_dmn_cross_graph(self):
+        """DMN scans all workspaces (не только текущий) для поиска cross-graph
+        bridges через embedding similarity. Находка → cross_edge в workspace
+        index + alert.
+
+        Суть: система ищет связи между твоими «исследование» и «личное»,
+        «работа» и «здоровье» и т.д. — скрытые оси между разными областями.
+        """
+        now = time.time()
+        if now - self._last_dmn_cross < self.DMN_CROSS_GRAPH_INTERVAL:
+            return
+        self._last_dmn_cross = now
+        try:
+            from .workspace import get_workspace_manager
+            wm = get_workspace_manager()
+            wm.load_index()
+            workspaces = wm._index.get("workspaces", {})
+            if len(workspaces) < 2:
+                return
+            log.info(f"[cognitive_loop] DMN cross-graph scan ({len(workspaces)} workspaces)")
+            # Поискать нашёлся ли метод find_bridges
+            if hasattr(wm, "find_serendipity_bridges"):
+                bridges = wm.find_serendipity_bridges(min_distinct=0.3, max_results=3)
+            elif hasattr(wm, "meta_graph"):
+                # Попытка meta
+                meta = wm.meta_graph()
+                bridges = meta.get("bridges", [])[:3] if isinstance(meta, dict) else []
+            else:
+                # Фолбэк: просто считаем что доступно API /workspace/meta
+                bridges = []
+            if bridges:
+                first = bridges[0] if isinstance(bridges, list) else None
+                if first:
+                    self._add_alert({
+                        "type": "dmn_cross_graph",
+                        "severity": "info",
+                        "text": (f"🔗 Cross-graph мост найден: "
+                                 f"{first.get('from_graph','?')} ↔ {first.get('to_graph','?')}"),
+                        "bridges": bridges,
+                    })
+                    log.info(f"[cognitive_loop] cross-graph bridges found: {len(bridges)}")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] cross_graph failed: {e}")
 
     def _check_dmn_continuous(self):
         now = time.time()
@@ -1676,6 +2011,9 @@ class CognitiveLoop:
             "last_foreground_tick": self._last_foreground_tick,
             "last_heartbeat": self._last_heartbeat,
             "heartbeat_interval_s": self.HEARTBEAT_INTERVAL,
+            "last_dmn_deep": self._last_dmn_deep,
+            "last_dmn_converge": self._last_dmn_converge,
+            "last_dmn_cross": self._last_dmn_cross,
             "recent_bridges": list(self._recent_bridges or [])[-5:],
             "dmn": gate,
         }

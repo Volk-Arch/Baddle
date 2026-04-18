@@ -124,7 +124,7 @@ def execute_tournament(message: str, lang: str = "ru") -> Dict:
     result, _ = _graph_generate(
         [{"role": "system", "content": system},
          {"role": "user", "content": options_text}],
-        max_tokens=250, temp=0.5, top_k=40,
+        max_tokens=2000, temp=0.5, top_k=40,
     )
 
     # Parse
@@ -184,7 +184,7 @@ def execute_bayes(message: str, lang: str = "ru") -> Dict:
     result, _ = _graph_generate(
         [{"role": "system", "content": system},
          {"role": "user", "content": f"Гипотеза: {message}"}],
-        max_tokens=80, temp=0.3, top_k=40,
+        max_tokens=3000, temp=0.3, top_k=40,
     )
 
     prior = 0.5
@@ -237,7 +237,7 @@ def execute_brainstorm(message: str, lang: str = "ru") -> Dict:
     result, _ = _graph_generate(
         [{"role": "system", "content": system},
          {"role": "user", "content": user_prompt}],
-        max_tokens=500, temp=0.95, top_k=80,
+        max_tokens=3000, temp=0.95, top_k=80,
     )
 
     lines = [l.strip(" -•*1234567890.") for l in result.split("\n") if l.strip()]
@@ -442,6 +442,495 @@ def _render_card(renderer: str, ideas: list, zones: dict, lang: str,
     }
 
 
+# ═══ Ask-gate: проверка нужны ли вводные ═══
+# Некоторые режимы (tournament/race/dispute/builder/pipeline/cascade/scales)
+# требуют 2+ inputs. Если юзер написал просто «сравни», не дав опций —
+# возвращаем clarify card и спрашиваем конкретики. Без этого engine
+# работает на пустом месте и даёт слабый результат.
+
+MODES_NEED_OPTIONS = {
+    "tournament": ("options", 2),      # сравнение — нужны ≥2 options
+    "race":       ("options", 2),
+    "dispute":    ("positions", 2),    # дебаты — ≥2 позиции / тезиса
+    "builder":    ("subtasks", 2),     # сборка — ≥2 подзадачи
+    "pipeline":   ("steps", 2),        # шаги по порядку — ≥2 шага
+    "cascade":    ("tasks", 2),        # приоритеты — ≥2 задачи
+    "scales":     ("dimensions", 2),   # баланс — ≥2 измерения
+    "fan":        ("topic", 0),        # brainstorm — достаточно темы
+}
+
+
+def _need_inputs(message: str, mode_id: str, lang: str = "ru") -> Optional[Dict]:
+    """Проверить достаточно ли вводных в message для данного mode.
+
+    Возвращает None если OK (можно запускать engine) или clarify-card
+    dict если требуется дополнить.
+    """
+    cfg = MODES_NEED_OPTIONS.get(mode_id)
+    if not cfg:
+        return None
+    field_name, need = cfg
+    if need <= 0:
+        return None
+    parsed = _parse_options(message, max_count=10)
+    if len(parsed) >= need:
+        return None
+
+    # Недостаточно — готовим clarify
+    hints_ru = {
+        "tournament": "Какие варианты сравнить? Напиши через запятую, «или», или по одному в строке. Нужно минимум 2.",
+        "race":       "Какие варианты рассмотреть? Перечисли через запятую или по строкам — подойдёт первый валидный.",
+        "dispute":    "Какие противоречивые позиции обсудить? Минимум 2 тезиса через запятую или по строкам.",
+        "builder":    "Из каких частей собрать? Перечисли подзадачи — каждая на новой строке.",
+        "pipeline":   "Какие шаги в каком порядке? Перечисли по одному в строке.",
+        "cascade":    "Какие задачи проставить по приоритету? Перечисли через запятую или построчно.",
+        "scales":     "Между чем балансируем? Назови 2+ измерений через запятую.",
+    }
+    hints_en = {
+        "tournament": "Which options to compare? List via commas, 'or', or one per line. At least 2.",
+        "race":       "Which options to consider? Any valid one wins.",
+        "dispute":    "Which positions to debate? At least 2 theses.",
+        "builder":    "Which parts to assemble? List subtasks one per line.",
+        "pipeline":   "Which steps in which order? One per line.",
+        "cascade":    "Which tasks to prioritize? List them.",
+        "scales":     "Balance between what? Name 2+ dimensions.",
+    }
+    q = (hints_ru if lang == "ru" else hints_en).get(mode_id,
+        "Дополни запрос — мне нужно больше вводных." if lang == "ru" else "Need more inputs.")
+    return {
+        "text": q,
+        "intro": q,
+        "cards": [{
+            "type": "mode_clarify",
+            "mode_id": mode_id,
+            "field": field_name,
+            "have": len(parsed),
+            "need": need,
+            "question": q,
+            "prompt_user": True,
+        }],
+        "steps": [f"Mode «{mode_id}» требует ≥{need} {field_name}, дано {len(parsed)} — спрашиваю"
+                  if lang == "ru" else f"Mode '{mode_id}' needs ≥{need} {field_name}, got {len(parsed)}"],
+        "awaiting_input": True,
+        "graph_updated": False,
+    }
+
+
+# ═══ Deep execute: реальный 3-step pipeline с tools ═══
+# Применяется ко всем 12 non-special modes (rhythm и bayes оставлены как
+# specials из-за уникального state-flow). Создаёт реальные ноды в content
+# graph, вызывает elaborate и SmartDC. Renderer финальной card адаптируется
+# под mode.renderer_style.
+
+HEAVY_MODES_DEEP = ("horizon", "dispute", "builder", "pipeline",
+                     "tournament", "race", "cascade", "scales", "fan",
+                     "scout", "vector", "free")
+
+
+def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
+                 profile_hint: str = "", max_steps: int = 3) -> Dict:
+    """3-step deep research через реальные tools — реальное использование
+    того же engine что и в graph tab autorun, не замена одним brainstorm'ом.
+
+    Шаги:
+      1. Brainstorm → create goal-node + N hypotheses в content graph
+      2. Elaborate самую слабую hypothesis → evidence-ноды (углубляем)
+      3. SmartDC top-2 сильных → pro/contra/synthesis
+
+    Возвращает `deep_research` card: trace шагов + final synthesis +
+    список созданных нод (юзер видит реальную работу системы).
+    """
+    from .prompts import _p
+    from .graph_routes import _add_node as _add_node_route  # same module
+    from .graph_logic import _compute_edges
+    from .api_backend import get_neural_defaults
+    _nd = get_neural_defaults()
+    # Эти значения override'ят hardcoded max_tokens если они больше дефолта
+    _nd_maxtok = _nd.get("max_tokens") or 3000
+    _nd_temp = _nd.get("temperature") or 0.7
+    _nd_topk = _nd.get("top_k") or 40
+
+    trace = []  # список шагов для UI
+
+    # ── Step 1: Seed — goal + 5 hypotheses ──
+    try:
+        goal_idx = _add_node(message[:300], depth=0, topic="", confidence=0.5,
+                             node_type="goal")
+        _graph["nodes"][goal_idx]["mode"] = mode_id
+        trace.append({"step": 1, "action": "seed_goal",
+                      "detail": f"Цель добавлена как node #{goal_idx}",
+                      "nodes_touched": [goal_idx]})
+    except Exception as e:
+        return execute_via_zones(message, lang, mode_id, profile_hint)
+
+    # Для comparative/cluster modes: используем user-provided options как hypotheses
+    # напрямую, не генерим свежие через LLM. Это сохраняет точность «сравни React,Vue,Svelte».
+    system = _p(lang, "think")
+    if profile_hint:
+        system += "\n" + profile_hint + (
+            "\nУчитывай эти предпочтения и ограничения."
+            if lang == "ru" else "\nTake constraints into account.")
+
+    try:
+        mode_cfg = get_mode(mode_id) or {}
+    except Exception:
+        mode_cfg = {}
+    style = mode_cfg.get("renderer_style", "ideas")
+
+    user_options = _parse_options(message, max_count=7)
+    use_user_options = (style in ("comparative", "cluster", "dialectical")
+                        and len(user_options) >= 2)
+
+    if use_user_options:
+        ideas = [_clean_thought(o, "") for o in user_options if len(o) > 1][:7]
+        log.info(f"[execute_deep] using {len(ideas)} user-provided options (style={style})")
+    else:
+        user_prompt = (f"{_p(lang, 'topic')}: {message}\n"
+                       f"Сгенерируй 5 разных гипотез. Одна на строке. Без нумерации."
+                       if lang == "ru" else
+                       f"Topic: {message}\nGenerate 5 hypotheses. One per line.")
+        try:
+            result, _ = _graph_generate(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": user_prompt}],
+                max_tokens=3000, temp=0.8, top_k=60,
+            )
+        except Exception as e:
+            log.warning(f"[execute_deep] brainstorm failed: {e}")
+            return execute_via_zones(message, lang, mode_id, profile_hint)
+        lines = [l.strip(" -•*1234567890.") for l in result.split("\n") if l.strip()]
+        ideas = [_clean_thought(l, "") for l in lines if len(l) > 8][:5]
+    added_hyp = []
+    for text in ideas:
+        try:
+            idx = _add_node(text, depth=1, topic="", confidence=0.5,
+                            node_type="hypothesis")
+            added_hyp.append(idx)
+        except Exception:
+            pass
+    trace.append({"step": 2, "action": "brainstorm",
+                  "detail": f"Сгенерировал {len(added_hyp)} гипотез",
+                  "nodes_touched": added_hyp,
+                  "texts": ideas[:5]})
+
+    # Compute embeddings for distinct/similarity
+    try:
+        _ensure_embeddings([n.get("text", "") for n in _graph["nodes"]])
+    except Exception:
+        pass
+
+    # ── Deep branch per option (comparative/cluster/dialectical) ──
+    # Каждая hypothesis получает **свой** evidence-branch: 2 pro + 2 con
+    # для comparative/dialectical, или 2 "why needed" для cluster.
+    # Плюс pairwise SmartDC между опциями → aggregate score per option.
+    pair_dialectics = []
+    option_scores = {i: 0 for i in added_hyp}
+    if style in ("comparative", "cluster", "dialectical") and len(added_hyp) >= 2:
+        directed = _graph["edges"].setdefault("directed", [])
+        per_option_evidence: dict[int, list[int]] = {}
+        for h_idx in added_hyp:
+            h_text = _graph["nodes"][h_idx].get("text", "")[:200]
+            per_option_evidence[h_idx] = []
+            # Для cluster — evidence просто "почему важно/как делать"
+            # Для comparative/dialectical — pro + con
+            polarity_rounds = (
+                [("почему хорошо", "pro", 0.7),
+                 ("почему плохо",  "con", 0.3)]
+                if style in ("comparative", "dialectical")
+                else
+                [("почему это важно", "why", 0.65),
+                 ("как это сделать",  "how", 0.65)]
+            )
+            for prompt_tail, pol_label, base_conf in polarity_rounds:
+                if lang == "ru":
+                    p = (f"Тема: {message[:100]}\n"
+                         f"Вариант: «{h_text}»\n"
+                         f"Дай 2 конкретных аргумента {prompt_tail}. По одному на строке, "
+                         f"без нумерации.")
+                else:
+                    p = (f"Topic: {message[:100]}\nOption: «{h_text}»\n"
+                         f"Give 2 concrete arguments: {prompt_tail}. One per line.")
+                try:
+                    res, _ = _graph_generate(
+                        [{"role": "system", "content": system},
+                         {"role": "user", "content": p}],
+                        max_tokens=1200, temp=0.6, top_k=40,
+                    )
+                    ev_lines = [_clean_thought(l.strip(" -•*1234567890."), "")
+                                for l in res.split("\n") if len(l.strip()) > 8][:2]
+                    for et in ev_lines:
+                        # Маркируем тип argument через node_type=evidence +
+                        # поле evidence_polarity для downstream визуализации
+                        try:
+                            eidx = _add_node(et, depth=2, topic="", confidence=base_conf,
+                                             node_type="evidence")
+                            _graph["nodes"][eidx]["evidence_polarity"] = pol_label
+                            _graph["nodes"][eidx]["evidence_target"] = h_idx
+                            per_option_evidence[h_idx].append(eidx)
+                            directed.append([h_idx, eidx])
+                        except Exception:
+                            pass
+                except Exception as e:
+                    log.debug(f"[execute_deep] {pol_label} for #{h_idx} failed: {e}")
+
+        total_ev = sum(len(v) for v in per_option_evidence.values())
+        trace.append({
+            "step": 3, "action": "elaborate_per_option",
+            "detail": f"Для {len(added_hyp)} опций сгенерировал {total_ev} evidence (pro+con)",
+            "nodes_touched": [e for lst in per_option_evidence.values() for e in lst],
+            "per_option": {
+                _graph["nodes"][h].get("text", "")[:30]: len(evs)
+                for h, evs in per_option_evidence.items()
+            },
+        })
+
+        # ── Pairwise SmartDC: каждая пара options → кто побеждает + reason
+        if style in ("comparative", "dialectical"):
+            for i, a in enumerate(added_hyp):
+                for b in added_hyp[i+1:]:
+                    a_t = _graph["nodes"][a].get("text", "")[:100]
+                    b_t = _graph["nodes"][b].get("text", "")[:100]
+                    if lang == "ru":
+                        pp = (f"Сравни в контексте «{message[:80]}»:\n"
+                              f"A: {a_t}\nB: {b_t}\n"
+                              f"Выдай:\n"
+                              f"WINNER: A или B\n"
+                              f"REASON: одна строка почему")
+                    else:
+                        pp = (f"Compare in context «{message[:80]}»:\n"
+                              f"A: {a_t}\nB: {b_t}\n"
+                              f"Output:\nWINNER: A or B\nREASON: one line")
+                    try:
+                        pr, _ = _graph_generate(
+                            [{"role": "system", "content": system},
+                             {"role": "user", "content": pp}],
+                            max_tokens=800, temp=0.3, top_k=20,
+                        )
+                        winner_letter = "?"
+                        reason = ""
+                        for line in pr.split("\n"):
+                            L = line.strip()
+                            if L.upper().startswith("WINNER:"):
+                                winner_letter = L.split(":", 1)[1].strip()[:1].upper()
+                            elif L.upper().startswith("REASON:") or L.upper().startswith("ПРИЧИНА:"):
+                                reason = L.split(":", 1)[1].strip()
+                        winner_idx = a if winner_letter == "A" else (b if winner_letter == "B" else None)
+                        if winner_idx in option_scores:
+                            option_scores[winner_idx] += 1
+                        pair_dialectics.append({
+                            "a": a, "a_text": a_t, "b": b, "b_text": b_t,
+                            "winner": winner_idx, "winner_letter": winner_letter,
+                            "reason": reason[:200],
+                        })
+                    except Exception as e:
+                        log.debug(f"[execute_deep] pair {a}x{b} failed: {e}")
+            trace.append({
+                "step": 4, "action": "pairwise_smartdc",
+                "detail": f"Pairwise SmartDC: {len(pair_dialectics)} пар",
+                "pairs": pair_dialectics,
+                "scores": {_graph["nodes"][h].get("text", "")[:30]: s
+                           for h, s in option_scores.items()},
+            })
+            # Update confidence based on pairwise wins
+            total_pairs = max(1, len(added_hyp) - 1)
+            for h_idx, wins in option_scores.items():
+                _graph["nodes"][h_idx]["confidence"] = min(0.95, 0.3 + 0.5 * (wins / total_pairs))
+
+    # ── Step 2 (single-hypothesis path): только для ideas-style ──
+    # Для comparative/cluster/dialectical уже отработал per-option branch выше.
+    skip_single_elaborate = style in ("comparative", "cluster", "dialectical") and len(added_hyp) >= 2
+    if added_hyp and not skip_single_elaborate:
+        # Выбираем первую из added (все conf=0.5 начальные — берём первую)
+        weak_idx = added_hyp[0]
+        weak_text = _graph["nodes"][weak_idx].get("text", "")
+        elaborate_prompt = (
+            f"Углуби мысль: «{weak_text}».\n"
+            f"Дай 2 конкретных evidence (факт или механизм). По одному на строке."
+            if lang == "ru" else
+            f"Elaborate on: «{weak_text}».\nGive 2 concrete evidence. One per line."
+        )
+        try:
+            ev_result, _ = _graph_generate(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": elaborate_prompt}],
+                max_tokens=2000, temp=0.6, top_k=40,
+            )
+            ev_lines = [_clean_thought(l.strip(" -•*1234567890."), "")
+                        for l in ev_result.split("\n") if len(l.strip()) > 8]
+            ev_added = []
+            for et in ev_lines[:2]:
+                idx = _add_node(et, depth=2, topic="", confidence=0.65,
+                                node_type="evidence")
+                ev_added.append(idx)
+            # Link evidence → hypothesis (directed edge)
+            directed = _graph["edges"].get("directed", [])
+            for eidx in ev_added:
+                directed.append([weak_idx, eidx])
+            trace.append({"step": 3, "action": "elaborate",
+                          "detail": f"Углубил #{weak_idx} ({weak_text[:40]}): "
+                                    f"+{len(ev_added)} evidence",
+                          "nodes_touched": ev_added,
+                          "parent": weak_idx,
+                          "texts": ev_lines[:2]})
+        except Exception as e:
+            log.warning(f"[execute_deep] elaborate failed: {e}")
+            trace.append({"step": 3, "action": "elaborate", "error": str(e)[:100]})
+
+    # ── Step 3: SmartDC на top hypothesis → pro/contra/synthesis ──
+    # Для comparative уже прошёл pairwise — пропускаем.
+    synthesis_text = None
+    confidence_t = None
+    confidence_a = None
+    skip_single_smartdc = style in ("comparative", "dialectical") and len(added_hyp) >= 2
+    if added_hyp and not skip_single_smartdc:
+        top_idx = added_hyp[0]
+        top_text = _graph["nodes"][top_idx].get("text", "")
+        dc_prompt = (
+            f"Гипотеза: «{top_text}».\n"
+            f"Выдай:\n"
+            f"1) FOR (аргумент за)\n2) AGAINST (аргумент против)\n3) SYNTHESIS (что верно)\n"
+            f"Формат: три строки начинающихся с FOR:/AGAINST:/SYNTHESIS:"
+            if lang == "ru" else
+            f"Hypothesis: «{top_text}».\nProvide FOR/AGAINST/SYNTHESIS. Three lines."
+        )
+        try:
+            dc_result, _ = _graph_generate(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": dc_prompt}],
+                max_tokens=3000, temp=0.4, top_k=30,
+            )
+            thesis = antithesis = synthesis_text = ""
+            for line in dc_result.split("\n"):
+                low = line.strip()
+                if low.upper().startswith("FOR:") or low.upper().startswith("ЗА:"):
+                    thesis = line.split(":", 1)[1].strip()
+                elif low.upper().startswith("AGAINST:") or low.upper().startswith("ПРОТИВ:"):
+                    antithesis = line.split(":", 1)[1].strip()
+                elif low.upper().startswith("SYNTHESIS:") or low.upper().startswith("СИНТЕЗ:"):
+                    synthesis_text = line.split(":", 1)[1].strip()
+            # Rough confidence heuristic: длины аргументов (более полный = более уверенный)
+            confidence_t = min(0.9, 0.5 + len(thesis) / 200)
+            confidence_a = min(0.9, 0.5 + len(antithesis) / 200)
+            # Update hypothesis confidence: если synthesis ближе к thesis → повышаем
+            if synthesis_text and thesis:
+                # Простая эвристика: synthesis короче antithesis → thesis сильнее
+                if len(antithesis) > len(thesis) * 1.3:
+                    _graph["nodes"][top_idx]["confidence"] = 0.35
+                else:
+                    _graph["nodes"][top_idx]["confidence"] = 0.75
+            trace.append({
+                "step": 4, "action": "smartdc",
+                "detail": f"SmartDC на #{top_idx}: FOR×{len(thesis)} AGAINST×{len(antithesis)}",
+                "thesis": thesis[:200],
+                "antithesis": antithesis[:200],
+                "synthesis": synthesis_text[:200] if synthesis_text else "",
+                "parent": top_idx,
+            })
+        except Exception as e:
+            log.warning(f"[execute_deep] smartdc failed: {e}")
+            trace.append({"step": 4, "action": "smartdc", "error": str(e)[:100]})
+
+    # ── Финальная сборка карточки ── зависит от mode.renderer_style
+    nodes_created = 1 + len(added_hyp) + sum(
+        len(t.get("nodes_touched") or []) for t in trace if t.get("action") == "elaborate")
+
+    try:
+        style = (get_mode(mode_id) or {}).get("renderer_style", "ideas")
+    except Exception:
+        style = "ideas"
+    # Для comparative modes подменяем card type → comparison-style с pairwise evidence.
+    # Для cluster modes → cluster-group. Для dialectical → dialectic с evidence.
+    # Остальные → deep_research (universal trace-view).
+    final_card_type = "deep_research"
+    if style == "comparative":
+        final_card_type = "deep_comparison"
+    elif style == "cluster":
+        final_card_type = "deep_cluster"
+    elif style == "dialectical":
+        final_card_type = "deep_dialectic"
+
+    summary = (f"{mode_id.title()} deep: {len(trace)} шагов · {nodes_created} нод в графе"
+               if lang == "ru" else
+               f"{mode_id.title()} deep: {len(trace)} steps · {nodes_created} nodes")
+
+    steps_human = []
+    for t in trace:
+        a = t.get("action", "?")
+        if a == "seed_goal":
+            steps_human.append(f"① Записал цель в граф")
+        elif a == "brainstorm":
+            steps_human.append(f"② Сгенерировал {len(t.get('nodes_touched',[]))} гипотез")
+        elif a == "elaborate":
+            steps_human.append(f"③ Углубил одну слабую: +{len(t.get('nodes_touched',[]))} evidence")
+        elif a == "smartdc":
+            steps_human.append(f"④ SmartDC thesis vs antithesis → синтез")
+
+    # Winner и детальная разборка для comparative/dialectical
+    winner_info = None
+    if option_scores and any(option_scores.values()):
+        winner_idx = max(option_scores, key=option_scores.get)
+        winner_info = {
+            "idx": winner_idx,
+            "text": _graph["nodes"][winner_idx].get("text", ""),
+            "score": option_scores[winner_idx],
+            "max_score": len(added_hyp) - 1,
+            "confidence": _graph["nodes"][winner_idx].get("confidence", 0.5),
+        }
+
+    # Hypothesis-level detail (для UI: опция + её evidence-трассы)
+    hyp_detail = []
+    for h_idx in added_hyp:
+        if h_idx >= len(_graph["nodes"]):
+            continue
+        hnode = _graph["nodes"][h_idx]
+        # Находим evidence nodes связанные с этой hypothesis через directed edges
+        ev_for_h = []
+        for en in _graph["nodes"]:
+            if en.get("type") == "evidence" and en.get("evidence_target") == h_idx:
+                ev_for_h.append({
+                    "text": en.get("text", "")[:200],
+                    "polarity": en.get("evidence_polarity"),
+                    "confidence": en.get("confidence", 0.5),
+                })
+        hyp_detail.append({
+            "idx": h_idx,
+            "text": hnode.get("text", ""),
+            "confidence": hnode.get("confidence", 0.5),
+            "evidence": ev_for_h,
+            "score": option_scores.get(h_idx, 0),
+        })
+
+    return {
+        "text": summary,
+        "intro": summary,
+        "cards": [{
+            "type": final_card_type,
+            "mode_id": mode_id,
+            "style": style,
+            "trace": trace,
+            "synthesis": synthesis_text or "",
+            "goal_idx": goal_idx,
+            "nodes_created": nodes_created,
+            "hypothesis_count": len(added_hyp),
+            "has_evidence": any(t.get("action", "").startswith("elaborate") and not t.get("error") for t in trace),
+            "has_smartdc": any(t.get("action", "").startswith("smartdc") or t.get("action") == "pairwise_smartdc" for t in trace),
+            "thesis": next((t.get("thesis") for t in trace if t.get("action") == "smartdc"), ""),
+            "antithesis": next((t.get("antithesis") for t in trace if t.get("action") == "smartdc"), ""),
+            "confidence_thesis": confidence_t,
+            "confidence_anti": confidence_a,
+            # Hypothesis texts (для comparative/cluster отрисовки как список)
+            "hypotheses": [_graph["nodes"][i].get("text", "") for i in added_hyp if i < len(_graph["nodes"])],
+            # Deep comparative detail
+            "hypothesis_detail": hyp_detail,  # per-option evidence + score
+            "pair_dialectics": pair_dialectics,  # pairwise SmartDC results
+            "option_scores": {_graph["nodes"][h].get("text", "")[:40]: s for h, s in option_scores.items()},
+            "winner": winner_info,
+        }],
+        "steps": steps_human,
+        "graph_updated": True,
+    }
+
+
 def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon",
                       profile_hint: str = "") -> Dict:
     """Единый путь для всех 14 режимов.
@@ -486,7 +975,7 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon",
     result, _ = _graph_generate(
         [{"role": "system", "content": system},
          {"role": "user", "content": user_prompt}],
-        max_tokens=400, temp=0.8, top_k=60,
+        max_tokens=3000, temp=0.8, top_k=60,
     )
     lines = [l.strip(" -•*1234567890.") for l in result.split("\n") if l.strip()]
     ideas = [_clean_thought(l, "") for l in lines if len(l) > 5][:n_ideas]
@@ -529,7 +1018,18 @@ def execute(mode_id: str, message: str, lang: str = "ru",
             return execute_rhythm(message, lang)
         if mode_id == "bayes":
             return execute_bayes(message, lang)
-        # Everything else: один путь через зоны + style preset
+
+        # Ask-gate: если mode требует 2+ вводных и message не даёт их —
+        # возвращаем clarify card. Сила baddle в глубине, не в быстрой
+        # отработке пустого запроса.
+        clarify = _need_inputs(message, mode_id, lang)
+        if clarify is not None:
+            return clarify
+
+        # Остальные 12 non-special modes → deep pipeline. Renderer под style.
+        if mode_id in HEAVY_MODES_DEEP:
+            return execute_deep(message, lang, mode_id, profile_hint=profile_hint)
+        # Fallback (если новый mode добавят в будущем без deep-интеграции)
         return execute_via_zones(message, lang, mode_id, profile_hint=profile_hint)
     except Exception as e:
         log.warning(f"[assist_exec] {mode_id} failed: {e}")

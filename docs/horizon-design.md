@@ -168,3 +168,7 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`
 - `src/tick_nand.py` — tick загружает/создаёт Horizon, считает distinct-matrix,
   кормит нейрохимию (`update_neurochem(d, weights)`), маршрутизирует по зонам
 - `src/graph_routes.py` — autorun отправляет feedback через `/graph/horizon-feedback`
+
+---
+
+**Навигация:** [← Tick](tick-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Neurochem →](neurochem-design.md)

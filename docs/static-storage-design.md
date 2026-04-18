@@ -263,3 +263,7 @@ KB (весь граф + state trace). Не хотим раздувать goals.j
 - [templates/index.html](../templates/index.html) — Profile/Goals modals + buttons
 - [static/css/style.css](../static/css/style.css) — profile/goals/profile_clarify styles
 - [static/js/assistant.js](../static/js/assistant.js) — modal logic + card renderer
+
+---
+
+**Навигация:** [← Meta-tick](meta-tick-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Activity log →](activity-log-design.md)

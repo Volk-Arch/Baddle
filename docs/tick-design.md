@@ -171,3 +171,7 @@ tick_emergent фильтрует classify только по subgoal нодам.
 - `src/state_graph.py` — `StateGraph` с hook'ом на каждый tick emit
 - `src/graph_routes.py` — `/graph/tick` эндпоинт → делегирует в `loop.tick_foreground()`
 - `static/js/graph.js` — autorun с обработкой `action: "ask"` (pause-on-question) и cone viz
+
+---
+
+**Навигация:** [← Divergence/Convergence](convergence-divergence.md)  ·  [Индекс](README.md)  ·  [Следующее: Horizon →](horizon-design.md)

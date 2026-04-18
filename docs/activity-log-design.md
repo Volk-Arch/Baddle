@@ -138,3 +138,7 @@ sim-панелью. Состояния:
 - Activity timeline view (отдельная вкладка поверх дня).
 - Pattern detector subscribes → weekday × category паттерны.
 - Sleep из idle-gap между днями.
+
+---
+
+**Навигация:** [← Static storage](static-storage-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Ontology →](ontology.md)

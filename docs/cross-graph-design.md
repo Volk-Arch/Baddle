@@ -91,3 +91,7 @@ POST /workspace/seed-from-history
   auto-seed в `/workspace/switch`
 - [src/state_graph.py](../src/state_graph.py) — источник conclusions,
   embedding cache
+
+---
+
+**Навигация:** [← Novelty](novelty-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Workspace →](workspace-design.md)

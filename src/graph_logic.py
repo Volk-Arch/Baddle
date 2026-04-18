@@ -6,6 +6,7 @@ import logging
 import threading
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from typing import Optional
 
 import numpy as np
 
@@ -287,6 +288,61 @@ def _get_texts(nodes: list[dict] | None = None) -> list[str]:
     if nodes is None:
         nodes = _graph["nodes"]
     return [n["text"] for n in nodes]
+
+
+def force_synthesize_top(n: int = 5, lang: str = "ru",
+                          max_tokens: int = 3000) -> Optional[dict]:
+    """Forced collapse: top-N hypothesis/evidence/thought по confidence
+    + LLM-синтез одним абзацем + добавление synthesis-ноды в граф.
+
+    Общий helper используется `_check_dmn_converge` (фон) и `/graph/synthesize`
+    endpoint'ом для graph tab autorun. Source of truth — один.
+
+    Возвращает {text, confidence, node_idx} или None если граф пустой.
+    """
+    nodes = _graph.get("nodes", [])
+    if not nodes:
+        return None
+    cand = [(i, n) for i, n in enumerate(nodes)
+            if n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
+    if not cand:
+        return None
+    cand.sort(key=lambda p: p[1].get("confidence", 0.5), reverse=True)
+    top = cand[:n]
+    avg_conf = round(sum(p[1].get("confidence", 0.5) for p in top) / len(top), 2)
+    texts = "\n".join(f"- {p[1].get('text','')[:200]} (conf {p[1].get('confidence',0.5):.2f})"
+                       for p in top)
+    goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
+    if lang == "ru":
+        prompt = (f"Цель: {goal_text}\n"
+                  f"Найденные мысли (от сильной к слабой):\n{texts}\n\n"
+                  f"Напиши финальный синтез одним абзацем (3-5 предложений). "
+                  f"Если уверенность низкая — честно признайся об этом.")
+        system = "/no_think\nТы ассистент-синтезатор."
+    else:
+        prompt = (f"Goal: {goal_text}\nThoughts (strong to weak):\n{texts}\n\n"
+                  f"Final synthesis, one paragraph (3-5 sentences). Be honest "
+                  f"about low confidence.")
+        system = "/no_think\nYou are a synthesizer."
+    try:
+        res, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": prompt}],
+            max_tokens=max_tokens, temp=0.5, top_k=30,
+        )
+    except Exception as e:
+        log.debug(f"[force_synthesize_top] LLM failed: {e}")
+        return None
+    text = (res or "").strip()[:2000]
+    if not text:
+        return None
+    try:
+        idx = _add_node(text[:500], depth=0, topic="",
+                        confidence=avg_conf, node_type="synthesis")
+    except Exception:
+        idx = None
+    return {"text": text, "confidence": avg_conf, "node_idx": idx,
+            "source_indices": [p[0] for p in top]}
 
 
 def _add_node(text: str, depth: int = 0, topic: str = "",

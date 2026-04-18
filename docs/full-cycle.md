@@ -309,3 +309,7 @@ LLM промажет формат — fallback на простой split, мож
 | «Как работает ночью?» | [consolidation-design.md](consolidation-design.md) + REM-блок в TODO |
 | «Как находит инсайты?» | [pump-design.md](pump-design.md) + [meta-tick-design.md](meta-tick-design.md) |
 | Before commit | `TODO.md` секция ⬇ СДЕЛАНО — там полный список проверяемых кейсов |
+
+---
+
+**Навигация:** [← Epilogue](epilogue.md)  ·  [Индекс](README.md)  ·  [Следующее: NAND архитектура →](nand-architecture.md)

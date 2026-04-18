@@ -7,6 +7,14 @@ function openSettings() {
     document.getElementById('settings-api-model').value = s.api_model || '';
     document.getElementById('settings-embedding-model').value = s.embedding_model || '';
     document.getElementById('settings-ctx').value = s.local_ctx || 32768;
+    // Neural defaults
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.value = v; };
+    setVal('settings-neural-temp',      s.neural_temp !== undefined ? s.neural_temp : 0.7);
+    setVal('settings-neural-topk',      s.neural_top_k !== undefined ? s.neural_top_k : 40);
+    setVal('settings-neural-threshold', s.neural_threshold !== undefined ? s.neural_threshold : 0.91);
+    setVal('settings-neural-novelty',   s.neural_novelty !== undefined ? s.neural_novelty : 0.85);
+    setVal('settings-neural-maxtok',    s.neural_max_tokens !== undefined ? s.neural_max_tokens : 3000);
+    setVal('settings-neural-seed',      s.neural_seed !== undefined ? s.neural_seed : -1);
     const liveBayes = document.getElementById('settings-live-bayes');
     if (liveBayes) liveBayes.checked = !!s.live_bayes;
     document.getElementById('settings-current-model').textContent = `Current: ${s.current_model || '(not configured)'}`;
@@ -31,6 +39,19 @@ function saveSettings() {
     embedding_model: document.getElementById('settings-embedding-model').value.trim(),
     local_ctx: parseInt(document.getElementById('settings-ctx').value) || 32768,
   };
+  // Neural defaults
+  const numFrom = (id, def) => {
+    const el = document.getElementById(id);
+    if (!el) return def;
+    const v = parseFloat(el.value);
+    return isFinite(v) ? v : def;
+  };
+  body.neural_temp       = numFrom('settings-neural-temp', 0.7);
+  body.neural_top_k      = parseInt(numFrom('settings-neural-topk', 40)) || 40;
+  body.neural_threshold  = numFrom('settings-neural-threshold', 0.91);
+  body.neural_novelty    = numFrom('settings-neural-novelty', 0.85);
+  body.neural_max_tokens = parseInt(numFrom('settings-neural-maxtok', 3000)) || 3000;
+  body.neural_seed       = parseInt(numFrom('settings-neural-seed', -1));
   const liveBayes = document.getElementById('settings-live-bayes');
   if (liveBayes) body.live_bayes = liveBayes.checked;
 

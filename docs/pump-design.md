@@ -81,3 +81,7 @@ Pump — **поворот** конуса. Не расширение (Brainstorm)
 - `src/pump_logic.py` — `pump()`, `_expand_cloud()`, `_find_bridges()`, `_verify_bridge()`, `_compute_bridge_quality()`
 - `src/graph_routes.py` — `/graph/pump` route
 - `static/js/graph.js` — `graphPumpStart()`, `graphPumpTo()`, `graphPumpSave()`, `graphPumpVerify()`
+
+---
+
+**Навигация:** [← SmartDC](smartdc-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Embedding-first →](embedding-first-design.md)

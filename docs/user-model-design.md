@@ -244,3 +244,7 @@ UserState.from_dict(user_state_dump))`. Это восстанавливает ex
   - `_compute_energy` — dual-pool snapshot
   - `_log_decision` — mode-взвешенный debit
   - `/assist/simulate-day`, `/assist/named-states` endpoints
+
+---
+
+**Навигация:** [← Symbiosis](symbiosis-design.md)  ·  [Индекс](README.md)  ·  [Следующее: HRV →](hrv-design.md)

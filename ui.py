@@ -12,6 +12,15 @@ import threading
 import webbrowser
 from pathlib import Path
 
+# Force UTF-8 для stdout/stderr — критично на Windows где default cp1251
+# ломает print() с Unicode (→ ← ← ↔ эмодзи). Без этого /graph/elaborate
+# и другие endpoints возвращают HTTP 500 на любом print'е.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 try:
     from flask import Flask, request, render_template, jsonify
 except ImportError:
@@ -27,6 +36,15 @@ app = Flask(__name__)
 app.register_blueprint(graph_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(assistant_bp)
+
+# Format validation + light migrations — проверяет что все jsonl/json
+# файлы парсятся, backfills новых полей (last_sleep_duration_h,
+# last_briefing_ts, profile.categories). Fails soft.
+try:
+    from src.migrations import run_all as _run_migrations
+    _run_migrations(verbose=True)
+except Exception as _e:
+    print(f"  [migrations] skipped: {_e}")
 
 # Bootstrap: загрузить активный workspace (nodes + embeddings) в runtime-state.
 # Без этого embeddings/ноды терялись бы на рестарт — были бы живы только до

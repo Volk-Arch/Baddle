@@ -145,3 +145,7 @@ GET  /workspace/meta                    → meta-graph derived view
 *Workspaces — это не multi-tenant, это multi-context у одного человека.
 Граф знания vs граф проектов vs граф отношений — все живут отдельно, но
 связаны через serendipity-мосты и общую нейрохимию.*
+
+---
+
+**Навигация:** [← Cross-graph](cross-graph-design.md)  ·  [Индекс](README.md)  ·  Конец пути ✓

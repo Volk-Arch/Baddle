@@ -4,5 +4,11 @@
   "api_model": "qwen/qwen3-8b",
   "embedding_model": "text-embedding-nomic-embed-text-v2-moe",
   "local_ctx": 32768,
+  "neural_threshold": 0.91,
+  "neural_temp": 0.7,
+  "neural_top_k": 40,
+  "neural_seed": -1,
+  "neural_novelty": 0.85,
+  "neural_max_tokens": 3000,
   "live_bayes": false
 }

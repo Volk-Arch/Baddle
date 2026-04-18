@@ -1548,6 +1548,23 @@ def graph_consolidate():
     return jsonify(result)
 
 
+@graph_bp.route("/graph/synthesize", methods=["POST"])
+def graph_synthesize():
+    """Forced synthesis: top-N hypothesis/evidence/thought → LLM-синтез →
+    synthesis-нода. Общий endpoint для graph-tab autorun и для юзер-вызова.
+
+    Body: {n: 5, lang: "ru", max_tokens: 3000}
+    """
+    from .graph_logic import force_synthesize_top
+    d = _p_data()
+    n = int(d.get("n", 5))
+    max_tokens = int(d.get("max_tokens", 3000))
+    syn = force_synthesize_top(n=n, lang=d.get("lang", "ru"), max_tokens=max_tokens)
+    if not syn:
+        return jsonify({"error": "no_nodes_to_synthesize"})
+    return jsonify({"ok": True, **syn})
+
+
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
     """Foreground tick — ping в CognitiveLoop.

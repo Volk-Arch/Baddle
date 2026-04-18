@@ -350,6 +350,19 @@ function graphRenderSvg() {
   const positions = graphNodePositions;
   if (!nodes.length || !positions.length) return;
 
+  // Precompute degree per node (для node-size-by-degree)
+  window._graphDegree = new Array(nodes.length).fill(0);
+  (graphData.edges || []).forEach(e => {
+    if (typeof e.from === 'number') window._graphDegree[e.from]++;
+    if (typeof e.to === 'number') window._graphDegree[e.to]++;
+  });
+  (graphData.directed_edges || []).forEach(pair => {
+    if (Array.isArray(pair) && pair.length === 2) {
+      window._graphDegree[pair[0]]++;
+      window._graphDegree[pair[1]]++;
+    }
+  });
+
   const nodeCluster = new Array(nodes.length).fill(-1);
   (graphData.clusters || []).forEach((cl, ci) => cl.forEach(idx => { nodeCluster[idx] = ci; }));
   const clusterColors = graphClusterColors;
@@ -595,7 +608,12 @@ function graphRenderSvg() {
       const nodeType = (graphData.nodes[i] && graphData.nodes[i].type) || 'thought';
       const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       circle.setAttribute('cx', p.x); circle.setAttribute('cy', p.y);
-      circle.setAttribute('r', isSelected ? 14 : (ci >= 0 ? 11 : 8));
+      // Size by degree — хабы (много связей) визуально крупнее. Base 8,
+      // +0.6 за edge, max 16. Selected всегда 14.
+      const deg = (window._graphDegree && window._graphDegree[i]) || 0;
+      const degBoost = Math.min(8, deg * 0.6);
+      const baseR = isSelected ? 14 : (ci >= 0 ? 11 : 8);
+      circle.setAttribute('r', isSelected ? 14 : Math.round(baseR + degBoost));
       circle.setAttribute('fill', color);
       let strokeColor = isSelected ? '#facc15' : (isOnWalkPath ? '#10b981' : confColor);
       let strokeWidth = isSelected ? 3 : (isOnWalkPath ? 3 : (isCollapseSelected ? 3 : 1.5));
@@ -619,6 +637,18 @@ function graphRenderSvg() {
       } else if (nodeType === 'action') {
         if (!isSelected) strokeColor = '#8b5cf6'; // violet for action
         strokeWidth = isSelected ? 3 : 2.5;
+      } else if (nodeType === 'activity') {
+        // Activity timeplayer-node: цвет по activity_category, кольцо-индикатор done
+        const node = graphData.nodes[i] || {};
+        const catColors = {
+          work: '#6366f1', food: '#f59e0b', health: '#10b981',
+          social: '#ec4899', learning: '#8b5cf6',
+        };
+        const actFill = catColors[node.activity_category] || '#52525b';
+        circle.setAttribute('fill', actFill);
+        if (!isSelected) strokeColor = node.activity_done ? '#166534' : '#ef4444';
+        strokeWidth = isSelected ? 3 : 2;
+        if (!node.activity_done) circle.setAttribute('stroke-dasharray', '3,2');
       }
       circle.setAttribute('stroke', strokeColor);
       circle.setAttribute('stroke-width', strokeWidth);

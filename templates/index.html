@@ -74,6 +74,39 @@
         <input id="settings-ctx" type="number" value="32768" class="modal-input" style="width:100px;padding:4px 8px;font-size:12px">
       </div>
 
+      <!-- Neural defaults — общие для baddle chat, DMN, graph tab -->
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <label class="modal-label" style="margin-bottom:6px" title="Общие neural-параметры для baddle chat, DMN, graph tab. Раньше жили только в graph tab.">
+          Neural defaults
+        </label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Temperature (0.1-1.5)</label>
+            <input id="settings-neural-temp" type="number" step="0.05" min="0.1" max="1.5" value="0.7" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Top-K</label>
+            <input id="settings-neural-topk" type="number" step="1" min="1" max="200" value="40" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Distinct threshold (0.5-1.0)</label>
+            <input id="settings-neural-threshold" type="number" step="0.01" min="0.5" max="1.0" value="0.91" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Novelty gate (0-1)</label>
+            <input id="settings-neural-novelty" type="number" step="0.01" min="0" max="1" value="0.85" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px" title="Max tokens per LLM call. 3000+ даёт неограниченный ответ для любого режима.">Max tokens (3000+)</label>
+            <input id="settings-neural-maxtok" type="number" step="500" min="500" max="16000" value="3000" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Seed (-1 = random)</label>
+            <input id="settings-neural-seed" type="number" step="1" value="-1" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+        </div>
+      </div>
+
       <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
         <label class="modal-label" style="margin-bottom:6px">Experimental</label>
         <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
@@ -769,6 +802,20 @@
       <div style="flex:1;min-width:0;">
         <div id="graph-svg-wrap" style="position:relative;">
           <svg id="graph-svg" width="100%" height="520" style="user-select:none;"></svg>
+          <!-- Legend: что означают цвета/формы нод -->
+          <div id="graph-legend" class="graph-legend" title="Легенда типов нод. Клик = свернуть.">
+            <div class="gl-title" onclick="this.parentElement.classList.toggle('collapsed')">Легенда ▾</div>
+            <div class="gl-items">
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24"></span>мысль / thought</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px dashed #a78bfa"></span>гипотеза</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #06b6d4"></span>evidence</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #10b981"></span>факт</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #f43f5e"></span>цель (goal)</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#6366f1;border:2px solid #166534"></span>activity · done</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#6366f1;border:2px dashed #ef4444"></span>activity · active</div>
+              <div class="gl-item gl-tip">Размер ~ degree · цвет заливки ≈ тип · обводка = статус</div>
+            </div>
+          </div>
           <!-- Meta-graph overlay: кружки per-workspace + cross_edges между ними -->
           <svg id="meta-graph-svg" width="260" height="180"
                style="position:absolute;top:8px;right:8px;display:none;

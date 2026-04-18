@@ -128,3 +128,7 @@ HRV coherence — прямой индикатор: высокая = энерги
 3. **Persist energy** — сохранение энергии между сессиями (JSON)
 4. **Daily routines** — repeatable mode + интерактивный ассистент для питания/задач
 5. **Auto-decision** — XOR comparative с авто-выбором при параличе (timer → LLM judge)
+
+---
+
+**Навигация:** [← Origin story](origin-story.md)  ·  [Индекс](README.md)  ·  [Следующее: Epilogue →](epilogue.md)

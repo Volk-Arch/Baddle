@@ -161,6 +161,166 @@ function assistRenderCard(card) {
   wrapper.className = 'assist-card';
   wrapper.style.cssText = 'align-self:stretch;max-width:100%;margin-bottom:12px;';
 
+  if (card.type === 'mode_clarify') {
+    // Ask-gate: mode требует ≥N inputs, юзер дал меньше
+    wrapper.innerHTML = `
+      <div style="padding:12px 14px;background:#1c1917;border:1px solid #78350f;border-radius:12px;color:#e4e4e7">
+        <div style="font-size:10px;color:#f59e0b;font-weight:600;margin-bottom:6px">
+          🎯 MODE «${_esc(card.mode_id || '?')}» · нужно больше вводных
+        </div>
+        <div style="font-size:13px;margin-bottom:8px">${_esc(card.question)}</div>
+        <div style="font-size:11px;color:#71717a">
+          Поле <b>${_esc(card.field || '?')}</b> · дано ${card.have || 0} из ${card.need || 2}.
+          Допиши в следующем сообщении — сразу запустим полный режим.
+        </div>
+      </div>`;
+    return wrapper;
+  }
+
+  if (card.type === 'deep_comparison') {
+    // Comparative deep: opt1 vs opt2 vs opt3 — pro/con + pairwise winner.
+    const detail = card.hypothesis_detail || [];
+    const pairs = card.pair_dialectics || [];
+    const winner = card.winner || null;
+    const hypHtml = detail.map(h => {
+      const wins = h.score || 0;
+      const conf = Math.round((h.confidence || 0.5) * 100);
+      const isWinner = winner && winner.idx === h.idx;
+      const pro = (h.evidence || []).filter(e => e.polarity === 'pro');
+      const con = (h.evidence || []).filter(e => e.polarity === 'con');
+      const proHtml = pro.map(e => `<li style="color:#a1a1aa">${_esc(e.text)}</li>`).join('');
+      const conHtml = con.map(e => `<li style="color:#a1a1aa">${_esc(e.text)}</li>`).join('');
+      return `<div style="padding:10px 12px;background:${isWinner?'#052e16':'#1f1f23'};border-radius:10px;margin-bottom:6px;border-left:3px solid ${isWinner?'#10b981':'#3f3f46'}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-size:13px;color:#e4e4e7;font-weight:600">${isWinner?'🏆 ':''}${_esc(h.text)}</div>
+          <div style="font-size:10px;color:#71717a">wins ${wins} · conf ${conf}%</div>
+        </div>
+        ${pro.length ? `<div style="font-size:10px;color:#10b981;margin-top:4px">PRO</div><ul style="margin:2px 0 4px 18px;padding:0;font-size:11px">${proHtml}</ul>` : ''}
+        ${con.length ? `<div style="font-size:10px;color:#f59e0b;margin-top:4px">CON</div><ul style="margin:2px 0 4px 18px;padding:0;font-size:11px">${conHtml}</ul>` : ''}
+      </div>`;
+    }).join('');
+    const pairsHtml = pairs.map(p => `
+      <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:11px;margin-bottom:3px">
+        <span style="color:#71717a">${_esc(p.a_text.slice(0,30))}</span>
+        <span style="color:#52525b;margin:0 6px">vs</span>
+        <span style="color:#71717a">${_esc(p.b_text.slice(0,30))}</span>
+        <span style="color:#10b981;margin-left:8px">→ ${_esc(p.winner_letter || '?')}</span>
+        ${p.reason ? `<div style="color:#a1a1aa;font-size:10px;margin-top:2px">${_esc(p.reason)}</div>` : ''}
+      </div>`).join('');
+    wrapper.innerHTML = `
+      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.4px">⚔ DEEP COMPARISON · ${_esc(card.mode_id || 'tournament')}</div>
+          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод · ${detail.length} опций · ${pairs.length} пар</div>
+        </div>
+        <div>${hypHtml}</div>
+        ${pairs.length ? `<div style="margin-top:10px"><div style="font-size:10px;color:#71717a;font-weight:600;margin-bottom:4px">PAIRWISE SMARTDC (${pairs.length} пар)</div>${pairsHtml}</div>` : ''}
+        ${winner ? `<div style="margin-top:10px;padding:10px 12px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px">
+          <div style="font-size:10px;color:#818cf8;font-weight:600">🏆 WINNER</div>
+          <div style="font-size:13px;color:#e4e4e7;margin-top:4px"><b>${_esc(winner.text)}</b> · ${winner.score}/${winner.max_score} побед · conf ${Math.round((winner.confidence||0)*100)}%</div>
+        </div>` : ''}
+      </div>`;
+    return wrapper;
+  }
+
+  if (card.type === 'deep_cluster') {
+    // Cluster deep: для builder/pipeline/cascade/scales — разбиение с поддержкой
+    const hypotheses = card.hypotheses || [];
+    const traceLen = (card.trace || []).length;
+    const items = hypotheses.map((h, i) => `
+      <div style="padding:6px 10px;background:#1f1f23;border-left:3px solid #818cf8;border-radius:6px;margin-bottom:4px">
+        <span style="color:#818cf8;font-weight:600;margin-right:6px">${i+1}</span>
+        <span style="color:#e4e4e7;font-size:12px">${_esc(h)}</span>
+      </div>`).join('');
+    wrapper.innerHTML = `
+      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:11px;color:#818cf8;font-weight:600">🧩 DEEP CLUSTER · ${_esc(card.mode_id || '?')}</div>
+          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод · ${traceLen} шагов</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:0">${items}</div>
+        ${card.synthesis ? `<div style="margin-top:8px;padding:8px 10px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px;font-size:12px;color:#e4e4e7">
+          <div style="font-size:10px;color:#818cf8;font-weight:600">SYNTHESIS</div>
+          ${_esc(card.synthesis)}</div>` : ''}
+      </div>`;
+    return wrapper;
+  }
+
+  if (card.type === 'deep_dialectic') {
+    // Dialectical deep: dispute/fan — thesis/antithesis c evidence
+    wrapper.innerHTML = `
+      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:11px;color:#818cf8;font-weight:600">⚖ DEEP DIALECTIC · ${_esc(card.mode_id || '?')}</div>
+          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px;padding:8px;background:#052e16;border:1px solid #166534;border-radius:8px">
+            <div style="font-size:10px;color:#10b981;font-weight:600">FOR · conf ${Math.round((card.confidence_thesis || 0)*100)}%</div>
+            <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.thesis || '—')}</div>
+          </div>
+          <div style="flex:1;min-width:200px;padding:8px;background:#1c1917;border:1px solid #78350f;border-radius:8px">
+            <div style="font-size:10px;color:#f59e0b;font-weight:600">AGAINST · conf ${Math.round((card.confidence_anti || 0)*100)}%</div>
+            <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.antithesis || '—')}</div>
+          </div>
+        </div>
+        ${card.synthesis ? `<div style="padding:8px 10px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px">
+          <div style="font-size:10px;color:#818cf8;font-weight:600">SYNTHESIS</div>
+          <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.synthesis)}</div>
+        </div>` : ''}
+      </div>`;
+    return wrapper;
+  }
+
+  if (card.type === 'deep_research') {
+    // Deep-research card: trace шагов + evidence + synthesis
+    const trace = card.trace || [];
+    const traceHtml = trace.map(t => {
+      const act = t.action || '?';
+      const detail = t.detail || '';
+      const err = t.error;
+      const color = err ? '#ef4444' : (act === 'smartdc' ? '#818cf8' : (act === 'elaborate' ? '#06b6d4' : '#10b981'));
+      let body = `<div style="font-size:11px;color:${color};font-weight:600;">${_esc(act.toUpperCase())}</div>
+                  <div style="font-size:12px;color:#e4e4e7;margin-top:2px">${_esc(detail)}</div>`;
+      if (t.texts && t.texts.length) {
+        body += '<ul style="margin:4px 0 0 12px;padding:0;font-size:11px;color:#a1a1aa;">'
+          + t.texts.map(tx => `<li>${_esc(tx)}</li>`).join('') + '</ul>';
+      }
+      if (act === 'smartdc' && (t.thesis || t.antithesis || t.synthesis)) {
+        body += `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <div style="flex:1;min-width:160px;padding:6px;background:#052e16;border:1px solid #166534;border-radius:6px">
+            <div style="font-size:9px;color:#10b981;font-weight:600">FOR</div>
+            <div style="font-size:11px;color:#e4e4e7">${_esc(t.thesis)}</div>
+          </div>
+          <div style="flex:1;min-width:160px;padding:6px;background:#1c1917;border:1px solid #78350f;border-radius:6px">
+            <div style="font-size:9px;color:#f59e0b;font-weight:600">AGAINST</div>
+            <div style="font-size:11px;color:#e4e4e7">${_esc(t.antithesis)}</div>
+          </div>
+        </div>`;
+        if (t.synthesis) {
+          body += `<div style="margin-top:6px;padding:6px;background:#1e1b4b;border:1px solid #4338ca;border-radius:6px">
+            <div style="font-size:9px;color:#818cf8;font-weight:600">SYNTHESIS</div>
+            <div style="font-size:11px;color:#e4e4e7">${_esc(t.synthesis)}</div>
+          </div>`;
+        }
+      }
+      if (err) body += `<div style="color:#ef4444;font-size:10px;margin-top:4px">⚠ ${_esc(err)}</div>`;
+      return `<div style="padding:8px 10px;background:#1f1f23;border-left:3px solid ${color};border-radius:6px;margin-bottom:4px">${body}</div>`;
+    }).join('');
+    wrapper.innerHTML = `
+      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.4px">🔬 DEEP RESEARCH</div>
+          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод в графе · ${trace.length} шагов</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px">${traceHtml}</div>
+        <div style="margin-top:8px;font-size:10px;color:#52525b;text-align:right">
+          Открой 🕸 Graph чтобы увидеть созданные ноды
+        </div>
+      </div>`;
+    return wrapper;
+  }
+
   if (card.type === 'status_briefing') {
     // Unified sections card (использует brief-* стили) — status, план,
     // food-history, help и т.д. Разницы с morning briefing по стилю нет,
@@ -2232,6 +2392,37 @@ async function assistPollAlerts() {
             </div>`;
           container.appendChild(card);
           container.scrollTop = container.scrollHeight;
+          return;
+        }
+
+        // DMN autonomous deep-research: система исследовала open-goal сама
+        if (a.type === 'dmn_deep_research') {
+          const key = 'dmn_deep:' + (a.goal_id || '') + ':' + new Date().toDateString();
+          if (_assistLastAlertTypes.has(key)) return;
+          _assistLastAlertTypes.add(key);
+          const container = document.getElementById('assist-messages');
+          if (!container) return;
+          const empty = container.querySelector('.assist-empty');
+          if (empty) empty.remove();
+          // Render как deep_research card
+          const card = a.card || null;
+          const wrap = document.createElement('div');
+          wrap.className = 'assist-msg assist-assistant';
+          wrap.style.cssText = 'max-width:95%;margin-bottom:12px;';
+          // Intro message
+          const intro = document.createElement('div');
+          intro.style.cssText = 'padding:10px 14px;background:#1e1b4b;border-left:3px solid #818cf8;border-radius:10px;margin-bottom:8px;font-size:13px;color:#e4e4e7';
+          intro.innerHTML = `<div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:4px">🧠 DMN AUTONOMOUS RESEARCH</div>
+            Пока ты не смотрел, я разобрала цель <b>«${_esc(a.goal_text)}»</b> —
+            ${a.nodes_created || 0} новых нод за ${a.trace_len || 0} шагов.`;
+          wrap.appendChild(intro);
+          if (card) {
+            const deepEl = assistRenderCard(card);
+            if (deepEl) wrap.appendChild(deepEl);
+          }
+          container.appendChild(wrap);
+          container.scrollTop = container.scrollHeight;
+          if (typeof _incrChatUnread === 'function') _incrChatUnread();
           return;
         }
 

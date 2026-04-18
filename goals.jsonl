@@ -5,3 +5,8 @@
 {"action": "update", "id": "ee991ea6c1c0", "fields": {"deadline": "2026-04-19T07:00:00"}, "ts": 1776524497.770484}
 {"action": "abandon", "id": "ee991ea6c1c0", "reason": "test cleanup", "ts": 1776524508.0798614}
 {"action": "create", "id": "d12980f9a795", "workspace": "main", "text": "как я?", "mode": "free", "priority": null, "deadline": null, "category": null, "ts": 1776528965.1671402}
+{"action": "create", "id": "2f7252b424ab", "workspace": "main", "text": "что влияет на глубину сна", "mode": "horizon", "priority": null, "deadline": null, "category": null, "ts": 1776534890.7556474}
+{"action": "create", "id": "ac6f6c1d6bca", "workspace": "main", "text": "что влияет на глубину сна", "mode": "horizon", "priority": null, "deadline": null, "category": null, "ts": 1776535065.3348374}
+{"action": "create", "id": "97e158248d3e", "workspace": "main", "text": "что влияет на глубину сна", "mode": "horizon", "priority": null, "deadline": null, "category": null, "ts": 1776535818.8419526}
+{"action": "create", "id": "634cbc68438f", "workspace": "main", "text": "что важно для хорошего сна", "mode": "horizon", "priority": null, "deadline": null, "category": null, "ts": 1776536160.6766167}
+{"action": "create", "id": "9105e328f6f4", "workspace": "main", "text": "исследуй природу креативности", "mode": "horizon", "priority": null, "deadline": null, "category": null, "ts": 1776536759.9008095}

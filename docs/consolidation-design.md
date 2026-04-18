@@ -107,3 +107,7 @@ replay. Архив холодный, но читаемый. Если нужно 
 - [src/consolidation.py](../src/consolidation.py) — `consolidate_content_graph`, `consolidate_state_graph`, `consolidate_all`
 - [src/graph_routes.py](../src/graph_routes.py) `/graph/consolidate` endpoint
 - [src/cognitive_loop.py](../src/cognitive_loop.py) `_check_consolidation` nightly hook
+
+---
+
+**Навигация:** [← State graph](state-graph-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Meta-tick →](meta-tick-design.md)

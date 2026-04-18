@@ -235,3 +235,7 @@ mode:
 2. **Alpha**: Расчёт θ из HRV, ручное переключение состояний
 3. **Beta**: Автоматические переходы + UI-визуализация конуса
 4. **Production**: Адаптивная калибровка + интеграция с tick cycle
+
+---
+
+**Навигация:** [← User Model](user-model-design.md)  ·  [Индекс](README.md)  ·  [Следующее: State graph →](state-graph-design.md)

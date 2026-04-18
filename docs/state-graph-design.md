@@ -198,3 +198,7 @@ cluster(user_feedback == "rejected" AND action == "compare")
 *State-граф — substrate эпизодической памяти. Не решает v11-вопрос
 «может ли смысл возникнуть», но даёт его компоненты: continuity,
 self-observation, эпизоды в контексте, не плоский лог.*
+
+---
+
+**Навигация:** [← HRV](hrv-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Consolidation →](consolidation-design.md)

@@ -192,3 +192,7 @@ ProtectiveFreeze:
 *Старая версия этого документа описывала 5 скаляров + γ как отдельное поле.
 Упростили до 3 скаляров + derived γ в духе NeuroBrain-эскиза. Legacy имена
 (`S`/`NE`/`DA_tonic`/`burnout_idx`) полностью удалены — single-path.*
+
+---
+
+**Навигация:** [← Horizon](horizon-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Symbiosis →](symbiosis-design.md)
