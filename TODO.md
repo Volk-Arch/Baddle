@@ -14,13 +14,13 @@
 
 ## Тело и сенсоры
 
-- [ ] **Polar H10 BLE** — реальный RR-поток вместо симулятора. `bleak` клиент,
-  24/7 connect, fallback на simulator. Сейчас только симулятор с слайдерами.
-
-## Автономность и память
-
-
-## Ум расширенный
+- [ ] **Polar H10 BLE** — реальный RR + accelerometer поток. `bleak` клиент,
+  24/7 connect, fallback на симулятор. Сейчас только симулятор + слайдеры.
+- [ ] **Apple Watch / Oura / Garmin адаптер** — другая семантика данных
+  (sparse RR, HR-stream, sleep). Нужна отдельная формула coherence из
+  HR-timeseries (не RR-to-RR). `hrv_manager.start(mode="apple_watch")`
+  с альтернативным reader. Детали → [docs/hrv-design.md](docs/hrv-design.md)
+  таблица «Источники данных».
 
 ## UI / визуализация
 
@@ -35,7 +35,9 @@
 - [ ] **Per-этап выбор модели** — local 8B для generate, cloud для doubt/essay.
 - [ ] **Календарь** — события → приоритизация, напоминания.
 - [ ] **Погода API** — утренний брифинг + outdoor-активности + одежда.
-- [ ] **Продукты/рецепты** — что есть → XOR выбор блюда.
+- [ ] **Продукты/рецепты inventory** — опционально. Сейчас еда решается
+  через profile.food constraints + LLM (без холодильника). Inventory
+  понадобится только если захочется expiry-tracking / pantry persistence.
 - [ ] **Гардероб** — что есть + погода + календарь → outfit.
 - [ ] **Браузер-расширение** — impulse guard (покупки), emotion guard (письма).
 
@@ -49,13 +51,22 @@
 - [ ] **Demo mode** — ускоренная симуляция «недели Baddle».
 - [ ] **SSE/WebSocket** — push вместо polling для HRV/alerts (instant feel).
 
-## Автоопределение намерения (детали → Done/Classify)
+## Архитектурно открытые (edge cases, не блокеры)
 
+Не блокеры для daily use. Всплывут при scale'е или multi-user.
 
-## Архитектурный collapse (когда уберётся параллельная машинерия)
-
-Эти не блокеры. Делать только когда тестовая нагрузка покажет что стоит.
-По духу — то же что v8d сделал с primitive-switches: **слить две штуки в одну**.
+- [ ] **goals.jsonl ротация** — сейчас растёт монотонно. Year-long
+  использование → нужна квартальная ротация или gzip-архив старых
+  событий (аналогично state_graph.archive.jsonl).
+- [ ] **UserState global per-person** — один UserState на все workspaces.
+  Если захочется разных `profile.food` для work vs personal — потребуется
+  UserState per-workspace + context-switcher.
+- [ ] **Content-graph embeddings только в памяти** — `_graph["embeddings"]`
+  пересчитывается при рестарте. Можно кэшировать в `embeddings.jsonl`
+  аналогично state_graph.
+- [ ] **`_load_state` race** — параллельные `/assist` могут обоюдно
+  затереть user_state_dump. Не критично для single-user, но при
+  multi-tab UI может потеряться чекмарк. File lock решит.
 
 ---
 ---
