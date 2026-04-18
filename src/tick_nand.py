@@ -204,6 +204,46 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     except Exception as e:
         log.debug(f"[tick-nand] ask check failed: {e}")
 
+    # ── META-TICK: читаем хвост state_graph, детектим паттерны ────────────
+    # Если сами застряли / юзер отказывается / RPE стабильно негативный —
+    # эмитим ask / compare или толкаем policy weights. Второй порядок поверх
+    # мгновенного решения выше.
+    try:
+        from .state_graph import get_state_graph
+        from .meta_tick import analyze_tail, apply_policy_nudge
+        from .horizon import INTEGRATION, PROTECTIVE_FREEZE
+        tail = get_state_graph().tail(20)
+        meta = analyze_tail(tail)
+        recommend = meta.get("recommend")
+        not_frozen = horizon.state != PROTECTIVE_FREEZE
+
+        if recommend == "ask" and not_frozen and graph.get("_ask_count", 0) < 1:
+            graph["_ask_count"] = graph.get("_ask_count", 0) + 1
+            return _emit({
+                "action": "ask",
+                "target": goal_idx or 0,
+                "phase": "dialogue",
+                "reason": f"META[{meta['pattern']}]: {meta.get('detail', '')}",
+                "text": goal_text,
+            })
+        if recommend == "compare" and len(verified) >= 2:
+            target_ids = [v[0] for v in verified[:3]]
+            return _emit({
+                "action": "compare",
+                "target": target_ids,
+                "phase": "synthesize",
+                "reason": f"META[{meta['pattern']}]: {meta.get('detail', '')}",
+                "text": ", ".join(nodes[i]["text"][:30] for i in target_ids),
+            })
+        if recommend == "stabilize" and not_frozen:
+            horizon.state = INTEGRATION
+            log.info(f"[meta_tick] forcing INTEGRATION: {meta.get('detail')}")
+        # Lightweight policy nudge — даже без action: изменит select_phase на следующем тике
+        if meta.get("policy_nudge"):
+            apply_policy_nudge(horizon, meta["policy_nudge"])
+    except Exception as e:
+        log.debug(f"[tick-nand] meta-tick failed: {e}")
+
     # ── 1. Not enough nodes? GENERATE (skipped in Camera mode) ──
     generated = graph.get("_generated", False)
     need_generate = not generated and len(hypotheses) < min_hyp

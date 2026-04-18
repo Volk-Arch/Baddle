@@ -23,9 +23,6 @@
 
 ## Автономность и память
 
-- [ ] **Meta-tick на state-графе** — tick читает хвост (20 последних),
-  адаптирует policy. Пример: 10 шагов в EXECUTION с неизменным sync_error →
-  emit "ask" (уже триггерится по простым условиям, но не по паттернам).
 - [ ] **DMN walks на state-графе** — Scout'ы гуляют не только по content,
   но и по собственной истории.
 - [ ] **Полный REM-цикл** — Scout 3h ≈ slow-wave sleep (уже есть). Добавить
@@ -242,6 +239,49 @@ GET /graph/self?limit=5 → {entries: [...], total: N, last_hash: ...}
 **Красный флаг.**
 - Parent chain сломан (несколько корней) → concurrent write без lock
 - State_origin всегда `1_rest` → NE и burnout не читаются в state_origin_hint
+
+## Meta-tick — tick второго порядка через state-граф
+
+**Что.** Перед выбором action, tick читает хвост state_graph (последние 20)
+и детектит паттерны, невидимые в моменте:
+
+| Паттерн | Триггер | Рекомендация |
+|---------|---------|--------------|
+| stuck_execution | 9/10 подряд в EXECUTION, sync_error Δ < 0.05 | emit `ask` |
+| high_rejection | 3/5 последних с `user_feedback=rejected` | emit `ask` + nudge doubt |
+| rpe_negative_streak | 6/10 `recent_rpe < −0.05` | force INTEGRATION + nudge merge |
+| action_monotony | 5 одинаковых action подряд | emit `compare` + nudge doubt |
+| normal | ничего | продолжаем нормальный routing |
+
+Модуль [src/meta_tick.py](src/meta_tick.py). Tick ([src/tick_nand.py](src/tick_nand.py))
+вызывает `analyze_tail()` после ASK CHECK, применяет рекомендацию:
+emit action, либо `apply_policy_nudge()` (±0.1 к policy_weights с
+нормализацией — повлияет на следующий tick через `select_phase`).
+
+**Проверка.**
+```python
+from src.meta_tick import analyze_tail
+tail = [{'action':'smartdc','state_snapshot':{'state':'execution','sync_error':0.4}} for _ in range(10)]
+analyze_tail(tail)  # → {pattern: stuck_execution, recommend: ask}
+```
+
+**Влияет на:** self-awareness второго порядка. Tick теперь не только видит
+текущий граф, но и **себя во времени** — замечает когда застрял и ломает
+паттерн. Это закрывает петлю «граф думает → state_graph пишется →
+следующий tick читает state_graph → адаптирует policy».
+
+**Живые тесты.**
+- Запусти autorun на простом графе без явной стопки → после 10 тиков в
+  EXECUTION система сама эмитит ask (проверь в `/graph/self`).
+- Ручную серию rejects 3 раза подряд через `/assist/feedback` →
+  следующий tick должен детектить high_rejection, policy doubt подскочит.
+- Монотония smartdc → compare через 5 шагов.
+
+**Красный флаг.**
+- `/graph/self/tail` показывает одно и то же с reason=META но action не
+  меняется → рекомендация не применяется (проверь try/except в tick_nand).
+- Policy_weights всегда идентичные → nudge не нормализуется или перекрывается
+  обычным policy update в `horizon.update()`.
 
 ## Консолидация — забывание слабого, архив старого
 
