@@ -111,6 +111,12 @@ def _bayesian_update_distinct(prior: float, d: float) -> float:
         cs.neuro.record_outcome(prior, posterior)
     except Exception as e:
         log.debug(f"[bayes] RPE record failed: {e}")
+    # Maturity drift: нода пересекла verified threshold → система взрослеет
+    try:
+        if prior < 0.8 and posterior >= 0.8:
+            cs.note_verified()
+    except Exception as e:
+        log.debug(f"[bayes] maturity note failed: {e}")
     return posterior
 
 

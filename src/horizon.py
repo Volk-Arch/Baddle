@@ -43,8 +43,10 @@ PROTECTIVE_FREEZE = "protective_freeze"
 
 # ── Tuning knobs (only ones still used) ────────────────────────────────
 
-KAPPA_NE_TEMP = 0.8    # NE → T_eff coupling
-T_FLOOR = 0.05         # минимальная температура
+KAPPA_NE_TEMP = 0.8          # NE → T_eff coupling
+T_FLOOR = 0.05                # минимальная температура
+MATURITY_GROWTH_RATE = 0.003  # логистический рост на один verified-event
+MATURITY_GAIN = 0.4           # полный диапазон сдвига effective_precision (±MATURITY_GAIN/2)
 
 
 # ── CognitiveState ──────────────────────────────────────────────────────────
@@ -82,6 +84,12 @@ class CognitiveState:
         self.tau_in = 0.3
         self.tau_out = 0.7
 
+        # ── Maturity drift ──────────────────────────────────────────────
+        # Растёт монотонно к 1.0 по мере накопления verified-нод и resolved-goals.
+        # Сдвигает effective_precision на ±MATURITY_GAIN вокруг raw precision:
+        # младенец (maturity=0) → exploratory (wide cone), зрелый (maturity=1) → narrow.
+        self.maturity: float = 0.0
+
         # ── Neurochem layer (composition — проще старой монолитной модели) ──
         # Три скаляра + отдельный защитный режим. См. src/neurochem.py.
         from .neurochem import Neurochem, ProtectiveFreeze
@@ -94,11 +102,31 @@ class CognitiveState:
         self.state_origin_hint = "1_rest" # last computed state_origin (v8c)
 
 
+    # ── Maturity drift (0.2 младенец → 0.7+ зрелый) ─────────────────────────
+
+    @property
+    def effective_precision(self) -> float:
+        """Raw precision + maturity-зависимый сдвиг [−MATURITY_GAIN/2, +MATURITY_GAIN/2].
+
+        maturity=0.0 → сдвиг −0.2 (всё возможно, младенческий широкий конус)
+        maturity=1.0 → сдвиг +0.2 (конус сужается, взрослая точность)
+        Всегда в [0.05, 0.95].
+        """
+        shift = MATURITY_GAIN * (self.maturity - 0.5)
+        return max(0.05, min(0.95, self.precision + shift))
+
+    def note_verified(self):
+        """Verified-событие (нода пересекла conf ≥ 0.8 или goal resolved).
+
+        Логистический рост: шаг замедляется при приближении к 1.0.
+        """
+        self.maturity = min(1.0, self.maturity + MATURITY_GROWTH_RATE * (1.0 - self.maturity))
+
     # ── LLM params ──────────────────────────────────────────────────────────
 
     def to_llm_params(self) -> dict:
-        """Convert precision to LLM generation parameters + adaptive novelty."""
-        p = self.precision
+        """Convert effective precision (с maturity drift) to LLM generation parameters."""
+        p = self.effective_precision
         return {
             "temperature": max(0.1, min(1.5, 1.0 - p)),
             "top_k": int(max(10, min(100, 10 + 90 * (1 - p)))),
@@ -324,8 +352,9 @@ class CognitiveState:
                 self._pending_count = 0
                 return
 
-        # Determine target state with hysteresis
-        target = self._target_state(p, novelty)
+        # Determine target state with hysteresis (use effective_precision so
+        # maturity-драйфт сдвигает переходы — младенец сидит в EXPLORATION чаще)
+        target = self._target_state(self.effective_precision, novelty)
 
         # Same as current → reset pending, stay
         if target == self.state:
@@ -409,9 +438,12 @@ class CognitiveState:
             user_dict = get_user_state().to_dict()
         except Exception:
             user_dict = None
+        eff_p = self.effective_precision
         return {
             "precision": round(self.precision, 3),
-            "width": round(1.0 / (self.precision + 0.01), 2),
+            "effective_precision": round(eff_p, 3),
+            "maturity": round(self.maturity, 3),
+            "width": round(1.0 / (eff_p + 0.01), 2),
             "state": self.state,
             "focus_entropy": round(entropy, 3),
             "policy": {k: round(v, 3) for k, v in weights.items()},
@@ -468,6 +500,7 @@ class CognitiveState:
             "neuro": self.neuro.to_dict(),
             "freeze": self.freeze.to_dict(),
             "_burnout_trip_count": self._burnout_trip_count,
+            "maturity": self.maturity,
             "llm_disabled": self.llm_disabled,
             "state_origin_hint": self.state_origin_hint,
         }
@@ -496,6 +529,7 @@ class CognitiveState:
         h.neuro = Neurochem.from_dict(d.get("neuro", {}))
         h.freeze = ProtectiveFreeze.from_dict(d.get("freeze", {}))
         h._burnout_trip_count = d.get("_burnout_trip_count", 0)
+        h.maturity = float(d.get("maturity", 0.0))
         h.llm_disabled = d.get("llm_disabled", False)
         h.state_origin_hint = d.get("state_origin_hint", "1_rest")
         return h

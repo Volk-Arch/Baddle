@@ -128,7 +128,8 @@ class CognitiveLoop:
 
     # Интервалы в секундах
     SCOUT_INTERVAL = 3 * 3600         # 3 часа между Scout pump+save
-    DMN_INTERVAL = 600                # 10 минут между DMN continuous
+    DMN_INTERVAL = 600                # 10 минут между DMN continuous (content pump)
+    STATE_WALK_INTERVAL = 20 * 60     # 20 минут между эпизодическими запросами к state_graph
     CONSOLIDATION_INTERVAL = 24 * 3600  # раз в сутки: прунинг + архив state_graph
     TICK_INTERVAL = 60                # частота бэкграунд-проверок
     FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
@@ -144,6 +145,7 @@ class CognitiveLoop:
         self._stop_event = threading.Event()
         self._last_scout = 0.0
         self._last_dmn = 0.0
+        self._last_state_walk = 0.0
         self._last_consolidation = 0.0
         self._last_foreground_tick = 0.0
         self._alerts_queue: list = []
@@ -228,6 +230,7 @@ class CognitiveLoop:
                 if not_frozen and ne_quiet and idle_enough:
                     self._check_scout_night()
                     self._check_dmn_continuous()
+                    self._check_state_walk()
                     self._check_consolidation()
 
                 # 3. HRV alerts всегда
@@ -358,6 +361,112 @@ class CognitiveLoop:
                 log.warning(f"[cognitive_loop] bridge save failed: {e}")
 
         return best
+
+    # ── State walk (DMN на state-графе: ищем похожие моменты из прошлого) ──
+
+    def _build_current_state_signature(self) -> str:
+        """Текст-сигнатура текущего момента для embedding запроса.
+
+        Формат зеркалит `StateGraph._compute_embedding_text` — чтобы
+        сравнение current vs past было эквивалентным.
+        """
+        from .horizon import get_global_state
+        from .graph_logic import _graph
+        cs = get_global_state()
+        neuro = cs.neuro
+        bits = [f"state:{cs.state}"]
+        bits.append(f"S={neuro.serotonin:.2f} NE={neuro.norepinephrine:.2f} "
+                    f"DA={neuro.dopamine:.2f}")
+        bits.append(cs.state_origin_hint or "1_rest")
+        # Topic / goal text если есть
+        topic = (_graph.get("meta") or {}).get("topic", "")
+        if topic:
+            bits.append(f"topic: {topic[:80]}")
+        for n in _graph.get("nodes", []):
+            if n.get("type") == "goal" and n.get("depth", 0) >= 0:
+                bits.append(f"goal: {n.get('text', '')[:80]}")
+                break
+        return " | ".join(bits)
+
+    def _check_state_walk(self):
+        """DMN по state-графу: похожие моменты из прошлого → эпизодический alert.
+
+        1. Прогреваем embedding-кэш для хвоста (≤30 entries) — амортизация.
+        2. Берём embedding текущей сигнатуры.
+        3. query_similar(k=3), фильтруем < 1 час (тривиально-свежие).
+        4. Если топ-match достаточно близкий — surface as alert.
+        """
+        now = time.time()
+        if now - self._last_state_walk < self.STATE_WALK_INTERVAL:
+            return
+
+        from .state_graph import get_state_graph
+        sg = get_state_graph()
+        if sg.count() < 10:
+            return  # слишком мало истории
+        self._last_state_walk = now
+
+        # Прогрев embedding-кэша для tail (<=30 последних)
+        try:
+            for entry in sg.tail(30):
+                sg.ensure_embedding(entry)
+        except Exception as e:
+            log.debug(f"[state_walk] warm embeddings failed: {e}")
+
+        # Embedding текущего момента
+        try:
+            from .api_backend import api_get_embedding
+            sig = self._build_current_state_signature()
+            query_emb = api_get_embedding(sig)
+            if not query_emb:
+                return
+        except Exception as e:
+            log.warning(f"[state_walk] query embedding failed: {e}")
+            return
+
+        try:
+            similar = sg.query_similar(query_emb, k=3, exclude_recent=3)
+        except Exception as e:
+            log.warning(f"[state_walk] query_similar failed: {e}")
+            return
+        if not similar:
+            return
+
+        # Фильтр: не всплывать если лучший match моложе часа (тривиально близко)
+        from datetime import datetime, timezone
+        now_utc = datetime.now(timezone.utc)
+        best = None
+        for entry in similar:
+            ts_iso = entry.get("timestamp")
+            if not ts_iso:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+                if (now_utc - ts).total_seconds() < 3600:
+                    continue
+            except Exception:
+                pass
+            best = entry
+            break
+        if best is None:
+            return
+
+        ts_disp = str(best.get("timestamp", "?"))[:10]
+        action = best.get("action", "?")
+        reason = (best.get("reason") or "")[:100]
+        self._add_alert({
+            "type": "state_walk",
+            "severity": "info",
+            "text": f"Похожий момент в прошлом ({ts_disp}): {action} — {reason}",
+            "text_en": f"Similar past moment ({ts_disp}): {action} — {reason}",
+            "match": {
+                "hash": best.get("hash"),
+                "action": action,
+                "reason": reason,
+                "timestamp": best.get("timestamp"),
+            },
+        }, dedupe=True)
+        log.info(f"[state_walk] episodic recall: {ts_disp} {action} — {reason[:60]}")
 
     # ── Nightly consolidation (once per 24h, forget weak old branches) ──
 

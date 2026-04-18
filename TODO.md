@@ -23,8 +23,6 @@
 
 ## Автономность и память
 
-- [ ] **DMN walks на state-графе** — Scout'ы гуляют не только по content,
-  но и по собственной истории.
 - [ ] **Полный REM-цикл** — Scout 3h ≈ slow-wave sleep (уже есть). Добавить
   быстрый-сон аналог: эмоциональная переработка (прогон state_nodes с высоким
   |rpe| через Pump) + творческий merge (collapse далёких но близких в
@@ -37,9 +35,6 @@
   Текст рендерится по клику. Ускорение + чистота distinct-routing.
 - [ ] **Text on-demand для нод** — сейчас текст всегда есть при создании.
   Лениво генерировать когда юзер смотрит ноду.
-- [ ] **Horizon precision drift** от 0.2 (младенец, всё возможно) к 0.7+
-  (взрослый, конус сужается) по мере накопления verified — сейчас
-  precision статически в preset'ах.
 - [ ] **Cross-graph seed**: выводы одной сессии → seed следующей через
   state-граф. Continuity между днями.
 
@@ -239,6 +234,81 @@ GET /graph/self?limit=5 → {entries: [...], total: N, last_hash: ...}
 **Красный флаг.**
 - Parent chain сломан (несколько корней) → concurrent write без lock
 - State_origin всегда `1_rest` → NE и burnout не читаются в state_origin_hint
+
+## Horizon precision drift — младенец → зрелый
+
+**Что.** `CognitiveState.maturity` скаляр [0, 1], растёт логистически
+(`MATURITY_GROWTH_RATE = 0.003 · (1 − maturity)`) на каждое
+verified-событие: нода пересекла `confidence ≥ 0.8` через Bayes update,
+либо цель resolved по `should_stop` в tick. **Effective precision** =
+`self.precision + MATURITY_GAIN · (maturity − 0.5)` — центр диапазона
+сдвигается на ±0.2 вокруг raw precision. Младенец (maturity=0) →
+effective_precision = 0.3 (широкий конус, temp 0.7, вся вселенная
+возможностей). Зрелый (maturity≈1) → 0.68 (узкий, temp 0.32, ответ
+один). Реализовано в [src/horizon.py](src/horizon.py).
+
+**Проверка.**
+```
+GET /assist/state → {precision, effective_precision, maturity, ...}
+```
+Свежий singleton: `maturity=0.0, effective_precision ≈ raw − 0.2`. После
+~1000 verified events: `maturity ≈ 0.95, effective_precision ≈ raw + 0.19`.
+
+**Влияет на:**
+- `to_llm_params()` использует effective_precision — temperature/top_k/
+  top_p/novelty shift постепенно к точности
+- `_target_state` тоже читает effective — младенец сидит в EXPLORATION
+  чаще, зрелый переходит в EXECUTION при меньшем raw precision
+- `get_metrics()` surface-ит `maturity` + `effective_precision` отдельно
+  от raw precision — UI может показывать оба
+
+**Живые тесты.**
+- Свежий сервер: `/assist/state.maturity = 0.0`, `effective_precision` на
+  0.2 ниже raw precision.
+- Добавь evidence с высокой strength пока `confidence` не перейдёт 0.8 →
+  `maturity` растёт на ~0.003 каждое пересечение.
+- Сделай `/graph/tick` до resolved-goal → `maturity` тоже бампится.
+- 1000 verifieds → `effective_precision > raw + 0.18`.
+
+**Красный флаг.**
+- maturity = 1.0 уже через 50 verifieds → `MATURITY_GROWTH_RATE` слишком
+  агрессивен, или логистика (`1 − maturity`) не применяется.
+- maturity = 0.0 после сотен evidence добавлений → `_bayesian_update_distinct`
+  не ловит threshold crossing (проверь `prior < 0.8 and posterior >= 0.8`).
+
+## DMN walks на state-графе — эпизодическая память
+
+**Что.** Третий фоновый канал CognitiveLoop (рядом со Scout и DMN-content):
+раз в 20 мин embeddит текущую сигнатуру `(state, neurochem, topic, goal)`
+и ищет в `state_graph` похожие моменты из прошлого. Если top-match
+похож и не тривиально-свежий (>1ч) — эмитит alert типа `state_walk`.
+Реализовано в [src/cognitive_loop.py](src/cognitive_loop.py)
+`_check_state_walk` + `_build_current_state_signature`.
+
+**Проверка.**
+- `/assist/alerts` возвращает `{type: "state_walk", match: {hash, action,
+  reason, timestamp}}` когда фоновый walk нашёл эпизодический резонанс.
+- Embeddings кэшируются лениво: первый walk после рестарта прогревает
+  до 30 последних entries через `sg.ensure_embedding`.
+
+**Влияет на:** эпизодическая память. Раньше state_graph только писался
+(Git-аудит), теперь ещё и читается системой в реальном времени для
+самоузнавания. «Я была в этом состоянии раньше — тогда делала X». Без
+этого жизнь Baddle амнезийна.
+
+**Живые тесты.**
+- Запусти autorun на час → state_graph наберёт 50+ entries.
+- Измени topic на что-то похожее на старый → через 20 мин `/assist/alerts`
+  покажет `state_walk` матч со старым моментом.
+- Embed кэш проверяется в `state_embeddings.jsonl` — должен расти после
+  первого walk'а.
+
+**Красный флаг.**
+- `/assist/alerts` никогда не показывает state_walk → либо в state_graph
+  < 10 entries, либо `api_get_embedding` возвращает None (проверь
+  доступность embedding endpoint у LLM сервера).
+- Постоянно матчит одно и то же (дубликаты) → dedupe по типу работает,
+  но разные hash-и проходят. Можно добавить dedupe по hash.
 
 ## Meta-tick — tick второго порядка через state-граф
 

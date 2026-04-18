@@ -42,6 +42,25 @@ Horizon-слой:
 γ — derived property: `γ = 2.0 + 3.0 · norepinephrine · (1 − serotonin)`.
 Отдельного поля gamma нет.
 
+## Maturity drift (младенец → зрелый)
+
+Отдельный скаляр `maturity ∈ [0, 1]` растёт логистически на verified-
+события (node crossed conf ≥ 0.8, или goal resolved). **Effective precision**
+= `raw_precision + 0.4 · (maturity − 0.5)` — центр диапазона сдвигается
+на ±0.2 вокруг raw.
+
+```
+maturity=0.0  → effective = raw − 0.2   (младенец, wide cone, temp высокая)
+maturity=0.5  → effective = raw         (нейтрально)
+maturity=1.0  → effective = raw + 0.2   (зрелый, narrow cone, temp низкая)
+```
+
+`to_llm_params()` и `_target_state` читают **effective**, не raw. UI видит
+оба через `/assist/state: {precision, effective_precision, maturity}`.
+
+Параметры: `MATURITY_GROWTH_RATE = 0.003`, `MATURITY_GAIN = 0.4`. ~1000
+verifications нужно для maturity ≈ 0.95 — медленный биологический рост.
+
 ## Precision → параметры LLM
 
 ```python

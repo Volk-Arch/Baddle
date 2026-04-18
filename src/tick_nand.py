@@ -178,6 +178,13 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         stop = should_stop(cl, graph, horizon, goal_node=goal_node)
         if stop["resolved"]:
             log.info(f"[tick-nand] GOAL REACHED: {stop['reason']}")
+            # Goal resolved → взрослеем (maturity drift). Global state singleton —
+            # драйфт per-person, не per-graph.
+            try:
+                from .horizon import get_global_state
+                get_global_state().note_verified()
+            except Exception as e:
+                log.debug(f"[tick-nand] maturity note on stop failed: {e}")
             return _emit({
                 "action": "stable", "phase": "synthesize",
                 "reason": f"GOAL REACHED: {stop['reason']}",
