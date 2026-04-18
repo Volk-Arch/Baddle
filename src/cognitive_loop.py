@@ -1,0 +1,364 @@
+"""Baddle Cognitive Loop — один когнитивный контур с NE-бюджетом.
+
+Объединяет бывший Watchdog + точку входа /graph/tick в одну структуру:
+
+  CognitiveLoop owns:
+    • Background thread — NE decay, DMN pump (10 min), Scout pump (3 h), HRV alerts
+    • Foreground entry  — `tick_foreground()` для /graph/tick (юзер-инициированный)
+    • Shared state      — last_foreground_tick / last_dmn / last_scout timestamps,
+                          alerts queue. Background и foreground координируются через
+                          эти таймштампы (NE-бюджет).
+
+NE-бюджет:
+  norepinephrine > 0.55          → юзер активен, DMN/Scout на паузе
+  Последний foreground < 30s     → недавно была работа, DMN не лезет
+  PROTECTIVE_FREEZE              → только decay, никаких новых действий
+
+Design: poll-based, non-blocking. UI дёргает /assist/alerts чтобы увидеть
+накопленные инсайты от Scout/DMN.
+"""
+import threading
+import time
+import logging
+import random
+from typing import Optional, Tuple
+
+from .graph_logic import _graph
+from .hrv_manager import get_manager as get_hrv_manager
+
+log = logging.getLogger(__name__)
+
+
+def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
+    """Find two most distant hypothesis/thought nodes in the graph.
+
+    Uses embedding cosine distance. Returns (idx_a, idx_b) or None.
+    Sampling: random pivot, find furthest (O(n), fine for DMN).
+    """
+    from .main import cosine_similarity
+    import numpy as np
+
+    candidates = []
+    for i, n in enumerate(nodes):
+        if n.get("depth", 0) < 0:
+            continue
+        if n.get("type") not in ("hypothesis", "thought"):
+            continue
+        if not n.get("embedding"):
+            continue
+        candidates.append(i)
+
+    if len(candidates) < 2:
+        return None
+
+    pivot_idx = random.choice(candidates)
+    pivot_emb = np.array(nodes[pivot_idx]["embedding"], dtype=np.float32)
+
+    best_idx = None
+    best_dist = -1.0
+    for i in candidates:
+        if i == pivot_idx:
+            continue
+        emb = np.array(nodes[i]["embedding"], dtype=np.float32)
+        sim = cosine_similarity(pivot_emb, emb)
+        dist = 1.0 - sim
+        if dist > best_dist:
+            best_dist = dist
+            best_idx = i
+
+    if best_idx is None:
+        return None
+    return (pivot_idx, best_idx)
+
+
+class CognitiveLoop:
+    """Singleton: один фоновый контур + foreground tick entry."""
+
+    # Интервалы в секундах
+    SCOUT_INTERVAL = 3 * 3600    # 3 часа между Scout pump+save
+    DMN_INTERVAL = 600           # 10 минут между DMN continuous
+    TICK_INTERVAL = 60           # частота бэкграунд-проверок
+    FOREGROUND_COOLDOWN = 30     # после юзер-тика DMN ждёт столько секунд
+
+    # NE gating
+    NE_BASELINE = 0.3            # baseline к которому дрейфует NE
+    NE_HIGH_GATE = 0.55          # выше — юзер активен, DMN не лезет
+    NE_DECAY_PER_TICK = 0.05     # EMA decay в сторону baseline
+
+    def __init__(self):
+        self.is_running = False
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._last_scout = 0.0
+        self._last_dmn = 0.0
+        self._last_foreground_tick = 0.0
+        self._alerts_queue: list = []
+        self._lock = threading.Lock()
+
+    # ── Lifecycle ──────────────────────────────────────────────────────
+
+    def start(self):
+        if self.is_running:
+            return
+        self.is_running = True
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="cognitive_loop")
+        self._thread.start()
+        log.info("[cognitive_loop] started")
+
+    def stop(self):
+        self.is_running = False
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=3.0)
+
+    # ── Foreground entry (юзер-инициированный тик) ─────────────────────
+
+    def tick_foreground(self,
+                        threshold: float = 0.91,
+                        sim_mode: str = "embedding",
+                        stable_threshold: float = 0.8,
+                        force_collapse: bool = False,
+                        max_meta: int = 2,
+                        min_hyp: int = 5) -> dict:
+        """Юзер дёрнул /graph/tick → единый tick_emergent на текущем графе.
+
+        Записываем timestamp в shared state чтобы background DMN не полез
+        следующие FOREGROUND_COOLDOWN секунд.
+        """
+        from .tick_nand import tick_emergent
+        from .graph_logic import _compute_edges
+
+        self._last_foreground_tick = time.time()
+        nodes = _graph["nodes"]
+        edges = _compute_edges(nodes, threshold, sim_mode)
+        return tick_emergent(
+            nodes, edges, _graph,
+            threshold=threshold,
+            stable_threshold=stable_threshold,
+            force_collapse=force_collapse,
+            max_meta=max_meta,
+            min_hyp=min_hyp,
+            user_initiated=True,
+        )
+
+    # ── Background loop ────────────────────────────────────────────────
+
+    def _loop(self):
+        """Main loop body. Каждая итерация:
+
+        1. NE decay в сторону baseline (бездействие успокаивает)
+        2. Гейт: не FREEZE + NE < 0.55 + последний foreground > cooldown
+        3. Если прошёл интервал Scout / DMN — запустить pump
+        4. HRV alerts всегда
+        5. Сон tick_interval (масштабируется NE)
+        """
+        from .horizon import get_global_state, PROTECTIVE_FREEZE
+
+        while self.is_running and not self._stop_event.is_set():
+            try:
+                state = get_global_state()
+
+                # 1. NE homeostasis
+                ne = state.neuro.norepinephrine
+                state.neuro.norepinephrine = (
+                    ne * (1 - self.NE_DECAY_PER_TICK)
+                    + self.NE_BASELINE * self.NE_DECAY_PER_TICK
+                )
+
+                # 2. Gate
+                idle_enough = time.time() - self._last_foreground_tick >= self.FOREGROUND_COOLDOWN
+                ne_quiet = state.neuro.norepinephrine < self.NE_HIGH_GATE
+                not_frozen = state.state != PROTECTIVE_FREEZE
+
+                if not_frozen and ne_quiet and idle_enough:
+                    self._check_scout_night()
+                    self._check_dmn_continuous()
+
+                # 3. HRV alerts всегда
+                self._check_hrv_alerts()
+            except Exception as e:
+                log.warning(f"[cognitive_loop] error: {e}")
+
+            # 4. Adaptive sleep
+            try:
+                ne = get_global_state().neuro.norepinephrine
+                scaled = self.TICK_INTERVAL * max(0.5, 1.2 - ne)
+            except Exception:
+                scaled = self.TICK_INTERVAL
+            self._stop_event.wait(scaled)
+
+    # ── Scout (3h: pump + save persistent bridge) ───────────────────────
+
+    def _check_scout_night(self):
+        now = time.time()
+        if now - self._last_scout < self.SCOUT_INTERVAL:
+            return
+        if len(_graph.get("nodes", [])) < 5:
+            return
+
+        self._last_scout = now
+        bridge = self._run_pump_bridge(max_iterations=2, save=True)
+        if bridge:
+            self._add_alert({
+                "type": "scout_bridge",
+                "severity": "info",
+                "text": f"Scout нашёл мост: {bridge['text'][:80]}",
+                "text_en": f"Scout found bridge: {bridge['text'][:80]}",
+                "bridge": bridge,
+            })
+            log.info(f"[cognitive_loop] scout bridge: {bridge['text'][:60]} "
+                     f"q={bridge.get('quality', 0):.2f}")
+
+    # ── DMN continuous (10 min: pump attempt, don't save) ───────────────
+
+    def _check_dmn_continuous(self):
+        now = time.time()
+        if now - self._last_dmn < self.DMN_INTERVAL:
+            return
+        if len(_graph.get("nodes", [])) < 4:
+            return
+        self._last_dmn = now
+
+        bridge = self._run_pump_bridge(max_iterations=1, save=False)
+        if bridge and bridge.get("quality", 0) > 0.5:
+            self._add_alert({
+                "type": "dmn_bridge",
+                "severity": "info",
+                "text": f"DMN-инсайт: {bridge['text'][:80]} (quality {bridge.get('quality', 0):.0%})",
+                "text_en": f"DMN insight: {bridge['text'][:80]} (quality {bridge.get('quality', 0):.0%})",
+                "bridge": bridge,
+            }, dedupe=True)
+
+    def _run_pump_bridge(self, max_iterations: int = 2, save: bool = False) -> Optional[dict]:
+        """Call pump between two most distant nodes. Optionally persist bridge.
+
+        save=True → новый node + связи с обоими источниками (Scout path).
+        save=False → только возвращаем bridge-дикт (DMN suggest).
+        """
+        from .graph_logic import _add_node, _ensure_embeddings
+        from .pump_logic import pump
+
+        nodes = _graph.get("nodes", [])
+        if len(nodes) < 4:
+            return None
+
+        try:
+            texts = [n.get("text", "") for n in nodes]
+            _ensure_embeddings(texts)
+        except Exception as e:
+            log.warning(f"[cognitive_loop] embeddings failed: {e}")
+            return None
+
+        pair = _find_distant_pair(nodes)
+        if pair is None:
+            return None
+
+        idx_a, idx_b = pair
+        log.info(f"[cognitive_loop] Pump #{idx_a} <-> #{idx_b}")
+
+        try:
+            result = pump(idx_a, idx_b, max_iterations=max_iterations, lang="ru")
+        except Exception as e:
+            log.warning(f"[cognitive_loop] pump failed: {e}")
+            return None
+
+        if result.get("error"):
+            log.info(f"[cognitive_loop] pump error: {result['error']}")
+            return None
+
+        bridges = result.get("all_bridges", [])
+        if not bridges:
+            return None
+        best = bridges[0]
+
+        # Feed back to neurochem: хороший мост = низкое d (новизна подтверждена)
+        try:
+            from .horizon import get_global_state
+            quality = best.get("quality", 0.0)
+            get_global_state().update_neurochem(d=(1.0 - quality))
+        except Exception as e:
+            log.debug(f"[cognitive_loop] neurochem feedback failed: {e}")
+
+        if save:
+            try:
+                new_idx = _add_node(
+                    best["text"],
+                    depth=0, topic="",
+                    node_type="hypothesis",
+                    confidence=min(0.9, max(0.3, best.get("quality", 0.5))),
+                )
+                directed = _graph["edges"].setdefault("directed", [])
+                directed.append([idx_a, new_idx])
+                directed.append([idx_b, new_idx])
+                manual_links = _graph["edges"].setdefault("manual_links", [])
+                for other in (idx_a, idx_b):
+                    pair_link = [min(new_idx, other), max(new_idx, other)]
+                    if pair_link not in manual_links:
+                        manual_links.append(pair_link)
+                best["saved_idx"] = new_idx
+                best["source_a"] = idx_a
+                best["source_b"] = idx_b
+            except Exception as e:
+                log.warning(f"[cognitive_loop] bridge save failed: {e}")
+
+        return best
+
+    # ── HRV alerts ─────────────────────────────────────────────────────
+
+    def _check_hrv_alerts(self):
+        mgr = get_hrv_manager()
+        if not mgr.is_running:
+            return
+        state = mgr.get_baddle_state()
+        coh = state.get("coherence")
+        if coh is None:
+            return
+        if coh < 0.25:
+            self._add_alert({
+                "type": "coherence_crit",
+                "severity": "warning",
+                "text": "Coherence очень низкая. Сделай паузу.",
+                "text_en": "Coherence very low. Take a break.",
+            }, dedupe=True)
+
+    # ── Alerts queue ───────────────────────────────────────────────────
+
+    def _add_alert(self, alert: dict, dedupe: bool = False):
+        with self._lock:
+            if dedupe:
+                for a in self._alerts_queue:
+                    if a.get("type") == alert.get("type"):
+                        return
+            alert["ts"] = time.time()
+            self._alerts_queue.append(alert)
+            if len(self._alerts_queue) > 20:
+                self._alerts_queue = self._alerts_queue[-20:]
+
+    def get_alerts(self, clear: bool = False) -> list:
+        with self._lock:
+            alerts = list(self._alerts_queue)
+            if clear:
+                self._alerts_queue.clear()
+            return alerts
+
+    def get_status(self) -> dict:
+        return {
+            "running": self.is_running,
+            "alerts_pending": len(self._alerts_queue),
+            "last_scout": self._last_scout,
+            "last_dmn": self._last_dmn,
+            "last_foreground_tick": self._last_foreground_tick,
+        }
+
+
+# ── Singleton ─────────────────────────────────────────────────────────
+
+_loop: Optional[CognitiveLoop] = None
+
+
+def get_cognitive_loop() -> CognitiveLoop:
+    global _loop
+    if _loop is None:
+        _loop = CognitiveLoop()
+    return _loop

@@ -1344,26 +1344,27 @@ def graph_self_similar():
 
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
-    """NAND emergent tick — distinct()-zone routing.
+    """Foreground tick — ping в CognitiveLoop.
 
-    Single tick engine (v8d). Mode config only tunes Horizon presets
-    (τ_in/τ_out/γ/policy), logic is mode-agnostic — it emerges from distinct zones.
+    Единый когнитивный контур (cognitive_loop.py) владеет и фоновой работой
+    (Scout/DMN/NE decay), и foreground тиком. Юзер-инициированный тик
+    разделяет timestamp с фоном, чтобы DMN не лез следующие 30 секунд
+    (общий NE-бюджет).
+
+    Mode config тюнит Horizon пресеты (τ_in/τ_out/γ/policy); логика сама
+    эмерджентна из distinct-зон в tick_nand.
     """
-    from .tick_nand import tick_emergent
+    from .cognitive_loop import get_cognitive_loop
 
     d = _p_data()
-    stable_threshold = float(d.get("stable_threshold", 0.8))
-    force_collapse = d.get("force_collapse", False)
-    max_meta = int(d.get("max_meta", 2))
-    min_hyp = int(d.get("min_hyp", 5))
-
-    nodes = _graph["nodes"]
-    edges = _compute_edges(nodes, d["threshold"], d["sim_mode"])
-
-    result = tick_emergent(nodes, edges, _graph,
-                           threshold=d["threshold"], stable_threshold=stable_threshold,
-                           force_collapse=force_collapse,
-                           max_meta=max_meta, min_hyp=min_hyp)
+    result = get_cognitive_loop().tick_foreground(
+        threshold=d["threshold"],
+        sim_mode=d["sim_mode"],
+        stable_threshold=float(d.get("stable_threshold", 0.8)),
+        force_collapse=d.get("force_collapse", False),
+        max_meta=int(d.get("max_meta", 2)),
+        min_hyp=int(d.get("min_hyp", 5)),
+    )
     return jsonify(result)
 
 

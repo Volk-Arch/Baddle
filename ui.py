@@ -21,15 +21,15 @@ from src.graph_routes import graph_bp
 from src.chat import chat_bp
 from src.assistant import assistant_bp
 from src.api_backend import get_settings, update_settings, fetch_models
-from src.watchdog import get_watchdog
+from src.cognitive_loop import get_cognitive_loop
 
 app = Flask(__name__)
 app.register_blueprint(graph_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(assistant_bp)
 
-# Start background watchdog (Scout, DMN, HRV alerts)
-get_watchdog().start()
+# Start background cognitive loop (Scout, DMN, HRV alerts, NE homeostasis)
+get_cognitive_loop().start()
 
 
 # ── Roles / Templates ────────────────────────────────────────────────────────

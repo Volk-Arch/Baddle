@@ -160,8 +160,11 @@ tick_emergent фильтрует classify только по subgoal нодам.
 ## Файлы
 
 - `src/tick_nand.py` — `tick_emergent()` (единственный tick engine)
+- `src/cognitive_loop.py` — `CognitiveLoop` с `tick_foreground()` для `/graph/tick`
+  + фоновый thread (Scout/DMN/NE decay/HRV alerts). Общий NE-бюджет с
+  foreground через `last_foreground_tick` timestamp
 - `src/thinking.py` — helpers: `classify_nodes`, `_find_similar_group`, `_pick_target`, `_pick_distant_pair`, `_tick_force_collapse`
 - `src/horizon.py` — `CognitiveState` (`select_phase`, `update`, `to_llm_params`, `apply_to_bayes`, и все neurochem методы)
 - `src/state_graph.py` — `StateGraph` с hook'ом на каждый tick emit
-- `src/graph_routes.py` — `/graph/tick` endpoint, autorun executes actions
+- `src/graph_routes.py` — `/graph/tick` эндпоинт → делегирует в `loop.tick_foreground()`
 - `static/js/graph.js` — autorun с обработкой `action: "ask"` (pause-on-question) и cone viz

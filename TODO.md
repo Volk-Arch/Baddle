@@ -105,9 +105,6 @@
 Эти не блокеры. Делать только когда тестовая нагрузка покажет что стоит.
 По духу — то же что v8d сделал с primitive-switches: **слить две штуки в одну**.
 
-- [ ] **Tick + Watchdog → один когнитивный loop** (`src/cognitive_loop.py`).
-  Сейчас tick_emergent и watchdog.py — два параллельных механизма. Объединение
-  = один фоновый loop с NE-бюджетом. `/graph/tick` станет ping'ом в loop.
 - [ ] **14 modes → parameter presets**. Сейчас `modes.py` ~300 строк с
   primitive/strategy полями (мёртвые после v8d). Свести к кортежу
   `(S₀, NE₀, τ_in, τ_out, policy, renderer_key)`. 300 → 60 строк.
@@ -175,7 +172,7 @@ POST /graph/tick {"threshold":0.91,"sim_mode":"embedding"}
 ```
 В ответе всегда `tick_engine: "nand"`. Если `"classic"` — критический регресс.
 
-**Влияет на:** всю автономную работу. Run-кнопка, watchdog DMN, autorun.
+**Влияет на:** всю автономную работу. Run-кнопка, cognitive_loop DMN, autorun.
 Если не работает — система не может думать, только чат с LLM без графа.
 
 **Красный флаг.**
@@ -211,7 +208,7 @@ GET /assist/state → {neurochem: {dopamine, serotonin, norepinephrine,
 **Живые тесты.**
 - **NE spike**: отправь любое сообщение в `/assist` → `norepinephrine`
   скачок к 0.5-0.7 (inject_ne(0.4) в `assist()`). Подожди несколько minutes →
-  decay к 0.3 (watchdog loop).
+  decay к 0.3 (cognitive loop).
 - **Dopamine feedback**: нажми 👍 на карточке → `d=0.2` подаётся в EMA,
   dopamine слабо смещается к низу. Нажми 👎 → `d=0.8`, dopamine растёт +
   `freeze.accumulator` растёт.
@@ -225,7 +222,7 @@ GET /assist/state → {neurochem: {dopamine, serotonin, norepinephrine,
 
 **Красный флаг.**
 - `serotonin` застрял на 0.5 после feedback → EMA не применяется
-- `norepinephrine` не падает со временем → watchdog loop не идёт (AttributeError на legacy ключи)
+- `norepinephrine` не падает со временем → cognitive loop не идёт (AttributeError на legacy ключи)
 - PROTECTIVE_FREEZE не выходит даже при низком d → гистерезис сломан
 - `/assist/state` возвращает legacy ключи `S/NE/DA_tonic` — значит где-то остался старый путь
 
@@ -255,26 +252,42 @@ GET /graph/self?limit=5 → {entries: [...], total: N, last_hash: ...}
 - Parent chain сломан (несколько корней) → concurrent write без lock
 - State_origin всегда `1_rest` → NE и burnout не читаются в state_origin_hint
 
-## Когнитивный цикл — watchdog с NE-бюджетом
+## Когнитивный цикл — CognitiveLoop с NE-бюджетом
 
-**Что.** Фоновый поток читает `CognitiveState.NE`, разделяет бюджет между
-Horizon (активная работа) и DMN (Scout/pump). Низкий NE → DMN активнее.
+**Что.** Единый фоновый контур [src/cognitive_loop.py](src/cognitive_loop.py)
+владеет foreground тиком (`tick_foreground` для `/graph/tick`) И фоном
+(Scout/DMN/NE decay/HRV alerts). Координация через общие timestamps:
+`last_foreground_tick`, `last_scout`, `last_dmn`. Бэкграунд не лезет
+следующие 30 сек после юзер-тика — общий NE-бюджет.
 
 **Проверка.**
 ```
-GET /watchdog/status → {running: true, alerts_pending: N, last_scout: ts, last_dmn: ts}
+GET /loop/status → {running, alerts_pending, last_scout, last_dmn,
+                    last_foreground_tick}
+POST /graph/tick → foreground путь, обновляет last_foreground_tick
 ```
+(Алиас `/watchdog/*` сохранён для обратной совместимости.)
 
 **Влияет на:**
-- Фоновые инсайты (Scout bridges)
-- DMN-цикл пока юзер не смотрит
+- Фоновые инсайты (Scout bridges → сохраняются в граф)
+- DMN-цикл пока юзер не смотрит (предложения, не сохраняются)
 - Feedback в dopamine от качественных bridges (низкое d при найденном мосте)
+- Координация NE: после `/graph/tick` DMN пауза 30 сек, после ввода в
+  `/assist` NE подпрыгивает → фоновый контур уходит в минимум
 
 **Живые тесты.**
-- Добавь 5+ hypothesis в граф, подожди 10 минут → watchdog должен
-  запустить DMN, найти bridge. Появится в `/assist/alerts`.
+- Добавь 5+ hypothesis в граф, подожди 10 минут без активности →
+  CognitiveLoop запустит DMN, найдёт bridge. Появится в `/assist/alerts`.
 - При `norepinephrine > 0.55` (только что был input) DMN на паузе.
   При `< 0.55` активен.
+- Сделай `POST /graph/tick` → затем сразу посмотри `/loop/status`:
+  `last_foreground_tick` ≈ now, следующие 30с DMN не лезет.
+
+**Красный флаг.**
+- `/loop/status` не существует, только `/watchdog/status` — значит URL
+  alias'ы пропали. Проверить `assistant.py` add_url_rule.
+- Watchdog AttributeError на legacy ключи в логах — значит где-то остался
+  импорт `from .watchdog`, надо мигрировать.
 
 **Красный флаг.**
 - `last_dmn` не обновляется → background thread не идёт

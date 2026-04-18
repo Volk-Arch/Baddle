@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 from .modes import get_mode
 from .hrv_manager import get_manager as get_hrv_manager
-from .watchdog import get_watchdog
+from .cognitive_loop import get_cognitive_loop
 from .assistant_exec import execute as execute_mode
 
 assistant_bp = Blueprint("assistant", __name__)
@@ -832,10 +832,10 @@ def assist_alerts():
                 "text_en": f"Coherence {coh:.2f}. Take a breath.",
             })
 
-    # Background watchdog alerts (Scout, DMN)
-    wd = get_watchdog()
-    watchdog_alerts = wd.get_alerts(clear=True)
-    alerts.extend(watchdog_alerts)
+    # Background cognitive-loop alerts (Scout, DMN)
+    loop = get_cognitive_loop()
+    loop_alerts = loop.get_alerts(clear=True)
+    alerts.extend(loop_alerts)
 
     return jsonify({
         "alerts": alerts,
@@ -844,26 +844,29 @@ def assist_alerts():
         "hrv": hrv_state,
         "sync_regime": regime,
         "sync_error": round(sync_err, 3),
-        "watchdog": wd.get_status(),
+        "loop": loop.get_status(),
     })
 
 
-# ── Watchdog control ─────────────────────────────────────────────────
+# ── Cognitive loop control (/loop/* — canonical; /watchdog/* alias for compat) ─
 
-@assistant_bp.route("/watchdog/start", methods=["POST"])
-def watchdog_start():
-    wd = get_watchdog()
-    wd.start()
-    return jsonify({"ok": True, "status": wd.get_status()})
+def _loop_start():
+    loop = get_cognitive_loop()
+    loop.start()
+    return jsonify({"ok": True, "status": loop.get_status()})
 
-
-@assistant_bp.route("/watchdog/stop", methods=["POST"])
-def watchdog_stop():
-    wd = get_watchdog()
-    wd.stop()
+def _loop_stop():
+    get_cognitive_loop().stop()
     return jsonify({"ok": True})
 
+def _loop_status():
+    return jsonify(get_cognitive_loop().get_status())
 
-@assistant_bp.route("/watchdog/status", methods=["GET"])
-def watchdog_status():
-    return jsonify(get_watchdog().get_status())
+
+assistant_bp.add_url_rule("/loop/start",  "loop_start",  _loop_start,  methods=["POST"])
+assistant_bp.add_url_rule("/loop/stop",   "loop_stop",   _loop_stop,   methods=["POST"])
+assistant_bp.add_url_rule("/loop/status", "loop_status", _loop_status, methods=["GET"])
+# Legacy URL aliases — существующие клиенты (docs/TODO примеры) дёргают /watchdog/*
+assistant_bp.add_url_rule("/watchdog/start",  "watchdog_start",  _loop_start,  methods=["POST"])
+assistant_bp.add_url_rule("/watchdog/stop",   "watchdog_stop",   _loop_stop,   methods=["POST"])
+assistant_bp.add_url_rule("/watchdog/status", "watchdog_status", _loop_status, methods=["GET"])
