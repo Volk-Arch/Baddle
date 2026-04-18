@@ -1342,6 +1342,32 @@ def graph_self_similar():
     return jsonify({"results": results, "count": len(results)})
 
 
+@graph_bp.route("/graph/consolidate", methods=["POST"])
+def graph_consolidate():
+    """Консолидация памяти — прунинг слабых нод + архив старого state_graph.
+
+    Body (всё опционально):
+      {
+        "dry_run": false,
+        "confidence_threshold": 0.3,  # content: ниже = кандидат к удалению
+        "content_age_days": 30,       # content: давность last_accessed
+        "state_retain_days": 14       # state_graph: новее этого — держим в main
+      }
+
+    Возвращает summary {content, state}.
+    """
+    from .consolidation import consolidate_all
+
+    d = request.get_json(force=True) or {}
+    result = consolidate_all(
+        confidence_threshold=float(d.get("confidence_threshold", 0.3)),
+        content_age_days=float(d.get("content_age_days", 30)),
+        state_retain_days=float(d.get("state_retain_days", 14)),
+        dry_run=bool(d.get("dry_run", False)),
+    )
+    return jsonify(result)
+
+
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
     """Foreground tick — ping в CognitiveLoop.

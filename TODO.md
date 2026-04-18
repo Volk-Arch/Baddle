@@ -23,9 +23,6 @@
 
 ## Автономность и память
 
-- [ ] **Консолидация** — прунинг слабых веток content-графа и state-графа.
-  Без этого файлы растут линейно, мусор не отфильтровывается. Аналог
-  «забывания» как феномена, не бага.
 - [ ] **Meta-tick на state-графе** — tick читает хвост (20 последних),
   адаптирует policy. Пример: 10 шагов в EXECUTION с неизменным sync_error →
   emit "ask" (уже триггерится по простым условиям, но не по паттернам).
@@ -245,6 +242,53 @@ GET /graph/self?limit=5 → {entries: [...], total: N, last_hash: ...}
 **Красный флаг.**
 - Parent chain сломан (несколько корней) → concurrent write без lock
 - State_origin всегда `1_rest` → NE и burnout не читаются в state_origin_hint
+
+## Консолидация — забывание слабого, архив старого
+
+**Что.** Два процесса в [src/consolidation.py](src/consolidation.py):
+
+1. **Content-graph pruning** — удаляет hypothesis/thought ноды где
+   одновременно: `confidence < 0.3`, last_accessed > 30 дней, не в subgoals
+   цели, нет входящих directed-связей от goal/fact/action, нет evidence
+   на них. Всё остальное защищено.
+2. **State-graph archiving** — переносит tick-записи старше 14 дней из
+   `state_graph.jsonl` в `state_graph.archive.jsonl`. Парент-цепочка
+   переживает архив: старые хэши продолжают быть валидными в archive
+   файле. Атомарный rename через `.tmp`.
+
+Триггер: вручную через `POST /graph/consolidate` (с опцией `dry_run`),
+автоматически CognitiveLoop раз в 24ч когда NE низкое (sleep-like).
+
+**Проверка.**
+```
+POST /graph/consolidate {"dry_run": true}
+  → {content: {candidates, total_before}, state: {archived, retained}}
+
+POST /graph/consolidate {}
+  → реально удаляет + архивирует
+```
+
+**Влияет на:** прайм-директива в контексте времени. Граф перестаёт расти
+линейно; старая слабая информация уходит, освобождая внимание для
+релевантной. state_graph.jsonl не вырастает в гигабайт за месяцы.
+
+**Живые тесты.**
+- Создай 5 hypothesis с `confidence=0.2` и подделай `last_accessed` на
+  40 дней назад → `/graph/consolidate {dry_run:true}` вернёт их в
+  candidates.
+- Защищённые категории не удаляются: goal, fact, evidence, свежие (<30д),
+  подцели goal'а, цели evidence.
+- После `/graph/consolidate` на state_graph с entries старше 14 дней
+  проверь `state_graph.archive.jsonl` — старые там, main очищен.
+
+**Красный флаг.**
+- Consolidation удалила goal/fact → нода без защиты, проверь условие
+  `type not in ("hypothesis", "thought")` в фильтре кандидатов.
+- Archive cyclically растёт и не очищается → archive предполагается
+  cold storage, если всё-таки нужна ротация — отдельный таск.
+- Парент-цепочка сломана: `_last_hash` в StateGraph ссылается на entry
+  которого нет ни в main ни в archive → recovery logic в
+  `_recover_last_hash` не учитывает archive.
 
 ## RPE — автономный dopamine drift из Bayes-обновлений
 

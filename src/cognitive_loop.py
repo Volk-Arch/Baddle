@@ -127,10 +127,11 @@ class CognitiveLoop:
     """Singleton: один фоновый контур + foreground tick entry."""
 
     # Интервалы в секундах
-    SCOUT_INTERVAL = 3 * 3600    # 3 часа между Scout pump+save
-    DMN_INTERVAL = 600           # 10 минут между DMN continuous
-    TICK_INTERVAL = 60           # частота бэкграунд-проверок
-    FOREGROUND_COOLDOWN = 30     # после юзер-тика DMN ждёт столько секунд
+    SCOUT_INTERVAL = 3 * 3600         # 3 часа между Scout pump+save
+    DMN_INTERVAL = 600                # 10 минут между DMN continuous
+    CONSOLIDATION_INTERVAL = 24 * 3600  # раз в сутки: прунинг + архив state_graph
+    TICK_INTERVAL = 60                # частота бэкграунд-проверок
+    FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
 
     # NE gating
     NE_BASELINE = 0.3            # baseline к которому дрейфует NE
@@ -143,6 +144,7 @@ class CognitiveLoop:
         self._stop_event = threading.Event()
         self._last_scout = 0.0
         self._last_dmn = 0.0
+        self._last_consolidation = 0.0
         self._last_foreground_tick = 0.0
         self._alerts_queue: list = []
         self._lock = threading.Lock()
@@ -226,6 +228,7 @@ class CognitiveLoop:
                 if not_frozen and ne_quiet and idle_enough:
                     self._check_scout_night()
                     self._check_dmn_continuous()
+                    self._check_consolidation()
 
                 # 3. HRV alerts всегда
                 self._check_hrv_alerts()
@@ -355,6 +358,34 @@ class CognitiveLoop:
                 log.warning(f"[cognitive_loop] bridge save failed: {e}")
 
         return best
+
+    # ── Nightly consolidation (once per 24h, forget weak old branches) ──
+
+    def _check_consolidation(self):
+        now = time.time()
+        if now - self._last_consolidation < self.CONSOLIDATION_INTERVAL:
+            return
+        self._last_consolidation = now
+        try:
+            from .consolidation import consolidate_all
+            result = consolidate_all()
+            content = result.get("content") or {}
+            state = result.get("state") or {}
+            removed = content.get("removed", 0)
+            archived = state.get("archived", 0)
+            if removed or archived:
+                log.info(f"[cognitive_loop] consolidation: "
+                         f"pruned {removed} nodes, archived {archived} state entries")
+                self._add_alert({
+                    "type": "consolidation",
+                    "severity": "info",
+                    "text": f"Консолидация: удалено {removed} слабых нод, "
+                            f"архивировано {archived} tick-записей.",
+                    "text_en": f"Consolidation: pruned {removed} weak nodes, "
+                               f"archived {archived} tick entries.",
+                }, dedupe=True)
+        except Exception as e:
+            log.warning(f"[cognitive_loop] consolidation failed: {e}")
 
     # ── HRV alerts ─────────────────────────────────────────────────────
 
