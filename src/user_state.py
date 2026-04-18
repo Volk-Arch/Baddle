@@ -44,6 +44,15 @@ LONG_RESERVE_DEFAULT = 1500    # стартовое значение (можно
 DAILY_ENERGY_MAX = 100
 LONG_RESERVE_TAP_THRESHOLD = 20  # ниже daily → начинаем тратить long reserve
 
+# Activity zone параметры (из прототипа HRV × акселерометр)
+ACTIVITY_THRESHOLD = 0.5       # magnitude выше которого юзер считается «активным»
+COHERENCE_HEALTHY = 0.5        # coherence выше → HRV в норме (HIGH HRV)
+# 4 зоны из 2×2 грида (hrv_ok, active):
+ZONE_RECOVERY = "recovery"         # !active + hrv_ok    → 🟢 здоровое восстановление
+ZONE_STRESS_REST = "stress_rest"   # !active + !hrv_ok   → 🟡 беспокойство в покое
+ZONE_HEALTHY_LOAD = "healthy_load" #  active + hrv_ok    → 🔵 здоровая нагрузка
+ZONE_OVERLOAD = "overload"         #  active + !hrv_ok   → 🔴 перегрузка / overtraining
+
 
 class UserState:
     """Зеркало Neurochem для пользователя. Питается наблюдаемыми сигналами."""
@@ -62,6 +71,11 @@ class UserState:
         self.hrv_coherence: Optional[float] = None
         self.hrv_stress: Optional[float] = None
         self.hrv_rmssd: Optional[float] = None
+
+        # Activity magnitude (акселерометр Polar или симулятор-слайдер).
+        # 0 = покой, 0.5 = порог «активен», 1.0 = ходьба, 2+ = бег.
+        # `activity_zone` derived property: recovery / stress_rest / healthy_load / overload.
+        self.activity_magnitude: float = 0.0
 
         # Валентность: приятно/неприятно ∈ [−1, 1]. Отдельный канал от arousal.
         # HRV/dopamine ловят возбуждение, но не знак переживания. Собирается
@@ -87,12 +101,15 @@ class UserState:
     def update_from_hrv(self,
                         coherence: Optional[float] = None,
                         stress: Optional[float] = None,
-                        rmssd: Optional[float] = None):
-        """HRV → serotonin (coherence) + norepinephrine (stress).
+                        rmssd: Optional[float] = None,
+                        activity: Optional[float] = None):
+        """HRV → serotonin (coherence) + norepinephrine (stress) + activity passthrough.
 
         coherence ∈ [0,1] → serotonin EMA (спокойствие = стабильность)
         stress ∈ [0,1] → norepinephrine EMA (напряжение)
         rmssd mapped to stress if stress отсутствует (lower RMSSD = higher stress).
+        activity ∈ [0, 5] — L2 magnitude движения от акселерометра. Отдельный
+        канал для 4-зонной классификации (см. `activity_zone`).
         """
         if coherence is not None:
             self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
@@ -104,6 +121,8 @@ class UserState:
         if stress is not None:
             self.hrv_stress = max(0.0, min(1.0, float(stress)))
             self.norepinephrine = 0.9 * self.norepinephrine + 0.1 * self.hrv_stress
+        if activity is not None:
+            self.activity_magnitude = max(0.0, min(5.0, float(activity)))
         self._clamp()
         self.tick_expectation()
 
@@ -207,6 +226,7 @@ class UserState:
         self.expectation = max(0.0, min(1.0, self.expectation))
         self.long_reserve = max(0.0, min(float(LONG_RESERVE_MAX), self.long_reserve))
         self.valence = max(-1.0, min(1.0, self.valence))
+        self.activity_magnitude = max(0.0, min(5.0, self.activity_magnitude))
 
     def vector(self) -> np.ndarray:
         """4-мерная точка состояния для sync-метрики."""
@@ -255,6 +275,43 @@ class UserState:
         """|surprise| — магнитуда ошибки, эквивалент MindBalance ID."""
         return abs(self.surprise)
 
+    # ── Activity zone (4 региона HRV × акселерометр) ───────────────────────
+
+    @property
+    def activity_zone(self) -> dict:
+        """Derived 4-зонная классификация (HRV coherence × activity_magnitude).
+
+        Из прототипа HRV-Reader (Polar H10 + accelerometer). Даёт
+        **физический контекст** поверх чисто нейрохимического состояния:
+        одинаковая coherence значит разное, если юзер лежит vs бежит.
+
+          !active & hrv_ok     → recovery       🟢 здоровое восстановление
+          !active & !hrv_ok    → stress_rest    🟡 беспокойство в покое
+           active & hrv_ok     → healthy_load   🔵 здоровая нагрузка
+           active & !hrv_ok    → overload       🔴 перегрузка
+
+        Если HRV не запущен (coherence=None) → zone=None.
+        """
+        if self.hrv_coherence is None:
+            return {"key": None, "label": None, "advice": None}
+        active = self.activity_magnitude >= ACTIVITY_THRESHOLD
+        hrv_ok = self.hrv_coherence >= COHERENCE_HEALTHY
+        if not active and hrv_ok:
+            return {"key": ZONE_RECOVERY, "label": "Восстановление",
+                    "advice": "Хорошее время для отдыха / медитации.",
+                    "emoji": "🟢"}
+        if not active and not hrv_ok:
+            return {"key": ZONE_STRESS_REST, "label": "Стресс в покое",
+                    "advice": "Подыши минуту. Тело в напряжении без физической нагрузки.",
+                    "emoji": "🟡"}
+        if active and hrv_ok:
+            return {"key": ZONE_HEALTHY_LOAD, "label": "Здоровая нагрузка",
+                    "advice": "Ритм хороший. Используй для дела.",
+                    "emoji": "🔵"}
+        return {"key": ZONE_OVERLOAD, "label": "Перегрузка",
+                "advice": "Сильная активность + низкое HRV = риск overtraining. Снизь темп.",
+                "emoji": "🔴"}
+
     # ── Named state (Voronoi) ──────────────────────────────────────────────
 
     @property
@@ -262,15 +319,21 @@ class UserState:
         """Ближайший именованный регион в (T, A) пространстве.
 
         T (emotional tone) = serotonin (стабильность, валентность)
-        A (activation) = mean(dopamine, norepinephrine) (arousal)
+        A (activation) = weighted mean(DA, NE) + activity_contribution
+          — до этого A было чисто когнитивным arousal;
+          теперь physical activity_magnitude даёт дополнительный вклад
+          (клампом в [0, 1]) с весом 0.3. Бегущий юзер не может быть в
+          «медитации» по когнитивным скалярам.
 
         Возвращает {key, label, advice, distance, coord}. 10 регионов
         из MindBalance v4 (flow / stress / burnout / curiosity / ...).
         """
         from .user_state_map import nearest_named_state
         t = self.serotonin
-        a = (self.dopamine + self.norepinephrine) / 2.0
-        return nearest_named_state(t, a)
+        cog_arousal = (self.dopamine + self.norepinephrine) / 2.0
+        phys_arousal = min(1.0, self.activity_magnitude / 2.0)  # 2+ = max
+        a = 0.7 * cog_arousal + 0.3 * phys_arousal
+        return nearest_named_state(t, max(0.0, min(1.0, a)))
 
     # ── Dual-pool energy ───────────────────────────────────────────────────
 
@@ -327,6 +390,7 @@ class UserState:
 
     def to_dict(self) -> dict:
         ns = self.named_state
+        az = self.activity_zone
         return {
             "dopamine": round(self.dopamine, 3),
             "serotonin": round(self.serotonin, 3),
@@ -338,6 +402,8 @@ class UserState:
             "surprise": round(self.surprise, 3),
             "imbalance": round(self.imbalance, 3),
             "long_reserve": round(self.long_reserve, 1),
+            "activity_magnitude": round(self.activity_magnitude, 3),
+            "activity_zone": az,
             "named_state": {"key": ns["key"], "label": ns["label"],
                             "advice": ns["advice"]},
             "hrv": {
@@ -358,6 +424,7 @@ class UserState:
         u.expectation = float(d.get("expectation", 0.5))
         u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
         u.valence = float(d.get("valence", 0.0))
+        u.activity_magnitude = float(d.get("activity_magnitude", 0.0))
         hrv = d.get("hrv") or {}
         u.hrv_coherence = hrv.get("coherence")
         u.hrv_stress = hrv.get("stress")

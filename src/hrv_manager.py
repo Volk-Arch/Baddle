@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 
 
 class HRVManager:
-    """Singleton HRV data manager. Thread-safe rolling buffer of RR intervals."""
+    """Singleton HRV data manager. Thread-safe rolling buffer of RR intervals
+    + activity_magnitude (L2 norm акселерометра в [0, ∞), нормализован ~0..3)."""
 
     def __init__(self):
         self.mode = "off"  # off, simulator, polar
@@ -36,6 +37,10 @@ class HRVManager:
         self._last_metrics: Dict = {}
         self._baseline: Optional[Dict] = None  # calibration
         self._listeners: list[Callable] = []
+        # Activity — независимый от HR канал. Polar передаёт acc x/y/z,
+        # считаем magnitude - g (1.0 в покое) чтобы получить чистую динамику.
+        # Симулятор — плоский скаляр от слайдера.
+        self._activity_magnitude: float = 0.0
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -92,10 +97,21 @@ class HRVManager:
 
     # ── Simulator control ──────────────────────────────────────────────
 
-    def set_simulator_state(self, target_hr: float = None, target_coherence: float = None):
-        """Adjust simulator parameters at runtime (for demo sliders)."""
+    def set_simulator_state(self, target_hr: float = None, target_coherence: float = None,
+                            activity: float = None):
+        """Adjust simulator parameters at runtime (for demo sliders).
+
+        activity ∈ [0, 3] — magnitude движения (0 = лежишь, 1 = ходишь, 2+ = бег).
+        Эмулирует acc L2 norm - gravity baseline.
+        """
         if self._simulator is not None:
             self._simulator.set_state(target_hr=target_hr, target_coherence=target_coherence)
+        if activity is not None:
+            self._activity_magnitude = max(0.0, min(5.0, float(activity)))
+
+    def update_activity(self, magnitude: float):
+        """Called by Polar reader (real accelerometer): передаёт mag ≈ |accel|−g."""
+        self._activity_magnitude = max(0.0, min(5.0, float(magnitude)))
 
     # ── Data access ────────────────────────────────────────────────────
 
@@ -113,8 +129,11 @@ class HRVManager:
         return metrics
 
     def get_baddle_state(self) -> Dict:
-        """HRV normalized for Baddle Horizon integration."""
-        return hrv_to_baddle_state(self.get_metrics())
+        """HRV + activity → UserState signals. activity_magnitude проходит как
+        отдельный канал; activity_zone deriveится в UserState."""
+        state = hrv_to_baddle_state(self.get_metrics())
+        state["activity_magnitude"] = round(float(self._activity_magnitude), 3)
+        return state
 
     def get_status(self) -> Dict:
         return {

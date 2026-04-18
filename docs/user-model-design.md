@@ -47,6 +47,46 @@ high arousal может быть любопытством (+valence) или ст
 HRV не кормит valence — HRV про тело, valence про ощущение. Persistится
 через to_dict/from_dict.
 
+## 1c. Activity zone (HRV × движение)
+
+Прототип HRV-Reader у Игоря рисовал `RR vs activity` scatter с 4 цветными
+зонами. Baddle теперь читает акселерометр (`activity_magnitude`) как
+независимый канал и derive'ит `activity_zone`:
+
+```
+active = activity_magnitude >= 0.5
+hrv_ok = coherence >= 0.5
+
+!active & hrv_ok  → 🟢 recovery       — здоровое восстановление
+!active & !hrv_ok → 🟡 stress_rest    — беспокойство в покое
+ active & hrv_ok  → 🔵 healthy_load   — здоровая нагрузка / flow-like
+ active & !hrv_ok → 🔴 overload       — overtraining, тормози
+```
+
+Откуда physical signal:
+- **Polar H10**: accelerometer via BLE → `|accel| − g` magnitude → push в
+  `hrv_manager.update_activity(mag)` (когда Polar BLE будет реально подключён)
+- **Симулятор**: слайдер «Activity» в HRV-панели (0-3), `/hrv/simulate
+  {activity: 1.2}`. Сейчас единственный источник.
+
+### Влияние activity на named_state
+
+Раньше Voronoi A-ось = `mean(dopamine, norepinephrine)` — чисто
+когнитивный arousal. Лежащий юзер с высоким DA (например от сильного
+feedback) попадал в «flow», что неверно.
+
+Теперь: `A = 0.7·cog_arousal + 0.3·min(1, activity/2)`. Physical движение
+даёт до +0.3 к A. Бегущий юзер не может быть в «медитации» по чистым
+скалярам D/NE.
+
+### Alerts по зоне
+
+`/assist/alerts` генерит:
+- `type: zone_overload` при `active + !hrv_ok` — warning severity
+- `type: zone_stress_rest` при `!active + !hrv_ok` — info severity
+
+Recovery и healthy_load — позитивные зоны, alerts не выдают.
+
 ## 2. Named user-states (Voronoi)
 
 [src/user_state_map.py](../src/user_state_map.py) содержит 10 именованных

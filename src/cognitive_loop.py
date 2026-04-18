@@ -135,6 +135,7 @@ class CognitiveLoop:
     STATE_WALK_INTERVAL = 20 * 60     # 20 минут между эпизодическими запросами к state_graph
     NIGHT_CYCLE_INTERVAL = 24 * 3600  # раз в сутки: Scout + REM + Consolidation единым блоком
     BRIEFING_INTERVAL = 20 * 3600     # раз в ~сутки: утренний briefing (< чем night чтобы не совпадать)
+    HRV_PUSH_INTERVAL = 15            # каждые 15с синхронизируем HRV → UserState
     TICK_INTERVAL = 60                # частота бэкграунд-проверок
     FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
     DEFAULT_WAKE_HOUR = 7             # если profile.context.wake_hour не задан
@@ -159,6 +160,7 @@ class CognitiveLoop:
         self._last_state_walk = 0.0
         self._last_night_cycle = 0.0
         self._last_briefing = 0.0
+        self._last_hrv_push = 0.0
         self._last_foreground_tick = 0.0
         self._alerts_queue: list = []
         self._lock = threading.Lock()
@@ -244,19 +246,26 @@ class CognitiveLoop:
                     self._check_state_walk()
                     self._check_night_cycle()
 
-                # 3. HRV alerts + morning briefing всегда (не гейтим NE —
-                # briefing проактивный, срабатывает когда юзер проснулся)
+                # 3. HRV alerts + morning briefing + hrv→UserState push всегда
+                # (briefing проактивный, срабатывает когда юзер проснулся;
+                # hrv_push гарантирует что UserState.hrv_* не устаревает
+                # между вызовами /hrv/metrics endpoint — критично для
+                # activity_zone, sync_regime, named_state).
                 self._check_hrv_alerts()
                 self._check_daily_briefing()
+                self._check_hrv_push()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
-            # 4. Adaptive sleep
+            # 4. Adaptive sleep. Верхний bound = TICK_INTERVAL (60s) для
+            # scout/dmn/night проверок; но HRV push хочет каждые 15с —
+            # cap на HRV_PUSH_INTERVAL чтобы physical state не устаревал.
             try:
                 ne = get_global_state().neuro.norepinephrine
                 scaled = self.TICK_INTERVAL * max(0.5, 1.2 - ne)
             except Exception:
                 scaled = self.TICK_INTERVAL
+            scaled = min(scaled, float(self.HRV_PUSH_INTERVAL))
             self._stop_event.wait(scaled)
 
     # ── Night cycle: Scout + REM emotional + REM creative + Consolidation ──
@@ -779,6 +788,35 @@ class CognitiveLoop:
                 bits.append("Береги энергию, лёгкие задачи первыми.")
 
         return " ".join(bits)
+
+    # ── HRV → UserState periodic push (15s) ─────────────────────────────
+
+    def _check_hrv_push(self):
+        """Периодически синхронизирует hrv_manager → UserState.
+
+        До этого UserState.hrv_* обновлялся только при **явном вызове**
+        `/hrv/metrics` endpoint'а (pull-модель). Если UI не поллит — UserState
+        устаревает, `activity_zone` / `named_state` / `sync_regime` считаются
+        на старом coherence. Этот push гарантирует свежесть каждые 15с.
+        """
+        now = time.time()
+        if now - self._last_hrv_push < self.HRV_PUSH_INTERVAL:
+            return
+        mgr = get_hrv_manager()
+        if not mgr.is_running:
+            return
+        self._last_hrv_push = now
+        try:
+            state = mgr.get_baddle_state() or {}
+            from .user_state import get_user_state
+            get_user_state().update_from_hrv(
+                coherence=state.get("coherence"),
+                rmssd=state.get("rmssd"),
+                stress=state.get("stress"),
+                activity=state.get("activity_magnitude"),
+            )
+        except Exception as e:
+            log.debug(f"[cognitive_loop] hrv push failed: {e}")
 
     # ── HRV alerts ─────────────────────────────────────────────────────
 

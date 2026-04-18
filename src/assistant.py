@@ -81,7 +81,11 @@ assistant_bp = Blueprint("assistant", __name__)
 _STATE_FILE = Path(__file__).parent.parent / "user_state.json"
 
 
+_user_state_restored = False   # guard — restore from disk ОДИН раз при первой загрузке
+
+
 def _load_state() -> dict:
+    global _user_state_restored
     if _STATE_FILE.exists():
         try:
             data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
@@ -99,14 +103,17 @@ def _load_state() -> dict:
             "streaks": {},       # habit_name → consecutive_days
             "history": [],       # last 100 interactions (trimmed)
         }
-    # Восстановим UserState из блока в файле (persistence между сессиями)
-    try:
-        from .user_state import UserState, set_user_state
-        us_dump = data.get("user_state_dump")
-        if isinstance(us_dump, dict):
-            set_user_state(UserState.from_dict(us_dump))
-    except Exception as e:
-        print(f"[assistant] user_state restore error: {e}")
+    # Восстановим UserState ТОЛЬКО ОДИН раз за процесс — иначе каждый
+    # /assist request будет затирать runtime-апдейты от /hrv/metrics etc.
+    if not _user_state_restored:
+        try:
+            from .user_state import UserState, set_user_state
+            us_dump = data.get("user_state_dump")
+            if isinstance(us_dump, dict):
+                set_user_state(UserState.from_dict(us_dump))
+        except Exception as e:
+            print(f"[assistant] user_state restore error: {e}")
+        _user_state_restored = True
     return data
 
 
@@ -1507,6 +1514,29 @@ def assist_alerts():
                 "text": f"Coherence {coh:.2f}. Минутку подыши.",
                 "text_en": f"Coherence {coh:.2f}. Take a breath.",
             })
+
+    # Activity-zone alerts (4-зонная классификация HRV × движение)
+    try:
+        from .user_state import get_user_state
+        az = get_user_state().activity_zone
+        if az.get("key") == "overload":
+            alerts.append({
+                "type": "zone_overload",
+                "severity": "warning",
+                "text": f"🔴 {az['label']}. {az['advice']}",
+                "text_en": "Overload detected: high activity + low HRV. Ease off.",
+                "zone": "overload",
+            })
+        elif az.get("key") == "stress_rest":
+            alerts.append({
+                "type": "zone_stress_rest",
+                "severity": "info",
+                "text": f"🟡 {az['label']}. {az['advice']}",
+                "text_en": "Stress at rest: low HRV without movement. Breathe.",
+                "zone": "stress_rest",
+            })
+    except Exception:
+        pass
 
     # Background cognitive-loop alerts (Scout, DMN)
     loop = get_cognitive_loop()

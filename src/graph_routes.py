@@ -1906,6 +1906,7 @@ def hrv_metrics():
         coherence=state.get("coherence"),
         rmssd=state.get("rmssd"),
         stress=state.get("stress"),
+        activity=state.get("activity_magnitude"),
     )
 
     return jsonify({
@@ -1923,11 +1924,16 @@ def hrv_calibrate():
 
 @graph_bp.route("/hrv/simulate", methods=["POST"])
 def hrv_simulate():
-    """Adjust simulator params at runtime (for demo)."""
+    """Adjust simulator params at runtime (for demo).
+
+    Принимает: hr, coherence, activity (все опциональны).
+    activity ∈ [0, 5] — magnitude движения (0=лежишь, 1=ходьба, 2+=бег).
+    """
     d = request.get_json(force=True)
     mgr = get_hrv_manager()
     mgr.set_simulator_state(
         target_hr=d.get("hr"),
         target_coherence=d.get("coherence"),
+        activity=d.get("activity"),
     )
     return jsonify({"ok": True, "status": mgr.get_status()})

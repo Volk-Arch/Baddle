@@ -9,6 +9,51 @@ CognitiveState управляет конусом через prediction error (ч
 > обновляет `UserState.serotonin` (coherence) и `UserState.norepinephrine`
 > (stress). SystemState (Neurochem) эволюционирует по собственной динамике
 > графа. См. [symbiosis-design.md](symbiosis-design.md).
+>
+> **Activity как отдельный канал (из прототипа Polar+accelerometer):**
+> `UserState.activity_magnitude` — L2-magnitude движения. В паре с
+> `coherence` даёт 4-зонную классификацию (`activity_zone` derived):
+> recovery / stress_rest / healthy_load / overload. См.
+> [user-model-design.md](user-model-design.md) секция 1c.
+
+## Источники данных — разные устройства, разная семантика
+
+Текущий `hrv_manager.py` построен под **Polar-like модель**: непрерывный
+RR-поток + accelerometer как single magnitude. Это не подходит «из
+коробки» для других устройств. Вот реальность:
+
+| Источник | RR | Частота | Accel | HR | Sleep |
+|----------|-----|---------|-------|-----|-------|
+| **Simulator** (сейчас) | эмулируется каждый beat | ~1/s | скалярный слайдер | derived из RR | нет |
+| **Polar H10** | каждый beat | ~1/s непрерывно | 50 Hz X/Y/Z | derived | нет |
+| **Apple Watch** | sparse samples | раз в минуты | отдельный поток 50 Hz | 5-секундный stream | через HealthKit |
+| **Oura / Garmin** | raw RR часто недоступен | — | разные | continuous | yes (detailed) |
+| **Phone IMU** | — | — | 50-100 Hz | — | — |
+
+**Следствие:** один `hrv_manager` с `rr_buffer + activity_magnitude scalar`
+хорошо моделирует Polar и симулятор. Для Apple Watch / Oura нужен
+**адаптер** который конвертирует редкие RR-samples + непрерывный HR в
+те же signals что ожидает `hrv_to_baddle_state`:
+- `coherence` при разреженных RR → альтернативная формула (HR
+  variability от HR timeseries, не RR-to-RR)
+- `activity_magnitude` из Watch motion & workouts API
+- `sleep quality` (новое) → feed in `UserState.long_reserve` overnight recovery
+
+Это **отдельная задача** в TODO (экосистема/интеграции, deferred). Не
+ломает текущую архитектуру — добавляется как ещё один `mode` в
+`hrv_manager.start(mode="apple_watch")`.
+
+## Push vs Pull синхронизация
+
+С активити-зонами выяснилась важная тонкость: до периодического push'а
+`UserState.hrv_*` обновлялся **только** при явном вызове `/hrv/metrics`
+endpoint (pull). Если UI не поллит — UserState устаревает, zone-alerts
+и sync_regime считаются на старом coherence.
+
+**Сейчас:** `CognitiveLoop._check_hrv_push()` каждые 15с пушит свежий
+baddle_state из hrv_manager в UserState. Это гарантирует что
+`activity_zone`, `named_state`, `sync_regime` согласованы с реальным
+телом ±15 секунд, независимо от UI-активности.
 
 HRV (вариабельность сердечного ритма) — самый доступный физиологический сигнал, который отражает баланс симпатика/парасимпатика, когерентность дыхания и сердца, уровень восстановления. Polar H10 через BLE даёт RR-интервалы в реальном времени.
 

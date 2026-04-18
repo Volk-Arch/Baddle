@@ -894,6 +894,21 @@ function _updateNeurochemPanel(metrics) {
     namedEl.title = ns.advice || ns.key;
   }
 
+  // Activity zone badge (HRV × activity — 4 зоны)
+  const zoneEl = document.getElementById('neuro-activity-zone');
+  if (zoneEl) {
+    const az = metrics.user_state?.activity_zone;
+    if (az && az.key) {
+      zoneEl.style.display = 'inline-block';
+      zoneEl.textContent = `${az.emoji || ''} ${(az.label || az.key).toLowerCase()}`;
+      zoneEl.title = az.advice || az.key;
+      zoneEl.className = 'neuro-zone-badge zone-' + az.key;
+    } else {
+      // HRV не запущен или нет зоны — прячем badge
+      zoneEl.style.display = 'none';
+    }
+  }
+
   // Camera mode badge + button
   const camBadge = document.getElementById('neuro-camera');
   const camBtn = document.getElementById('neuro-camera-btn');
@@ -1658,14 +1673,18 @@ async function assistHRVPoll() {
 async function assistHRVSimSliders() {
   const hrEl = document.getElementById('sim-hr');
   const cohEl = document.getElementById('sim-coherence');
+  const actEl = document.getElementById('sim-activity');
   if (!hrEl || !cohEl) return;
-  const hr = parseFloat(hrEl.value);
-  const coherence = parseFloat(cohEl.value);
+  const body = {
+    hr: parseFloat(hrEl.value),
+    coherence: parseFloat(cohEl.value),
+  };
+  if (actEl) body.activity = parseFloat(actEl.value);
   try {
     await fetch('/hrv/simulate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ hr: hr, coherence: coherence })
+      body: JSON.stringify(body),
     });
   } catch(e) {}
 }

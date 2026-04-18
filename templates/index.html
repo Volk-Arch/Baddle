@@ -214,6 +214,7 @@
         <span id="neuro-action" class="neuro-action-badge" title="Последнее действие системы" style="display:none">—</span>
         <span id="neuro-origin" class="neuro-origin-badge" title="Внутренний тонус: покой или напряжение (state_origin)">◌ покой</span>
         <span id="neuro-user-named" class="neuro-named-badge" title="Ближайшее named-состояние пользователя (Voronoi)">😐 нейтральное</span>
+        <span id="neuro-activity-zone" class="neuro-zone-badge" style="display:none" title="Activity zone (HRV × движение): recovery / stress в покое / healthy load / overload"></span>
         <span id="neuro-camera" class="neuro-camera-badge" style="display:none" title="Camera: сенсорная депривация, без LLM">📷 медитация</span>
         <span style="flex:1"></span>
         <button onclick="assistToggleCamera()" id="neuro-camera-btn" class="neuro-toggle-btn" title="Медитация (без LLM, только distinct между существующими нодами)">📷</button>
@@ -302,6 +303,7 @@
       <div class="assist-sim-controls">
         <label>HR <input id="sim-hr" type="range" min="50" max="120" value="70" oninput="assistHRVSimSliders()"></label>
         <label>Coherence <input id="sim-coherence" type="range" min="0" max="1" step="0.05" value="0.7" oninput="assistHRVSimSliders()"></label>
+        <label title="Activity magnitude: 0=лежишь · 1=ходьба · 2+=бег. Дает физический контекст 4-зоны (recovery/overload/...)">Activity <input id="sim-activity" type="range" min="0" max="3" step="0.1" value="0" oninput="assistHRVSimSliders()"></label>
         <button onclick="assistHRVStart('simulator')">Restart</button>
       </div>
     </details>

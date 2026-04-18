@@ -700,6 +700,22 @@ select {
   border: 1px solid #166534;
 }
 
+/* Activity zone badge (4 зоны HRV × accelerometer) */
+.neuro-zone-badge {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  background: #1e293b;
+  color: #94a3b8;
+  border: 1px solid #334155;
+}
+.neuro-zone-badge.zone-recovery     { background: #14532d; color: #bbf7d0; border-color: #166534; }
+.neuro-zone-badge.zone-healthy_load { background: #1e3a8a; color: #bfdbfe; border-color: #1d4ed8; }
+.neuro-zone-badge.zone-stress_rest  { background: #78350f; color: #fed7aa; border-color: #b45309; }
+.neuro-zone-badge.zone-overload     { background: #7f1d1d; color: #fecaca; border-color: #b91c1c; }
+
 /* Sync-dashboard */
 .sync-dashboard {
   background: #0c0a12;
