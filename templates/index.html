@@ -221,6 +221,8 @@
         <button onclick="assistToggleSyncDash()" id="neuro-sync-btn" class="neuro-toggle-btn" title="Sync-dashboard — график sync_error + топ ошибки">📊</button>
         <button onclick="assistWeeklyReview()" id="neuro-weekly-btn" class="neuro-toggle-btn" title="Weekly review — графики по неделе">📆</button>
         <button onclick="assistToggleTimeline()" id="neuro-timeline-btn" class="neuro-toggle-btn" title="Хронология — последние 20 действий системы">⏱</button>
+        <button onclick="profileOpen()" id="profile-btn" class="neuro-toggle-btn" title="Профиль — preferences и constraints по категориям">👤</button>
+        <button onclick="goalsOpen()" id="goals-btn" class="neuro-toggle-btn" title="Цели — open/done/archived + статистика">🎯</button>
       </div>
 
       <!-- Sync-dashboard: график sync_error + top rejected modes -->
@@ -236,6 +238,38 @@
           Timeline <span id="neuro-timeline-count">0</span> actions
         </div>
         <div id="neuro-timeline-list" class="neuro-timeline-list"></div>
+      </div>
+    </div>
+
+    <!-- Profile modal (👤) — preferences + constraints per category -->
+    <div id="profile-modal" class="weekly-modal" style="display:none" onclick="profileClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Профиль <button class="weekly-close" onclick="profileClose()">×</button>
+        </div>
+        <div class="weekly-summary">
+          Preferences и constraints по категориям. Система подтягивает их
+          в LLM-промпты когда видит релевантную тему.
+        </div>
+        <div id="profile-body"></div>
+      </div>
+    </div>
+
+    <!-- Goals modal (🎯) — open/done/abandoned + stats -->
+    <div id="goals-modal" class="weekly-modal" style="display:none" onclick="goalsClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Цели <button class="weekly-close" onclick="goalsClose()">×</button>
+        </div>
+        <div id="goals-stats" class="weekly-summary"></div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Открытые</div>
+          <div id="goals-open" class="goals-list"></div>
+        </div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Завершённые / архив решений</div>
+          <div id="goals-solved" class="goals-list"></div>
+        </div>
       </div>
     </div>
 

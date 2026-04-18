@@ -251,10 +251,30 @@ def graph_add():
     if node_type == "goal":
         # Store only mode_id — Horizon preset handles behavior (no primitive switches)
         from .modes import get_mode
+        from .goals_store import add_goal
+        from .workspace import get_workspace_manager
         mode_id = d.get("mode", "horizon")
         mode_cfg = get_mode(mode_id)
         nodes[new_idx]["mode"] = mode_id
         _graph["meta"]["mode"] = mode_id
+
+        # Persistent goal lifecycle: регистрируем в goals_store
+        try:
+            ws_id = get_workspace_manager().active_id or "main"
+        except Exception:
+            ws_id = "main"
+        try:
+            goal_id = add_goal(
+                text=text,
+                mode=mode_id,
+                workspace=ws_id,
+                priority=d.get("priority"),
+                deadline=d.get("deadline"),
+                category=d.get("category"),
+            )
+            nodes[new_idx]["goal_id"] = goal_id  # связь node ↔ persistent record
+        except Exception as e:
+            print(f"[goal/add] goals_store persist failed: {e}")
 
         # Parse subgoals from multiline text for multi-goal modes
         subgoal_indices = []

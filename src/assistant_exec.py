@@ -442,7 +442,8 @@ def _render_card(renderer: str, ideas: list, zones: dict, lang: str,
     }
 
 
-def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") -> Dict:
+def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon",
+                      profile_hint: str = "") -> Dict:
     """Единый путь для всех 14 режимов.
 
     Алгоритм:
@@ -450,6 +451,10 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
       2. Distinct-matrix → зоны CONFIRM / EXPLORE / CONFLICT
       3. `_resolve_renderer(style, zones)` → выбор финального рендерера
       4. `_render_card(renderer, ideas, zones, lang)` → карточка
+
+    profile_hint — preferences/constraints из user_profile в текущей
+    категории (food/work/health/...). Инжектится в brainstorm-промпт
+    чтобы LLM не предлагал неподходящее.
 
     Specials (rhythm, bayes) не проходят сюда — они диспатчатся в execute().
     """
@@ -467,6 +472,12 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
 
     n_ideas = 3 if mode_id == "vector" else MAX_IDEAS
     system = _p(lang, "think")
+    if profile_hint:
+        system = system + "\n" + profile_hint + (
+            "\nУчитывай эти предпочтения и ограничения в ответе."
+            if lang == "ru" else
+            "\nTake these preferences and constraints into account."
+        )
     user_prompt = (f"{_p(lang, 'topic')}: {message}\n"
                    f"Сгенерируй {n_ideas} разных идей/аспектов. Одна идея = одна строка. Без нумерации."
                    if lang == "ru" else
@@ -500,13 +511,17 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon") 
 
 # ═══ Dispatcher ═════════════════════════════════════════════════════
 
-def execute(mode_id: str, message: str, lang: str = "ru") -> Dict:
+def execute(mode_id: str, message: str, lang: str = "ru",
+            profile_hint: str = "") -> Dict:
     """Единый dispatcher. Все режимы → execute_via_zones кроме двух specials.
 
     Specials остались как pre-hooks потому что они трогают внешнее состояние
     (habit history в user_state.json) или имеют уникальный multi-step flow
     (bayes: prior → observations → posterior). Для этих двух renderer-dispatch
     нерелевантен — у них собственная логика.
+
+    profile_hint — user_profile summary в релевантной категории;
+    прокидывается в execute_via_zones. Specials его игнорируют.
     """
     try:
         # Specials: external state or unique flow
@@ -515,7 +530,7 @@ def execute(mode_id: str, message: str, lang: str = "ru") -> Dict:
         if mode_id == "bayes":
             return execute_bayes(message, lang)
         # Everything else: один путь через зоны + style preset
-        return execute_via_zones(message, lang, mode_id)
+        return execute_via_zones(message, lang, mode_id, profile_hint=profile_hint)
     except Exception as e:
         log.warning(f"[assist_exec] {mode_id} failed: {e}")
         return {

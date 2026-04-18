@@ -222,6 +222,18 @@ function assistRenderCard(card) {
         <div style="font-size:11px;color:#a1a1aa;margin-top:8px;">Ответь — я пойму что ты имел в виду.</div>
       </div>`;
   }
+  else if (card.type === 'profile_clarify') {
+    const origAttr = (card.original_message || '').replace(/"/g, '&quot;');
+    wrapper.innerHTML = `
+      <div class="card-profile-clarify" data-category="${_esc(card.category || '')}" data-original="${origAttr}">
+        <div class="pc-q">👤 ${_esc(card.question)}</div>
+        <textarea placeholder="например: не ем орехи, люблю курицу"></textarea>
+        <div class="pc-actions">
+          <button class="secondary" onclick="profileClarifyDismiss(this.closest('.card-profile-clarify'))">Пропустить</button>
+          <button class="primary" onclick="profileClarifySubmit(this.closest('.card-profile-clarify'))">Сохранить</button>
+        </div>
+      </div>`;
+  }
   else if (card.type === 'habit') {
     wrapper.innerHTML = `
       <div style="padding:14px;background:#1f1f23;border-radius:14px;display:flex;align-items:center;gap:16px;">
@@ -1083,6 +1095,194 @@ function _renderWeeklyStreaks(streaks) {
       <span class="weekly-bar-value">${days}d</span>
     </div>`;
   }).join('');
+}
+
+// ── Profile modal ────────────────────────────────────────────────────
+
+async function profileOpen() {
+  document.getElementById('profile-modal').style.display = 'flex';
+  await _refreshProfile();
+}
+
+function profileClose(ev) {
+  if (ev && ev.target.closest('.weekly-content') && !ev.target.classList.contains('weekly-close')) return;
+  document.getElementById('profile-modal').style.display = 'none';
+}
+
+async function _refreshProfile() {
+  try {
+    const r = await fetch('/profile');
+    const d = await r.json();
+    const body = document.getElementById('profile-body');
+    if (!body) return;
+    const profile = d.profile || {};
+    const cats = d.categories || [];
+    const labels = d.labels_ru || {};
+    body.innerHTML = cats.map(cat => {
+      const entry = (profile.categories || {})[cat] || {preferences:[], constraints:[]};
+      const prefs = entry.preferences || [];
+      const cons = entry.constraints || [];
+      const prefChips = prefs.map(t => `<span class="profile-chip pref">${_esc(t)}<button class="remove" onclick="profileRemove('${cat}','preferences',${JSON.stringify(t).replace(/'/g,"\\'").replace(/"/g,'&quot;')})">×</button></span>`).join('');
+      const consChips = cons.map(t => `<span class="profile-chip constraint">${_esc(t)}<button class="remove" onclick="profileRemove('${cat}','constraints',${JSON.stringify(t).replace(/'/g,"\\'").replace(/"/g,'&quot;')})">×</button></span>`).join('');
+      return `<div class="profile-category">
+        <div class="profile-cat-title">${_esc(labels[cat] || cat)}</div>
+        <div class="profile-kind">
+          <div class="profile-kind-label">Нравится</div>
+          <div class="profile-items" id="profile-pref-${cat}">${prefChips || '<span style="color:#52525b;font-size:10px">пусто</span>'}</div>
+          <div class="profile-add">
+            <input type="text" id="profile-input-pref-${cat}" placeholder="добавить что любишь">
+            <button onclick="profileAdd('${cat}','preferences')">+</button>
+          </div>
+        </div>
+        <div class="profile-kind">
+          <div class="profile-kind-label">Избегаю</div>
+          <div class="profile-items" id="profile-cons-${cat}">${consChips || '<span style="color:#52525b;font-size:10px">пусто</span>'}</div>
+          <div class="profile-add">
+            <input type="text" id="profile-input-cons-${cat}" placeholder="добавить ограничение">
+            <button onclick="profileAdd('${cat}','constraints')">+</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) { console.warn('[profile] load failed:', e); }
+}
+
+async function profileAdd(cat, kind) {
+  const inputId = kind === 'preferences' ? `profile-input-pref-${cat}` : `profile-input-cons-${cat}`;
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    await fetch('/profile/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({category: cat, kind, text}),
+    });
+    input.value = '';
+    await _refreshProfile();
+  } catch(e) { console.warn('[profile] add failed:', e); }
+}
+
+async function profileRemove(cat, kind, text) {
+  try {
+    await fetch('/profile/remove', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({category: cat, kind, text}),
+    });
+    await _refreshProfile();
+  } catch(e) { console.warn('[profile] remove failed:', e); }
+}
+
+// ── Goals modal ──────────────────────────────────────────────────────
+
+async function goalsOpen() {
+  document.getElementById('goals-modal').style.display = 'flex';
+  await _refreshGoals();
+}
+
+function goalsClose(ev) {
+  if (ev && ev.target.closest('.weekly-content') && !ev.target.classList.contains('weekly-close')) return;
+  document.getElementById('goals-modal').style.display = 'none';
+}
+
+async function _refreshGoals() {
+  try {
+    const [openR, solvedR, statsR] = await Promise.all([
+      fetch('/goals?status=open').then(r => r.json()),
+      fetch('/goals/solved').then(r => r.json()),
+      fetch('/goals/stats').then(r => r.json()),
+    ]);
+    const statsEl = document.getElementById('goals-stats');
+    if (statsEl) {
+      statsEl.innerHTML = `Всего: <b>${statsR.total || 0}</b> · открыто: <b>${statsR.open || 0}</b> · завершено: <b>${statsR.done || 0}</b> · заброшено: <b>${statsR.abandoned || 0}</b> · completion-rate: <b>${((statsR.completion_rate || 0) * 100).toFixed(0)}%</b>` +
+        (statsR.avg_time_to_done_h != null ? ` · avg time: <b>${statsR.avg_time_to_done_h}ч</b>` : '');
+    }
+    const openEl = document.getElementById('goals-open');
+    if (openEl) {
+      const items = openR.goals || [];
+      openEl.innerHTML = items.length ? items.map(g => {
+        const date = g.created_at ? new Date(g.created_at * 1000).toLocaleDateString() : '';
+        return `<div class="goals-row status-open">
+          <span class="goal-status"></span>
+          <span class="goal-text" title="${_esc(g.text)}">${_esc(g.text)}</span>
+          <span class="goal-meta">${_esc(g.mode || '?')} · ${_esc(g.workspace || 'main')} · ${date}</span>
+          <span class="goal-actions">
+            <button onclick="goalComplete('${g.id}')">✓</button>
+            <button onclick="goalAbandon('${g.id}')">×</button>
+          </span>
+        </div>`;
+      }).join('') : '<div style="color:#52525b;font-size:10px">нет открытых целей</div>';
+    }
+    const solvedEl = document.getElementById('goals-solved');
+    if (solvedEl) {
+      const items = solvedR.solved || [];
+      solvedEl.innerHTML = items.length ? items.slice(0, 15).map(s => {
+        const date = s.archived_at ? new Date(s.archived_at * 1000).toLocaleDateString() : '';
+        return `<div class="goals-row status-done" title="${_esc(s.reason || '')}">
+          <span class="goal-status"></span>
+          <span class="goal-text">${_esc(s.goal_text || s.snapshot_ref)}</span>
+          <span class="goal-meta">${s.nodes_count || 0} нод · ${date}</span>
+        </div>`;
+      }).join('') : '<div style="color:#52525b;font-size:10px">архив пуст</div>';
+    }
+  } catch(e) { console.warn('[goals] load failed:', e); }
+}
+
+async function goalComplete(id) {
+  try {
+    await fetch('/goals/complete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id, reason: 'manually marked'}),
+    });
+    await _refreshGoals();
+  } catch(e) { console.warn('[goals] complete failed:', e); }
+}
+
+async function goalAbandon(id) {
+  if (!confirm('Отметить цель как заброшенную?')) return;
+  try {
+    await fetch('/goals/abandon', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id, reason: 'manually abandoned'}),
+    });
+    await _refreshGoals();
+  } catch(e) { console.warn('[goals] abandon failed:', e); }
+}
+
+// ── Profile-clarify card handler (when /assist returns profile_clarify) ──
+
+async function profileClarifySubmit(cardEl) {
+  const ta = cardEl.querySelector('textarea');
+  const answer = (ta && ta.value || '').trim();
+  if (!answer) return;
+  const category = cardEl.dataset.category;
+  const originalMsg = cardEl.dataset.original || '';
+  const btn = cardEl.querySelector('button.primary');
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    const r = await fetch('/profile/learn', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({category, answer, original_message: originalMsg, lang: 'ru'}),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    // Показываем what was saved + авто-ретраим original message
+    cardEl.innerHTML = `<div class="pc-q">✓ Запомнил: ${(d.added.preferences || []).length} предпочтений, ${(d.added.constraints || []).length} ограничений. Повторяю запрос...</div>`;
+    // Повторный assist с тем же message (теперь profile не пустой)
+    if (originalMsg) {
+      setTimeout(() => {
+        const inp = document.getElementById('assist-input');
+        if (inp) { inp.value = originalMsg; assistSend(); }
+      }, 400);
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Сохранить'; }
+    console.warn('[profile] learn failed:', e);
+  }
+}
+
+function profileClarifyDismiss(cardEl) {
+  cardEl.innerHTML = '<div class="pc-q" style="color:#71717a">Пропущено. Можешь заполнить профиль вручную 👤</div>';
 }
 
 // ── Meta-graph overlay (SVG circular layout) ─────────────────────────

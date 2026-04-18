@@ -185,6 +185,29 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                 get_global_state().note_verified()
             except Exception as e:
                 log.debug(f"[tick-nand] maturity note on stop failed: {e}")
+
+            # Persistent goal lifecycle: archive snapshot + complete_goal().
+            # Hook срабатывает один раз на goal — маркируем через _goal_completed
+            # чтобы повторный tick на том же состоянии не дублировал архив.
+            try:
+                if not goal_node.get("_goal_completed"):
+                    from .goals_store import complete_goal
+                    from .solved_archive import archive_solved
+                    gid = goal_node.get("goal_id")
+                    if gid:
+                        snapshot_ref = archive_solved(
+                            goal_id=gid,
+                            goal_text=goal_node.get("text", ""),
+                            workspace=graph.get("meta", {}).get("workspace", "main"),
+                            reason=stop["reason"],
+                        )
+                        complete_goal(gid, reason=stop["reason"],
+                                      snapshot_ref=snapshot_ref)
+                        goal_node["_goal_completed"] = True
+                        goal_node["_snapshot_ref"] = snapshot_ref
+            except Exception as e:
+                log.debug(f"[tick-nand] goal archive failed: {e}")
+
             return _emit({
                 "action": "stable", "phase": "synthesize",
                 "reason": f"GOAL REACHED: {stop['reason']}",

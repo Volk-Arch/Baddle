@@ -65,6 +65,74 @@
 Формат каждого блока: **что делает** → **как проверить** → **на что влияет** →
 **красный флаг если сломано**.
 
+## Static storage — Profile / Goals / Archive + uncertainty-learning
+
+**Что.** До этого Baddle была только динамикой (tick, sync, neurochem).
+Статики — «кто юзер, что решает, как решал раньше» — не было; всё жило
+в эфемерных нодах графа и умирало при reset. Этот блок закрывает gap.
+
+**Три хранилища:**
+1. **User Profile** ([src/user_profile.py](src/user_profile.py),
+   `user_profile.json`) — 5 категорий (food/work/health/social/learning)
+   × {preferences, constraints} + context (profession/wake/sleep/tz).
+2. **Goals Store** ([src/goals_store.py](src/goals_store.py),
+   `goals.jsonl` append-only) — events: create/complete/abandon/update.
+   Replay → current state + stats (completion_rate, avg_time, by_mode/category).
+3. **Solved Archive** ([src/solved_archive.py](src/solved_archive.py),
+   `solved/{ref}.json`) — snapshot графа + state_trace + final_synthesis
+   при goal-resolved. Полный replay «как решалась задача».
+
+**Замкнутый цикл (profile-aware flow):**
+```
+message → _detect_category (keyword)
+  ├─ category NONE или profile пуст → profile_clarify card
+  │       юзер отвечает → parse_category_answer (LLM) → add_item → auto-retry
+  └─ profile_hint = summary(category) → classify_intent_llm(...hint)
+                                     → execute_via_zones(..., hint)
+                                     → LLM генерирует учитывая constraints
+```
+
+**Lifecycle hooks:**
+- `/graph/add {node_type:"goal"}` → `goals_store.add_goal()`, `goal_id` на ноде
+- `tick_nand` STOP CHECK → `archive_solved()` + `complete_goal(snapshot_ref)`,
+  `_goal_completed` flag на ноде чтобы не дублировать
+
+**Endpoints:**
+```
+GET/POST /profile, /profile/add, /profile/remove, /profile/context, /profile/learn
+GET /goals?status=open&category=food&workspace=main
+POST /goals/add, /goals/complete, /goals/abandon, /goals/update
+GET /goals/stats
+GET /goals/solved, /goals/solved/{ref}
+```
+
+**UI:** 👤 Profile modal + 🎯 Goals modal + `profile_clarify` in-chat card
+(textarea + Save/Skip + auto-retry original message).
+
+Details → [docs/static-storage-design.md](docs/static-storage-design.md).
+
+**Проверка.**
+```
+1. Fresh: GET /profile → все 5 категорий пустые
+2. /assist {message:"хочу покушать"} → profile_clarify card
+3. User: "не ем орехи, люблю курицу" → /profile/learn → profile updated
+4. Auto-retry → 3 варианта блюд учитывая constraints
+5. /graph/add {node_type:goal, ...} → GET /goals/open → появилась
+6. tick до goal-resolved → GET /goals/solved → snapshot в архиве
+```
+
+**Влияет на:** замыкание daily-use цикла. Juzer перестаёт повторять одно
+и то же каждый раз. Goals aggregate в статистику. Прошлые решения можно
+открыть и увидеть как думал.
+
+**Красный флаг.**
+- profile_clarify не всплывает при пустой food-категории → `_detect_category`
+  не матчит keyword (добавь ключевое слово в `_CATEGORY_KEYWORDS`).
+- goal completed но нет записи в /goals/solved → `_goal_completed` flag
+  не установлен, либо archive_solved упал (check logs).
+- Profile modal не закрывается → CSS `.weekly-modal {display: flex !important}`
+  переопределяет inline style none. Поправлено селектором `[style*="flex"]`.
+
 ## UI-батч: sparkline + sync-dash + weekly + timeline + meta-graph
 
 **Что.** Пять UI-фич одним ходом, все на чистом inline SVG без Chart.js.

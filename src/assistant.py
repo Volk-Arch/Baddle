@@ -43,6 +43,36 @@ def _decision_cost(mode_id: str) -> int:
     """Стоимость решения в daily energy единицах по mode_id."""
     return _MODE_COST.get(mode_id, _DEFAULT_COST)
 
+
+# ── Category detection (lightweight keyword-first) ─────────────────────
+# Категория используется для инжекции profile.preferences/constraints
+# в LLM-промпты. Keyword match — быстрый фолбэк, можно расширить LLM-classify.
+
+_CATEGORY_KEYWORDS = {
+    "food": ("еда", "кушать", "поесть", "завтрак", "обед", "ужин", "блюдо",
+             "готовить", "food", "meal", "eat", "breakfast", "lunch", "dinner"),
+    "work": ("работа", "работе", "проект", "дедлайн", "задач", "встреч", "код",
+             "митинг", "work", "project", "meeting", "deadline", "code"),
+    "health": ("здоровье", "здоров", "сон", "тренировк", "зарядк", "спорт",
+               "устал", "бег", "health", "sleep", "exercise", "gym", "tired"),
+    "social": ("друг", "семь", "подруг", "партнёр", "родител", "дети",
+               "friend", "family", "partner", "parent"),
+    "learning": ("учит", "курс", "книг", "статью", "изучит", "выучить",
+                 "study", "book", "learn", "course", "article"),
+}
+
+
+def _detect_category(message: str) -> Optional[str]:
+    """Keyword-based category detection. Returns None если ничего не подошло."""
+    if not message:
+        return None
+    lower = message.lower()
+    for cat, kws in _CATEGORY_KEYWORDS.items():
+        for kw in kws:
+            if kw in lower:
+                return cat
+    return None
+
 assistant_bp = Blueprint("assistant", __name__)
 
 
@@ -275,7 +305,7 @@ _MODE_DESCRIPTIONS_RU = """
 """
 
 def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
-                        lang: str = "ru") -> dict:
+                        profile_hint: str = "", lang: str = "ru") -> dict:
     """Один LLM-вызов: mode + intent + confidence. Заменяет detect_mode+detect_intent.
 
     LLM получает:
@@ -283,6 +313,9 @@ def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
       - краткий контекст (последние turns, опционально)
       - state_hint (текущее состояние CognitiveState — если система устала,
         юзер давно молчит, sync_error растёт — это влияет на интерпретацию)
+      - profile_hint (preferences/constraints из user_profile в релевантной
+        категории — влияет на mode-selection, напр. «не ем орехи» может
+        склонить к tournament вместо fan)
 
     Возвращает:
       {
@@ -333,6 +366,8 @@ def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
         user += f"\nКонтекст: {context[:200]}"
     if state_hint:
         user += f"\nСостояние системы: {state_hint}"
+    if profile_hint:
+        user += f"\n{profile_hint[:300]}"
 
     try:
         result, _ = _graph_generate(
@@ -433,6 +468,14 @@ def assist():
                   f"S={neuro.get('serotonin', 0):.2f} "
                   f"burnout={neuro.get('burnout', 0):.2f}")
 
+    # Profile-aware: detect category → pull profile constraints/preferences
+    from .user_profile import profile_summary_for_prompt, is_category_empty, load_profile
+    detected_category = _detect_category(message)
+    _user_profile = load_profile()
+    profile_hint = (profile_summary_for_prompt([detected_category], lang=lang,
+                                                profile=_user_profile)
+                    if detected_category else "")
+
     # Recent context from state_graph (last 3 user-initiated actions)
     context_parts = []
     try:
@@ -446,7 +489,8 @@ def assist():
     context = " | ".join(context_parts)
 
     # ── ONE LLM call: mode + intent + confidence ──
-    classification = classify_intent_llm(message, context=context, state_hint=state_hint, lang=lang)
+    classification = classify_intent_llm(message, context=context, state_hint=state_hint,
+                                         profile_hint=profile_hint, lang=lang)
     mode_id = classification.get("mode", "free")
     intent = classification.get("intent", "direct")
     confidence = classification.get("confidence", 0.5)
@@ -465,6 +509,49 @@ def assist():
             "type": "low_coherence",
             "text": "Coherence падает — может стоит сделать паузу." if lang == "ru"
                     else "Coherence dropping — consider a break.",
+        })
+
+    # Uncertainty-driven profile learning:
+    # Если категория распознана, но в профиле по ней пусто — сначала спросим
+    # предпочтения/ограничения и **сохраним в profile**, чтобы следующий раз
+    # не переспрашивать. Это замыкает цикл: state + profile + goals + info.
+    if (detected_category and is_category_empty(detected_category, _user_profile)
+            and intent != "ambiguous"):
+        from .user_profile import CATEGORY_LABELS_RU
+        label = (CATEGORY_LABELS_RU.get(detected_category, detected_category)
+                 if lang == "ru" else detected_category)
+        if lang == "ru":
+            q = (f"Чтобы помочь лучше, мне нужно знать твои предпочтения и "
+                 f"ограничения в категории «{label}». Расскажи кратко: что "
+                 f"любишь, чего избегаешь?")
+        else:
+            q = (f"To help better I need to know your preferences and "
+                 f"constraints for «{label}». Briefly: what do you like, "
+                 f"what do you avoid?")
+        _log_decision(state, kind="profile_ask",
+                      meta={"category": detected_category, "mode": mode_id,
+                            "message": message[:200]},
+                      mode_id="free",
+                      hrv_recovery=(hrv_state or {}).get("energy_recovery"))
+        _save_state(state)
+        return jsonify({
+            "text": q, "intro": q, "mode": mode_id,
+            "mode_name": "уточнение профиля" if lang == "ru" else "profile clarify",
+            "message_echo": message,
+            "cards": [{
+                "type": "profile_clarify",
+                "question": q,
+                "category": detected_category,
+                "original_message": message,
+            }],
+            "steps": [f"Категория «{detected_category}» в профиле пустая — спрашиваю"
+                      if lang == "ru"
+                      else f"Profile for '{detected_category}' empty — asking"],
+            "energy": energy, "hrv": hrv_state, "warnings": warnings,
+            "awaiting_input": True, "graph_updated": False,
+            "lang": lang, "intent": intent, "confidence": confidence,
+            "profile_category": detected_category,
+            "classify_source": classification.get("source"),
         })
 
     # Ambiguous → задать clarifying question вместо полноценного execute
@@ -508,8 +595,8 @@ def assist():
             "classify_source": classification.get("source"),
         })
 
-    # ── Actually execute the mode ──
-    exec_result = execute_mode(mode_id, message, lang)
+    # ── Actually execute the mode (profile_hint injects constraints) ──
+    exec_result = execute_mode(mode_id, message, lang, profile_hint=profile_hint)
     response_text = exec_result.get("text") or response["intro"]
     cards = exec_result.get("cards", [])
     steps = exec_result.get("steps", [])
@@ -791,6 +878,173 @@ def assist_named_states():
     """UI map: 10 регионов из MindBalance-Voronoi с координатами и advice."""
     from .user_state_map import list_named_states
     return jsonify({"states": list_named_states()})
+
+
+# ── User Profile endpoints ─────────────────────────────────────────────
+
+@assistant_bp.route("/profile", methods=["GET"])
+def profile_get():
+    """Return full user profile."""
+    from .user_profile import load_profile, CATEGORIES, CATEGORY_LABELS_RU
+    return jsonify({
+        "profile": load_profile(),
+        "categories": list(CATEGORIES),
+        "labels_ru": CATEGORY_LABELS_RU,
+    })
+
+
+@assistant_bp.route("/profile/add", methods=["POST"])
+def profile_add():
+    """Body: {category, kind: preferences|constraints, text}"""
+    from .user_profile import add_item
+    d = request.get_json(force=True) or {}
+    try:
+        p = add_item(d.get("category", ""), d.get("kind", ""), d.get("text", ""))
+        return jsonify({"ok": True, "profile": p})
+    except ValueError as e:
+        return jsonify({"error": str(e)})
+
+
+@assistant_bp.route("/profile/remove", methods=["POST"])
+def profile_remove():
+    """Body: {category, kind, text}"""
+    from .user_profile import remove_item
+    d = request.get_json(force=True) or {}
+    p = remove_item(d.get("category", ""), d.get("kind", ""), d.get("text", ""))
+    return jsonify({"ok": True, "profile": p})
+
+
+@assistant_bp.route("/profile/context", methods=["POST"])
+def profile_context():
+    """Body: {key, value} для свободного context-поля."""
+    from .user_profile import set_context
+    d = request.get_json(force=True) or {}
+    p = set_context(d.get("key", ""), d.get("value"))
+    return jsonify({"ok": True, "profile": p})
+
+
+@assistant_bp.route("/profile/learn", methods=["POST"])
+def profile_learn():
+    """Uncertainty-learning: LLM-разбор ответа юзера на profile_clarify-вопрос.
+
+    Body: { "category": "food", "answer": "не ем орехи, люблю курицу",
+            "original_message": "хочу покушать", "lang": "ru" }
+
+    Парсит answer на preferences/constraints, сохраняет в profile[category].
+    Возвращает добавленные items + сохраняет в profile автоматически.
+    """
+    from .user_profile import parse_category_answer, add_item, CATEGORIES
+    d = request.get_json(force=True) or {}
+    cat = d.get("category")
+    answer = (d.get("answer") or "").strip()
+    lang = d.get("lang", "ru")
+    if cat not in CATEGORIES:
+        return jsonify({"error": f"unknown category: {cat}"})
+    if not answer:
+        return jsonify({"error": "empty answer"})
+
+    parsed = parse_category_answer(answer, cat, lang=lang)
+    for text in parsed.get("preferences", []):
+        add_item(cat, "preferences", text)
+    for text in parsed.get("constraints", []):
+        add_item(cat, "constraints", text)
+
+    return jsonify({
+        "ok": True,
+        "category": cat,
+        "added": parsed,
+        "original_message": d.get("original_message", ""),
+    })
+
+
+# ── Goals store endpoints ──────────────────────────────────────────────
+
+@assistant_bp.route("/goals", methods=["GET"])
+def goals_list():
+    """Query: ?status=open|done|abandoned &workspace=X &category=Y &limit=N"""
+    from .goals_store import list_goals
+    status = request.args.get("status")
+    ws = request.args.get("workspace")
+    cat = request.args.get("category")
+    try:
+        limit = int(request.args.get("limit", 100))
+    except ValueError:
+        limit = 100
+    return jsonify({"goals": list_goals(status=status, workspace=ws,
+                                        category=cat, limit=limit)})
+
+
+@assistant_bp.route("/goals/stats", methods=["GET"])
+def goals_stats():
+    from .goals_store import goal_stats
+    return jsonify(goal_stats())
+
+
+@assistant_bp.route("/goals/add", methods=["POST"])
+def goals_add():
+    """Manual add (obычно создаётся автоматом из /graph/add node_type=goal).
+
+    Body: {text, mode, workspace, priority, deadline, category}
+    """
+    from .goals_store import add_goal
+    d = request.get_json(force=True) or {}
+    gid = add_goal(
+        text=d.get("text", ""),
+        mode=d.get("mode", "horizon"),
+        workspace=d.get("workspace", "main"),
+        priority=d.get("priority"),
+        deadline=d.get("deadline"),
+        category=d.get("category"),
+    )
+    return jsonify({"ok": True, "id": gid})
+
+
+@assistant_bp.route("/goals/complete", methods=["POST"])
+def goals_complete():
+    """Body: {id, reason}"""
+    from .goals_store import complete_goal
+    d = request.get_json(force=True) or {}
+    complete_goal(d.get("id", ""), reason=d.get("reason", ""))
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/goals/abandon", methods=["POST"])
+def goals_abandon():
+    """Body: {id, reason}"""
+    from .goals_store import abandon_goal
+    d = request.get_json(force=True) or {}
+    abandon_goal(d.get("id", ""), reason=d.get("reason", ""))
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/goals/update", methods=["POST"])
+def goals_update():
+    """Body: {id, fields: {priority, deadline, category, ...}}"""
+    from .goals_store import update_goal
+    d = request.get_json(force=True) or {}
+    update_goal(d.get("id", ""), d.get("fields") or {})
+    return jsonify({"ok": True})
+
+
+# ── Solved tasks archive ──────────────────────────────────────────────
+
+@assistant_bp.route("/goals/solved", methods=["GET"])
+def goals_solved_list():
+    from .solved_archive import list_solved
+    try:
+        limit = int(request.args.get("limit", 50))
+    except ValueError:
+        limit = 50
+    return jsonify({"solved": list_solved(limit=limit)})
+
+
+@assistant_bp.route("/goals/solved/<snapshot_ref>", methods=["GET"])
+def goals_solved_get(snapshot_ref):
+    from .solved_archive import load_solved
+    data = load_solved(snapshot_ref)
+    if not data:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify(data)
 
 
 @assistant_bp.route("/graph/assist", methods=["POST"])

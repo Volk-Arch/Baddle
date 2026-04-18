@@ -1,0 +1,30 @@
+{
+  "categories": {
+    "food": {
+      "preferences": [
+        "здоровое питание"
+      ],
+      "constraints": [
+        "не ем орехи"
+      ]
+    },
+    "work": {
+      "preferences": [],
+      "constraints": []
+    },
+    "health": {
+      "preferences": [],
+      "constraints": []
+    },
+    "social": {
+      "preferences": [],
+      "constraints": []
+    },
+    "learning": {
+      "preferences": [],
+      "constraints": []
+    }
+  },
+  "context": {},
+  "updated_at": 1776503844.9637504
+}
