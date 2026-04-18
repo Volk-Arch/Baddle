@@ -825,6 +825,28 @@ function _updateNeurochemPanel(metrics) {
   setBar('neuro-da-fill',   'neuro-da-val',   dopamine);
   setBar('neuro-burn-fill', 'neuro-burn-val', burnout, true);
 
+  // User-side (symbiosis mirror) — same bars, different source
+  const user = metrics.user_state || {};
+  setBar('user-da-fill',   'user-da-val',   user.dopamine || 0);
+  setBar('user-s-fill',    'user-s-val',    user.serotonin || 0);
+  setBar('user-ne-fill',   'user-ne-val',   user.norepinephrine || 0);
+  setBar('user-burn-fill', 'user-burn-val', user.burnout || 0);
+
+  // Sync indicator (prime-directive в одном бейдже)
+  const regime = metrics.sync_regime || 'flow';
+  const syncErr = typeof metrics.sync_error === 'number' ? metrics.sync_error : 0;
+  const regimeEl = document.getElementById('sync-regime');
+  if (regimeEl) {
+    regimeEl.textContent = regime.toUpperCase();
+    regimeEl.className = 'sync-regime ' + regime;
+  }
+  const errEl = document.getElementById('sync-error');
+  if (errEl) {
+    // Max L2 на 4D в [0,1] ≈ 2.0 → пересчёт в percent «синхронизации»
+    const pct = Math.max(0, Math.min(100, Math.round((1 - syncErr / 2) * 100)));
+    errEl.textContent = 'sync ' + pct + '%';
+  }
+
   // Dopamine phasic arrow (legacy — new dopamine is single scalar, so always hidden)
   const phasicEl = document.getElementById('neuro-da-phasic');
   if (phasicEl) phasicEl.style.display = 'none';

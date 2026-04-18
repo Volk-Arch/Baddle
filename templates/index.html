@@ -154,29 +154,52 @@
       <button onclick="assistHRVStart('simulator')" class="assist-hrv-btn">Start HRV</button>
     </div>
 
-    <!-- Neurochem panel: human-readable labels, tech terms in tooltips -->
+    <!-- Symbiosis panel: USER ↕ BADDLE — две симметричные нейрохимии вокруг sync-индикатора -->
     <div id="assist-neurochem" class="assist-neurochem">
-      <div class="neuro-row">
-        <div class="neuro-bar" title="Серотонин — стабильность весов, уверенность в приорах">
-          <span class="neuro-label">Стабильность</span>
-          <div class="neuro-track"><div id="neuro-s-fill" class="neuro-fill" style="background:#a78bfa"></div></div>
-          <span id="neuro-s-val" class="neuro-val">0.50</span>
+      <div class="neuro-row neuro-user" title="Твоё состояние: питается HRV, таймингами, feedback'ом">
+        <span class="neuro-side-label">ТЫ</span>
+        <div class="neuro-bar" title="Интерес: скорость вовлечения + принятые ответы">
+          <div class="neuro-track"><div id="user-da-fill" class="neuro-fill" style="background:#10b981"></div></div>
+          <span id="user-da-val" class="neuro-val">0.50</span>
         </div>
-        <div class="neuro-bar" title="Норадреналин — энтропия распределения весов, неопределённость">
-          <span class="neuro-label">Напряжение</span>
-          <div class="neuro-track"><div id="neuro-ne-fill" class="neuro-fill" style="background:#f59e0b"></div></div>
-          <span id="neuro-ne-val" class="neuro-val">0.50</span>
+        <div class="neuro-bar" title="Стабильность: HRV coherence + постоянство длины сообщений">
+          <div class="neuro-track"><div id="user-s-fill" class="neuro-fill" style="background:#a78bfa"></div></div>
+          <span id="user-s-val" class="neuro-val">0.50</span>
         </div>
-        <div class="neuro-bar" title="Дофамин — реакция на новизну, EMA от d">
-          <span class="neuro-label">Интерес</span>
+        <div class="neuro-bar" title="Напряжение: HRV stress">
+          <div class="neuro-track"><div id="user-ne-fill" class="neuro-fill" style="background:#f59e0b"></div></div>
+          <span id="user-ne-val" class="neuro-val">0.50</span>
+        </div>
+        <div class="neuro-bar" title="Усталость: decisions_today + накопленные rejects">
+          <div class="neuro-track"><div id="user-burn-fill" class="neuro-fill" style="background:#ef4444"></div></div>
+          <span id="user-burn-val" class="neuro-val">0.00</span>
+        </div>
+      </div>
+
+      <div class="sync-indicator" title="‖user − system‖ в 4-мерном пространстве нейрохимии — прайм-директива">
+        <span class="sync-icon">⚡</span>
+        <span id="sync-regime" class="sync-regime">FLOW</span>
+        <span id="sync-error" class="sync-error">sync 100%</span>
+      </div>
+
+      <div class="neuro-row neuro-system" title="Baddle-сторона: питается динамикой графа (distinct-matrix в tick'ах)">
+        <span class="neuro-side-label">BADDLE</span>
+        <div class="neuro-bar" title="Дофамин — реакция на новизну, EMA от d в tick'е">
           <div class="neuro-track">
             <div id="neuro-da-fill" class="neuro-fill" style="background:#10b981"></div>
             <div id="neuro-da-phasic" class="neuro-phasic" style="display:none">▲</div>
           </div>
           <span id="neuro-da-val" class="neuro-val">0.50</span>
         </div>
+        <div class="neuro-bar" title="Серотонин — стабильность весов, уверенность в приорах">
+          <div class="neuro-track"><div id="neuro-s-fill" class="neuro-fill" style="background:#a78bfa"></div></div>
+          <span id="neuro-s-val" class="neuro-val">0.50</span>
+        </div>
+        <div class="neuro-bar" title="Норадреналин — энтропия распределения весов">
+          <div class="neuro-track"><div id="neuro-ne-fill" class="neuro-fill" style="background:#f59e0b"></div></div>
+          <span id="neuro-ne-val" class="neuro-val">0.50</span>
+        </div>
         <div class="neuro-bar" title="Burnout — защитный режим при хроническом конфликте">
-          <span class="neuro-label">Усталость</span>
           <div class="neuro-track"><div id="neuro-burn-fill" class="neuro-fill" style="background:#ef4444"></div></div>
           <span id="neuro-burn-val" class="neuro-val">0.00</span>
         </div>

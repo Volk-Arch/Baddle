@@ -625,6 +625,50 @@ select {
   font-size: 10px;
   color: #71717a;
 }
+
+/* Symbiosis: user ↕ system panels + sync indicator */
+.neuro-side-label {
+  font-size: 9px;
+  color: #71717a;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  min-width: 50px;
+}
+.neuro-row.neuro-user .neuro-side-label { color: #94a3b8; }
+.neuro-row.neuro-system .neuro-side-label { color: #a5b4fc; }
+
+.sync-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  justify-content: center;
+}
+.sync-icon {
+  font-size: 12px;
+}
+.sync-regime {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #1e293b;
+  color: #94a3b8;
+  text-transform: uppercase;
+  font-size: 9px;
+}
+.sync-regime.flow    { background: #064e3b; color: #6ee7b7; }
+.sync-regime.rest    { background: #1e293b; color: #94a3b8; }
+.sync-regime.protect { background: #422006; color: #fdba74; }
+.sync-regime.confess { background: #4c0519; color: #fda4af; }
+.sync-error {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
 .neuro-mode-badge, .neuro-action-badge, .neuro-origin-badge, .neuro-camera-badge {
   padding: 2px 8px;
   border-radius: 6px;

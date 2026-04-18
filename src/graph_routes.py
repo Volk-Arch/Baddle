@@ -1692,17 +1692,14 @@ def hrv_metrics():
     metrics = mgr.get_metrics()
     state = mgr.get_baddle_state()
 
-    # Push to Horizon if graph has one
-    horizon_data = _graph.get("_horizon")
-    if horizon_data:
-        from .horizon import CognitiveState
-        horizon = CognitiveState.from_dict(horizon_data)
-        horizon.update_from_hrv(
-            coherence=state.get("coherence"),
-            rmssd=state.get("rmssd"),
-            stress=state.get("stress"),
-        )
-        _graph["_horizon"] = horizon.to_dict()
+    # Push to UserState — HRV — сигнал тела пользователя, не системы.
+    # Системная нейрохимия эволюционирует по собственным сигналам графа.
+    from .user_state import get_user_state
+    get_user_state().update_from_hrv(
+        coherence=state.get("coherence"),
+        rmssd=state.get("rmssd"),
+        stress=state.get("stress"),
+    )
 
     return jsonify({
         "metrics": metrics,

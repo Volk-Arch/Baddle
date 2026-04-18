@@ -284,13 +284,20 @@ def assist():
     if not message:
         return jsonify({"error": "empty message"})
 
-    # Inject NE spike — user engagement = Horizon takes budget from DMN (v5a/v5d)
+    # Inject NE spike — user engagement = Horizon takes budget from DMN
     from .horizon import get_global_state
+    from .user_state import get_user_state
     cs = get_global_state()
     cs.inject_ne(0.4)
 
+    # User signals: timing + message length (before state logging so EMA updated)
+    user = get_user_state()
+    user.update_from_timing()
+    user.update_from_message(message)
+
     ctx = _get_context()
     state, hrv_state, energy = ctx["state"], ctx["hrv"], ctx["energy"]
+    user.update_from_energy(state.get("decisions_today", 0))
 
     # Build state hint for classifier (brief CognitiveState summary)
     neuro = cs.get_metrics().get("neurochem", {})
@@ -453,6 +460,9 @@ def assist_feedback():
     d_val = d_map.get(kind)
     if d_val is not None:
         cs.update_neurochem(d=d_val)
+    # Mirror signal into UserState (accept ↑ dopamine, reject ↑ burnout)
+    from .user_state import get_user_state
+    get_user_state().update_from_feedback(kind)
     return jsonify({"ok": True, "neurochem": cs.get_metrics().get("neurochem", {})})
 
 
@@ -763,12 +773,48 @@ def assist_weekly():
 
 @assistant_bp.route("/assist/alerts", methods=["GET"])
 def assist_alerts():
-    """Return pending proactive alerts. UI polls this periodically."""
+    """Return pending proactive alerts. UI polls this periodically.
+
+    Alerts теперь выводятся из sync_regime (FLOW/REST/PROTECT/CONFESS) плюс
+    watchdog Scout/DMN. Жёсткие пороги остаются fallback'ом на случай когда
+    UserState ещё не набрал сигналов.
+    """
+    from .horizon import get_global_state
     ctx = _get_context()
     state, hrv_state, energy = ctx["state"], ctx["hrv"] or {}, ctx["energy"]
     alerts = []
 
-    # Low energy + more decisions needed today
+    cs = get_global_state()
+    regime = cs.sync_regime
+    sync_err = cs.sync_error
+
+    # Sync-regime driven advice (prime-directive слой)
+    if regime == "rest":
+        alerts.append({
+            "type": "regime_rest",
+            "severity": "info",
+            "text": "Оба устали. Предлагаю сделать паузу.",
+            "text_en": "We're both low. Let's take a pause.",
+            "regime": regime, "sync_error": round(sync_err, 2),
+        })
+    elif regime == "protect":
+        alerts.append({
+            "type": "regime_protect",
+            "severity": "info",
+            "text": "Ты устал — возьму на себя. Отвечаю короче, сложное отложим.",
+            "text_en": "You're tired — I'll handle it. Short answers, heavy stuff later.",
+            "regime": regime, "sync_error": round(sync_err, 2),
+        })
+    elif regime == "confess":
+        alerts.append({
+            "type": "regime_confess",
+            "severity": "info",
+            "text": "Мне нужно подумать — дай минуту.",
+            "text_en": "I need a moment to think.",
+            "regime": regime, "sync_error": round(sync_err, 2),
+        })
+
+    # Hard floors (независимо от regime — критические пороги должны звенеть)
     if energy["energy"] < 20 and state.get("decisions_today", 0) > 5:
         alerts.append({
             "type": "energy_critical",
@@ -776,14 +822,12 @@ def assist_alerts():
             "text": "Энергия <20. Отложи сложные решения до утра.",
             "text_en": "Energy <20. Postpone heavy decisions until morning.",
         })
-
-    # Coherence dropping
     if hrv_state:
         coh = hrv_state.get("coherence")
-        if coh is not None and coh < 0.4:
+        if coh is not None and coh < 0.25:
             alerts.append({
                 "type": "low_coherence",
-                "severity": "info",
+                "severity": "warning",
                 "text": f"Coherence {coh:.2f}. Минутку подыши.",
                 "text_en": f"Coherence {coh:.2f}. Take a breath.",
             })
@@ -798,6 +842,8 @@ def assist_alerts():
         "count": len(alerts),
         "energy": energy,
         "hrv": hrv_state,
+        "sync_regime": regime,
+        "sync_error": round(sync_err, 3),
         "watchdog": wd.get_status(),
     })
 

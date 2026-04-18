@@ -1,23 +1,27 @@
-"""CognitiveState — адаптивный контроллер цикла мышления.
+"""CognitiveState — адаптивный контроллер цикла мышления (SystemState side).
 
 Композиция из:
   • Horizon-слой: precision, policy, τ_in/τ_out, temperature_nand, state machine
   • self.neuro (Neurochem): dopamine/serotonin/norepinephrine + derived γ
   • self.freeze (ProtectiveFreeze): защитный режим при хроническом конфликте
-  • HRV-поля: coherence, stress, rmssd (только для советов юзеру)
+  • Derived: sync_error, sync_regime, hrv_* — читают глобальный UserState
   • Mode flags: llm_disabled (Camera)
 
 Bayesian update делегирован в `self.neuro.apply_to_bayes`. См. neurochem.py для
 формул и neurochem-design.md для спецификации.
+
+Прайм-директива: sync_error = ‖user − system‖ в 4-мерном нейрохимическом
+пространстве. UserState питается сигналами юзера (HRV, тайминги, feedback),
+SystemState — динамикой графа. См. docs/symbiosis-design.md.
 
 States (гистерезис + debounce):
   EXPLORATION  (precision 0.3–0.5, широкий фокус)
   EXECUTION    (0.7–0.9, узкий)
   RECOVERY     (post-surprise drop)
   INTEGRATION  (0.5–0.6, синтез)
-  STABILIZE    (HRV coherence < 0.3)
-  CONFLICT     (sync_error spike)
-  PROTECTIVE_FREEZE (burnout trip)
+  STABILIZE    (HRV coherence < 0.3 — derived из UserState)
+  CONFLICT     (sync_error > 0.75 — расхождение user/system)
+  PROTECTIVE_FREEZE (freeze.accumulator > 0.15)
 """
 
 import math
@@ -71,20 +75,14 @@ class CognitiveState:
         # NAND temperature + метрики
         self.temperature_nand = 0.1
         self.temperature_nand_0 = 0.1
-        self.sync_error = 0.0
         self._prev_policy_weights = None
         self.kl_divergence = 0.0
 
-        # Thresholds for distinct-zone decisions (can be nudged by HRV)
+        # Thresholds for distinct-zone decisions
         self.tau_in = 0.3
         self.tau_out = 0.7
 
-        # ── HRV layer ───────────────────────────────────────────────────
-        self.hrv_coherence = None
-        self.hrv_stress = None
-        self.hrv_rmssd = None
-
-        # ── Neurochem layer (v2: composition — проще старой монолитной модели) ──
+        # ── Neurochem layer (composition — проще старой монолитной модели) ──
         # Три скаляра + отдельный защитный режим. См. src/neurochem.py.
         from .neurochem import Neurochem, ProtectiveFreeze
         self.neuro = Neurochem()
@@ -173,38 +171,50 @@ class CognitiveState:
         # Snapshot current as previous for next tick
         self._prev_policy_weights = dict(self.policy_weights)
 
-    def update_sync_error(self, distance: float):
-        """Update sync_error — how well system predicts user.
+    # ── Derived: sync_error + hrv passthrough from UserState ──────────────
+    # Prime-directive: sync_error = ‖user − system‖ (L2 в 4-мерном пространстве
+    # dopamine/serotonin/norepinephrine/burnout). Не скаляр, не хранится — вычисляется
+    # из глобального UserState. См. src/user_state.py и docs/symbiosis-design.md.
 
-        distance: d(predicted_response, actual_response) in [0,1]
-        Low → system understands user. High → desync, needs clarification.
-        """
-        self.sync_error = max(0.0, min(1.0, distance))
+    @property
+    def sync_error(self) -> float:
+        try:
+            from .user_state import get_user_state, compute_sync_error
+            return compute_sync_error(get_user_state(), self.neuro, self.freeze)
+        except Exception:
+            return 0.0
 
-    def update_from_hrv(self, coherence: float = None, rmssd: float = None,
-                         stress: float = None, lf_hf: float = None):
-        """Update HRV fields only. Никакого влияния на когнитивные параметры системы.
+    @property
+    def sync_regime(self) -> str:
+        try:
+            from .user_state import get_user_state, compute_sync_regime
+            return compute_sync_regime(get_user_state(), self.neuro, self.freeze)
+        except Exception:
+            return "flow"
 
-        Принцип: HRV — сигнал тела пользователя. Он идёт в **советы юзеру**
-        (через /assist/alerts, energy recovery, предупреждения) и в **расчёт
-        состояния HRV** (coherence, rmssd, stress). Он НЕ модулирует γ, τ,
-        precision, S, NE, DA или burnout — это внутреннее состояние системы,
-        оно эволюционирует по собственной динамике.
+    @property
+    def hrv_coherence(self):
+        try:
+            from .user_state import get_user_state
+            return get_user_state().hrv_coherence
+        except Exception:
+            return None
 
-        Юзер устал → система замечает и предлагает «отложи до утра», а не
-        «устаёт» вместе с ним.
+    @property
+    def hrv_stress(self):
+        try:
+            from .user_state import get_user_state
+            return get_user_state().hrv_stress
+        except Exception:
+            return None
 
-        См. docs/hrv-design.md.
-        """
-        if coherence is not None:
-            self.hrv_coherence = max(0.0, min(1.0, coherence))
-        if rmssd is not None:
-            self.hrv_rmssd = rmssd
-            # Infer stress from RMSSD: lower RMSSD = higher stress
-            self.hrv_stress = max(0.0, min(1.0, 1.0 - (rmssd / 80.0)))
-        if stress is not None:
-            self.hrv_stress = max(0.0, min(1.0, stress))
-        # END. HRV fields set, nothing else touched.
+    @property
+    def hrv_rmssd(self):
+        try:
+            from .user_state import get_user_state
+            return get_user_state().hrv_rmssd
+        except Exception:
+            return None
 
     # ── Neurochem + freeze: делегируем в self.neuro / self.freeze ──────────
 
@@ -393,6 +403,12 @@ class CognitiveState:
                 entropy -= w * math.log2(w)
 
         neuro_dict = self.neuro.to_dict()
+        # Pull user-side from global UserState for full symbiosis picture
+        try:
+            from .user_state import get_user_state
+            user_dict = get_user_state().to_dict()
+        except Exception:
+            user_dict = None
         return {
             "precision": round(self.precision, 3),
             "width": round(1.0 / (self.precision + 0.01), 2),
@@ -404,6 +420,7 @@ class CognitiveState:
             "temperature_nand": round(self.temperature_nand, 3),
             "kl_divergence": round(self.kl_divergence, 4),
             "sync_error": round(self.sync_error, 3),
+            "sync_regime": self.sync_regime,
             "tau_in": round(self.tau_in, 3),
             "tau_out": round(self.tau_out, 3),
             "hrv": {
@@ -419,6 +436,7 @@ class CognitiveState:
                 "freeze_active":  self.freeze.active,
                 "state_origin":   self.state_origin_hint,
             },
+            "user_state": user_dict,
             "llm_disabled": self.llm_disabled,
             "horizon_budget": round(self.horizon_budget(), 3),
             "t_effective": round(self.effective_temperature(), 3),
@@ -427,7 +445,10 @@ class CognitiveState:
     # ── Serialization ───────────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
-        """Serialize for storage in graph state."""
+        """Serialize for storage in graph state.
+
+        sync_error и hrv_* — derived properties, не сериализуются (живут в UserState).
+        """
         return {
             "precision": self.precision,
             "policy_weights": dict(self.policy_weights),
@@ -441,13 +462,8 @@ class CognitiveState:
             "temperature_nand_0": self.temperature_nand_0,
             "kl_divergence": self.kl_divergence,
             "_prev_policy_weights": dict(self._prev_policy_weights) if self._prev_policy_weights else None,
-            "sync_error": self.sync_error,
             "tau_in": self.tau_in,
             "tau_out": self.tau_out,
-            "hrv_coherence": self.hrv_coherence,
-            "hrv_stress": self.hrv_stress,
-            "hrv_rmssd": self.hrv_rmssd,
-            # Neurochem v2: composition
             "neuro": self.neuro.to_dict(),
             "freeze": self.freeze.to_dict(),
             "_burnout_trip_count": self._burnout_trip_count,
@@ -457,7 +473,7 @@ class CognitiveState:
 
     @classmethod
     def from_dict(cls, d: dict) -> "CognitiveState":
-        """Восстановление из dump'а."""
+        """Восстановление из dump'а. Legacy поля sync_error/hrv_* игнорируются."""
         from .neurochem import Neurochem, ProtectiveFreeze
 
         h = cls(
@@ -474,12 +490,8 @@ class CognitiveState:
         h.temperature_nand_0 = d.get("temperature_nand_0", 0.1)
         h.kl_divergence = d.get("kl_divergence", 0.0)
         h._prev_policy_weights = d.get("_prev_policy_weights")
-        h.sync_error = d.get("sync_error", 0.0)
         h.tau_in = d.get("tau_in", 0.3)
         h.tau_out = d.get("tau_out", 0.7)
-        h.hrv_coherence = d.get("hrv_coherence")
-        h.hrv_stress = d.get("hrv_stress")
-        h.hrv_rmssd = d.get("hrv_rmssd")
         h.neuro = Neurochem.from_dict(d.get("neuro", {}))
         h.freeze = ProtectiveFreeze.from_dict(d.get("freeze", {}))
         h._burnout_trip_count = d.get("_burnout_trip_count", 0)

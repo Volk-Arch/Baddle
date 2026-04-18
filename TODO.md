@@ -12,132 +12,6 @@
 
 # ⬆ НЕ СДЕЛАНО
 
-## Симбиоз — два state-вектора (формализация прайм-директивы)
-
-Переводит прайм-директиву из декларации в архитектуру. Сейчас `sync_error` —
-абстрактный скаляр в `CognitiveState`, который никак не вычисляется. Правильно —
-это **геометрическое расстояние между двумя 4-мерными точками состояния**:
-системы и пользователя.
-
-### Идея
-
-Два state-вектора одинаковой структуры:
-
-```
-UserState:   {dopamine, serotonin, norepinephrine, burnout}  ← ты
-SystemState: {dopamine, serotonin, norepinephrine, burnout}  ← Baddle
-                                                 (уже есть)
-```
-
-**UserState питается** наблюдаемыми сигналами юзера: HRV, тайминги ответов,
-длина сообщений, feedback, energy counter. **SystemState** — динамикой графа
-(как сейчас).
-
-```
-sync_error = ||user_vec − system_vec||
-```
-
-### Режимы симбиоза (derived)
-
-Из комбинации `(sync_error, user_state, system_state)` возникают 4 режима
-адаптивного поведения:
-
-| Режим | Условие | Поведение |
-|-------|---------|-----------|
-| **FLOW** | sync высокий, оба state высокие | Полный объём, сложные задачи, активные вопросы |
-| **REST** | sync высокий, оба state низкие | Предлагает паузу, лёгкие карточки, не грузит |
-| **PROTECT** | sync низкий, user low, system high | Берёт на себя: сама предлагает, меньше спрашивает, откладывает сложное |
-| **CONFESS** | sync низкий, user high, system low | «Дай мне время, я в процессе» — честное признание |
-
-Это **третий контур (диалог)** замкнутый через sync-метрику: до сих пор он
-был просто «задаю вопрос», теперь — адаптивное поведение на основе взаимного
-состояния.
-
-### Компоненты реализации
-
-- [ ] **`src/user_state.py`** — зеркальная структура `neurochem.py`.
-  Класс `UserState` с теми же тремя скалярами + burnout, теми же EMA-формулами.
-  Отличие — в источниках сигналов.
-
-- [ ] **UserState signals** — откуда питаются скаляры:
-  - HRV coherence → `user.serotonin` (спокойствие = стабильность)
-  - HRV stress → `user.norepinephrine` (напряжение)
-  - Тайминг: скорость ответа юзера → `user.dopamine` (быстро = интерес)
-  - Gap с последнего ввода → `user.dopamine` decay (молчание = охлаждение)
-  - Variance длины сообщений → `user.serotonin` (стабильные по длине = уверенный)
-  - feedback accept/reject rate → `user.dopamine` (accept) / `user.burnout` (rejects копятся)
-  - `energy counter` (decisions_today) → `user.burnout`
-
-- [ ] **`CognitiveState.sync_error`** → **derived property** вместо скаляра:
-  ```python
-  @property
-  def sync_error(self):
-      u = user_state.vector()
-      s = self.neuro.vector()
-      return np.linalg.norm(u - s)
-  ```
-  Текущее `update_sync_error(distance)` удаляется как legacy.
-
-- [ ] **`sync_regime`** → derived enum `FLOW | REST | PROTECT | CONFESS`
-  из (sync_error, user_state, system_state). Пороги:
-  - высокий state = mean(dopamine, serotonin) > 0.55
-  - низкий = < 0.35
-  - sync высокий = error < 0.3
-
-- [ ] **Advice-слой использует sync_regime** — заменяет текущие alerts
-  в `assistant.py` (low_energy / low_coherence warnings):
-  - PROTECT → короткие простые ответы, clarify-questions не задавать
-  - CONFESS → «мне нужно подумать», возможно emit `action: "ask"` автоматически
-  - FLOW → полный execute_via_zones с максимумом кандидатов
-  - REST → предлагает отложить, показывает энергию и coherence
-
-- [ ] **UI: две симметричные панели** в header `baddle`-таба:
-  ```
-  ┌────────────────────────────────────────┐
-  │ ТЫ:   Интерес │ Стабильность │ ...      │
-  │                                          │
-  │           ⚡ синхронизация 78%  · FLOW    │
-  │                                          │
-  │ BADDLE: Интерес │ Стабильность │ ...      │
-  └────────────────────────────────────────┘
-  ```
-  Симметричная вёрстка + одинаковый цветовой код = визуально видно
-  **где расходимся и куда тянет**. Режим (FLOW/REST/PROTECT/CONFESS) —
-  подпись к sync-индикатору.
-
-- [ ] **`/assist/state`** возвращает `{user_state, system_state, sync_error, sync_regime}`.
-
-- [ ] **HRV полностью переезжает в UserState**. Сейчас `update_from_hrv`
-  живёт в `CognitiveState`, хотя ничего не трогает (после утреннего
-  decouple). Убрать оттуда совсем — HRV читает UserState. В CognitiveState
-  могут остаться только hrv-поля для совместимости с endpoint'ом, если
-  UI читает их отдельно.
-
-### Следствия для существующих решений
-
-- `CognitiveState.sync_error` scalar → derived. `update_sync_error` удаляется.
-- HRV-decouple (утро) был half-fix: правильно что ушёл из system-нейрохимии,
-  но без UserState сигнал повис в воздухе. Теперь полная картина.
-- Alerts (`low_energy`, `low_coherence` в `/assist/alerts`) становятся
-  сайд-эффектом `sync_regime`: вместо hardcoded порогов — выводятся из режима.
-
-### Риски и ответы
-
-| Риск | Ответ |
-|------|-------|
-| UserState нужно время набрать сигналы | Default regime = FLOW до стабилизации EMA |
-| Тайминги шумные | Aggressive decay (λ=0.1) + медианная фильтрация |
-| Двойная панель перегружает UI | Collapse по умолчанию, expand on click |
-| Без HRV половина UserState сигналов нет | Работает на активности/фидбэке, хуже но работает |
-
-### Scope
-
-**~2-3 часа** фокусной работы. Не блокер для demo-first релиза, но
-**архитектурное завершение prime-directive в коде** — делает её реальной,
-а не декларативной. Рассматривать после LM-smoke или параллельно.
-
----
-
 ## Тело и сенсоры
 
 - [ ] **Polar H10 BLE** — реальный RR-поток вместо симулятора. `bleak` клиент,
@@ -247,6 +121,47 @@ sync_error = ||user_vec − system_vec||
 
 Формат каждого блока: **что делает** → **как проверить** → **на что влияет** →
 **красный флаг если сломано**.
+
+## Симбиоз — UserState ↕ SystemState + sync_regime
+
+**Что.** Прайм-директива теперь вычисляется, не декларируется.
+`UserState` ([src/user_state.py](src/user_state.py)) — зеркало Neurochem,
+питается сигналами юзера (HRV, тайминги, длина сообщений, feedback, energy).
+`sync_error = ‖user_vec − system_vec‖` (L2 в 4D). `sync_regime` ∈
+{FLOW, REST, PROTECT, CONFESS} — derived из (error, user_level, system_level).
+Детали → [docs/symbiosis-design.md](docs/symbiosis-design.md).
+
+**Проверка.**
+```
+GET /assist/state → {
+  neurochem: {dopamine, serotonin, norepinephrine, burnout, ...},
+  user_state: {dopamine, serotonin, norepinephrine, burnout, hrv},
+  sync_error: 0.05,
+  sync_regime: "flow",
+  ...
+}
+```
+
+**Влияет на:**
+- `/assist/alerts` — regime добавляет советы (protect / confess / rest) к жёстким флорам
+- UI — две симметричные панели «ТЫ / BADDLE» с sync-индикатором посередине
+- `CognitiveState.sync_error` / `sync_regime` / `hrv_*` — все derived properties
+  читающие UserState
+
+**Живые тесты.**
+- Напиши сообщение → user.dopamine вырастет через timing (<30с от следующего)
+- Напиши 3+ сообщения примерно одной длины → user.serotonin медленно растёт (variance низкий)
+- Запусти HRV симулятор → coherence → user.serotonin, stress → user.norepinephrine
+- Нажми 👍 5 раз подряд → user.dopamine→0.9; 👎 5 раз → user.burnout растёт
+- Выстави user в «устал» (dopamine=0.1, burnout=0.7) при свежей системе →
+  `sync_regime` станет `protect`, alert «возьму на себя» появится в `/assist/alerts`
+
+**Красный флаг.**
+- `/assist/state` не имеет `sync_regime` / `user_state` → старый код
+- `sync_error` всегда 0.0 → UserState не питается (проверить что /assist
+  вызывает update_from_timing/message/energy)
+- Sync всегда `flow` при явной разнице user/system → пороги не срабатывают
+  (проверить STATE_HIGH/LOW_THRESHOLD в user_state.py)
 
 ## Ядро мышления — NAND-emergent tick
 
