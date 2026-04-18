@@ -12,6 +12,17 @@
 
 # ⬆ НЕ СДЕЛАНО
 
+## 🩺 Daily-use viability (остатки)
+
+- [ ] **Desktop / system-tray notifications.** Alerts работают только
+  пока вкладка браузера с Baddle открыта. Закрыл — morning briefing,
+  DMN-мосты, night_cycle summary, zone_overload уходят в пустоту.
+  Варианты: (а) `pystray` + `plyer` — system tray + OS notifications;
+  (б) PyWebView-обёртка вокруг Flask → single window с фоном;
+  (в) Service Worker + WebSocket push + Notification API. Минимум
+  для daily — (а): иконка в трее + OS toast на каждый alert.
+  *Требует pip-пакеты — отложено.*
+
 ## Тело и сенсоры
 
 - [ ] **Polar H10 BLE** — реальный RR + accelerometer поток. `bleak` клиент,
@@ -50,23 +61,24 @@
 - [ ] **Извлечение графа из текста** — статья → граф.
 - [ ] **Demo mode** — ускоренная симуляция «недели Baddle».
 - [ ] **SSE/WebSocket** — push вместо polling для HRV/alerts (instant feel).
+- [ ] **Telegram Mini App wrapper (Activity + Briefing + Alerts)** — взять
+  прототип `Time Player/v2/index.html` (его цикл Начать/Следующая/Стоп +
+  шаблоны + история) как основу TMA-клиента к Baddle. Бэкенд уже готов
+  (/activity/* endpoints). На входе — `tg.initDataUnsafe.user.id` как
+  namespace для multi-user в будущем. Что даёт: (а) OS-уведомления
+  бесплатно через Telegram на phone+desktop даже при закрытом браузере
+  (закрывает блокер «Desktop / system-tray notifications»), (б) мобильный
+  ввод activity на ходу, (в) morning_briefing приходит как push. Scope:
+  переписать фронт HTML → обёртка над теми же endpoints + WebApp.sendData
+  для auth handshake. Backend-pairing: эндпоинт `/tma/link` с OTP.
 
 ## Архитектурно открытые (edge cases, не блокеры)
 
 Не блокеры для daily use. Всплывут при scale'е или multi-user.
 
-- [ ] **goals.jsonl ротация** — сейчас растёт монотонно. Year-long
-  использование → нужна квартальная ротация или gzip-архив старых
-  событий (аналогично state_graph.archive.jsonl).
 - [ ] **UserState global per-person** — один UserState на все workspaces.
   Если захочется разных `profile.food` для work vs personal — потребуется
   UserState per-workspace + context-switcher.
-- [ ] **Content-graph embeddings только в памяти** — `_graph["embeddings"]`
-  пересчитывается при рестарте. Можно кэшировать в `embeddings.jsonl`
-  аналогично state_graph.
-- [ ] **`_load_state` race** — параллельные `/assist` могут обоюдно
-  затереть user_state_dump. Не критично для single-user, но при
-  multi-tab UI может потеряться чекмарк. File lock решит.
 
 ---
 ---

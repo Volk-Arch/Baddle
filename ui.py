@@ -28,8 +28,30 @@ app.register_blueprint(graph_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(assistant_bp)
 
+# Bootstrap: загрузить активный workspace (nodes + embeddings) в runtime-state.
+# Без этого embeddings/ноды терялись бы на рестарт — были бы живы только до
+# первого /workspace/switch.
+try:
+    from src.workspace import get_workspace_manager
+    get_workspace_manager().load_active_graph()
+except Exception as _e:
+    print(f"  [workspace] bootstrap failed: {_e}")
+
 # Start background cognitive loop (Scout, DMN, HRV alerts, NE homeostasis)
 get_cognitive_loop().start()
+
+# HRV auto-start: если в profile.context.hrv_autostart=true — запускаем
+# симулятор при инициализации процесса (без него HRV-петля не видит юзера
+# и sync_error всегда фикция). Закрывает блокер daily-use.
+try:
+    from src.user_profile import load_profile
+    from src.hrv_manager import get_manager as get_hrv_manager
+    _prof = load_profile()
+    if (_prof.get("context") or {}).get("hrv_autostart"):
+        get_hrv_manager().start(mode="simulator")
+        print("  [HRV] auto-started (simulator) — profile.context.hrv_autostart=true")
+except Exception as _e:
+    print(f"  [HRV] auto-start skipped: {_e}")
 
 
 # ── Roles / Templates ────────────────────────────────────────────────────────

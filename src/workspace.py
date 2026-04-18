@@ -161,12 +161,62 @@ class WorkspaceManager:
         self.save_index()
         return info
 
+    def _read_graph_file(self, ws_id: str) -> bool:
+        """Читает graph.json нужного workspace'а в глобальный `_graph`.
+
+        Возвращает True если файл существует и загружен, False если fresh
+        workspace / файл сломан. Используется и при switch(), и на старте
+        процесса (embeddings persist). Выделено из switch() чтобы один код
+        на оба пути.
+        """
+        from .graph_logic import _graph, reset_graph
+        target_gf = self.graph_file(ws_id)
+        if not target_gf.exists():
+            reset_graph()
+            return False
+        try:
+            data = json.loads(target_gf.read_text(encoding="utf-8"))
+            reset_graph()
+            _graph["nodes"] = data.get("nodes", [])
+            _graph["edges"] = data.get("edges", {
+                "manual_links": [], "manual_unlinks": [], "directed": []
+            })
+            _graph["meta"] = data.get("meta", {"topic": "", "hub_nodes": set(), "mode": "horizon"})
+            if isinstance(_graph["meta"].get("hub_nodes"), list):
+                _graph["meta"]["hub_nodes"] = set(_graph["meta"]["hub_nodes"])
+            _graph["embeddings"] = data.get("embeddings", [])
+            _graph["tp_overrides"] = data.get("tp_overrides", {})
+            if "_horizon" in data:
+                _graph["_horizon"] = data["_horizon"]
+            return True
+        except Exception as e:
+            log.warning(f"[workspace] failed to load {ws_id}: {e}")
+            reset_graph()
+            return False
+
+    def load_active_graph(self):
+        """Bootstrap-путь: подгрузить graph.json + state_graph активного
+        workspace'а в runtime-state. Вызывается один раз при старте процесса
+        (из ui.py), чтобы embeddings и ноды не терялись на рестарте.
+        """
+        from .state_graph import StateGraph, set_state_graph
+        self.load_index()
+        ws_id = self.active_id or "main"
+        loaded = self._read_graph_file(ws_id)
+        set_state_graph(StateGraph(base_dir=self.state_graph_dir(ws_id), graph_id=ws_id))
+        if loaded:
+            from .graph_logic import _graph
+            n = len(_graph.get("nodes") or [])
+            e = len(_graph.get("embeddings") or [])
+            log.info(f"[workspace] restored '{ws_id}' from disk: {n} nodes, {e} embeddings")
+        return loaded
+
     def switch(self, ws_id: str):
         """Switch active workspace. Flushes current _graph to disk, loads target.
 
         Also rebinds global StateGraph to target workspace.
         """
-        from .graph_logic import _graph, reset_graph
+        from .graph_logic import _graph
         from .state_graph import StateGraph, set_state_graph
 
         self.load_index()
@@ -176,30 +226,8 @@ class WorkspaceManager:
         # Flush current
         self._flush_active(_graph)
 
-        # Load target
-        target_gf = self.graph_file(ws_id)
-        if target_gf.exists():
-            try:
-                data = json.loads(target_gf.read_text(encoding="utf-8"))
-                # Replace _graph contents in-place (preserve references)
-                reset_graph()
-                _graph["nodes"] = data.get("nodes", [])
-                _graph["edges"] = data.get("edges", {
-                    "manual_links": [], "manual_unlinks": [], "directed": []
-                })
-                _graph["meta"] = data.get("meta", {"topic": "", "hub_nodes": set(), "mode": "horizon"})
-                # hub_nodes may be serialized as list — coerce back to set
-                if isinstance(_graph["meta"].get("hub_nodes"), list):
-                    _graph["meta"]["hub_nodes"] = set(_graph["meta"]["hub_nodes"])
-                _graph["embeddings"] = data.get("embeddings", [])
-                _graph["tp_overrides"] = data.get("tp_overrides", {})
-                if "_horizon" in data:
-                    _graph["_horizon"] = data["_horizon"]
-            except Exception as e:
-                log.warning(f"[workspace] failed to load {ws_id}: {e}")
-                reset_graph()
-        else:
-            reset_graph()
+        # Load target (shared reader — embeddings persist without manual save)
+        self._read_graph_file(ws_id)
 
         # Rebind state graph to target directory
         set_state_graph(StateGraph(base_dir=self.state_graph_dir(ws_id), graph_id=ws_id))

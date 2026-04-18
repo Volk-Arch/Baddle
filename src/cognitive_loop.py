@@ -139,6 +139,21 @@ class CognitiveLoop:
     TICK_INTERVAL = 60                # частота бэкграунд-проверок
     FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
     DEFAULT_WAKE_HOUR = 7             # если profile.context.wake_hour не задан
+    WS_FLUSH_INTERVAL = 120           # каждые 2 мин — auto-save активного workspace
+                                      # (nodes + embeddings) чтобы рестарт не терял данные
+    LOW_ENERGY_THRESHOLD = 30         # ниже этого — тяжёлые решения предлагаем отложить
+    LOW_ENERGY_CHECK_INTERVAL = 30 * 60  # раз в 30 мин — не спамить
+    HEAVY_MODES = ("dispute", "tournament", "bayes", "race", "builder", "cascade", "scales")
+
+    # Plan reminders: push-alert за N min до planned events
+    PLAN_REMINDER_MINUTES = 10        # за сколько минут до события пушить
+    PLAN_REMINDER_CHECK_INTERVAL = 60 # раз в минуту проверяем upcoming
+
+    # Evening retrospective: раз в сутки поздним вечером
+    EVENING_RETRO_HOUR_OFFSET = 14    # wake_hour + 14h = typical 21:00
+
+    # Heartbeat: сводный снапшот в state_graph для DMN/scout substrate
+    HEARTBEAT_INTERVAL = 300          # раз в 5 мин — пишет single state_node со стримами
 
     # NE gating
     NE_BASELINE = 0.3            # baseline к которому дрейфует NE
@@ -162,6 +177,18 @@ class CognitiveLoop:
         self._last_briefing = 0.0
         self._last_hrv_push = 0.0
         self._last_foreground_tick = 0.0
+        self._last_ws_flush = 0.0
+        self._last_activity_tick = 0.0  # для activity → energy cost
+        self._activity_cost_carry = 0.0  # остаток < 0.1 между тиками (не терять копейки)
+        self._last_low_energy_check = 0.0  # дроссель low_energy_heavy alerts
+        self._last_plan_reminder_check = 0.0
+        self._reminded_plan_keys: set = set()  # "plan_id:YYYY-MM-DD" dedup
+        self._last_evening_retro_date: str = ""  # YYYY-MM-DD последнего ретро
+        self._last_heartbeat = 0.0
+        # Persist overnight findings отдельно от alerts_queue — UI drain'ит очередь
+        # быстрее чем briefing её читает. Briefing читает recent_bridges напрямую.
+        self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
+        self._last_night_summary: Optional[dict] = None
         self._alerts_queue: list = []
         self._lock = threading.Lock()
 
@@ -254,6 +281,12 @@ class CognitiveLoop:
                 self._check_hrv_alerts()
                 self._check_daily_briefing()
                 self._check_hrv_push()
+                self._check_ws_flush()
+                self._check_activity_cost()
+                self._check_low_energy_heavy()
+                self._check_plan_reminders()
+                self._check_evening_retro()
+                self._check_heartbeat()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -316,6 +349,22 @@ class CognitiveLoop:
         except Exception as e:
             summary["consolidation"] = {"error": str(e)}
 
+        # Phase 5: Patterns detector (weekday × activity → исход)
+        try:
+            from .patterns import detect_all
+            detected = detect_all(days_back=21)
+            summary["patterns"] = {"detected": len(detected)}
+        except Exception as e:
+            summary["patterns"] = {"error": str(e)}
+
+        # Phase 6: Rotation goals.jsonl (gzip старых завершённых событий)
+        try:
+            from .goals_store import rotate_if_needed
+            rotated = rotate_if_needed()
+            summary["rotation"] = {"archived_file": rotated}
+        except Exception as e:
+            summary["rotation"] = {"error": str(e)}
+
         s = summary
         text = (
             f"Ночной цикл: "
@@ -330,6 +379,16 @@ class CognitiveLoop:
             "text": text, "text_en": text,
             "summary": summary,
         }, dedupe=True)
+        # Persist за пределами очереди alerts — briefing читает напрямую
+        self._last_night_summary = dict(summary)
+        bt = (s.get("scout") or {}).get("bridge_text")
+        if bt:
+            self._recent_bridges.append({
+                "ts": time.time(),
+                "text": bt,
+                "source": "scout",
+            })
+            self._recent_bridges = self._recent_bridges[-10:]
         log.info(f"[cognitive_loop] night cycle done: {text}")
 
     # ── REM emotional: прогон эпизодов с высоким |rpe| через Pump ──
@@ -508,6 +567,13 @@ class CognitiveLoop:
                 "text_en": f"DMN insight: {bridge['text'][:80]} (quality {bridge.get('quality', 0):.0%})",
                 "bridge": bridge,
             }, dedupe=True)
+            self._recent_bridges.append({
+                "ts": time.time(),
+                "text": (bridge.get("text") or "")[:100],
+                "quality": bridge.get("quality", 0),
+                "source": "dmn",
+            })
+            self._recent_bridges = self._recent_bridges[-10:]
 
     def _run_pump_bridge(self, max_iterations: int = 2, save: bool = False) -> Optional[dict]:
         """Call pump between two most distant nodes. Optionally persist bridge.
@@ -697,11 +763,23 @@ class CognitiveLoop:
         Условия:
           • прошло >= BRIEFING_INTERVAL с прошлого briefing
           • текущий локальный час >= wake_hour (из profile.context, default 7)
-        Первый запуск при чистом `_last_briefing=0` тоже сработает только
-        после wake_hour.
+        `_last_briefing` персистится в user_state.json — чтобы рестарт
+        процесса не приводил к повторному брифингу в тот же день.
         """
         import datetime as _dt
         now = time.time()
+
+        # Lazy-load last_briefing_ts из state (первый вызов после рестарта)
+        if getattr(self, "_briefing_loaded_from_disk", False) is False:
+            try:
+                from .assistant import _load_state
+                persisted = float((_load_state().get("last_briefing_ts") or 0.0))
+                if persisted > self._last_briefing:
+                    self._last_briefing = persisted
+            except Exception:
+                pass
+            self._briefing_loaded_from_disk = True
+
         if now - self._last_briefing < self.BRIEFING_INTERVAL:
             return
 
@@ -717,11 +795,27 @@ class CognitiveLoop:
             return
 
         self._last_briefing = now
+        # Persist сразу — даже если briefing text упадёт, интервал уже
+        # зачитан и повторы не сработают.
+        try:
+            from .assistant import _load_state, _save_state
+            st = _load_state()
+            st["last_briefing_ts"] = now
+            _save_state(st)
+        except Exception as e:
+            log.debug(f"[cognitive_loop] briefing persist failed: {e}")
         try:
             text = self._build_morning_briefing_text()
         except Exception as e:
             log.warning(f"[cognitive_loop] briefing text failed: {e}")
             return
+        # Structured sections — для rich-card рендеринга в UI (как в mockup).
+        # text остаётся как fallback / для logs.
+        try:
+            sections = self._build_morning_briefing_sections()
+        except Exception as e:
+            log.debug(f"[cognitive_loop] briefing sections failed: {e}")
+            sections = []
 
         self._add_alert({
             "type": "morning_briefing",
@@ -729,8 +823,264 @@ class CognitiveLoop:
             "text": text,
             "text_en": text,
             "hour": local_hour,
+            "sections": sections,
         }, dedupe=True)
         log.info(f"[cognitive_loop] morning briefing pushed @ {local_hour}:00")
+
+    def _build_morning_briefing_sections(self) -> list:
+        """Структурированный briefing — список карточек {emoji, title, subtitle, kind}.
+
+        UI рендерит как набор секций (см. mockup Thursday briefing). Порядок:
+          1. Sleep      (из activity log)
+          2. Recovery   (HRV energy_recovery + named_state)
+          3. Energy     (long_reserve %)
+          4. Overnight  (Scout bridges найденные ночью)
+          5. Activity   (вчера: N часов по категориям)
+          6. Goals      (открытые + первая)
+          7. Pattern    (weekday hint если есть)
+
+        kind ∈ {info, warn, highlight, neutral} → CSS-класс акцента.
+        """
+        from .horizon import get_global_state
+        from .hrv_manager import get_manager as get_hrv_mgr
+        from .goals_store import list_goals
+        sections: list = []
+
+        # 1. Sleep
+        try:
+            from .activity_log import estimate_last_sleep_hours
+            sleep = estimate_last_sleep_hours()
+            if sleep and sleep.get("hours"):
+                hrs = sleep["hours"]
+                src = "из трекера" if sleep.get("source") == "explicit" else "из пауз активности"
+                if hrs >= 7:
+                    sub, kind = f"Полноценный сон · {src}", "info"
+                elif hrs >= 5:
+                    sub, kind = f"Короткий сон · береги ресурс · {src}", "warn"
+                else:
+                    sub, kind = f"Сильно недоспал · сложные задачи позже · {src}", "warn"
+                sections.append({"emoji": "💤", "title": f"Сон {hrs}ч",
+                                 "subtitle": sub, "kind": kind})
+        except Exception:
+            pass
+
+        # 1b. Last check-in (если есть) — subjective сигнал юзера
+        try:
+            from .checkins import latest_checkin
+            ci = latest_checkin(hours=36)
+            if ci:
+                parts = []
+                if ci.get("energy") is not None:
+                    parts.append(f"E {int(ci['energy'])}")
+                if ci.get("focus") is not None:
+                    parts.append(f"F {int(ci['focus'])}")
+                if ci.get("stress") is not None:
+                    parts.append(f"S {int(ci['stress'])}")
+                surprise_part = None
+                if ci.get("expected") is not None and ci.get("reality") is not None:
+                    s = ci["reality"] - ci["expected"]
+                    surprise_part = f"Δ{'+' if s >= 0 else ''}{int(s)}"
+                subtitle_bits = []
+                if parts:
+                    subtitle_bits.append(" · ".join(parts))
+                if surprise_part:
+                    subtitle_bits.append(f"вчера ожидание vs реальность: {surprise_part}")
+                if ci.get("note"):
+                    subtitle_bits.append(f"«{ci['note'][:50]}»")
+                if subtitle_bits:
+                    kind = "info"
+                    # Если stress высокий — warn
+                    if (ci.get("stress") or 0) > 70:
+                        kind = "warn"
+                    sections.append({
+                        "emoji": "📝",
+                        "title": "Последний check-in",
+                        "subtitle": " · ".join(subtitle_bits),
+                        "kind": kind,
+                    })
+        except Exception:
+            pass
+
+        # 2. Recovery + named_state
+        recovery_pct = None
+        named_label = None
+        try:
+            mgr = get_hrv_mgr()
+            if mgr.is_running:
+                hrv_state = mgr.get_baddle_state() or {}
+                rec = hrv_state.get("energy_recovery")
+                if rec is not None:
+                    recovery_pct = int(rec * 100)
+            metrics = get_global_state().get_metrics()
+            ns = (metrics.get("user_state") or {}).get("named_state") or {}
+            named_label = ns.get("label") or ns.get("key")
+        except Exception:
+            pass
+        if recovery_pct is not None or named_label:
+            title = "Восстановление"
+            if recovery_pct is not None:
+                title += f" {recovery_pct}%"
+            kind = "neutral"
+            subtitle = f"Состояние: {named_label.lower()}" if named_label else ""
+            if recovery_pct is not None:
+                if recovery_pct >= 80:
+                    subtitle = (subtitle + " · хороший день для сложного") if subtitle else "Хороший день для сложного"
+                    kind = "info"
+                elif recovery_pct >= 60:
+                    subtitle = (subtitle + " · начни с важного") if subtitle else "Начни с важного"
+                else:
+                    subtitle = (subtitle + " · лёгкие задачи первыми") if subtitle else "Лёгкие задачи первыми"
+                    kind = "warn"
+            sections.append({"emoji": "⚡", "title": title, "subtitle": subtitle or "—", "kind": kind})
+
+        # 3. Energy pool (long_reserve)
+        try:
+            metrics = get_global_state().get_metrics()
+            user = metrics.get("user_state") or {}
+            lr = user.get("long_reserve")
+            if isinstance(lr, (int, float)):
+                pct = int(lr / 2000.0 * 100)
+                kind = "info" if pct >= 70 else "warn" if pct < 30 else "neutral"
+                sub = "полный" if pct >= 90 else ("в норме" if pct >= 50
+                                                   else "нужна пауза" if pct < 30 else "средний")
+                sections.append({"emoji": "🔋", "title": f"Резерв {pct}%",
+                                 "subtitle": f"{int(lr)}/2000 · {sub}", "kind": kind})
+        except Exception:
+            pass
+
+        # 4. Overnight Scout / DMN bridges
+        try:
+            now_ts = time.time()
+            cutoff = now_ts - 10 * 3600
+            recent = [b for b in (self._recent_bridges or [])
+                      if (b.get("ts") or 0) >= cutoff]
+            if recent:
+                recent.sort(key=lambda b: b.get("ts", 0), reverse=True)
+                first = recent[0].get("text", "")[:80]
+                if len(recent) == 1:
+                    sections.append({
+                        "emoji": "🌙", "title": "Scout нашёл 1 мост",
+                        "subtitle": f"«{first}»", "kind": "highlight"
+                    })
+                else:
+                    sections.append({
+                        "emoji": "🌙", "title": f"Scout нашёл {len(recent)} мостов",
+                        "subtitle": f"Первый: «{first}»", "kind": "highlight"
+                    })
+        except Exception:
+            pass
+
+        # 5. Yesterday activity summary
+        try:
+            from .activity_log import day_summary
+            yday = day_summary(ts=time.time() - 86400)
+            if (yday.get("activity_count") or 0) > 0:
+                cat_h = yday.get("by_category_h") or {}
+                top = sorted(cat_h.items(), key=lambda kv: kv[1], reverse=True)[:2]
+                by_cat = ", ".join(f"{c} {h}ч" for c, h in top if h > 0.1)
+                sections.append({
+                    "emoji": "📊", "title": f"Вчера: {yday['total_tracked_h']}ч",
+                    "subtitle": f"{by_cat or '—'} · {yday.get('switches', 0)} переключений",
+                    "kind": "neutral"
+                })
+        except Exception:
+            pass
+
+        # 6. Open goals
+        try:
+            open_goals = list_goals(status="open", limit=3)
+            if open_goals:
+                first = (open_goals[0].get("text") or "")[:70]
+                sections.append({
+                    "emoji": "🎯",
+                    "title": f"Открытых целей: {len(open_goals)}",
+                    "subtitle": f"Первая: «{first}»",
+                    "kind": "neutral"
+                })
+        except Exception:
+            pass
+
+        # 7. Pattern hint for today
+        try:
+            from .patterns import patterns_for_today
+            today_patterns = patterns_for_today()
+            if today_patterns:
+                today_patterns.sort(key=lambda p: p.get("detected_at", 0), reverse=True)
+                hint = today_patterns[0].get("hint_ru") or ""
+                if hint:
+                    sections.append({
+                        "emoji": "💡", "title": "Паттерн на сегодня",
+                        "subtitle": hint, "kind": "highlight"
+                    })
+        except Exception:
+            pass
+
+        # 8. Today's schedule (plans + recurring habits)
+        try:
+            from .plans import schedule_for_day
+            sched = schedule_for_day()
+            if sched:
+                # Неотмеченные + неотпропущенные
+                todo = [s for s in sched if not s.get("done") and not s.get("skipped")]
+                recurring = [s for s in sched if s.get("kind") == "recurring"]
+                n_todo = len(todo)
+                n_total = len(sched)
+                n_rec = len(recurring)
+                # Краткая строка первых 2 событий по времени
+                preview_parts = []
+                for it in sorted(todo, key=lambda x: x.get("planned_ts") or 0)[:3]:
+                    import datetime as _dt
+                    t = _dt.datetime.fromtimestamp(it.get("planned_ts") or 0).strftime("%H:%M")
+                    preview_parts.append(f"{t} {it.get('name', '')[:30]}")
+                preview = "; ".join(preview_parts) if preview_parts else "все выполнено"
+                kind = "highlight" if n_todo > 0 else "info"
+                title = f"План: {n_todo}/{n_total}"
+                if n_rec > 0:
+                    title += f" · {n_rec} привычек"
+                sections.append({
+                    "emoji": "📋", "title": title,
+                    "subtitle": preview, "kind": kind,
+                })
+        except Exception:
+            pass
+
+        # 9. Food suggestion если нет завтрака в плане и profile.food непустой
+        try:
+            from .user_profile import load_profile, get_category
+            from .plans import schedule_for_day
+            import datetime as _dt
+            prof = load_profile()
+            food_cat = get_category("food", prof)
+            has_prefs = bool(food_cat.get("preferences") or food_cat.get("constraints"))
+            sched = schedule_for_day()
+            # Уже есть запланированная еда на утро (до 11:00)?
+            has_morning_food = any(
+                s for s in sched
+                if s.get("category") == "food"
+                and (s.get("planned_ts") or 0)
+                    and _dt.datetime.fromtimestamp(s["planned_ts"]).hour < 11
+            )
+            if has_prefs and not has_morning_food:
+                prefs = food_cat.get("preferences") or []
+                cons = food_cat.get("constraints") or []
+                constr_str = ""
+                if cons:
+                    constr_str = " · избегай: " + ", ".join(cons[:2])
+                pref_str = ""
+                if prefs:
+                    pref_str = " · любишь: " + ", ".join(prefs[:2])
+                sections.append({
+                    "emoji": "🍳", "title": "Завтрак?",
+                    "subtitle": f"Нет плана на утро{pref_str}{constr_str}.",
+                    "kind": "info",
+                    "actions": [
+                        {"label": "Выбери для меня", "action": "food_suggest"},
+                    ],
+                })
+        except Exception:
+            pass
+
+        return sections
 
     def _build_morning_briefing_text(self) -> str:
         """Собрать короткий morning-briefing из HRV + energy + open goals + profile.
@@ -743,6 +1093,23 @@ class CognitiveLoop:
         from .goals_store import list_goals
 
         bits = ["Доброе утро."]
+
+        # Sleep duration (из activity idle-gap или явной задачи «Сон»)
+        try:
+            from .activity_log import estimate_last_sleep_hours
+            sleep = estimate_last_sleep_hours()
+            if sleep and sleep.get("hours"):
+                hrs = sleep["hours"]
+                suffix = " (из трекера)" if sleep.get("source") == "explicit" else ""
+                bits.append(f"Сон {hrs}ч{suffix}.")
+                # Зеркалим в UserState чтобы simulate-day и другие могли читать
+                try:
+                    from .user_state import get_user_state
+                    get_user_state().last_sleep_duration_h = float(hrs)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # HRV recovery
         mgr = get_hrv_manager()
@@ -787,6 +1154,65 @@ class CognitiveLoop:
             else:
                 bits.append("Береги энергию, лёгкие задачи первыми.")
 
+        # Overnight Scout / DMN findings — что нашёл пока юзер спал.
+        # Читаем из self._recent_bridges (персистентно, не через alerts-queue
+        # которую UI быстро drain'ит). Порог ~10ч — покрывает ночь.
+        try:
+            now_ts = time.time()
+            cutoff = now_ts - 10 * 3600
+            recent = [b for b in (self._recent_bridges or [])
+                      if (b.get("ts") or 0) >= cutoff]
+            if recent:
+                # Топ 2 — от новых к старым
+                recent.sort(key=lambda b: b.get("ts", 0), reverse=True)
+                top = recent[:2]
+                if len(recent) == 1:
+                    bits.append(f"Пока спал, Scout нашёл мост: «{top[0]['text'][:80]}».")
+                else:
+                    bits.append(f"Пока спал, Scout нашёл {len(recent)} мостов. "
+                                f"Первый: «{top[0]['text'][:80]}».")
+            elif self._last_night_summary is not None:
+                # Scout пробежал но мостов нет — отметим хотя бы консолидацию
+                cs = self._last_night_summary.get("consolidation") or {}
+                pr = cs.get("pruned", 0)
+                ar = cs.get("archived", 0)
+                if pr or ar:
+                    bits.append(f"Ночная консолидация: прунинг {pr}, архив {ar}.")
+        except Exception:
+            pass
+
+        # Pattern hint для сегодняшнего weekday (если ночью что-то нашли)
+        try:
+            from .patterns import patterns_for_today
+            todays = patterns_for_today()
+            if todays:
+                # Один самый свежий — не заваливаем briefing
+                todays.sort(key=lambda p: p.get("detected_at", 0), reverse=True)
+                hint = todays[0].get("hint_ru") or ""
+                if hint:
+                    bits.append(f"💡 {hint}")
+        except Exception:
+            pass
+
+        # Вчерашний activity summary — ground truth прошедшего дня
+        try:
+            from .activity_log import day_summary
+            import time as _time
+            yday = day_summary(ts=_time.time() - 86400)
+            if (yday.get("activity_count") or 0) > 0:
+                parts = [f"Вчера: {yday['total_tracked_h']}ч"]
+                # Топ-2 по категориям
+                cat_h = yday.get("by_category_h") or {}
+                top_cats = sorted(cat_h.items(), key=lambda kv: kv[1], reverse=True)[:2]
+                if top_cats:
+                    parts.append("(" + ", ".join(f"{c} {h}ч" for c, h in top_cats if h > 0.1) + ")")
+                sw = yday.get("switches") or 0
+                if sw > 0:
+                    parts.append(f"· {sw} переключ.")
+                bits.append(" ".join(parts) + ".")
+        except Exception:
+            pass
+
         return " ".join(bits)
 
     # ── HRV → UserState periodic push (15s) ─────────────────────────────
@@ -817,6 +1243,386 @@ class CognitiveLoop:
             )
         except Exception as e:
             log.debug(f"[cognitive_loop] hrv push failed: {e}")
+
+    # ── Low-energy heavy-decision guard ─────────────────────────────────
+
+    def _check_low_energy_heavy(self):
+        """Проактивная защита: если daily_remaining < THRESHOLD И в open_goals
+        есть цель с тяжёлым mode — предлагаем перенести на утро.
+
+        Mockup: «Heavy decision 'change tech stack?' — move to tomorrow
+        morning?». Дроссель раз в 30 минут чтобы не спамить.
+        """
+        now = time.time()
+        if now - self._last_low_energy_check < self.LOW_ENERGY_CHECK_INTERVAL:
+            return
+        try:
+            from .assistant import _get_context
+            from .goals_store import list_goals
+            ctx = _get_context(reset_daily=False)
+            energy = ctx.get("energy") or {}
+            daily = energy.get("energy", 100)
+            if daily >= self.LOW_ENERGY_THRESHOLD:
+                return
+            open_goals = list_goals(status="open", limit=20)
+            heavy = [g for g in open_goals if g.get("mode") in self.HEAVY_MODES]
+            if not heavy:
+                return
+            g0 = heavy[0]
+            txt = (g0.get("text") or "")[:80]
+            self._last_low_energy_check = now
+            self._add_alert({
+                "type": "low_energy_heavy",
+                "severity": "warning",
+                "text": f"Энергия {int(daily)}/100. Тяжёлое решение «{txt}» — "
+                        f"перенести на утро?",
+                "text_en": f"Energy {int(daily)}/100. Heavy decision '{txt}' — "
+                           f"move to tomorrow morning?",
+                "goal_id": g0.get("id"),
+                "goal_text": txt,
+                "goal_mode": g0.get("mode"),
+                "energy": int(daily),
+                "actions": [
+                    {"label": "Перенести", "label_en": "Postpone",
+                     "action": "postpone_goal_tomorrow", "goal_id": g0.get("id")},
+                    {"label": "Нет, сейчас", "label_en": "No, now",
+                     "action": "dismiss"},
+                ],
+            }, dedupe=True)
+            log.info(f"[cognitive_loop] low_energy_heavy alert: energy={daily} goal={g0.get('id')}")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] low_energy check failed: {e}")
+
+    # ── Heartbeat: сводный снапшот всех стримов в state_graph ───────────
+
+    def _check_heartbeat(self):
+        """Раз в 5 мин пишем в state_graph «pulse»-запись — свёрнутый снапшот
+        всего что система знает в этот момент: активная задача, pending plans,
+        last check-in, recent surprises, open goals, live HRV.
+
+        Зачем: DMN, state_walk и meta-tick читают tail state_graph'a как
+        substrate. Если юзер idle — без heartbeat'a tail статичен и DMN
+        варится только на content_graph. С heartbeat'ом поток живёт 24/7:
+        система всегда видит СВОЁ текущее состояние во времени.
+
+        Не эмитит alert — это наблюдательная запись, не сигнал.
+        """
+        now = time.time()
+        if now - self._last_heartbeat < self.HEARTBEAT_INTERVAL:
+            return
+        self._last_heartbeat = now
+
+        snapshot: dict = {"ts": now}
+        # 1. Active activity
+        try:
+            from .activity_log import get_active, day_summary
+            active = get_active()
+            if active:
+                snapshot["active_activity"] = {
+                    "name": active.get("name"),
+                    "category": active.get("category"),
+                    "elapsed_s": int(now - float(active.get("started_at") or now)),
+                }
+            today = day_summary()
+            snapshot["today_activity"] = {
+                "count": today.get("activity_count", 0),
+                "total_h": today.get("total_tracked_h", 0),
+                "switches": today.get("switches", 0),
+            }
+        except Exception:
+            pass
+
+        # 2. Plans today (pending + completed ratio)
+        try:
+            from .plans import schedule_for_day
+            sched = schedule_for_day()
+            snapshot["plans_today"] = {
+                "total": len(sched),
+                "done": sum(1 for s in sched if s.get("done")),
+                "skipped": sum(1 for s in sched if s.get("skipped")),
+                "pending": sum(1 for s in sched
+                               if not s.get("done") and not s.get("skipped")),
+            }
+            # Ближайшее событие
+            pending = [s for s in sched if not s.get("done") and not s.get("skipped")
+                       and (s.get("planned_ts") or 0) >= now]
+            if pending:
+                nx = min(pending, key=lambda s: s.get("planned_ts") or 0)
+                snapshot["next_plan_in_s"] = int((nx.get("planned_ts") or now) - now)
+                snapshot["next_plan_name"] = nx.get("name")
+        except Exception:
+            pass
+
+        # 3. Latest check-in
+        try:
+            from .checkins import latest_checkin
+            ci = latest_checkin(hours=48)
+            if ci:
+                snapshot["last_checkin"] = {
+                    "age_h": round((now - float(ci.get("ts") or now)) / 3600.0, 1),
+                    "energy": ci.get("energy"),
+                    "focus": ci.get("focus"),
+                    "stress": ci.get("stress"),
+                    "surprise": ci.get("surprise"),
+                }
+        except Exception:
+            pass
+
+        # 4. Open goals
+        try:
+            from .goals_store import list_goals
+            open_count = len(list_goals(status="open", limit=50))
+            snapshot["open_goals"] = open_count
+        except Exception:
+            pass
+
+        # 5. Neurochem + UserState scalars
+        try:
+            from .horizon import get_global_state
+            m = get_global_state().get_metrics()
+            neuro = m.get("neurochem", {})
+            us = m.get("user_state", {})
+            snapshot["neuro"] = {
+                "da": round(neuro.get("dopamine", 0), 2),
+                "s":  round(neuro.get("serotonin", 0), 2),
+                "ne": round(neuro.get("norepinephrine", 0), 2),
+                "burnout": round(neuro.get("burnout", 0), 2),
+            }
+            snapshot["user"] = {
+                "long_reserve_pct": us.get("long_reserve_pct"),
+                "named": (us.get("named_state") or {}).get("key"),
+                "sync_regime": m.get("sync_regime"),
+            }
+        except Exception:
+            pass
+
+        # 6. Recent bridge (если был DMN хит)
+        if self._recent_bridges:
+            last_br = self._recent_bridges[-1]
+            if (now - (last_br.get("ts") or 0)) < 3600:
+                snapshot["recent_bridge"] = {
+                    "text": (last_br.get("text") or "")[:80],
+                    "source": last_br.get("source"),
+                    "age_s": int(now - (last_br.get("ts") or now)),
+                }
+
+        # Составляем короткую reason-строку (для читаемого tail)
+        bits = []
+        if snapshot.get("active_activity"):
+            a = snapshot["active_activity"]
+            bits.append(f"act:{a['name']}({a['elapsed_s']//60}m)")
+        if snapshot.get("plans_today"):
+            p = snapshot["plans_today"]
+            bits.append(f"plans:{p['done']}/{p['total']}")
+        if snapshot.get("next_plan_in_s") is not None:
+            mins = snapshot["next_plan_in_s"] // 60
+            bits.append(f"next:{snapshot.get('next_plan_name', '')}→{mins}m")
+        if snapshot.get("open_goals"):
+            bits.append(f"goals:{snapshot['open_goals']}")
+        neuro = snapshot.get("neuro") or {}
+        if neuro:
+            bits.append(f"NE:{neuro.get('ne')}")
+        reason = "heartbeat · " + (" ".join(bits) if bits else "idle")
+
+        try:
+            from .state_graph import get_state_graph
+            from .horizon import get_global_state
+            st = get_global_state()
+            sg = get_state_graph()
+            # state_origin: 1_held если есть active activity, иначе 1_rest
+            origin = "1_held" if snapshot.get("active_activity") else "1_rest"
+            sg.append(
+                action="heartbeat",
+                phase="background",
+                user_initiated=False,
+                state_snapshot=snapshot,
+                reason=reason,
+                state_origin=origin,
+            )
+            log.debug(f"[cognitive_loop] heartbeat: {reason}")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] heartbeat write failed: {e}")
+
+    # ── Plan reminders & evening retrospective ──────────────────────────
+
+    def _check_plan_reminders(self):
+        """За 10 минут до запланированного события пушим alert.
+
+        Dedup по (plan_id, for_date) чтобы не повторять. На новый день набор
+        сбрасывается.
+        """
+        now = time.time()
+        if now - self._last_plan_reminder_check < self.PLAN_REMINDER_CHECK_INTERVAL:
+            return
+        self._last_plan_reminder_check = now
+
+        import datetime as _dt
+        today_str = _dt.date.today().strftime("%Y-%m-%d")
+        # Reset set на новый день
+        if not any(k.endswith(today_str) for k in self._reminded_plan_keys):
+            # Отсеиваем старые записи — храним только сегодняшние
+            self._reminded_plan_keys = {k for k in self._reminded_plan_keys
+                                        if k.endswith(today_str)}
+
+        try:
+            from .plans import schedule_for_day
+            sched = schedule_for_day()
+            window_s = self.PLAN_REMINDER_MINUTES * 60
+            for it in sched:
+                if it.get("done") or it.get("skipped"):
+                    continue
+                planned = it.get("planned_ts")
+                if not planned:
+                    continue
+                delta = planned - now
+                if not (0 < delta <= window_s):
+                    continue
+                key = f"{it['id']}:{it.get('for_date') or today_str}"
+                if key in self._reminded_plan_keys:
+                    continue
+                self._reminded_plan_keys.add(key)
+                mins_left = max(1, int(delta / 60))
+                self._add_alert({
+                    "type": "plan_reminder",
+                    "severity": "info",
+                    "text": f"Через {mins_left} мин: {it.get('name', '')}"
+                            + (f" ({it.get('category')})" if it.get("category") else ""),
+                    "text_en": f"In {mins_left} min: {it.get('name', '')}",
+                    "plan_id": it["id"],
+                    "plan_name": it.get("name", ""),
+                    "plan_category": it.get("category"),
+                    "for_date": it.get("for_date"),
+                    "planned_ts": planned,
+                    "minutes_before": mins_left,
+                })
+                log.info(f"[cognitive_loop] plan_reminder: {it.get('name')} in {mins_left}min")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] plan reminder failed: {e}")
+
+    def _check_evening_retro(self):
+        """Вечернее ретро — раз в день, после wake_hour + 14h.
+
+        Alert содержит list невыполненных plans + hint на check-in модал.
+        """
+        import datetime as _dt
+        today_str = _dt.date.today().strftime("%Y-%m-%d")
+        if self._last_evening_retro_date == today_str:
+            return
+        # Считаем время наступления ретро: wake_hour + offset (14h)
+        try:
+            from .user_profile import load_profile
+            wake = int((load_profile().get("context") or {}).get("wake_hour",
+                                                                  self.DEFAULT_WAKE_HOUR))
+        except Exception:
+            wake = self.DEFAULT_WAKE_HOUR
+        retro_hour = min(23, wake + self.EVENING_RETRO_HOUR_OFFSET)
+        local_hour = _dt.datetime.now().hour
+        if local_hour < retro_hour:
+            return
+
+        # Собираем unfinished сегодняшние plans
+        try:
+            from .plans import schedule_for_day
+            sched = schedule_for_day()
+            unfinished = [
+                {"id": s["id"], "name": s.get("name", ""),
+                 "category": s.get("category"),
+                 "planned_ts": s.get("planned_ts"),
+                 "kind": s.get("kind")}
+                for s in sched
+                if not s.get("done") and not s.get("skipped")
+            ]
+        except Exception:
+            unfinished = []
+
+        self._last_evening_retro_date = today_str
+        n_un = len(unfinished)
+        text = (f"Ретро дня: {n_un} невыполнен{'о' if n_un == 1 else 'ы'}. "
+                f"Откроем check-in?") if n_un else "Ретро дня: всё по плану. Сделаем check-in?"
+        self._add_alert({
+            "type": "evening_retro",
+            "severity": "info",
+            "text": text,
+            "text_en": text,
+            "unfinished": unfinished,
+            "hour": local_hour,
+        })
+        log.info(f"[cognitive_loop] evening retro pushed @ {local_hour}:00 ({n_un} unfinished)")
+
+    # ── Activity → energy cost (category-based) ──────────────────────────
+
+    def _check_activity_cost(self):
+        """Списывает daily energy по категории текущей активной задачи.
+
+        До этого `decision_cost` применялся только при `/assist/feedback`
+        (разговор с Baddle) — реальный 2h митинг без Baddle не тратил
+        энергию в модели. Теперь:
+          - work      → 0.25/мин  (≈15/час)
+          - meeting   → 0.40/мин  (override по name)
+          - pause/sleep → отрицательное (лёгкое восстановление)
+
+        Source of truth — daily_spent в assistant state (тот же что и
+        /assist тратит, единый счётчик).
+        """
+        now = time.time()
+        if self._last_activity_tick == 0.0:
+            self._last_activity_tick = now
+            return
+        delta_s = now - self._last_activity_tick
+        if delta_s < 10:  # слишком частые тики — пропускаем
+            return
+
+        try:
+            from .activity_log import get_active, cost_per_min
+            act = get_active()
+            if not act:
+                self._last_activity_tick = now
+                return
+
+            rate = cost_per_min(act.get("name", ""), act.get("category"))
+            if rate == 0:
+                self._last_activity_tick = now
+                return
+
+            minutes = delta_s / 60.0
+            cost = rate * minutes + self._activity_cost_carry
+            # Накапливаем под 0.1 чтобы не терять мелкие delta
+            whole = round(cost, 2)
+            self._activity_cost_carry = cost - whole
+
+            if whole != 0:
+                # Импорт assistant state helpers (единый источник daily_spent)
+                from .assistant import _get_context, _save_state
+                ctx = _get_context()
+                state = ctx["state"]
+                prev = float(state.get("daily_spent", 0.0))
+                new = max(0.0, prev + whole)  # clamp в ноль при recovery
+                state["daily_spent"] = new
+                _save_state(state)
+        except Exception as e:
+            log.debug(f"[cognitive_loop] activity cost failed: {e}")
+        finally:
+            self._last_activity_tick = now
+
+    # ── Workspace auto-save (embeddings + nodes persistence) ─────────────
+
+    def _check_ws_flush(self):
+        """Каждые ~2 мин сбрасываем активный workspace на диск.
+
+        До этого save происходил только на /workspace/switch или явный
+        /workspace/save. При крэше/рестарте терялись новые ноды +
+        embeddings с момента последнего switch. Теперь auto-flush раз
+        в 2 минуты делает persistence надёжным.
+        """
+        now = time.time()
+        if now - self._last_ws_flush < self.WS_FLUSH_INTERVAL:
+            return
+        self._last_ws_flush = now
+        try:
+            from .workspace import get_workspace_manager
+            get_workspace_manager().save_active()
+        except Exception as e:
+            log.debug(f"[cognitive_loop] ws flush failed: {e}")
 
     # ── HRV alerts ─────────────────────────────────────────────────────
 
@@ -857,6 +1663,9 @@ class CognitiveLoop:
             return alerts
 
     def get_status(self) -> dict:
+        now = time.time()
+        # Gate diagnostics: почему/может ли DMN сейчас сработать
+        gate = self._dmn_gate_diagnostics(now)
         return {
             "running": self.is_running,
             "alerts_pending": len(self._alerts_queue),
@@ -865,6 +1674,58 @@ class CognitiveLoop:
             "last_night_cycle": self._last_night_cycle,
             "last_briefing": self._last_briefing,
             "last_foreground_tick": self._last_foreground_tick,
+            "last_heartbeat": self._last_heartbeat,
+            "heartbeat_interval_s": self.HEARTBEAT_INTERVAL,
+            "recent_bridges": list(self._recent_bridges or [])[-5:],
+            "dmn": gate,
+        }
+
+    def _dmn_gate_diagnostics(self, now: float) -> dict:
+        """Детальный статус DMN-гейта — почему может / не может сработать.
+
+        Для проверки: работает ли DMN автономно когда юзер idle.
+        Гейт: not_frozen AND ne < NE_HIGH_GATE AND idle >= FOREGROUND_COOLDOWN
+        Плюс DMN_INTERVAL между запусками.
+        """
+        try:
+            from .horizon import get_global_state, PROTECTIVE_FREEZE
+            st = get_global_state()
+            ne = st.neuro.norepinephrine
+            state = st.state
+            not_frozen = state != PROTECTIVE_FREEZE
+        except Exception:
+            ne = None
+            state = "?"
+            not_frozen = True
+        idle_s = (now - self._last_foreground_tick) if self._last_foreground_tick else None
+        since_dmn = now - self._last_dmn if self._last_dmn else None
+        ne_quiet = (ne is not None and ne < self.NE_HIGH_GATE)
+        # idle_enough: никогда не было foreground ИЛИ прошло больше cooldown
+        idle_enough = (idle_s is None) or (idle_s >= self.FOREGROUND_COOLDOWN)
+        interval_ok = since_dmn is None or since_dmn >= self.DMN_INTERVAL
+
+        eligible = not_frozen and ne_quiet and idle_enough and interval_ok
+        reason = None
+        if not not_frozen:
+            reason = f"PROTECTIVE_FREEZE (state={state})"
+        elif not ne_quiet:
+            reason = f"NE too high ({ne:.2f} >= {self.NE_HIGH_GATE})"
+        elif not idle_enough:
+            reason = f"user active recently ({idle_s:.0f}s < cooldown {self.FOREGROUND_COOLDOWN})"
+        elif not interval_ok:
+            reason = f"DMN_INTERVAL not elapsed ({since_dmn:.0f}s < {self.DMN_INTERVAL})"
+
+        return {
+            "eligible_now": eligible,
+            "blocked_by": reason,
+            "ne": round(ne, 3) if ne is not None else None,
+            "ne_gate": self.NE_HIGH_GATE,
+            "state": state,
+            "idle_seconds": round(idle_s, 1) if idle_s is not None else None,
+            "cooldown_s": self.FOREGROUND_COOLDOWN,
+            "since_last_dmn_s": round(since_dmn, 1) if since_dmn is not None else None,
+            "dmn_interval_s": self.DMN_INTERVAL,
+            "last_bridge": (self._recent_bridges[-1] if self._recent_bridges else None),
         }
 
 

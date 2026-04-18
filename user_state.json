@@ -1,8 +1,8 @@
 {
-  "decisions_today": 7,
+  "decisions_today": 18,
   "last_reset_date": "2026-04-18",
-  "last_interaction": 1776504626.0882037,
-  "total_decisions": 25,
+  "last_interaction": 1776530119.9845917,
+  "total_decisions": 36,
   "streaks": {
     "Morning exercise": 1
   },
@@ -164,6 +164,105 @@
       "category": "health",
       "mode": "scout",
       "message": "Помоги разобраться с тренировками"
+    },
+    {
+      "ts": 1776524405.6739385,
+      "kind": "morning_briefing",
+      "cost": 6,
+      "daily_used": 6,
+      "long_used": 0.0
+    },
+    {
+      "ts": 1776528937.8674583,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "status",
+      "message": "как я"
+    },
+    {
+      "ts": 1776528938.1318655,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "help",
+      "message": "что ты умеешь"
+    },
+    {
+      "ts": 1776528938.185765,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "plan_today",
+      "message": "план"
+    },
+    {
+      "ts": 1776528938.4509532,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "start",
+      "message": "запусти код"
+    },
+    {
+      "ts": 1776528938.504166,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "stop",
+      "message": "стоп"
+    },
+    {
+      "ts": 1776528938.7569091,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "food_history",
+      "message": "что я ел за неделю"
+    },
+    {
+      "ts": 1776528938.8099978,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "checkin",
+      "message": "check-in"
+    },
+    {
+      "ts": 1776528940.0521529,
+      "kind": "assist_clarify",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "mode": "fan",
+      "message": "произвольный вопрос который не команда"
+    },
+    {
+      "ts": 1776528964.912327,
+      "kind": "chat_command",
+      "cost": 3,
+      "daily_used": 3,
+      "long_used": 0.0,
+      "command": "status",
+      "message": "как я?"
+    },
+    {
+      "ts": 1776530119.9846065,
+      "kind": "assist",
+      "cost": 12,
+      "daily_used": 12,
+      "long_used": 0.0,
+      "mode": "tournament",
+      "message": "сравни react и vue",
+      "intent": "direct",
+      "confidence": 1.0
     }
   ],
   "habit_history": {
@@ -189,23 +288,30 @@
       "completion_7d": 1
     }
   },
-  "daily_spent": 36.0,
+  "daily_spent": 81.23,
   "user_state_dump": {
-    "dopamine": 0.5,
-    "serotonin": 0.5,
+    "dopamine": 0.671,
+    "serotonin": 0.459,
     "norepinephrine": 0.5,
-    "burnout": 0.012,
-    "valence": 0.0,
-    "expectation": 0.5,
-    "reality": 0.5,
-    "surprise": 0.0,
-    "imbalance": 0.0,
+    "burnout": 0.191,
+    "valence": 0.067,
+    "expectation": 0.518,
+    "reality": 0.565,
+    "surprise": 0.047,
+    "imbalance": 0.047,
     "long_reserve": 1500.0,
+    "activity_magnitude": 0.0,
+    "activity_zone": {
+      "key": null,
+      "label": null,
+      "advice": null
+    },
     "named_state": {
       "key": "neutral",
       "label": "Нейтральное",
       "advice": "Баланс. Хорошая точка для выбора направления."
     },
     "hrv": null
-  }
+  },
+  "last_briefing_ts": 1776525359.397747
 }

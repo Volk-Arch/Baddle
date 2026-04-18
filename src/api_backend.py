@@ -84,20 +84,74 @@ def fetch_models(api_url: str, api_key: str) -> dict:
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = (1, 3, 8)  # seconds
 
+# ── API health (для graceful degradation) ───────────────────────────────
+# Держим trailing-state: last success/failure + consecutive failures.
+# Статус выводится: ok (недавно успешный вызов), degraded (1-2 consecutive
+# failures), offline (>=3 подряд или экплицитная ошибка retry-exhausted).
+_api_health = {
+    "last_ok_ts": 0.0,
+    "last_fail_ts": 0.0,
+    "consecutive_failures": 0,
+    "last_error": "",
+}
+
+# Cooldown: если оффлайн — первый call после 60с всё равно пробуется
+# (не смысла держать permanent offline, LM-сервер может вернуться).
+_OFFLINE_RETRY_COOLDOWN = 60.0
+
+
+def _health_mark_ok():
+    _api_health["last_ok_ts"] = time.time()
+    _api_health["consecutive_failures"] = 0
+    _api_health["last_error"] = ""
+
+
+def _health_mark_fail(err: str):
+    _api_health["last_fail_ts"] = time.time()
+    _api_health["consecutive_failures"] += 1
+    _api_health["last_error"] = (err or "")[:200]
+
+
+def get_api_health() -> dict:
+    """Возвращает {status: ok|degraded|offline, ...}. Для UI-индикатора."""
+    now = time.time()
+    cf = _api_health["consecutive_failures"]
+    last_ok = _api_health["last_ok_ts"]
+    if cf == 0 and last_ok > 0:
+        status = "ok"
+    elif cf < 3:
+        status = "degraded" if cf > 0 else ("unknown" if last_ok == 0 else "ok")
+    else:
+        status = "offline"
+    return {
+        "status": status,
+        "consecutive_failures": cf,
+        "last_ok_ts": last_ok,
+        "last_fail_ts": _api_health["last_fail_ts"],
+        "last_error": _api_health["last_error"],
+        "seconds_since_ok": (now - last_ok) if last_ok else None,
+    }
+
 
 def _api_request(url: str, data: bytes = None, headers: dict = None,
                  method: str = "POST", timeout: int = 120) -> dict:
-    """HTTP request with retry + exponential backoff on 5xx/timeout."""
+    """HTTP request with retry + exponential backoff on 5xx/timeout.
+
+    Обновляет `_api_health` на каждом итоге — чтобы UI мог показать
+    статус «LM offline» без тихих полома.
+    """
     last_err = None
     for attempt in range(_MAX_RETRIES):
         req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                result = json.loads(resp.read().decode("utf-8"))
+            _health_mark_ok()
+            return result
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8", errors="replace")
             if e.code < 500 and e.code != 429:
-                # Client error (4xx except 429) — don't retry
+                # Client error (4xx except 429) — don't retry, не offline
                 log.error(f"[api] HTTP {e.code}: {error_body[:500]}")
                 raise RuntimeError(f"API error {e.code}: {error_body[:200]}")
             last_err = f"HTTP {e.code}: {error_body[:200]}"
@@ -110,6 +164,7 @@ def _api_request(url: str, data: bytes = None, headers: dict = None,
         log.warning(f"[api] Attempt {attempt + 1}/{_MAX_RETRIES} failed: {last_err}. Retrying in {wait}s...")
         time.sleep(wait)
 
+    _health_mark_fail(last_err or "unknown")
     log.error(f"[api] All {_MAX_RETRIES} attempts failed: {last_err}")
     raise RuntimeError(f"API failed after {_MAX_RETRIES} retries: {last_err}")
 

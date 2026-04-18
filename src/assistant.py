@@ -80,54 +80,67 @@ assistant_bp = Blueprint("assistant", __name__)
 
 _STATE_FILE = Path(__file__).parent.parent / "user_state.json"
 
+# In-process lock сериализует load↔save между параллельными Flask-threads.
+# Устраняет race: thread A читает dump, thread B читает тот же dump,
+# оба пишут обратно свои версии → чекмарк теряется. Atomic write через
+# temp + replace даёт файловую консистентность; lock — семантическую.
+import threading as _threading
+_state_lock = _threading.RLock()
 
 _user_state_restored = False   # guard — restore from disk ОДИН раз при первой загрузке
 
 
 def _load_state() -> dict:
     global _user_state_restored
-    if _STATE_FILE.exists():
-        try:
-            data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-        except Exception:
+    with _state_lock:
+        if _STATE_FILE.exists():
+            try:
+                data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+        else:
             data = None
-    else:
-        data = None
-    if not data:
-        data = {
-            "decisions_today": 0,
-            "daily_spent": 0.0,   # сумма энергии потраченной за сегодня (дробная)
-            "last_reset_date": None,
-            "last_interaction": None,
-            "total_decisions": 0,
-            "streaks": {},       # habit_name → consecutive_days
-            "history": [],       # last 100 interactions (trimmed)
-        }
-    # Восстановим UserState ТОЛЬКО ОДИН раз за процесс — иначе каждый
-    # /assist request будет затирать runtime-апдейты от /hrv/metrics etc.
-    if not _user_state_restored:
-        try:
-            from .user_state import UserState, set_user_state
-            us_dump = data.get("user_state_dump")
-            if isinstance(us_dump, dict):
-                set_user_state(UserState.from_dict(us_dump))
-        except Exception as e:
-            print(f"[assistant] user_state restore error: {e}")
-        _user_state_restored = True
-    return data
+        if not data:
+            data = {
+                "decisions_today": 0,
+                "daily_spent": 0.0,   # сумма энергии потраченной за сегодня (дробная)
+                "last_reset_date": None,
+                "last_interaction": None,
+                "total_decisions": 0,
+                "streaks": {},       # habit_name → consecutive_days
+                "history": [],       # last 100 interactions (trimmed)
+            }
+        # Восстановим UserState ТОЛЬКО ОДИН раз за процесс — иначе каждый
+        # /assist request будет затирать runtime-апдейты от /hrv/metrics etc.
+        if not _user_state_restored:
+            try:
+                from .user_state import UserState, set_user_state
+                us_dump = data.get("user_state_dump")
+                if isinstance(us_dump, dict):
+                    set_user_state(UserState.from_dict(us_dump))
+            except Exception as e:
+                print(f"[assistant] user_state restore error: {e}")
+            _user_state_restored = True
+        return data
 
 
 def _save_state(state: dict):
-    # Сериализуем текущий UserState вместе с остальным для continuity
-    try:
-        from .user_state import get_user_state
-        state["user_state_dump"] = get_user_state().to_dict()
-    except Exception:
-        pass
-    try:
-        _STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception as e:
-        print(f"[assistant] state save error: {e}")
+    with _state_lock:
+        # Сериализуем текущий UserState вместе с остальным для continuity
+        try:
+            from .user_state import get_user_state
+            state["user_state_dump"] = get_user_state().to_dict()
+        except Exception:
+            pass
+        try:
+            # Atomic write: temp file → replace, чтобы half-written файл
+            # не мог прочитать параллельный reader.
+            tmp = _STATE_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+            tmp.replace(_STATE_FILE)
+        except Exception as e:
+            print(f"[assistant] state save error: {e}")
 
 
 def _today_date() -> str:
@@ -452,6 +465,37 @@ def assist():
     if not message:
         return jsonify({"error": "empty message"})
 
+    # Deterministic chat-commands prefilter: «как я?», «запусти код», «план»,
+    # «что я ел» — обрабатываем локально без LLM. Экономит токены и даёт
+    # мгновенный UX. Если ни один паттерн не матчится — продолжаем как обычно.
+    try:
+        from .chat_commands import try_handle
+        cmd_res = try_handle(message, lang=lang)
+        if cmd_res is not None:
+            # Минимальный engagement-ping чтобы UserState видел что юзер активен
+            from .user_state import get_user_state
+            get_user_state().update_from_timing()
+            get_user_state().update_from_message(message)
+            # Привязываем energy+hrv к ответу (UI ожидает эти поля)
+            ctx = _get_context()
+            cmd_res.setdefault("energy", ctx.get("energy"))
+            cmd_res.setdefault("hrv", ctx.get("hrv"))
+            cmd_res.setdefault("warnings", [])
+            cmd_res.setdefault("lang", lang)
+            cmd_res.setdefault("message_echo", message)
+            cmd_res.setdefault("api_offline", False)
+            # Логируем в state_graph (не-LLM action)
+            state = ctx["state"]
+            _log_decision(state, kind="chat_command",
+                          meta={"command": cmd_res.get("chat_command"),
+                                "message": message[:200]},
+                          mode_id="free",
+                          hrv_recovery=(ctx.get("hrv") or {}).get("energy_recovery"))
+            _save_state(state)
+            return jsonify(cmd_res)
+    except Exception as e:
+        log.warning(f"[/assist] chat-command prefilter failed: {e}")
+
     # Inject NE spike — user engagement = Horizon takes budget from DMN
     from .horizon import get_global_state
     from .user_state import get_user_state
@@ -495,9 +539,20 @@ def assist():
         pass
     context = " | ".join(context_parts)
 
-    # ── ONE LLM call: mode + intent + confidence ──
-    classification = classify_intent_llm(message, context=context, state_hint=state_hint,
-                                         profile_hint=profile_hint, lang=lang)
+    # ── Forced mode (юзер явно выбрал режим в UI) → skip classify ──
+    # Экономит LLM-вызов + даёт детерминированное поведение когда юзер
+    # хочет конкретно dispute / tournament / bayes / и т.д.
+    forced = (d.get("mode") or "").strip()
+    _valid_modes = {"dispute","tournament","bayes","fan","rhythm","horizon",
+                    "vector","scout","builder","pipeline","cascade","scales",
+                    "race","free"}
+    if forced and forced in _valid_modes:
+        classification = {"mode": forced, "intent": "direct",
+                          "confidence": 1.0, "source": "forced"}
+    else:
+        # ── ONE LLM call: mode + intent + confidence ──
+        classification = classify_intent_llm(message, context=context, state_hint=state_hint,
+                                             profile_hint=profile_hint, lang=lang)
     mode_id = classification.get("mode", "free")
     intent = classification.get("intent", "direct")
     confidence = classification.get("confidence", 0.5)
@@ -604,7 +659,32 @@ def assist():
         })
 
     # ── Actually execute the mode (profile_hint injects constraints) ──
-    exec_result = execute_mode(mode_id, message, lang, profile_hint=profile_hint)
+    # Graceful degradation: если LM упал на 3 retry — возвращаем
+    # user-friendly fallback-карточку вместо 500. state_graph всё равно
+    # пишет assist-event с пометкой api_offline.
+    api_offline = False
+    try:
+        exec_result = execute_mode(mode_id, message, lang, profile_hint=profile_hint)
+    except RuntimeError as e:
+        api_offline = True
+        log.error(f"[/assist] LM offline: {e}")
+        if lang == "ru":
+            msg = ("⚠ LM offline — не отвечает после 3 попыток. "
+                   "Твой запрос я сохранил, верну ответ как только LM восстановится.")
+        else:
+            msg = ("⚠ LM offline — no response after 3 retries. Saved your "
+                   "request, will reply when LM recovers.")
+        exec_result = {
+            "text": msg,
+            "cards": [{
+                "type": "lm_offline",
+                "message_echo": message,
+                "error": str(e)[:200],
+                "retry_hint": ("Проверь LM Studio / api_url в Settings" if lang == "ru"
+                               else "Check LM Studio / api_url in Settings"),
+            }],
+            "steps": [],
+        }
     response_text = exec_result.get("text") or response["intro"]
     cards = exec_result.get("cards", [])
     steps = exec_result.get("steps", [])
@@ -646,6 +726,7 @@ def assist():
         "confidence": confidence,
         "classify_source": classification.get("source"),
         "error": exec_result.get("error"),
+        "api_offline": api_offline,
     })
 
 
@@ -719,7 +800,49 @@ def assist_state():
     prediction error), named_state (Voronoi region), long_reserve (dual-pool).
     """
     from .horizon import get_global_state
-    return jsonify(get_global_state().get_metrics())
+    from .api_backend import get_api_health
+    data = get_global_state().get_metrics()
+    data["api_health"] = get_api_health()
+    return jsonify(data)
+
+
+@assistant_bp.route("/assist/health", methods=["GET"])
+def assist_health():
+    """Quick LLM-connection health for UI badge. `status` ∈ {ok, degraded, offline, unknown}."""
+    from .api_backend import get_api_health
+    return jsonify(get_api_health())
+
+
+@assistant_bp.route("/patterns", methods=["GET"])
+def patterns_list():
+    """Recent detected patterns (weekday × category × outcome).
+
+    Query: ?today=1 — only today's weekday, ?hours=N — lookback (default 36).
+    """
+    from .patterns import read_recent_patterns, patterns_for_today
+    only_today = (request.args.get("today", "0") in ("1", "true"))
+    if only_today:
+        return jsonify({"patterns": patterns_for_today()})
+    try:
+        hours = int(request.args.get("hours", 36))
+    except ValueError:
+        hours = 36
+    return jsonify({"patterns": read_recent_patterns(hours=hours)})
+
+
+@assistant_bp.route("/patterns/run", methods=["POST"])
+def patterns_run():
+    """Manual trigger — запускает детектор сейчас (полезно для тестов и
+    когда night_cycle ещё не отработал).
+    """
+    from .patterns import detect_all
+    d = request.get_json(silent=True) or {}
+    try:
+        days = int(d.get("days_back", 21))
+    except (TypeError, ValueError):
+        days = 21
+    found = detect_all(days_back=days)
+    return jsonify({"ok": True, "detected": len(found), "patterns": found})
 
 
 @assistant_bp.route("/assist/history", methods=["GET"])
@@ -1034,6 +1157,33 @@ def goals_update():
     return jsonify({"ok": True})
 
 
+@assistant_bp.route("/goals/postpone", methods=["POST"])
+def goals_postpone():
+    """Отложить цель до завтрашнего wake_hour. Используется в low_energy_heavy alert.
+
+    Body: {id, until?: "tomorrow"|"next_week"}  — default "tomorrow"
+    """
+    from .goals_store import update_goal, get_goal
+    from .user_profile import load_profile
+    import datetime as _dt
+    d = request.get_json(force=True) or {}
+    gid = d.get("id") or ""
+    if not gid or not get_goal(gid):
+        return jsonify({"error": "goal_not_found"}), 404
+    until = d.get("until", "tomorrow")
+    prof = load_profile()
+    wake = int(((prof.get("context") or {}).get("wake_hour")) or 7)
+    now = _dt.datetime.now()
+    if until == "next_week":
+        target = now + _dt.timedelta(days=7)
+    else:
+        target = now + _dt.timedelta(days=1)
+    target = target.replace(hour=wake, minute=0, second=0, microsecond=0)
+    # deadline — это существующее поле, переиспользуем с семантикой postpone
+    update_goal(gid, {"deadline": target.isoformat(timespec="seconds")})
+    return jsonify({"ok": True, "postponed_until": target.isoformat(timespec="seconds")})
+
+
 # ── Solved tasks archive ──────────────────────────────────────────────
 
 @assistant_bp.route("/goals/solved", methods=["GET"])
@@ -1053,6 +1203,355 @@ def goals_solved_get(snapshot_ref):
     if not data:
         return jsonify({"error": "not_found"}), 404
     return jsonify(data)
+
+
+# ── Activity log endpoints (ручной ground-truth трекер) ──────────────
+
+@assistant_bp.route("/activity/active", methods=["GET"])
+def activity_active():
+    """Текущая активная задача + список шаблонов."""
+    from .activity_log import get_active, get_templates
+    cur = get_active()
+    if cur:
+        cur = dict(cur)
+        if cur.get("started_at"):
+            cur["elapsed_s"] = max(0, int(time.time() - float(cur["started_at"])))
+    return jsonify({
+        "active": cur,
+        "templates": get_templates(),
+    })
+
+
+def _sync_activity_to_graph(activity_id: str, name: str, category, workspace: str,
+                            node_index=None, finalize: bool = False,
+                            ts_start=None, ts_end=None, duration_s=None):
+    """Создать/обновить ноду type=activity в текущем workspace графе.
+
+    - При start: добавляем ноду, возвращаем её index.
+    - При stop (finalize=True): обновляем ts_end + duration_s на существующей.
+    Нейтрально к ошибкам — activity-лог не должен падать из-за графа.
+    """
+    try:
+        from .graph_logic import _graph, _add_node, graph_lock
+        if finalize and node_index is not None:
+            with graph_lock:
+                nodes = _graph.get("nodes") or []
+                if 0 <= node_index < len(nodes):
+                    n = nodes[node_index]
+                    n["activity_ts_end"] = ts_end
+                    n["activity_duration_s"] = duration_s
+                    # Визуальная пометка что задача закрыта
+                    n["activity_done"] = True
+                    return node_index
+            return None
+        # Start: create node
+        new_idx = _add_node(
+            text=name,
+            node_type="activity",
+        )
+        with graph_lock:
+            nodes = _graph.get("nodes") or []
+            if 0 <= new_idx < len(nodes):
+                n = nodes[new_idx]
+                n["activity_id"] = activity_id
+                n["activity_category"] = category
+                n["activity_ts_start"] = ts_start
+                n["activity_done"] = False
+        return new_idx
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[activity] graph sync failed: {e}")
+        return None
+
+
+@assistant_bp.route("/activity/start", methods=["POST"])
+def activity_start():
+    """Начать новую задачу. Если есть активная — она автоматически стопается
+    со `stop_reason='switch'` (поведение кнопки «Следующая» в Time Player).
+
+    Body: {name, category?, workspace?}
+    """
+    from .activity_log import start_activity, get_active, update_activity
+    from .workspace import get_workspace_manager
+
+    d = request.get_json(force=True) or {}
+    name = (d.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+    try:
+        ws_id = get_workspace_manager().active_id or d.get("workspace") or "main"
+    except Exception:
+        ws_id = d.get("workspace") or "main"
+
+    # Закрываем предыдущую ноду в графе (обновляем duration)
+    prev = get_active()
+    if prev and prev.get("node_index") is not None:
+        started = prev.get("started_at") or 0
+        _sync_activity_to_graph(
+            activity_id=prev["id"], name=prev.get("name", ""),
+            category=prev.get("category"), workspace=prev.get("workspace", "main"),
+            node_index=prev["node_index"], finalize=True,
+            ts_end=time.time(),
+            duration_s=round(time.time() - float(started)),
+        )
+
+    # Старт новой (автоматический stop_reason='switch' для предыдущей происходит внутри)
+    category = d.get("category")
+    aid = start_activity(name=name, category=category, workspace=ws_id)
+
+    # Создаём ноду в графе и связываем
+    node_idx = _sync_activity_to_graph(
+        activity_id=aid, name=name, category=category, workspace=ws_id,
+        ts_start=time.time(),
+    )
+    if node_idx is not None:
+        update_activity(aid, {"node_index": node_idx})
+
+    return jsonify({"ok": True, "id": aid, "node_index": node_idx,
+                    "name": name, "workspace": ws_id})
+
+
+@assistant_bp.route("/activity/stop", methods=["POST"])
+def activity_stop():
+    """Остановить текущую активную задачу. Body: {reason?}"""
+    from .activity_log import stop_activity
+    d = request.get_json(silent=True) or {}
+    rec = stop_activity(reason=d.get("reason") or "manual")
+    if not rec:
+        return jsonify({"ok": True, "stopped": None})
+    # Финализируем графовую ноду
+    if rec.get("node_index") is not None:
+        _sync_activity_to_graph(
+            activity_id=rec["id"], name=rec.get("name", ""),
+            category=rec.get("category"), workspace=rec.get("workspace", "main"),
+            node_index=rec["node_index"], finalize=True,
+            ts_end=rec.get("stopped_at"),
+            duration_s=round(rec.get("duration_s") or 0),
+        )
+    return jsonify({"ok": True, "stopped": rec})
+
+
+@assistant_bp.route("/activity/today", methods=["GET"])
+def activity_today():
+    """Агрегат по локальному дню: total / by_category / top_names / switches."""
+    from .activity_log import day_summary
+    return jsonify(day_summary())
+
+
+@assistant_bp.route("/activity/history", methods=["GET"])
+def activity_history():
+    """Последние N задач (завершённые + активная).
+
+    Query: ?limit=100 &category=food|work|health|social|learning &days=7
+    Фильтр по category + days даёт ответ на вопросы типа «что я ел за неделю»,
+    «сколько времени на работу за 30 дней».
+    """
+    from .activity_log import list_activities
+    try:
+        limit = int(request.args.get("limit", 100))
+    except ValueError:
+        limit = 100
+    cat = request.args.get("category")
+    since = None
+    days_s = request.args.get("days")
+    if days_s:
+        try:
+            since = time.time() - int(days_s) * 86400
+        except ValueError:
+            since = None
+    acts = list_activities(since_ts=since, limit=limit * 3 if cat else limit)
+    if cat:
+        acts = [a for a in acts if a.get("category") == cat][:limit]
+    return jsonify({"activities": acts})
+
+
+@assistant_bp.route("/activity/update", methods=["POST"])
+def activity_update():
+    """Body: {id, fields:{name,category,started_at,stopped_at}}.
+
+    started_at/stopped_at — unix timestamps, для коррекции времени
+    («забыл выключить Код → подрежь»).
+    """
+    from .activity_log import update_activity
+    d = request.get_json(force=True) or {}
+    aid = d.get("id", "")
+    if not aid:
+        return jsonify({"error": "id_required"}), 400
+    try:
+        update_activity(aid, d.get("fields") or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/activity/delete", methods=["POST"])
+def activity_delete():
+    """Body: {id}. Мягкое удаление — событие `delete` в activity.jsonl."""
+    from .activity_log import delete_activity
+    d = request.get_json(force=True) or {}
+    aid = d.get("id", "")
+    if not aid:
+        return jsonify({"error": "id_required"}), 400
+    delete_activity(aid)
+    return jsonify({"ok": True})
+
+
+# ── Plans: карта будущего (events + recurring habits) ──────────────────
+
+@assistant_bp.route("/plan", methods=["GET"])
+def plans_list():
+    """Query: ?status=active|done|all &kind=recurring|oneshot &limit=N"""
+    from .plans import list_plans
+    status = request.args.get("status", "active")
+    kind = request.args.get("kind")
+    try:
+        limit = int(request.args.get("limit", 200))
+    except ValueError:
+        limit = 200
+    return jsonify({"plans": list_plans(status=status, kind=kind, limit=limit)})
+
+
+@assistant_bp.route("/plan/today", methods=["GET"])
+def plans_today():
+    """Расписание на сегодня (или ?date=YYYY-MM-DD). Разворачивает recurring."""
+    from .plans import schedule_for_day
+    import datetime as _dt
+    ds = request.args.get("date")
+    target = None
+    if ds:
+        try:
+            target = _dt.date.fromisoformat(ds)
+        except ValueError:
+            pass
+    return jsonify({"schedule": schedule_for_day(target=target)})
+
+
+@assistant_bp.route("/plan/add", methods=["POST"])
+def plans_add():
+    """Body: {name, category?, ts_start?, ts_end?, recurring?{days:[0..6],time:"HH:MM"},
+             expected_difficulty?, note?}."""
+    from .plans import add_plan
+    d = request.get_json(force=True) or {}
+    name = (d.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+    pid = add_plan(
+        name=name,
+        category=d.get("category"),
+        ts_start=d.get("ts_start"),
+        ts_end=d.get("ts_end"),
+        recurring=d.get("recurring"),
+        expected_difficulty=d.get("expected_difficulty"),
+        note=d.get("note", ""),
+    )
+    return jsonify({"ok": True, "id": pid})
+
+
+@assistant_bp.route("/plan/complete", methods=["POST"])
+def plans_complete():
+    """Body: {id, for_date?, actual_ts?, actual_difficulty?, note?}"""
+    from .plans import complete_plan
+    d = request.get_json(force=True) or {}
+    pid = d.get("id")
+    if not pid:
+        return jsonify({"error": "id_required"}), 400
+    complete_plan(
+        plan_id=pid, for_date=d.get("for_date"),
+        actual_ts=d.get("actual_ts"),
+        actual_difficulty=d.get("actual_difficulty"),
+        note=d.get("note", ""),
+    )
+    # Feed surprise в UserState (expected vs actual_difficulty)
+    try:
+        from .plans import get_plan
+        from .user_state import get_user_state
+        p = get_plan(pid)
+        if p and p.get("expected_difficulty") and d.get("actual_difficulty"):
+            exp = int(p["expected_difficulty"])
+            act = int(d["actual_difficulty"])
+            s = (act - exp) / 4.0  # norm в [-1, 1]
+            user = get_user_state()
+            user.surprise = user.surprise * 0.6 + s * 0.4
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/plan/skip", methods=["POST"])
+def plans_skip():
+    """Body: {id, for_date?, reason?}"""
+    from .plans import skip_plan
+    d = request.get_json(force=True) or {}
+    if not d.get("id"):
+        return jsonify({"error": "id_required"}), 400
+    skip_plan(plan_id=d["id"], for_date=d.get("for_date"), reason=d.get("reason", ""))
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/plan/update", methods=["POST"])
+def plans_update():
+    """Body: {id, fields:{name, category, ts_start, ts_end, recurring, expected_difficulty, note}}"""
+    from .plans import update_plan
+    d = request.get_json(force=True) or {}
+    if not d.get("id"):
+        return jsonify({"error": "id_required"}), 400
+    update_plan(plan_id=d["id"], fields=d.get("fields") or {})
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/plan/delete", methods=["POST"])
+def plans_delete():
+    from .plans import delete_plan
+    d = request.get_json(force=True) or {}
+    if not d.get("id"):
+        return jsonify({"error": "id_required"}), 400
+    delete_plan(plan_id=d["id"])
+    return jsonify({"ok": True})
+
+
+# ── Daily check-in endpoints (ручной subjective-сигнал, если HRV off) ──
+
+@assistant_bp.route("/checkin", methods=["POST"])
+def checkin_add():
+    """Body: {energy?, focus?, stress?, expected?, reality?, note?}.
+
+    Все поля опциональны. Записывает событие + корректирует UserState:
+    energy→long_reserve, stress→NE, focus→serotonin, reality→valence,
+    (reality−expected)→surprise. Replaces HRV-контур когда трекера нет.
+    """
+    from .checkins import add_checkin, apply_to_user_state
+    d = request.get_json(force=True) or {}
+    entry = add_checkin(
+        energy=d.get("energy"),
+        focus=d.get("focus"),
+        stress=d.get("stress"),
+        expected=d.get("expected"),
+        reality=d.get("reality"),
+        note=d.get("note", ""),
+    )
+    apply_to_user_state(entry)
+    return jsonify({"ok": True, "entry": entry})
+
+
+@assistant_bp.route("/checkin/latest", methods=["GET"])
+def checkin_latest():
+    """Последний check-in за последние 24ч (для UI-восстановления формы)."""
+    from .checkins import latest_checkin
+    return jsonify({"entry": latest_checkin(hours=24)})
+
+
+@assistant_bp.route("/checkin/history", methods=["GET"])
+def checkin_history():
+    """Список за последние N дней (?days=14, default)."""
+    from .checkins import list_checkins, rolling_averages
+    try:
+        days = int(request.args.get("days", 14))
+    except ValueError:
+        days = 14
+    return jsonify({
+        "items": list_checkins(days=days),
+        "averages": rolling_averages(days=7),
+    })
 
 
 @assistant_bp.route("/graph/assist", methods=["POST"])
@@ -1442,6 +1941,199 @@ def assist_weekly():
                 "coherence": h.get("hrv_coherence"),
             })
 
+    # Correlation layer: time-of-day × outcome → actionable recommendation.
+    # Критерий: решения группируем по 4 бакетам (morning/afternoon/evening/night).
+    # Outcome-метрика: accepted/rejected feedback (если нет — skip бакет).
+    # Если разница accept-rate между лучшим и худшим бакетом ≥ 20 pp и
+    # сэмплов в каждом ≥ 3 — выдаём рекомендацию.
+    def _bucket_for_hour(h):
+        if 5 <= h < 12: return "morning"
+        if 12 <= h < 18: return "afternoon"
+        if 18 <= h < 23: return "evening"
+        return "night"
+    bucket_stats: dict = {}
+    for h in recent:
+        fb = h.get("feedback")
+        if fb not in ("accepted", "rejected"):
+            continue
+        try:
+            hr = datetime.fromtimestamp(float(h.get("ts", 0))).hour
+        except Exception:
+            continue
+        b = _bucket_for_hour(hr)
+        st = bucket_stats.setdefault(b, {"accepted": 0, "rejected": 0})
+        st[fb] = st.get(fb, 0) + 1
+
+    recommendations = []
+    bucket_rates = {}
+    for b, st in bucket_stats.items():
+        total = st.get("accepted", 0) + st.get("rejected", 0)
+        if total < 3:
+            continue
+        bucket_rates[b] = st.get("accepted", 0) / total
+
+    if len(bucket_rates) >= 2:
+        best_b, best_r = max(bucket_rates.items(), key=lambda kv: kv[1])
+        worst_b, worst_r = min(bucket_rates.items(), key=lambda kv: kv[1])
+        if (best_r - worst_r) >= 0.20:
+            ru_names = {"morning": "утром", "afternoon": "днём",
+                        "evening": "вечером", "night": "ночью"}
+            en_names = {"morning": "morning", "afternoon": "afternoon",
+                        "evening": "evening", "night": "night"}
+            if lang == "ru":
+                msg = (f"Решения {ru_names[best_b]} принимаются {int(best_r*100)}%, "
+                       f"{ru_names[worst_b]} — {int(worst_r*100)}%. "
+                       f"Переноси важное на {ru_names[best_b]} "
+                       f"({(best_r/worst_r):.1f}x лучше исход).")
+            else:
+                msg = (f"Decisions {en_names[best_b]}: {int(best_r*100)}% accept, "
+                       f"{en_names[worst_b]}: {int(worst_r*100)}%. "
+                       f"Move important to {en_names[best_b]} "
+                       f"({(best_r/worst_r):.1f}x better outcome).")
+            recommendations.append({
+                "kind": "time_of_day",
+                "best_bucket": best_b,
+                "worst_bucket": worst_b,
+                "best_rate": round(best_r, 2),
+                "worst_rate": round(worst_r, 2),
+                "text": msg,
+            })
+    elif len(bucket_rates) == 1:
+        # Слабый сигнал — одна группа не даёт сравнения
+        recommendations.append({
+            "kind": "insufficient_data",
+            "text": ("Данных по feedback мало — нужно хотя бы 3 accept/reject "
+                     "в разных частях дня для рекомендаций."
+                     if lang == "ru" else
+                     "Not enough feedback data — need ≥3 accept/reject in different "
+                     "parts of the day for recommendations."),
+        })
+
+    # Activity summary last 7d → mean work/health/food hours — дополнительная
+    # рекомендация при сильном перекосе
+    try:
+        from .activity_log import _replay as _replay_act
+        week_cutoff = cutoff
+        totals: dict[str, float] = {}
+        for a in _replay_act().values():
+            if (a.get("started_at") or 0) < week_cutoff:
+                continue
+            cat = a.get("category") or "uncategorized"
+            totals[cat] = totals.get(cat, 0) + (a.get("duration_s") or 0)
+        total_all = sum(totals.values())
+        if total_all > 3600:  # хотя бы час трекинга
+            work_h = totals.get("work", 0) / 3600
+            health_h = totals.get("health", 0) / 3600
+            if work_h > 30 and health_h < 2:
+                recommendations.append({
+                    "kind": "work_heavy",
+                    "work_hours": round(work_h, 1),
+                    "health_hours": round(health_h, 1),
+                    "text": (f"За неделю {work_h:.0f}ч работы и {health_h:.1f}ч отдыха. "
+                             f"Риск выгорания — добавь паузы."
+                             if lang == "ru" else
+                             f"{work_h:.0f}h work vs {health_h:.1f}h rest this week. "
+                             f"Burnout risk — add pauses."),
+                })
+    except Exception:
+        pass
+
+    # Weekly digest блок: habit completion + food variety + scout bridges + checkin avg
+    digest: dict = {}
+    # Habits completion rate (plans.recurring)
+    try:
+        from .plans import _replay as _plans_replay
+        week_start = time.time() - 7 * 86400
+        import datetime as _dt
+        today_d = _dt.date.today()
+        from .plans import _matches_recurring as _mr
+        completed = 0
+        planned = 0
+        top_habits = []
+        for p in _plans_replay().values():
+            if p.get("status") == "deleted" or not p.get("recurring"):
+                continue
+            rec = p["recurring"]
+            done_dates = {c.get("for_date") for c in p.get("completions", []) if c.get("for_date")}
+            # Считаем за последние 7 дней
+            h_planned = 0
+            h_done = 0
+            for i in range(7):
+                d = today_d - _dt.timedelta(days=i)
+                if _mr(rec, d):
+                    h_planned += 1
+                    if d.strftime("%Y-%m-%d") in done_dates:
+                        h_done += 1
+            if h_planned > 0:
+                planned += h_planned
+                completed += h_done
+                top_habits.append({
+                    "name": p.get("name", ""),
+                    "done": h_done, "planned": h_planned,
+                    "streak": None,
+                })
+        digest["habits"] = {
+            "completed": completed, "planned": planned,
+            "rate": round(completed / planned, 2) if planned else None,
+            "top": top_habits[:5],
+        }
+    except Exception as e:
+        digest["habits"] = {"error": str(e)}
+
+    # Food variety (уникальных блюд + суммарное время food)
+    try:
+        from .activity_log import _replay as _act_replay
+        week_start = time.time() - 7 * 86400
+        food_names = []
+        food_time_s = 0
+        for a in _act_replay().values():
+            if (a.get("started_at") or 0) < week_start:
+                continue
+            if a.get("category") == "food":
+                name = (a.get("name") or "").strip()
+                if name:
+                    food_names.append(name)
+                food_time_s += (a.get("duration_s") or 0)
+        digest["food"] = {
+            "entries": len(food_names),
+            "unique_names": len(set(food_names)),
+            "top_names": list({n: food_names.count(n) for n in set(food_names)}.items())[:5]
+                         if food_names else [],
+            "total_minutes": round(food_time_s / 60),
+        }
+    except Exception as e:
+        digest["food"] = {"error": str(e)}
+
+    # Scout bridges за неделю (читаем из alerts_queue + _recent_bridges cognitive_loop)
+    try:
+        from .cognitive_loop import get_cognitive_loop
+        loop = get_cognitive_loop()
+        now_ts = time.time()
+        week_ago = now_ts - 7 * 86400
+        bridges = [b for b in (getattr(loop, "_recent_bridges", []) or [])
+                   if (b.get("ts") or 0) >= week_ago]
+        digest["scout_bridges"] = [{
+            "text": (b.get("text") or "")[:120],
+            "source": b.get("source"),
+            "ts": b.get("ts"),
+        } for b in bridges[:10]]
+    except Exception as e:
+        digest["scout_bridges"] = []
+
+    # Check-in averages (7-day)
+    try:
+        from .checkins import rolling_averages
+        digest["checkin"] = rolling_averages(days=7)
+    except Exception as e:
+        digest["checkin"] = {"error": str(e)}
+
+    # Patterns detected recently
+    try:
+        from .patterns import read_recent_patterns
+        digest["patterns"] = read_recent_patterns(hours=7 * 24)[:5]
+    except Exception:
+        digest["patterns"] = []
+
     return jsonify({
         "text": text,
         "decisions_this_week": len(recent),
@@ -1449,6 +2141,9 @@ def assist_weekly():
         "streaks": streaks,
         "daily_series": daily_series,
         "hrv_trend": hrv_trend,
+        "recommendations": recommendations,
+        "bucket_rates": bucket_rates,
+        "digest": digest,
     })
 
 

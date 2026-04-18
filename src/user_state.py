@@ -91,6 +91,12 @@ class UserState:
         # Dual-pool energy (MindBalance v2): daily + долгосрочный резерв
         self.long_reserve: float = LONG_RESERVE_DEFAULT
 
+        # Sleep duration: восстанавливается при утреннем briefing через
+        # activity_log.estimate_last_sleep_hours() — либо явная задача «Сон»,
+        # либо idle-gap между последним stop вчера и первым start сегодня.
+        # None = ещё не оценили за этот день.
+        self.last_sleep_duration_h: Optional[float] = None
+
         # Rolling state для timing/message variance
         self._last_input_ts: Optional[float] = None
         self._msg_lengths = []              # bounded to 10 последних
