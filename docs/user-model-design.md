@@ -31,6 +31,22 @@
 - `surprise < 0` → реальность ниже ожиданий (эффект как «разочарование»/спад)
 - `imbalance` большой → активация сознания растёт (см. MindBalance A = energy × (1 + ID · 0.5))
 
+## 1b. Valence (signed pleasant/unpleasant)
+
+Arousal (норадреналин, дофамин) и валентность — **разные оси**. Одинаковый
+high arousal может быть любопытством (+valence) или стрессом (−valence).
+`UserState.valence ∈ [−1, 1]` добавлен как отдельный EMA-скаляр:
+
+- `accepted` feedback → +0.7 с decay 0.9
+- `rejected` feedback → −0.7 с тем же decay + **streak bias**: если
+  rejects превышают accepts на 3+, валентность дополнительно снижается
+  пропорционально overshoot
+- quick input (<30s gap) → +0.2 (тихая радость когда хочется ещё)
+- long silence (>5min gap) → −0.2 (лёгкая отстранённость)
+
+HRV не кормит valence — HRV про тело, valence про ощущение. Persistится
+через to_dict/from_dict.
+
 ## 2. Named user-states (Voronoi)
 
 [src/user_state_map.py](../src/user_state_map.py) содержит 10 именованных

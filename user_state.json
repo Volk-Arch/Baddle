@@ -1,8 +1,8 @@
 {
-  "decisions_today": 2,
+  "decisions_today": 4,
   "last_reset_date": "2026-04-18",
-  "last_interaction": 1776489365.3739054,
-  "total_decisions": 20,
+  "last_interaction": 1776499229.4807389,
+  "total_decisions": 22,
   "streaks": {
     "Morning exercise": 1
   },
@@ -112,6 +112,28 @@
     {
       "ts": 1776489365.373906,
       "kind": "morning_briefing"
+    },
+    {
+      "ts": 1776499228.0253453,
+      "kind": "assist",
+      "cost": 12,
+      "daily_used": 12,
+      "long_used": 0.0,
+      "mode": "tournament",
+      "message": "BMW vs Tesla какую выбрать",
+      "intent": "simple_note",
+      "confidence": 0.95
+    },
+    {
+      "ts": 1776499229.4807537,
+      "kind": "assist",
+      "cost": 12,
+      "daily_used": 12,
+      "long_used": 0.0,
+      "mode": "tournament",
+      "message": "BMW vs Tesla какую выбрать",
+      "intent": "simple_note",
+      "confidence": 0.95
     }
   ],
   "habit_history": {
@@ -136,5 +158,24 @@
       ],
       "completion_7d": 1
     }
+  },
+  "daily_spent": 24.0,
+  "user_state_dump": {
+    "dopamine": 0.5,
+    "serotonin": 0.5,
+    "norepinephrine": 0.5,
+    "burnout": 0.012,
+    "valence": 0.0,
+    "expectation": 0.5,
+    "reality": 0.5,
+    "surprise": 0.0,
+    "imbalance": 0.0,
+    "long_reserve": 1500.0,
+    "named_state": {
+      "key": "neutral",
+      "label": "Нейтральное",
+      "advice": "Баланс. Хорошая точка для выбора направления."
+    },
+    "hrv": null
   }
 }

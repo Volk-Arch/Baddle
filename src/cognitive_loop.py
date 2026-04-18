@@ -1,21 +1,25 @@
 """Baddle Cognitive Loop — один когнитивный контур с NE-бюджетом.
 
-Объединяет бывший Watchdog + точку входа /graph/tick в одну структуру:
+Объединяет бывший Watchdog + точку входа /graph/tick в одну структуру.
 
-  CognitiveLoop owns:
-    • Background thread — NE decay, DMN pump (10 min), Scout pump (3 h), HRV alerts
-    • Foreground entry  — `tick_foreground()` для /graph/tick (юзер-инициированный)
-    • Shared state      — last_foreground_tick / last_dmn / last_scout timestamps,
-                          alerts queue. Background и foreground координируются через
-                          эти таймштампы (NE-бюджет).
+Фоновая активность разнесена по временным шкалам:
+  • DMN 10 min       — continuous pump (не сохраняет, только предлагает)
+  • State-walk 20 min — эпизодическая память через state_graph similarity
+  • Night cycle 24 h — единый ночной проход:
+      1. Scout pump+save (persistent bridge)
+      2. REM emotional (эпизоды с высоким |rpe| → pump их content)
+      3. REM creative (close-in-embedding + far-in-path → manual_link)
+      4. Consolidation (прунинг + архив state_graph)
+Foreground вход:
+  • tick_foreground() — /graph/tick ping, координация через shared timestamp
 
 NE-бюджет:
-  norepinephrine > 0.55          → юзер активен, DMN/Scout на паузе
-  Последний foreground < 30s     → недавно была работа, DMN не лезет
+  norepinephrine > 0.55          → юзер активен, фон на паузе
+  Последний foreground < 30s     → недавно была работа, фон не лезет
   PROTECTIVE_FREEZE              → только decay, никаких новых действий
 
 Design: poll-based, non-blocking. UI дёргает /assist/alerts чтобы увидеть
-накопленные инсайты от Scout/DMN.
+накопленные инсайты.
 """
 import threading
 import time
@@ -127,10 +131,9 @@ class CognitiveLoop:
     """Singleton: один фоновый контур + foreground tick entry."""
 
     # Интервалы в секундах
-    SCOUT_INTERVAL = 3 * 3600         # 3 часа между Scout pump+save
     DMN_INTERVAL = 600                # 10 минут между DMN continuous (content pump)
     STATE_WALK_INTERVAL = 20 * 60     # 20 минут между эпизодическими запросами к state_graph
-    CONSOLIDATION_INTERVAL = 24 * 3600  # раз в сутки: прунинг + архив state_graph
+    NIGHT_CYCLE_INTERVAL = 24 * 3600  # раз в сутки: Scout + REM + Consolidation единым блоком
     TICK_INTERVAL = 60                # частота бэкграунд-проверок
     FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
 
@@ -139,14 +142,20 @@ class CognitiveLoop:
     NE_HIGH_GATE = 0.55          # выше — юзер активен, DMN не лезет
     NE_DECAY_PER_TICK = 0.05     # EMA decay в сторону baseline
 
+    # REM параметры
+    REM_RPE_THRESHOLD = 0.15          # |rpe| выше → эпизод эмоционально насыщен
+    REM_EMO_MAX_PUMPS = 3             # максимум пампов эмоциональной фазы за ночь
+    REM_CREATIVE_DIST_MAX = 0.2       # embedding близость для creative-merge
+    REM_CREATIVE_PATH_MIN = 3         # BFS-дистанция чтобы считаться «далёкими»
+    REM_CREATIVE_MAX_MERGES = 3       # сколько парадоксальных пар линковать за ночь
+
     def __init__(self):
         self.is_running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._last_scout = 0.0
         self._last_dmn = 0.0
         self._last_state_walk = 0.0
-        self._last_consolidation = 0.0
+        self._last_night_cycle = 0.0
         self._last_foreground_tick = 0.0
         self._alerts_queue: list = []
         self._lock = threading.Lock()
@@ -228,10 +237,9 @@ class CognitiveLoop:
                 not_frozen = state.state != PROTECTIVE_FREEZE
 
                 if not_frozen and ne_quiet and idle_enough:
-                    self._check_scout_night()
                     self._check_dmn_continuous()
                     self._check_state_walk()
-                    self._check_consolidation()
+                    self._check_night_cycle()
 
                 # 3. HRV alerts всегда
                 self._check_hrv_alerts()
@@ -246,27 +254,226 @@ class CognitiveLoop:
                 scaled = self.TICK_INTERVAL
             self._stop_event.wait(scaled)
 
-    # ── Scout (3h: pump + save persistent bridge) ───────────────────────
+    # ── Night cycle: Scout + REM emotional + REM creative + Consolidation ──
 
-    def _check_scout_night(self):
+    def _check_night_cycle(self):
+        """Единый 24ч ночной цикл. Заменяет три параллельных механизма.
+
+        Последовательность (slow-wave → REM → cleanup):
+          1. Scout pump+save (был SCOUT_INTERVAL=3h, теперь раз в сутки)
+          2. REM emotional — state_nodes с |recent_rpe| > threshold
+             прогоняются через Pump между парами content_touched
+          3. REM creative — content-пары близкие в embedding + далёкие
+             в path-графе получают manual_link (парадоксальные связи)
+          4. Consolidation — прунинг слабых + архив state_graph (было 24h)
+        """
         now = time.time()
-        if now - self._last_scout < self.SCOUT_INTERVAL:
+        if now - self._last_night_cycle < self.NIGHT_CYCLE_INTERVAL:
             return
-        if len(_graph.get("nodes", [])) < 5:
-            return
+        self._last_night_cycle = now
+        log.info("[cognitive_loop] night cycle starting")
 
-        self._last_scout = now
-        bridge = self._run_pump_bridge(max_iterations=2, save=True)
-        if bridge:
-            self._add_alert({
-                "type": "scout_bridge",
-                "severity": "info",
-                "text": f"Scout нашёл мост: {bridge['text'][:80]}",
-                "text_en": f"Scout found bridge: {bridge['text'][:80]}",
-                "bridge": bridge,
+        summary: dict = {}
+
+        # Phase 1: Scout pump+save
+        if len(_graph.get("nodes", [])) >= 5:
+            bridge = self._run_pump_bridge(max_iterations=2, save=True)
+            summary["scout"] = {
+                "bridge_saved": bridge is not None,
+                "bridge_text": (bridge.get("text", "") if bridge else "")[:60],
+            }
+        else:
+            summary["scout"] = {"skipped": "graph_too_small"}
+
+        # Phase 2: REM emotional
+        summary["rem_emotional"] = self._rem_emotional()
+
+        # Phase 3: REM creative
+        summary["rem_creative"] = self._rem_creative()
+
+        # Phase 4: Consolidation
+        try:
+            from .consolidation import consolidate_all
+            res = consolidate_all()
+            summary["consolidation"] = {
+                "pruned": res.get("content", {}).get("removed", 0),
+                "archived": res.get("state", {}).get("archived", 0),
+            }
+        except Exception as e:
+            summary["consolidation"] = {"error": str(e)}
+
+        s = summary
+        text = (
+            f"Ночной цикл: "
+            f"Scout {'+мост' if s['scout'].get('bridge_saved') else 'пропуск'} · "
+            f"REM эмо pump {s['rem_emotional'].get('pumped', 0)} · "
+            f"REM merge {s['rem_creative'].get('merged', 0)} · "
+            f"прунинг {s['consolidation'].get('pruned', 0)} / "
+            f"архив {s['consolidation'].get('archived', 0)}"
+        )
+        self._add_alert({
+            "type": "night_cycle", "severity": "info",
+            "text": text, "text_en": text,
+            "summary": summary,
+        }, dedupe=True)
+        log.info(f"[cognitive_loop] night cycle done: {text}")
+
+    # ── REM emotional: прогон эпизодов с высоким |rpe| через Pump ──
+
+    def _rem_emotional(self) -> dict:
+        """Находит state_nodes с |recent_rpe| > REM_RPE_THRESHOLD за последние 100
+        записей, берёт их content_touched, запускает Pump между парой.
+
+        Эффект: эмоционально-насыщенные эпизоды получают новую переработку —
+        рождаются новые связи именно поверх тех нод которые удивили.
+        """
+        from .state_graph import get_state_graph
+        from .pump_logic import pump
+
+        try:
+            entries = get_state_graph().read_all()
+        except Exception as e:
+            return {"pumped": 0, "error": f"read_failed: {e}"}
+
+        candidates: list[tuple[float, list]] = []
+        seen_pair: set = set()
+        for entry in entries[-100:]:
+            snap = entry.get("state_snapshot") or {}
+            neuro = snap.get("neurochem") or {}
+            rpe = neuro.get("recent_rpe")
+            if not isinstance(rpe, (int, float)):
+                continue
+            if abs(rpe) < self.REM_RPE_THRESHOLD:
+                continue
+            touched = entry.get("content_touched") or []
+            if len(touched) < 2:
+                continue
+            sig = tuple(sorted(touched[:2]))
+            if sig in seen_pair:
+                continue
+            seen_pair.add(sig)
+            candidates.append((abs(float(rpe)), list(touched)))
+
+        if not candidates:
+            return {"pumped": 0, "candidates": 0}
+
+        # Самые неожиданные эпизоды сначала
+        candidates.sort(key=lambda x: -x[0])
+        nodes = _graph.get("nodes", [])
+        pumped = 0
+        for _, touched in candidates[:self.REM_EMO_MAX_PUMPS]:
+            valid = [
+                t for t in touched
+                if 0 <= t < len(nodes)
+                and nodes[t].get("embedding")
+                and nodes[t].get("type") in ("hypothesis", "thought")
+            ]
+            if len(valid) < 2:
+                continue
+            try:
+                result = pump(valid[0], valid[1], max_iterations=1, lang="ru")
+                if result and not result.get("error") and result.get("all_bridges"):
+                    pumped += 1
+            except Exception as e:
+                log.debug(f"[rem_emotional] pump failed: {e}")
+        return {"pumped": pumped, "candidates": len(candidates)}
+
+    # ── REM creative: пары близкие в embedding + далёкие в пути графа ──
+
+    def _rem_creative(self) -> dict:
+        """Находит «далёких но близких» — content ноды с distinct(emb) < 0.2
+        при BFS-расстоянии по графу ≥ 3, ставит manual_link между ними.
+
+        Это **парадоксальные связи**: ноды думают похожее но не связаны
+        путём. Creative merge — ночной мостик между ними. Без LLM синтеза
+        (дорого) — просто manual_link + alert; collapse юзер делает явно.
+        """
+        from .main import distinct
+        from collections import defaultdict, deque
+        import numpy as np
+
+        nodes = _graph.get("nodes", [])
+        if len(nodes) < 6:
+            return {"merged": 0, "reason": "graph_too_small"}
+
+        # Adjacency из similarity-edges + directed
+        adj = defaultdict(set)
+        from .graph_logic import _compute_edges
+        try:
+            sim_edges = _compute_edges(nodes, threshold=0.91, sim_mode="embedding")
+        except Exception as e:
+            return {"merged": 0, "error": f"edges_failed: {e}"}
+        for e in sim_edges:
+            adj[e["from"]].add(e["to"])
+            adj[e["to"]].add(e["from"])
+        for pair in _graph.get("edges", {}).get("directed", []) or []:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                a, b = pair
+                adj[a].add(b); adj[b].add(a)
+
+        def path_dist(start: int, goal: int, cap: int = 6) -> int:
+            if start == goal:
+                return 0
+            visited = {start}
+            queue = deque([(start, 0)])
+            while queue:
+                node, d = queue.popleft()
+                if d >= cap:
+                    continue
+                for n in adj[node]:
+                    if n in visited:
+                        continue
+                    if n == goal:
+                        return d + 1
+                    visited.add(n)
+                    queue.append((n, d + 1))
+            return cap
+
+        active = [
+            (i, n) for i, n in enumerate(nodes)
+            if n.get("depth", 0) >= 0
+            and n.get("type") in ("hypothesis", "thought")
+            and n.get("embedding")
+        ]
+
+        candidates: list[tuple[float, int, int, int]] = []
+        for ii in range(len(active)):
+            for jj in range(ii + 1, len(active)):
+                i, ni = active[ii]
+                j, nj = active[jj]
+                va = np.asarray(ni["embedding"], dtype=np.float32)
+                vb = np.asarray(nj["embedding"], dtype=np.float32)
+                d_emb = float(distinct(va, vb))
+                if d_emb > self.REM_CREATIVE_DIST_MAX:
+                    continue
+                pd = path_dist(i, j)
+                if pd < self.REM_CREATIVE_PATH_MIN:
+                    continue
+                candidates.append((d_emb, pd, i, j))
+
+        if not candidates:
+            return {"merged": 0, "candidates": 0}
+
+        # Самые парадоксальные сначала: близкие в emb, далёкие в path
+        candidates.sort(key=lambda x: (x[0], -x[1]))
+
+        merged = 0
+        insights: list[dict] = []
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        for d_emb, pd, i, j in candidates[:self.REM_CREATIVE_MAX_MERGES]:
+            pair = [min(i, j), max(i, j)]
+            if pair in manual_links:
+                continue
+            manual_links.append(pair)
+            merged += 1
+            insights.append({
+                "node_a": i, "text_a": nodes[i].get("text", "")[:60],
+                "node_b": j, "text_b": nodes[j].get("text", "")[:60],
+                "d_emb": round(d_emb, 3), "path_dist": pd,
             })
-            log.info(f"[cognitive_loop] scout bridge: {bridge['text'][:60]} "
-                     f"q={bridge.get('quality', 0):.2f}")
+
+        return {"merged": merged, "candidates": len(candidates),
+                "insights": insights}
 
     # ── DMN continuous (10 min: pump attempt, don't save) ───────────────
 
@@ -468,34 +675,6 @@ class CognitiveLoop:
         }, dedupe=True)
         log.info(f"[state_walk] episodic recall: {ts_disp} {action} — {reason[:60]}")
 
-    # ── Nightly consolidation (once per 24h, forget weak old branches) ──
-
-    def _check_consolidation(self):
-        now = time.time()
-        if now - self._last_consolidation < self.CONSOLIDATION_INTERVAL:
-            return
-        self._last_consolidation = now
-        try:
-            from .consolidation import consolidate_all
-            result = consolidate_all()
-            content = result.get("content") or {}
-            state = result.get("state") or {}
-            removed = content.get("removed", 0)
-            archived = state.get("archived", 0)
-            if removed or archived:
-                log.info(f"[cognitive_loop] consolidation: "
-                         f"pruned {removed} nodes, archived {archived} state entries")
-                self._add_alert({
-                    "type": "consolidation",
-                    "severity": "info",
-                    "text": f"Консолидация: удалено {removed} слабых нод, "
-                            f"архивировано {archived} tick-записей.",
-                    "text_en": f"Consolidation: pruned {removed} weak nodes, "
-                               f"archived {archived} tick entries.",
-                }, dedupe=True)
-        except Exception as e:
-            log.warning(f"[cognitive_loop] consolidation failed: {e}")
-
     # ── HRV alerts ─────────────────────────────────────────────────────
 
     def _check_hrv_alerts(self):
@@ -538,8 +717,9 @@ class CognitiveLoop:
         return {
             "running": self.is_running,
             "alerts_pending": len(self._alerts_queue),
-            "last_scout": self._last_scout,
             "last_dmn": self._last_dmn,
+            "last_state_walk": self._last_state_walk,
+            "last_night_cycle": self._last_night_cycle,
             "last_foreground_tick": self._last_foreground_tick,
         }
 

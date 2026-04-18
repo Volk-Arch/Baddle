@@ -6,7 +6,7 @@ User sees conversation. Baddle runs the graph underneath.
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -218,6 +218,43 @@ def _response_for_mode(mode_id: str, message: str, lang: str = "ru") -> Dict:
     return {"mode": mode_id, "mode_name": name, "intro": intro}
 
 
+# ── Classify cache (TTL + LRU) ───────────────────────────────────────
+# Один и тот же message после reload/retry не должен дёргать LLM повторно.
+# Ключ — нормализованный (message, lang). TTL короткий (5 мин) чтобы:
+#   • ретраи/refresh в течение сессии не жрут токены
+#   • после дня настроение юзера меняется → перекласифицирует на свежую
+# Кешируем ТОЛЬКО реальные LLM-результаты (source="llm"). Failures и
+# defaults не кешируются — чтобы LLM восстановившись из даун'а сразу
+# начал работать.
+
+_CLASSIFY_CACHE: dict = {}
+_CLASSIFY_CACHE_MAX = 100
+_CLASSIFY_CACHE_TTL = 300  # seconds
+
+
+def _classify_cache_key(message: str, lang: str) -> tuple:
+    return (message.strip().lower()[:300], lang)
+
+
+def _classify_cache_get(key: tuple):
+    entry = _CLASSIFY_CACHE.get(key)
+    if not entry:
+        return None
+    expires, result = entry
+    if time.time() > expires:
+        _CLASSIFY_CACHE.pop(key, None)
+        return None
+    return dict(result)   # copy чтобы caller не мутировал
+
+
+def _classify_cache_put(key: tuple, result: dict):
+    if len(_CLASSIFY_CACHE) >= _CLASSIFY_CACHE_MAX:
+        # Dict preserves insertion order — oldest first
+        oldest = next(iter(_CLASSIFY_CACHE))
+        _CLASSIFY_CACHE.pop(oldest, None)
+    _CLASSIFY_CACHE[key] = (time.time() + _CLASSIFY_CACHE_TTL, dict(result))
+
+
 # ── Intent & mode classification (single LLM call, keyword fallback) ─
 
 _MODE_DESCRIPTIONS_RU = """
@@ -265,6 +302,13 @@ def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
     if len(lower) < 4 or lower in ("?", "что?", "как?", "почему?", "помоги"):
         return {"mode": "free", "intent": "ambiguous", "confidence": 0.95, "source": "fast"}
 
+    # Cache: проверяем идентичный message+lang до похода в LLM
+    cache_key = _classify_cache_key(message, lang)
+    cached = _classify_cache_get(cache_key)
+    if cached is not None:
+        cached["source"] = "cache"
+        return cached
+
     # Build LLM prompt
     if lang == "ru":
         system = ("/no_think\nТы классификатор намерений. Получаешь сообщение пользователя "
@@ -299,6 +343,7 @@ def classify_intent_llm(message: str, context: str = "", state_hint: str = "",
         parsed = _parse_classify_output(result)
         if parsed:
             parsed["source"] = "llm"
+            _classify_cache_put(cache_key, parsed)
             return parsed
     except Exception as e:
         log.warning(f"[classify] LLM failed: {e}")
@@ -582,6 +627,85 @@ def assist_state():
     return jsonify(get_global_state().get_metrics())
 
 
+@assistant_bp.route("/assist/history", methods=["GET"])
+def assist_history():
+    """Time-series из state_graph для UI-дашбордов.
+
+    Query params:
+      limit: int (default 50)  — max entries
+      kind: str                 — фильтр по action (optional)
+
+    Returns:
+      {
+        "entries": [
+          {ts, sync_error, dopamine, serotonin, norepinephrine, burnout,
+           action, mode, user_feedback}
+        ],
+        "top_rejected_modes": [{mode, count}, ...]  — top-3
+      }
+    """
+    from .state_graph import get_state_graph
+    from datetime import datetime, timezone
+    import time as _t
+
+    try:
+        limit = int(request.args.get("limit", 50))
+    except ValueError:
+        limit = 50
+    kind = request.args.get("kind")
+
+    sg = get_state_graph()
+    try:
+        raw = sg.read_all()
+    except Exception:
+        raw = []
+
+    if kind:
+        raw = [e for e in raw if e.get("action") == kind]
+    raw = raw[-limit:]
+
+    out_entries = []
+    reject_by_mode: dict = {}
+    for e in raw:
+        snap = e.get("state_snapshot") or {}
+        neuro = snap.get("neurochem") or {}
+        ts_iso = e.get("timestamp") or ""
+        try:
+            ts_epoch = datetime.fromisoformat(
+                str(ts_iso).replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            ts_epoch = None
+        meta_mode = (e.get("reason") or "").split("[")[1].split("]")[0] if "[" in (e.get("reason") or "") else None
+        out_entries.append({
+            "ts": ts_epoch,
+            "timestamp": ts_iso,
+            "sync_error": snap.get("sync_error"),
+            "dopamine": neuro.get("dopamine"),
+            "serotonin": neuro.get("serotonin"),
+            "norepinephrine": neuro.get("norepinephrine"),
+            "burnout": neuro.get("burnout"),
+            "recent_rpe": neuro.get("recent_rpe"),
+            "state": snap.get("state"),
+            "action": e.get("action"),
+            "state_origin": e.get("state_origin"),
+            "reason": (e.get("reason") or "")[:80],
+            "user_feedback": e.get("user_feedback"),
+        })
+        if e.get("user_feedback") == "rejected":
+            mode = meta_mode or e.get("action") or "?"
+            reject_by_mode[mode] = reject_by_mode.get(mode, 0) + 1
+
+    top = sorted(reject_by_mode.items(), key=lambda x: -x[1])[:3]
+    top_rejected = [{"mode": m, "count": c} for m, c in top]
+
+    return jsonify({
+        "entries": out_entries,
+        "top_rejected_modes": top_rejected,
+        "count": len(out_entries),
+    })
+
+
 @assistant_bp.route("/assist/simulate-day", methods=["POST"])
 def assist_simulate_day():
     """Day planning simulator — предсказать end-of-day state от плана решений.
@@ -819,12 +943,67 @@ def graph_assist():
     })
 
 
+_DECOMPOSE_MODE_SUGGESTION = {
+    "and": "builder",           # все обязательны, порядок не строгий
+    "xor": "tournament",        # выбор одного
+    "research": "horizon",      # открытое исследование
+}
+
+
+def _parse_decompose_groups(text: str) -> dict:
+    """Разобрать структурированный вывод LLM на 3 группы подзадач.
+
+    Ожидаемый формат:
+      AND: подзадача 1
+      AND: подзадача 2
+      XOR: вариант A
+      XOR: вариант B
+      RESEARCH: направление исследования
+
+    Префикс case-insensitive, может быть с двоеточием, тире или пробелом.
+    Строки без префикса → в AND (самый нейтральный bucket).
+    """
+    groups = {"and": [], "xor": [], "research": []}
+    for raw_line in text.split("\n"):
+        # lstrip только bullets/numbering (не трогаем трейлинг — там могут быть
+        # значимые цифры типа «шаг 1»). rstrip пробельные.
+        line = raw_line.lstrip(" \t-•*1234567890.)]:").rstrip()
+        if not line or len(line) < 3:
+            continue
+        lower = line.lower()
+        bucket = "and"  # default fallback
+        content = line
+        for prefix, key in [("research:", "research"), ("xor:", "xor"),
+                            ("and:", "and"), ("research ", "research"),
+                            ("xor ", "xor"), ("and ", "and")]:
+            if lower.startswith(prefix):
+                bucket = key
+                content = line[len(prefix):].strip(" :-")
+                break
+        if content and len(content) > 2:
+            groups[bucket].append(content)
+    return groups
+
+
 @assistant_bp.route("/assist/decompose", methods=["POST"])
 def assist_decompose():
-    """Goal decomposition — LLM splits a complex goal into subgoals.
+    """Goal decomposition → **подграфы разных режимов** (не плоский список).
 
-    Used when user message looks like a big task. Returns list of subgoals
-    which the UI can confirm/edit before creating.
+    LLM классифицирует каждую подзадачу по трём bucket'ам:
+      - AND      — все обязательны (сборка, шаги, баланс) → mode=builder
+      - XOR      — выбор одного (сравнение вариантов) → mode=tournament
+      - RESEARCH — открытое исследование (без финала) → mode=horizon
+
+    UI может создать три раздельных subgraph'а с соответствующими
+    пресетами precision/policy вместо одного плоского goal'а.
+
+    Response:
+      {
+        "groups": {"and": [...], "xor": [...], "research": [...]},
+        "mode_suggestions": {"and": "builder", ...},
+        "subgoals": [...],     # backward compat: concat всех групп
+        "raw": "..."
+      }
     """
     from .graph_logic import _graph_generate
     d = request.get_json(force=True)
@@ -837,26 +1016,62 @@ def assist_decompose():
         return jsonify({"error": "empty message"})
 
     if lang == "ru":
-        system = ("/no_think\nРазбей задачу на 3-5 подзадач. Одна подзадача = одна строка. "
-                  "Коротко, конкретно. Без нумерации, без вступления.")
+        system = (
+            "/no_think\nРазбей задачу на подзадачи, класифицируя каждую в одну "
+            "из трёх категорий:\n"
+            "  AND      — все обязательны (части сборки, шаги плана, баланс)\n"
+            "  XOR      — выбор одного варианта (сравнение альтернатив)\n"
+            "  RESEARCH — открытое исследование без финала\n"
+            "Формат вывода: каждая строка начинается с префикса + двоеточие.\n"
+            "Пример:\n"
+            "  AND: купить продукты\n"
+            "  AND: приготовить блюдо\n"
+            "  XOR: какое именно блюдо\n"
+            "  RESEARCH: диетические ограничения гостей\n"
+            "Не все категории обязательны. Без вступления, без нумерации, "
+            "3-7 строк всего."
+        )
     else:
-        system = ("/no_think\nSplit this task into 3-5 subtasks. One subtask = one line. "
-                  "Short, concrete. No numbering, no preamble.")
+        system = (
+            "/no_think\nSplit task into subtasks, classifying each into one of "
+            "three categories:\n"
+            "  AND      — all required (assembly parts, pipeline steps, balance)\n"
+            "  XOR      — pick one option (compare alternatives)\n"
+            "  RESEARCH — open-ended exploration, no final state\n"
+            "Format: each line starts with prefix + colon.\n"
+            "Example:\n"
+            "  AND: buy groceries\n"
+            "  AND: cook dish\n"
+            "  XOR: which dish to cook\n"
+            "  RESEARCH: guests' dietary restrictions\n"
+            "Not all categories required. No preamble, no numbering, "
+            "3-7 lines total."
+        )
 
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": message},
     ]
     try:
-        text, _ = _graph_generate(messages, max_tokens=250, temp=temp, top_k=top_k)
+        text, _ = _graph_generate(messages, max_tokens=300, temp=temp, top_k=top_k)
     except Exception as e:
         return jsonify({"error": str(e)})
 
-    lines = [ln.strip(" -•*1234567890.") for ln in text.split("\n")]
-    subgoals = [ln for ln in lines if len(ln) > 3][:5]
+    groups = _parse_decompose_groups(text)
+    # Backward compat: flat list (сохраняем порядок AND → XOR → RESEARCH)
+    flat = groups["and"] + groups["xor"] + groups["research"]
+    # Clamp: не больше 7 чтобы UI не перегружать
+    flat = flat[:7]
+
+    mode_suggestions = {
+        key: _DECOMPOSE_MODE_SUGGESTION[key]
+        for key in ("and", "xor", "research") if groups[key]
+    }
 
     return jsonify({
-        "subgoals": subgoals,
+        "groups": groups,
+        "mode_suggestions": mode_suggestions,
+        "subgoals": flat,
         "raw": text,
     })
 
@@ -940,11 +1155,38 @@ def assist_weekly():
         if streaks:
             text += " Streaks: " + ", ".join(f"{k}={v}" for k, v in streaks.items()) + "."
 
+    # Daily breakdown для charts (7 столбцов — решения за каждый день недели)
+    daily_buckets: dict = {}
+    for h in recent:
+        try:
+            ts = float(h.get("ts", 0))
+            day_key = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            daily_buckets[day_key] = daily_buckets.get(day_key, 0) + 1
+        except Exception:
+            continue
+    # Сортируем по дате + заполняем пропуски нулями
+    now = datetime.now()
+    daily_series = []
+    for i in range(6, -1, -1):
+        dk = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        daily_series.append({"date": dk, "count": daily_buckets.get(dk, 0)})
+
+    # HRV trend — если в истории есть hrv snapshots
+    hrv_trend = []
+    for h in recent:
+        if "hrv_coherence" in h and h.get("hrv_coherence") is not None:
+            hrv_trend.append({
+                "ts": h.get("ts"),
+                "coherence": h.get("hrv_coherence"),
+            })
+
     return jsonify({
         "text": text,
         "decisions_this_week": len(recent),
         "mode_counts": mode_counts,
         "streaks": streaks,
+        "daily_series": daily_series,
+        "hrv_trend": hrv_trend,
     })
 
 

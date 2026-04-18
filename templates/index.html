@@ -204,14 +204,31 @@
           <span id="neuro-burn-val" class="neuro-val">0.00</span>
         </div>
       </div>
+      <!-- Sparklines: dopamine/serotonin/NE/burnout over last 30 ticks -->
+      <div id="neuro-sparklines" class="neuro-sparklines" style="display:none">
+        <svg id="neuro-sparkline-svg" viewBox="0 0 240 40" preserveAspectRatio="none"></svg>
+      </div>
+
       <div class="neuro-row neuro-secondary">
         <span id="neuro-mode" class="neuro-mode-badge" title="Текущий режим (Horizon state)">исследует</span>
         <span id="neuro-action" class="neuro-action-badge" title="Последнее действие системы" style="display:none">—</span>
         <span id="neuro-origin" class="neuro-origin-badge" title="Внутренний тонус: покой или напряжение (state_origin)">◌ покой</span>
+        <span id="neuro-user-named" class="neuro-named-badge" title="Ближайшее named-состояние пользователя (Voronoi)">😐 нейтральное</span>
         <span id="neuro-camera" class="neuro-camera-badge" style="display:none" title="Camera: сенсорная депривация, без LLM">📷 медитация</span>
         <span style="flex:1"></span>
         <button onclick="assistToggleCamera()" id="neuro-camera-btn" class="neuro-toggle-btn" title="Медитация (без LLM, только distinct между существующими нодами)">📷</button>
+        <button onclick="assistToggleSparkline()" id="neuro-spark-btn" class="neuro-toggle-btn" title="История нейрохимии — 30 последних тиков">📈</button>
+        <button onclick="assistToggleSyncDash()" id="neuro-sync-btn" class="neuro-toggle-btn" title="Sync-dashboard — график sync_error + топ ошибки">📊</button>
+        <button onclick="assistWeeklyReview()" id="neuro-weekly-btn" class="neuro-toggle-btn" title="Weekly review — графики по неделе">📆</button>
         <button onclick="assistToggleTimeline()" id="neuro-timeline-btn" class="neuro-toggle-btn" title="Хронология — последние 20 действий системы">⏱</button>
+      </div>
+
+      <!-- Sync-dashboard: график sync_error + top rejected modes -->
+      <div id="sync-dashboard" class="sync-dashboard" style="display:none">
+        <div class="dash-header">Sync dashboard <span id="sync-dash-count" class="dash-count"></span></div>
+        <svg id="sync-dash-svg" viewBox="0 0 360 80" preserveAspectRatio="none"></svg>
+        <div class="dash-subhead">Топ режимов с rejects</div>
+        <div id="sync-dash-top" class="dash-top"></div>
       </div>
       <!-- State-graph timeline (hidden by default, toggle with button) -->
       <div id="neuro-timeline" class="neuro-timeline" style="display:none">
@@ -219,6 +236,29 @@
           Timeline <span id="neuro-timeline-count">0</span> actions
         </div>
         <div id="neuro-timeline-list" class="neuro-timeline-list"></div>
+      </div>
+    </div>
+
+    <!-- Weekly review modal (открывается по клику 📆) -->
+    <div id="weekly-modal" class="weekly-modal" style="display:none" onclick="assistCloseWeekly(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Weekly review
+          <button class="weekly-close" onclick="assistCloseWeekly()">×</button>
+        </div>
+        <div id="weekly-summary" class="weekly-summary"></div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Решения по дням</div>
+          <svg id="weekly-daily-svg" viewBox="0 0 360 80" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Режимы (распределение)</div>
+          <div id="weekly-modes" class="weekly-modes"></div>
+        </div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Streaks привычек</div>
+          <div id="weekly-streaks" class="weekly-streaks"></div>
+        </div>
       </div>
     </div>
 
@@ -383,6 +423,17 @@
       <div style="flex:1;min-width:0;">
         <div id="graph-svg-wrap" style="position:relative;">
           <svg id="graph-svg" width="100%" height="520" style="user-select:none;"></svg>
+          <!-- Meta-graph overlay: кружки per-workspace + cross_edges между ними -->
+          <svg id="meta-graph-svg" width="260" height="180"
+               style="position:absolute;top:8px;right:8px;display:none;
+                      background:rgba(24,24,27,0.92);border:1px solid #3f3f46;
+                      border-radius:8px;pointer-events:auto;">
+          </svg>
+          <button id="meta-graph-toggle" onclick="metaGraphToggle()"
+                  style="position:absolute;top:196px;right:8px;font-size:10px;
+                         background:#18181b;color:#a1a1aa;border:1px solid #3f3f46;
+                         border-radius:4px;padding:2px 6px;cursor:pointer;"
+                  title="Meta-graph overlay (workspace connections)">🗺</button>
           <!-- Cognitive cone — visualization of precision × state × pump (FE-3, v5b) -->
           <svg id="graph-cone-viz" width="180" height="180" style="position:absolute;top:8px;left:8px;pointer-events:none;opacity:0.9;">
             <!-- Populated by graphRenderCone() in graph.js -->

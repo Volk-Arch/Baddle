@@ -16,36 +16,17 @@
 
 - [ ] **Polar H10 BLE** — реальный RR-поток вместо симулятора. `bleak` клиент,
   24/7 connect, fallback на simulator. Сейчас только симулятор с слайдерами.
-- [ ] **Валентность эмоций юзера** (приятно/неприятно, не только arousal) —
-  HRV ловит возбуждение, DA даёт внутреннюю валентность. Внешняя — от юзера —
-  не считывается. Возможно через время отклика + длину сообщений, или
-  отдельный канал (мимика через камеру).
 
 ## Автономность и память
 
-- [ ] **Полный REM-цикл** — Scout 3h ≈ slow-wave sleep (уже есть). Добавить
-  быстрый-сон аналог: эмоциональная переработка (прогон state_nodes с высоким
-  |rpe| через Pump) + творческий merge (collapse далёких но близких в
-  embedding кластеров). Объединить Scout + Consolidation + REM в один ночной
-  цикл, а не три параллельных.
 
 ## Ум расширенный
 
 ## UI / визуализация
 
-- [ ] **Sync-dashboard** — график sync_error во времени + топ-3 области
-  где система чаще всего ошибается. Главный honest KPI.
-- [ ] **Meta-graph UI overlay** — endpoint `/workspace/meta` готов, рендер
-  в advanced view не сделан. Graph-of-graphs визуально.
 - [ ] **Polar H10 cone viz с θ/φ** — сейчас конус рендерится по precision +
   state. Добавить polyvagal двухпараметрическую визуализацию когда будет
-  реальный сенсор.
-- [ ] **Weekly review с графиками** — chart.js для HRV trend, streaks,
-  mode distribution. Сейчас только текст.
-- [ ] **Neurochem history sparkline** — S/NE/DA во времени поверх баров,
-  чтоб видеть дрейф, а не только мгновенный срез.
-- [ ] **Timeline UI** — кнопка ⏱ открывает список, но хочется вертикальную
-  ленту с цветовыми мазками по state_origin и группировкой по сессиям.
+  реальный сенсор. (зависит от hardware integration)
 
 ## Внешний мир (интеграции)
 
@@ -70,11 +51,6 @@
 
 ## Автоопределение намерения (детали → Done/Classify)
 
-- [ ] **Декомпозиция в подграфы разных режимов** — сложная задача
-  разбивается не на плоский список подзадач, а на AND-часть + XOR-часть
-  + research-часть. Сейчас `/assist/decompose` даёт плоский список.
-- [ ] **Cache classify результатов** — если один и тот же message прилетает
-  повторно (reload, retry) — не делать лишний LLM-вызов.
 
 ## Архитектурный collapse (когда уберётся параллельная машинерия)
 
@@ -88,6 +64,239 @@
 
 Формат каждого блока: **что делает** → **как проверить** → **на что влияет** →
 **красный флаг если сломано**.
+
+## UI-батч: sparkline + sync-dash + weekly + timeline + meta-graph
+
+**Что.** Пять UI-фич одним ходом, все на чистом inline SVG без Chart.js.
+
+1. **Neurochem sparkline** — 4 цветные линии (dopamine/serotonin/NE/burnout)
+   поверх баров, 30 последних тиков. Кнопка 📈 (toggle). Источник:
+   `GET /assist/history?limit=30`.
+2. **Sync-dashboard** — collapsible панель с line-chart `sync_error` во
+   времени + reference line 0.3 (порог sync-high) + топ-3 режима где были
+   rejects. Кнопка 📊. Источник: `GET /assist/history?limit=80`.
+3. **Weekly review modal** — кнопка 📆 открывает modal с тремя SVG-чартами:
+   решения по дням (7 bars), распределение режимов (horizontal bars),
+   streaks привычек (horizontal bars с green gradient). Источник:
+   `POST /assist/weekly` + расширенное поле `daily_series`.
+4. **Timeline UI polish** — `.neuro-timeline-item` получил цветовой border-
+   left по `state_origin` (orange held / grey rest) + по action
+   (pink `ask` / green `stable`). Вертикальные «мазки» как в TODO.
+5. **Meta-graph overlay** — кнопка 🗺 в graph-tab разворачивает SVG-
+   наложение с circular-layout workspaces + edges (cross_graph bridges).
+   Источник: `GET /workspace/meta`. Активный workspace подсвечен
+   purple + stroke.
+
+Плюс **named user-state badge** ("😐 нейтральное" / "🌊 поток" / …) —
+derived property `UserState.named_state` visible в header.
+
+**Проверка.**
+```
+GET /assist/history?limit=30 → {entries, top_rejected_modes, count}
+GET /assist/history?limit=80 → full timeseries with sync_error per tick
+POST /assist/weekly → +daily_series (7 дней bucket'ы) + hrv_trend
+```
+UI: открой baddle tab → кликни 📈 / 📊 / 📆 / ⏱ → все панели открываются
+и заполняются. graph tab → кнопка 🗺 показывает meta-graph.
+
+**Влияет на:** видимость динамики. До этого UI был frozen snapshot —
+мгновенные значения скаляров. Теперь виден **тренд**: как sync_error
+менялся, куда дрейфует DA, какие режимы чаще дают rejects, какой день
+недели был продуктивный.
+
+**Живые тесты.**
+- Кликни 📈 → sparkline появляется, 4 цветные линии видны.
+- Кликни 📊 → sync-dashboard разворачивается с yellow-линией + dashed
+  0.3 threshold.
+- Кликни 📆 → весь week отчёт в modal, закрывается × или кликом вне.
+- Timeline-items после кликов ⏱ имеют разные цвета border-left в
+  зависимости от state_origin и action.
+
+**Красный флаг.**
+- `/assist/history.entries = []` при непустом state_graph.jsonl → parse
+  error в endpoint (проверь `datetime.fromisoformat(...)` в выводе).
+- Sparkline plos → line flat → проверь что `entry[key]` в числе (не None).
+- Modal не закрывается → inline `display:none` overridden CSS `!important`
+  (использовать `[style*="flex"]` селектор — уже поправлено).
+
+## Cache classify результатов
+
+**Что.** `classify_intent_llm` в [src/assistant.py](src/assistant.py) теперь
+мемоизирует результат в module-level TTL-LRU кэше:
+- Ключ: `(message.strip().lower()[:300], lang)`
+- TTL: 5 минут (после дня настроение юзера меняется, перекласифицирует)
+- Capacity: 100 entries (LRU — самый старый вытесняется)
+- Только `source="llm"` результаты кешируются; fast-path / default /
+  LLM-failures не кешируются (чтобы восстановившийся LLM сразу начал работать)
+
+На cache hit возвращает dict с `source="cache"` — UI видит откуда пришёл.
+
+**Проверка.**
+```
+1-й `POST /assist {"message":"BMW vs Tesla какую выбрать"}`
+  → classify_source: "llm", ~2.3s elapsed
+
+2-й тот же запрос в течение 5 мин
+  → classify_source: "cache", ~1.5s (сэкономили ~800ms LLM classify)
+  (execute всё ещё делает LLM-calls для карточек, полного zero-time нет)
+```
+
+**Влияет на:** экономия токенов при reload/retry и повторных одинаковых
+запросах. Особенно важно при UI refresh, обратной навигации, или
+демо-показе когда одно и то же сообщение гоняется несколько раз.
+
+**Живые тесты.**
+- Два одинаковых `/assist` запроса подряд → второй с `classify_source: "cache"`.
+- Разный case/whitespace → тот же cache hit (нормализация в ключе).
+- Разные lang (ru/en) → разные entries в кэше.
+- Через 5 минут — TTL expired, снова miss.
+
+**Красный флаг.**
+- `source` всегда "llm" → cache не пишется (проверь `_classify_cache_put`
+  после `_parse_classify_output`).
+- `source="cache"` возвращает mismatched mode → проверь что ключ включает
+  lang (разные языки дают разные classifiers).
+
+## Декомпозиция в подграфы разных режимов
+
+**Что.** `POST /assist/decompose` вместо плоского `[подзадача 1, 2, 3, ...]`
+теперь возвращает **3 labeled группы**:
+- `and` — все обязательны (сборка, шаги плана) → `mode_suggestions.and = "builder"`
+- `xor` — выбор одного варианта → `mode_suggestions.xor = "tournament"`
+- `research` — открытое исследование → `mode_suggestions.research = "horizon"`
+
+Parser в [src/assistant.py](src/assistant.py) `_parse_decompose_groups`
+читает строки формата `AND: ... / XOR: ... / RESEARCH: ...` (case-insensitive,
+терпит bullets/numbering), раскладывает в dict из 3 bucket'ов.
+Backward compat — `subgoals` в ответе остаётся как concat (and+xor+research).
+
+**Проверка.**
+```
+POST /assist/decompose {"message":"организовать день рождения"}
+→ {
+    "groups": {
+      "and": ["выбрать дату", "подготовить стол"],
+      "xor": ["ресторан или дома"],
+      "research": ["предпочтения гостей"]
+    },
+    "mode_suggestions": {"and":"builder","xor":"tournament","research":"horizon"},
+    "subgoals": [все 4 конкатом],
+    "raw": "..."
+  }
+```
+
+**Влияет на:** сложная задача раскладывается на три независимых
+subgraph'а каждый со своим режимом Horizon'а — вместо одного monolithic
+goal с плоским списком. UI может создать 3 goal-ноды с правильными
+пресетами precision/policy. Или юзер явно выбирает какую группу взять.
+
+**Живые тесты.**
+- `/assist/decompose {"message":"выбрать машину для семьи"}` → обычно
+  возвращает XOR (выбор между типами) + RESEARCH (отзывы/стоимость) +
+  AND (безопасность/комфорт как требования).
+- Простая задача где всё equals → groups.and содержит все, xor/research
+  пустые. mode_suggestions содержит только `and`.
+
+**Красный флаг.**
+- `groups` всегда пустые при непустом `raw` → парсер не матчит префикс
+  (LLM может выдать "1. **AND**:" с жирным или вариации — добавить в
+  startswith список).
+- `mode_suggestions` не содержит некоторых bucket'ов → это нормально,
+  они добавляются только при непустой группе.
+
+## REM-цикл + unified night cycle
+
+**Что.** Ночной 24-часовой цикл в [src/cognitive_loop.py](src/cognitive_loop.py)
+объединяет три раньше-параллельных механизма в одну последовательность:
+
+1. **Scout** (pump+save persistent bridge) — раньше 3h interval, теперь
+   фаза 1 ночного цикла
+2. **REM emotional** (новое) — находит state_nodes с `|recent_rpe| > 0.15`
+   в последних 100 записях, запускает Pump между парами их
+   `content_touched`. «Эмоционально-насыщенные эпизоды перерабатываются
+   поверх тех нод которые удивили».
+3. **REM creative** (новое) — ищет пары content-нод с `distinct(emb) < 0.2`
+   И BFS-path ≥ 3 («близкие в смысле, далёкие в пути»). Топ-3 по
+   парадоксальности получают manual_link. Collapse в synthesis — явно
+   юзер через `/graph/collapse` (ночью дорого LLM-синтез).
+4. **Consolidation** — прунинг слабых нод + архив state_graph (было 24h
+   separate).
+
+DMN continuous (10min) и state-walk (20min) остаются отдельными —
+это не ночные события, а постоянный фоновый пульс.
+
+Один alert на ночь вместо 4 разных:
+```
+Ночной цикл: Scout +мост · REM эмо pump 2 · REM merge 3 · прунинг 1 / архив 14
+```
+
+**Проверка.**
+```
+GET /loop/status
+  → last_night_cycle: timestamp последнего прохода
+  → last_dmn / last_state_walk / last_foreground_tick — отдельные
+  → поле last_scout убрано (фолдировано)
+```
+
+**Влияет на:** архитектурная чистота. Scout + REM + Consolidation
+последовательны (как slow-wave → REM → cleanup в биологии), а не три
+параллельных check'а. Новая REM creative фаза находит неочевидные связи —
+ноды в разных областях графа с одинаковым смыслом.
+
+**Живые тесты.**
+- После 24h работы → `last_night_cycle` обновится. `/assist/alerts` покажет
+  одну `night_cycle`-запись с summary.
+- Подай серию evidence которая даёт high RPE → state_nodes с |rpe|>0.15
+  накопятся. Следующий night cycle REM emo запустит Pump по их content.
+- Создай 6+ нод в двух кластерах с одной парой похожих-но-неподключённых
+  → REM creative добавит `manual_link` между ними (видно в graph tab).
+
+**Красный флаг.**
+- `rem_emotional.candidates` всегда 0 → `recent_rpe` не пишется в
+  state_snapshot (проверь что tick_nand сохраняет snapshot через
+  horizon.get_metrics()).
+- `rem_creative.merged` всегда 0 при большом графе → пороги слишком
+  жёсткие (поправь `REM_CREATIVE_DIST_MAX` / `_PATH_MIN`).
+- `last_scout` всплыл в /loop/status → фалбек на старое поле; нужно
+  почистить.
+
+## Валентность эмоций юзера
+
+**Что.** UserState получил отдельный скаляр `valence ∈ [−1, 1]` — знак
+переживания (приятно/неприятно), независимый от arousal (который уже
+ловили через D/NE). Сигналы EMA:
+- `accepted` feedback → +0.7 вклад (95% decay)
+- `rejected` feedback → −0.7 вклад + streak bias: 3+ rejects подряд вычитают дополнительные −0.05·(overshoot)
+- quick input (<30с gap) → слабый +0.2
+- long silence (>5мин gap) → слабый −0.2
+
+Реализовано в [src/user_state.py](src/user_state.py). Surface в `to_dict`
++ `/assist/state.user_state.valence`, персистится между сессиями.
+
+**Проверка.**
+```
+POST /assist/feedback {"feedback":"rejected"} × 7
+GET /assist/state → user_state.valence ≈ −1.0 (streak bias полностью выжат)
+
+POST /assist/feedback {"feedback":"accepted"} × 3
+GET /assist/state → user_state.valence ≈ +0.19
+```
+
+**Влияет на:** UX-понимание юзера. Раньше видно было только arousal
+(напряжение/интерес), но не знак: высокий DA мог быть и любопытством,
+и стрессом. Теперь `valence` даёт ответ. Будущий advice-слой может
+учитывать: low valence + low arousal = apathy (разный fix от "reject
+streak"); low valence + high arousal = stress.
+
+**Живые тесты.**
+- Кликни 👍 3 раза → `/assist/state.user_state.valence` вырастет ~0.2.
+- Кликни 👎 3 раза → спад, возможно в отрицательные значения.
+- Оставь графа без interaction на 10 мин, потом напиши → valence чуть просядет.
+
+**Красный флаг.**
+- valence всегда 0 → feedback endpoint не вызывает `update_from_feedback`
+  (проверь что в assistant.py feedback handler дёргает UserState).
+- 7 rejects не выжигают valence до −1.0 → streak bias не триггерится.
 
 ## Предиктивная user-модель (prototype integration из MindBalance)
 

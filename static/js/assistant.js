@@ -868,6 +868,20 @@ function _updateNeurochemPanel(metrics) {
     originEl.title = 'state_origin: ' + origin;
   }
 
+  // Named user-state badge (Voronoi)
+  const namedEl = document.getElementById('neuro-user-named');
+  if (namedEl && metrics.user_state && metrics.user_state.named_state) {
+    const ns = metrics.user_state.named_state;
+    const emojis = {
+      flow: '🌊', inspiration: '✨', curiosity: '🔍', gratitude: '🙏',
+      neutral: '😐', meditation: '🧘', apathy: '😶', stress: '😰',
+      disappointment: '😔', burnout: '🥀',
+    };
+    const em = emojis[ns.key] || '◯';
+    namedEl.textContent = `${em} ${(ns.label || ns.key).toLowerCase()}`;
+    namedEl.title = ns.advice || ns.key;
+  }
+
   // Camera mode badge + button
   const camBadge = document.getElementById('neuro-camera');
   const camBtn = document.getElementById('neuro-camera-btn');
@@ -875,6 +889,264 @@ function _updateNeurochemPanel(metrics) {
   if (camBadge) camBadge.style.display = camOn ? 'inline-block' : 'none';
   if (camBtn) camBtn.classList.toggle('active', camOn);
   _lastCameraState = camOn;
+
+  // Refresh sparkline + sync-dashboard if open
+  if (_sparklineOpen) _refreshSparkline();
+  if (_syncDashOpen) _refreshSyncDash();
+}
+
+// ── Neurochem sparkline (30-tick history) ────────────────────────────
+
+let _sparklineOpen = false;
+
+function assistToggleSparkline() {
+  const panel = document.getElementById('neuro-sparklines');
+  const btn = document.getElementById('neuro-spark-btn');
+  if (!panel) return;
+  _sparklineOpen = panel.style.display === 'none';
+  panel.style.display = _sparklineOpen ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', _sparklineOpen);
+  if (_sparklineOpen) _refreshSparkline();
+}
+
+async function _refreshSparkline() {
+  try {
+    const r = await fetch('/assist/history?limit=30');
+    const d = await r.json();
+    const svg = document.getElementById('neuro-sparkline-svg');
+    if (!svg || !d.entries || !d.entries.length) {
+      if (svg) svg.innerHTML = '<text x="120" y="22" text-anchor="middle" fill="#52525b" font-size="9">no history yet</text>';
+      return;
+    }
+    const series = [
+      {key: 'dopamine',        color: '#10b981', y: 0 },   // 4 strips x 10px each
+      {key: 'serotonin',       color: '#a78bfa', y: 10 },
+      {key: 'norepinephrine',  color: '#f59e0b', y: 20 },
+      {key: 'burnout',         color: '#ef4444', y: 30 },
+    ];
+    const n = d.entries.length;
+    const W = 240, H = 40;
+    const stepX = n > 1 ? W / (n - 1) : W;
+    let paths = '';
+    for (const s of series) {
+      const pts = d.entries.map((e, i) => {
+        const v = typeof e[s.key] === 'number' ? e[s.key] : 0.5;
+        const x = i * stepX;
+        const y = s.y + (1 - Math.max(0, Math.min(1, v))) * 8 + 1;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      paths += `<polyline fill="none" stroke="${s.color}" stroke-width="1.4" points="${pts}"/>`;
+      paths += `<line x1="0" x2="${W}" y1="${s.y + 9.5}" y2="${s.y + 9.5}" stroke="#27272a" stroke-width="0.4"/>`;
+    }
+    svg.innerHTML = paths;
+  } catch(e) { /* silent */ }
+}
+
+// ── Sync-dashboard ──────────────────────────────────────────────────
+
+let _syncDashOpen = false;
+
+function assistToggleSyncDash() {
+  const panel = document.getElementById('sync-dashboard');
+  const btn = document.getElementById('neuro-sync-btn');
+  if (!panel) return;
+  _syncDashOpen = panel.style.display === 'none';
+  panel.style.display = _syncDashOpen ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', _syncDashOpen);
+  if (_syncDashOpen) _refreshSyncDash();
+}
+
+async function _refreshSyncDash() {
+  try {
+    const r = await fetch('/assist/history?limit=80');
+    const d = await r.json();
+    const svg = document.getElementById('sync-dash-svg');
+    const top = document.getElementById('sync-dash-top');
+    const count = document.getElementById('sync-dash-count');
+    if (count) count.textContent = `· ${d.count || 0} ticks`;
+    if (!svg) return;
+    if (!d.entries || !d.entries.length) {
+      svg.innerHTML = '<text x="180" y="42" text-anchor="middle" fill="#52525b" font-size="10">нет данных</text>';
+      if (top) top.innerHTML = '';
+      return;
+    }
+    const W = 360, H = 80, pad = 4;
+    const n = d.entries.length;
+    const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+    // sync_error L2-norm может быть 0..2, рисуем 0..1.5 вертикально
+    const maxSync = 1.5;
+    const pts = d.entries.map((e, i) => {
+      const v = typeof e.sync_error === 'number' ? e.sync_error : 0;
+      const x = pad + i * stepX;
+      const y = pad + (1 - Math.max(0, Math.min(maxSync, v)) / maxSync) * (H - 2*pad);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    // 0.3 threshold line (sync-high boundary)
+    const threshY = pad + (1 - 0.3/maxSync) * (H - 2*pad);
+    svg.innerHTML = `
+      <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
+            stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.6"/>
+      <text x="${W-pad-4}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
+            font-size="8" opacity="0.8">0.3 sync</text>
+      <polyline fill="none" stroke="#eab308" stroke-width="1.2" points="${pts}"/>
+      <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">older ——→ newer</text>
+    `;
+    // Top rejected modes
+    if (top) {
+      const list = d.top_rejected_modes || [];
+      if (!list.length) {
+        top.innerHTML = '<div style="color:#52525b;font-size:10px">отказов нет</div>';
+      } else {
+        top.innerHTML = list.map(r =>
+          `<div class="dash-top-row"><span class="dash-top-mode">${_esc(r.mode)}</span>` +
+          `<span class="dash-top-count">${r.count}×</span></div>`
+        ).join('');
+      }
+    }
+  } catch(e) { /* silent */ }
+}
+
+// ── Weekly review modal ─────────────────────────────────────────────
+
+async function assistWeeklyReview() {
+  try {
+    const r = await fetch('/assist/weekly', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lang: 'ru'}),
+    });
+    const d = await r.json();
+    document.getElementById('weekly-modal').style.display = 'flex';
+    const sum = document.getElementById('weekly-summary');
+    if (sum) sum.textContent = d.text || '';
+    _renderWeeklyDaily(d.daily_series || []);
+    _renderWeeklyModes(d.mode_counts || {});
+    _renderWeeklyStreaks(d.streaks || {});
+  } catch(e) { console.warn('[weekly] failed:', e); }
+}
+
+function assistCloseWeekly(ev) {
+  if (ev && ev.target.closest('.weekly-content') && !ev.target.classList.contains('weekly-close')) return;
+  document.getElementById('weekly-modal').style.display = 'none';
+}
+
+function _renderWeeklyDaily(series) {
+  const svg = document.getElementById('weekly-daily-svg');
+  if (!svg) return;
+  if (!series.length) { svg.innerHTML = ''; return; }
+  const W = 360, H = 80, pad = 8;
+  const maxV = Math.max(1, ...series.map(s => s.count));
+  const barW = (W - 2*pad) / series.length - 4;
+  let bars = '';
+  series.forEach((s, i) => {
+    const x = pad + i * ((W - 2*pad) / series.length) + 2;
+    const barH = (s.count / maxV) * (H - 2*pad - 10);
+    const y = H - pad - barH;
+    const dayLabel = s.date.slice(-2);
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}"
+                   fill="${s.count > 0 ? '#6366f1' : '#27272a'}" rx="2"/>`;
+    bars += `<text x="${(x + barW/2).toFixed(1)}" y="${H-2}" text-anchor="middle" fill="#71717a" font-size="8">${dayLabel}</text>`;
+    if (s.count > 0) {
+      bars += `<text x="${(x + barW/2).toFixed(1)}" y="${(y-2).toFixed(1)}" text-anchor="middle" fill="#a5b4fc" font-size="8">${s.count}</text>`;
+    }
+  });
+  svg.innerHTML = bars;
+}
+
+function _renderWeeklyModes(counts) {
+  const el = document.getElementById('weekly-modes');
+  if (!el) return;
+  const entries = Object.entries(counts).sort((a,b) => b[1] - a[1]);
+  if (!entries.length) { el.innerHTML = '<div style="color:#52525b;font-size:10px">пусто</div>'; return; }
+  const max = entries[0][1] || 1;
+  el.innerHTML = entries.map(([mode, count]) => {
+    const pct = (count / max * 100).toFixed(0);
+    return `<div class="weekly-bar-row">
+      <span class="weekly-bar-label">${_esc(mode)}</span>
+      <span class="weekly-bar-track"><span class="weekly-bar-fill" style="width:${pct}%"></span></span>
+      <span class="weekly-bar-value">${count}</span>
+    </div>`;
+  }).join('');
+}
+
+function _renderWeeklyStreaks(streaks) {
+  const el = document.getElementById('weekly-streaks');
+  if (!el) return;
+  const entries = Object.entries(streaks).sort((a,b) => b[1] - a[1]);
+  if (!entries.length) { el.innerHTML = '<div style="color:#52525b;font-size:10px">нет привычек</div>'; return; }
+  const max = Math.max(1, ...entries.map(e => e[1]));
+  el.innerHTML = entries.map(([habit, days]) => {
+    const pct = (days / max * 100).toFixed(0);
+    const name = habit.length > 20 ? habit.slice(0, 20) + '…' : habit;
+    return `<div class="weekly-bar-row">
+      <span class="weekly-bar-label">${_esc(name)}</span>
+      <span class="weekly-bar-track"><span class="weekly-bar-fill" style="width:${pct}%;background:linear-gradient(90deg,#10b981,#84cc16)"></span></span>
+      <span class="weekly-bar-value">${days}d</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Meta-graph overlay (SVG circular layout) ─────────────────────────
+
+let _metaOpen = false;
+
+async function metaGraphToggle() {
+  const el = document.getElementById('meta-graph-svg');
+  if (!el) return;
+  _metaOpen = el.style.display === 'none';
+  el.style.display = _metaOpen ? 'block' : 'none';
+  if (_metaOpen) await _refreshMetaGraph();
+}
+
+async function _refreshMetaGraph() {
+  const el = document.getElementById('meta-graph-svg');
+  if (!el) return;
+  try {
+    const r = await fetch('/workspace/meta');
+    const d = await r.json();
+    const nodes = d.nodes || [];
+    const edges = d.edges || [];
+    const W = 260, H = 180, cx = W/2, cy = H/2, R = Math.min(cx, cy) - 20;
+    if (!nodes.length) {
+      el.innerHTML = `<text x="${cx}" y="${cy}" text-anchor="middle" fill="#52525b" font-size="10">нет workspaces</text>`;
+      return;
+    }
+    // Circular layout
+    const positions = {};
+    nodes.forEach((n, i) => {
+      const angle = (i / nodes.length) * 2 * Math.PI - Math.PI/2;
+      positions[n.id] = {
+        x: cx + R * Math.cos(angle),
+        y: cy + R * Math.sin(angle),
+      };
+    });
+    // Edges first (underneath nodes)
+    let edgesSvg = '';
+    for (const e of edges) {
+      const p1 = positions[e.from], p2 = positions[e.to];
+      if (!p1 || !p2) continue;
+      const w = Math.min(4, 0.5 + (e.count || 1) * 0.3);
+      edgesSvg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}"
+                          x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}"
+                          stroke="#6366f1" stroke-width="${w.toFixed(1)}" opacity="0.5"/>`;
+    }
+    let nodesSvg = '';
+    for (const n of nodes) {
+      const p = positions[n.id];
+      const isActive = n.id === d.active;
+      const fill = isActive ? '#a855f7' : '#3f3f46';
+      const stroke = isActive ? '#e9d5ff' : '#71717a';
+      const r_ = 6 + Math.log(Math.max(1, n.node_count || 0)) * 1.5;
+      nodesSvg += `<g><title>${_esc(n.title || n.id)} · ${n.node_count || 0} nodes</title>
+        <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r_.toFixed(1)}"
+                fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>
+        <text x="${p.x.toFixed(1)}" y="${(p.y + r_ + 10).toFixed(1)}"
+              text-anchor="middle" fill="#e4e4e7" font-size="9">${_esc(n.id.slice(0, 10))}</text>
+      </g>`;
+    }
+    el.innerHTML = `<text x="8" y="12" fill="#a1a1aa" font-size="9">meta-graph · ${nodes.length} ws · ${edges.length} bridges</text>${edgesSvg}${nodesSvg}`;
+  } catch(e) {
+    el.innerHTML = `<text x="${130}" y="90" text-anchor="middle" fill="#ef4444" font-size="10">error: ${_esc(String(e))}</text>`;
+  }
 }
 
 function _updateNeurochemAction(action, reason) {
@@ -920,7 +1192,11 @@ async function _refreshTimeline() {
       const originLabel = originRaw === '1_held' ? '● работа' : '◌ покой';
       const actionLabel = _ACTION_LABELS[e.action] || (e.action || '?');
       const reason = (e.reason || '').substring(0, 60);
-      return `<div class="neuro-timeline-item" title="${_esc(e.action)} · ${_esc(originRaw)}">
+      // Дополнительные классы для цветового мазка (state_origin + action)
+      const originCls = originRaw === '1_held' ? 'origin-held' : 'origin-rest';
+      const actionCls = e.action === 'ask' ? 'action-ask'
+                      : e.action === 'stable' ? 'action-stable' : '';
+      return `<div class="neuro-timeline-item ${originCls} ${actionCls}" title="${_esc(e.action)} · ${_esc(originRaw)}">
         <span class="neuro-timeline-time">${t}</span>
         <span class="neuro-timeline-action">${_esc(actionLabel)}</span>
         <span class="neuro-timeline-origin ${originRaw === '1_held' ? 'held' : ''}">${originLabel}</span>

@@ -63,6 +63,12 @@ class UserState:
         self.hrv_stress: Optional[float] = None
         self.hrv_rmssd: Optional[float] = None
 
+        # Валентность: приятно/неприятно ∈ [−1, 1]. Отдельный канал от arousal.
+        # HRV/dopamine ловят возбуждение, но не знак переживания. Собирается
+        # EMA из feedback (accept/reject), timing (engagement/silence) и
+        # стрик отказов (накопительный negative bias). См. tick_valence.
+        self.valence: float = 0.0
+
         # Предиктивная модель (signed prediction error)
         # expectation = медленный EMA state_level (baseline ожидания)
         # surprise = (current state_level) − expectation, signed в [−1, 1]
@@ -104,22 +110,27 @@ class UserState:
     # ── Timing / engagement ────────────────────────────────────────────────
 
     def update_from_timing(self, now: Optional[float] = None):
-        """Скорость вовлечения → dopamine.
+        """Скорость вовлечения → dopamine + лёгкий вклад в valence.
 
         Быстрый повторный ввод (< 30с) → dopamine EMA растёт (интерес).
-        Длинная пауза (> 5 мин) → dopamine EMA decay (охлаждение).
+        Длинная пауза (> 5 мин) → dopamine EMA decay (охлаждение) + лёгкий
+        negative vibe в valence.
         Между — нейтрально.
         """
         now = now or time.time()
         if self._last_input_ts is not None:
             gap = now - self._last_input_ts
             if gap < 30:
-                signal = 0.8   # quick engagement
+                signal = 0.8       # quick engagement
+                val_signal = 0.2   # приятно когда хочется ещё
             elif gap > 300:
-                signal = 0.2   # long silence
+                signal = 0.2       # long silence
+                val_signal = -0.2  # молчание ближе к отстранённости
             else:
                 signal = 0.5
+                val_signal = 0.0
             self.dopamine = 0.9 * self.dopamine + 0.1 * signal
+            self.valence = 0.95 * self.valence + 0.05 * val_signal
         self._last_input_ts = now
         self._clamp()
         self.tick_expectation()
@@ -148,15 +159,27 @@ class UserState:
     # ── Feedback → dopamine + burnout ──────────────────────────────────────
 
     def update_from_feedback(self, kind: str):
-        """accept → dopamine ↑; reject → burnout ↑ + dopamine ↓; ignore → ничего."""
+        """accept → dopamine + valence ↑; reject → burnout + valence ↓; ignore → нейтрально.
+
+        Valence — основной канал сюда: feedback юзера явно даёт знак переживания.
+        Плюс: streak of rejects накапливает negative bias (3 reject подряд →
+        ощутимый спад valence).
+        """
         if kind not in self._feedback_counts:
             return
         self._feedback_counts[kind] = self._feedback_counts[kind] + 1
         if kind == "accepted":
             self.dopamine = 0.9 * self.dopamine + 0.1 * 0.9
+            self.valence = 0.9 * self.valence + 0.1 * 0.7
         elif kind == "rejected":
             self.dopamine = 0.9 * self.dopamine + 0.1 * 0.2
             self.burnout = min(1.0, self.burnout + 0.05)
+            self.valence = 0.9 * self.valence + 0.1 * (-0.7)
+            # Streak bias: чем больше подряд rejects, тем жёстче спад
+            recent_rejects = self._feedback_counts.get("rejected", 0)
+            recent_accepts = self._feedback_counts.get("accepted", 0)
+            if recent_rejects - recent_accepts >= 3:
+                self.valence -= 0.05 * min(5, recent_rejects - recent_accepts - 2)
         self._clamp()
         self.tick_expectation()
 
@@ -183,6 +206,7 @@ class UserState:
         self.burnout = max(0.0, min(1.0, self.burnout))
         self.expectation = max(0.0, min(1.0, self.expectation))
         self.long_reserve = max(0.0, min(float(LONG_RESERVE_MAX), self.long_reserve))
+        self.valence = max(-1.0, min(1.0, self.valence))
 
     def vector(self) -> np.ndarray:
         """4-мерная точка состояния для sync-метрики."""
@@ -308,6 +332,7 @@ class UserState:
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
             "burnout": round(self.burnout, 3),
+            "valence": round(self.valence, 3),
             "expectation": round(self.expectation, 3),
             "reality": round(self.reality, 3),
             "surprise": round(self.surprise, 3),
@@ -332,6 +357,7 @@ class UserState:
         )
         u.expectation = float(d.get("expectation", 0.5))
         u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
+        u.valence = float(d.get("valence", 0.0))
         hrv = d.get("hrv") or {}
         u.hrv_coherence = hrv.get("coherence")
         u.hrv_stress = hrv.get("stress")

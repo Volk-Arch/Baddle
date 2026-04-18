@@ -669,6 +669,189 @@ select {
   color: #64748b;
   font-variant-numeric: tabular-nums;
 }
+
+/* Neurochem sparkline */
+.neuro-sparklines {
+  background: #0c0a12;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 4px;
+  margin-top: 4px;
+}
+.neuro-sparklines svg {
+  width: 100%;
+  height: 40px;
+  display: block;
+}
+.neuro-sparklines .spark-label {
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Named-state badge (Voronoi) */
+.neuro-named-badge {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  background: #14532d;
+  color: #bbf7d0;
+  border: 1px solid #166534;
+}
+
+/* Sync-dashboard */
+.sync-dashboard {
+  background: #0c0a12;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+.dash-header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #a5b4fc;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.dash-count { color: #64748b; font-weight: 400; margin-left: 6px; }
+.sync-dashboard svg {
+  width: 100%;
+  height: 80px;
+  display: block;
+  background: #18181b;
+  border-radius: 4px;
+}
+.dash-subhead {
+  font-size: 10px;
+  color: #71717a;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+.dash-top {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+}
+.dash-top-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 6px;
+  background: #18181b;
+  border-radius: 3px;
+}
+.dash-top-mode { color: #e4e4e7; }
+.dash-top-count { color: #f87171; font-variant-numeric: tabular-nums; }
+
+/* Weekly review modal */
+.weekly-modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.75);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.weekly-modal[style*="flex"] { display: flex !important; }
+.weekly-content {
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 16px 20px;
+  max-width: 480px;
+  width: 92%;
+  max-height: 88vh;
+  overflow-y: auto;
+  color: #e4e4e7;
+}
+.weekly-header {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #a5b4fc;
+}
+.weekly-close {
+  background: none;
+  border: none;
+  color: #a1a1aa;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.weekly-close:hover { color: #fff; }
+.weekly-summary {
+  font-size: 12px;
+  color: #a1a1aa;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: #18181b;
+  border-radius: 6px;
+}
+.weekly-chart-block { margin-bottom: 14px; }
+.weekly-chart-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #71717a;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.weekly-chart-block svg {
+  width: 100%;
+  height: 80px;
+  display: block;
+  background: #18181b;
+  border-radius: 6px;
+}
+.weekly-modes, .weekly-streaks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.weekly-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+.weekly-bar-label {
+  width: 80px;
+  color: #a1a1aa;
+  text-align: right;
+}
+.weekly-bar-track {
+  flex: 1;
+  height: 10px;
+  background: #18181b;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.weekly-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #a855f7);
+}
+.weekly-bar-value {
+  width: 28px;
+  text-align: right;
+  color: #a1a1aa;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Timeline polish — vertical band with state_origin color */
+.neuro-timeline-item {
+  border-left: 3px solid #3f3f46;
+  padding-left: 8px;
+}
+.neuro-timeline-item.origin-held { border-left-color: #f59e0b; }
+.neuro-timeline-item.origin-rest { border-left-color: #6b7280; }
+.neuro-timeline-item.action-ask  { border-left-color: #ec4899; }
+.neuro-timeline-item.action-stable { border-left-color: #10b981; }
 .neuro-mode-badge, .neuro-action-badge, .neuro-origin-badge, .neuro-camera-badge {
   padding: 2px 8px;
   border-radius: 6px;
