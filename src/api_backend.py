@@ -28,10 +28,34 @@ _settings = {
     "neural_max_tokens": 3000,             # single-call упpер лимит
     # Depth knobs — сколько циклов thinking на каждом уровне.
     # Чем больше — тем глубже и дольше обрабатываем.
-    "deep_chat_steps":       3,            # execute_deep: brainstorm→elab→smartdc (+pairwise)
+    "deep_chat_steps":       3,            # execute_deep: global fallback (если mode не в dict)
+    # Per-mode depth override. Ключ = mode_id, значение = число итераций.
+    # После базовых brainstorm+elaborate+smartdc делаем ещё N-3 раундов
+    # углубления на weakest hypothesis, пока confidence не > 0.85 или не stall.
+    # horizon/bayes тяжёлые по задумке (глубокое исследование), tournament
+    # лёгкий (pairwise уже дорогой), free/scout средние.
+    "deep_mode_steps": {
+        "horizon":    5,    # research — deep exploration
+        "bayes":      7,    # bayesian — prior+observations+posterior cycles
+        "dispute":    4,    # dialectical — thesis/anti/synth ходит глубже
+        "tournament": 3,    # comparative — pairwise SmartDC уже N² heavy
+        "builder":    4,    # assembly — parts deeper
+        "pipeline":   4,    # steps — walks longer
+        "cascade":    3,    # priorities
+        "scales":     3,    # balance
+        "race":       2,    # any option — first match
+        "fan":        3,    # brainstorm
+        "scout":      3,    # wander
+        "vector":     3,    # focus
+        "free":       3,    # manual
+    },
     "dmn_converge_max_steps":   100,       # server-side autorun до stable
     "dmn_converge_stall_window": 12,       # шагов без роста нод → stop
     "dmn_converge_max_wall_s":   900,      # абсолютный лимит wall-time (15 мин)
+    # Diversity guard в brainstorm: если avg pairwise distinct между hypotheses
+    # < этого порога, auto-trigger pump между двумя ближайшими для разброса
+    # (serendipity axis injection) — иначе synthesize работает на слипшемся.
+    "deep_diversity_min":       0.30,
     # Experimental
     "live_bayes": False,
 }
@@ -83,12 +107,33 @@ def get_neural_defaults() -> dict:
 
 def get_depth_defaults() -> dict:
     """Depth knobs — сколько циклов на каждом уровне мышления."""
+    mode_steps = _settings.get("deep_mode_steps") or {}
+    if not isinstance(mode_steps, dict):
+        mode_steps = {}
     return {
         "deep_chat_steps":          int(_settings.get("deep_chat_steps", 3)),
+        "deep_mode_steps":          dict(mode_steps),
+        "deep_diversity_min":       float(_settings.get("deep_diversity_min", 0.30)),
         "dmn_converge_max_steps":   int(_settings.get("dmn_converge_max_steps", 100)),
         "dmn_converge_stall_window":int(_settings.get("dmn_converge_stall_window", 12)),
         "dmn_converge_max_wall_s":  int(_settings.get("dmn_converge_max_wall_s", 900)),
     }
+
+
+def get_mode_depth(mode_id: str) -> int:
+    """Число thinking iterations для конкретного mode. Fallback → deep_chat_steps.
+
+    Читается execute_deep'ом чтобы варьировать глубину per-mode (tournament
+    дешевле, horizon/bayes глубже). Без правки кода — через settings.json.
+    """
+    mode_steps = _settings.get("deep_mode_steps") or {}
+    if isinstance(mode_steps, dict) and mode_id in mode_steps:
+        try:
+            val = int(mode_steps[mode_id])
+            return max(1, min(10, val))
+        except (TypeError, ValueError):
+            pass
+    return max(1, min(10, int(_settings.get("deep_chat_steps", 3))))
 
 
 def update_settings(new: dict):
@@ -96,7 +141,8 @@ def update_settings(new: dict):
               "embedding_model", "local_ctx", "live_bayes",
               "neural_threshold", "neural_temp", "neural_top_k",
               "neural_seed", "neural_novelty", "neural_max_tokens",
-              "deep_chat_steps", "dmn_converge_max_steps",
+              "deep_chat_steps", "deep_mode_steps", "deep_diversity_min",
+              "dmn_converge_max_steps",
               "dmn_converge_stall_window", "dmn_converge_max_wall_s"):
         if k in new:
             _settings[k] = new[k]

@@ -248,6 +248,67 @@ class StateGraph:
             log.warning(f"[state_graph] embedding failed for {h}: {e}")
         return None
 
+    # ── Markov transitions: P(next_action | prev_action) ────────────────────
+
+    def action_transitions(self, tail_n: int = 200,
+                            exclude_actions: tuple = ("heartbeat", "none", "")) -> dict:
+        """Bigram probabilities над action-sequence из последних tail_n entries.
+
+        Возвращает:
+            {
+              "transitions": {prev_action: {next_action: prob, ...}},
+              "counts":      {prev_action: {next_action: count, ...}},
+              "totals":      {prev_action: total_out},
+              "n":           сколько transitions учтено
+            }
+
+        Используется meta_tick'ом для детекции «policy drift» — когда
+        текущий bigram сильно отклоняется от исторической вероятности.
+        Также tick_nand может использовать `most_likely_next()` для
+        предиктивного policy_nudge.
+
+        heartbeat/none отфильтрованы по умолчанию — это техническая
+        активность, не cognitive actions.
+        """
+        entries = self.read_all()
+        if len(entries) < 2:
+            return {"transitions": {}, "counts": {}, "totals": {}, "n": 0}
+        # Берём хвост и фильтруем
+        rel = [e for e in entries[-tail_n:]
+                if e.get("action", "") not in exclude_actions]
+        if len(rel) < 2:
+            return {"transitions": {}, "counts": {}, "totals": {}, "n": 0}
+        counts: dict[str, dict[str, int]] = {}
+        for a, b in zip(rel[:-1], rel[1:]):
+            prev = a.get("action", "")
+            nxt = b.get("action", "")
+            if not prev or not nxt:
+                continue
+            counts.setdefault(prev, {})[nxt] = counts.setdefault(prev, {}).get(nxt, 0) + 1
+        totals = {k: sum(v.values()) for k, v in counts.items()}
+        transitions = {}
+        for prev, nxts in counts.items():
+            tot = totals.get(prev, 0) or 1
+            transitions[prev] = {n: round(c / tot, 3) for n, c in nxts.items()}
+        return {
+            "transitions": transitions,
+            "counts": counts,
+            "totals": totals,
+            "n": len(rel) - 1,
+        }
+
+    def most_likely_next(self, prev_action: str, tail_n: int = 200) -> Optional[tuple]:
+        """Самая вероятная next-action после prev_action (None если нет данных).
+
+        Returns (action, probability) или None.
+        """
+        tr = self.action_transitions(tail_n=tail_n)
+        row = tr["transitions"].get(prev_action)
+        if not row:
+            return None
+        nxt = max(row, key=row.get)
+        return (nxt, row[nxt])
+
     # ── Episodic query ──────────────────────────────────────────────────────
 
     def query_similar(self, query_embedding: list[float],

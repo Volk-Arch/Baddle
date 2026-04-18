@@ -10,5 +10,25 @@
   "neural_seed": -1,
   "neural_novelty": 0.85,
   "neural_max_tokens": 3000,
+  "deep_chat_steps": 3,
+  "deep_mode_steps": {
+    "horizon": 5,
+    "bayes": 7,
+    "dispute": 4,
+    "tournament": 3,
+    "builder": 4,
+    "pipeline": 4,
+    "cascade": 3,
+    "scales": 3,
+    "race": 2,
+    "fan": 3,
+    "scout": 3,
+    "vector": 3,
+    "free": 3
+  },
+  "dmn_converge_max_steps": 100,
+  "dmn_converge_stall_window": 12,
+  "dmn_converge_max_wall_s": 900,
+  "deep_diversity_min": 0.3,
   "live_bayes": false
 }

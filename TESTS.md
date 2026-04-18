@@ -928,7 +928,19 @@ GET /assist/state → {precision, effective_precision, maturity, ...}
 | high_rejection | 3/5 последних с `user_feedback=rejected` | emit `ask` + nudge doubt |
 | rpe_negative_streak | 6/10 `recent_rpe < −0.05` | force INTEGRATION + nudge merge |
 | action_monotony | 5 одинаковых action подряд | emit `compare` + nudge doubt |
+| markov_anomaly | последний bigram `(prev→cur)` имеет P<10% при ≥20 наблюдений | только зафиксировать (`markov` field в meta) |
 | normal | ничего | продолжаем нормальный routing |
+
+`markov_anomaly` подключён когда tick_nand передаёт `transitions`:
+```python
+sg = get_state_graph()
+transitions = sg.action_transitions(tail_n=200)  # P(next|prev)
+meta = analyze_tail(tail, transitions=transitions)
+```
+Используется пока read-only (не меняет policy): `meta['markov']` содержит
+текущий bigram + его типичную альтернативу. Это база для будущего
+predictive nudge (если markov предсказывает `think_toward` но ожидаем
+`elaborate` — можно поджать weights).
 
 Модуль [src/meta_tick.py](src/meta_tick.py). Tick ([src/tick_nand.py](src/tick_nand.py))
 вызывает `analyze_tail()` после ASK CHECK, применяет рекомендацию:
@@ -1314,6 +1326,77 @@ Mode выбирается из контекста (state, history), а не то
 - `execute()` делает `if mode_id == X` больше чем 2 раза → чей-то regress
 
 ---
+
+## Depth engine — per-mode глубина + diversity guard + iterative deepening
+
+**Что.** `execute_deep` больше не фиксирован на 3 шагах. Четыре улучшения:
+
+1. **Per-mode depth** — `settings.deep_mode_steps` dict: `{"horizon":5,"bayes":7,"tournament":3,...}`.
+   `get_mode_depth(mode_id)` → int. При отсутствии mode → `deep_chat_steps` fallback.
+2. **Diversity guard** — после brainstorm: `_pairwise_diversity(added_hyp)` считает
+   avg pairwise distinct. Если < `deep_diversity_min` (0.30) → `pump_logic.pump`
+   между двумя ближайшими гипотезами → bridge-нода добавляется как новая
+   hypothesis (инжектит альтернативную ось). В trace — `diversity_pump`.
+3. **Iterative deepening** — после базовых brainstorm/elaborate/smartdc
+   делаем `max_steps - 3` дополнительных раундов: pick weakest (MIN
+   `|conf−0.5|` = максимальная энтропия) → `_deepen_round()` = elaborate
+   (2 новых evidence) + SmartDC + conf update. **Adaptive exit** через
+   `should_stop(cl, graph, horizon, goal_node)` из [modes.py:184](src/modes.py:184) —
+   тот же алгоритм что tick_nand (4 кейса: subgoals AND/OR, synthesis-
+   close-to-goal `d<τ_in`, convergence `≥3 verified + avg conf > 85%`,
+   novelty exhaustion `precision > 0.85`). Safety net: 2 раунда avg_conf
+   без progress (+0.02) → stall exit.
+4. **Cross-graph find_serendipity_bridges** — `WorkspaceManager.find_serendipity_bridges(min_distinct, max_distinct, max_results)`
+   сканирует все пары workspaces, ищет node-пары с d в окне `(min, max)`:
+   `min_distinct` отсекает дубликаты, `max_distinct` — unrelated.
+   Bridges persist'ятся в `cross_edges` индекса (dedup встроен).
+
+**Проверка.**
+```python
+# 1. Per-mode depth
+from src.api_backend import get_mode_depth
+assert get_mode_depth("horizon") == 5
+assert get_mode_depth("bayes") == 7
+assert get_mode_depth("tournament") == 3
+
+# 2. Diversity helper
+from src.assistant_exec import _pairwise_diversity
+# inject nodes with embeddings, call _pairwise_diversity([0,1,2])
+# → (avg_d, closest_pair)
+
+# 3. Markov transitions
+from src.state_graph import get_state_graph
+tr = get_state_graph().action_transitions(tail_n=200)
+# {"transitions": {prev: {next: prob}}, "counts", "totals", "n"}
+
+# 4. Serendipity bridges (нужно ≥2 workspace)
+from src.workspace import get_workspace_manager
+wm = get_workspace_manager()
+bridges = wm.find_serendipity_bridges(min_distinct=0.05, max_distinct=0.30, max_results=3)
+# → [{from_graph, from_node, to_graph, to_node, d, from_text, to_text}, ...]
+```
+
+**Живые тесты.**
+- В chat: mode=horizon (5 шагов) с запросом «что улучшить в моём дне».
+  В карточке в steps_human должны быть ② brainstorm, ③ elaborate, ④ smartdc,
+  и 1-2 раунда «↻ Раунд углубления #N: conf 0.50 → 0.62». Deepen
+  таргетируется на РАЗНЫЕ гипотезы (MIN |conf-0.5|, меняется каждый раунд).
+  Exit: либо `should_stop: ...` (natural convergence), либо
+  `stall safety: 2 раунда avg_conf без progress`.
+- Mode=tournament с близкими опциями (React vs Vue) → может триггернуться
+  `diversity_pump` если ideas слипаются (в trace увидишь шаг 2.5).
+- Поднять `DMN_CROSS_GRAPH_INTERVAL` до минимума, создать 2 workspaces
+  с похожими темами → alert `🔗 Cross-graph мост найден`.
+
+**Красный флаг.**
+- `execute_deep` падает с UnboundLocalError на `synthesis_text` →
+  в блоке iterative deepening ссылка до её инициализации
+- Diversity guard спамит pump на каждый запрос → `deep_diversity_min`
+  слишком высокий (>0.5); снизить обратно до 0.30
+- `find_serendipity_bridges` возвращает миллион пар → `max_distinct`
+  слишком высокий, либо ноды без embeddings (пропускаются)
+- `action_transitions` всегда пустой → state_graph файл не существует
+  или `exclude_actions` отсекает всё (heartbeat-only трафик)
 
 ## Assistant — чат с графом под капотом
 

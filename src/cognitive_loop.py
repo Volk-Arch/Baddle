@@ -658,17 +658,18 @@ class CognitiveLoop:
             # Слишком пусто или слишком большой граф — не запускаем
             return
         self._last_dmn_converge = now
-        # Depth config из settings — юзер может override дефолты
+        # Depth config из settings — юзер может override class-level дефолты
+        max_steps = self.DMN_CONVERGE_MAX_STEPS
+        stall_window = self.DMN_CONVERGE_STALL_WINDOW
+        max_wall_s = self.DMN_CONVERGE_MAX_WALL_S
         try:
             from .api_backend import get_depth_defaults
             _dd = get_depth_defaults()
-            max_steps = _dd.get("dmn_converge_max_steps", max_steps)
-            stall_window = _dd.get("dmn_converge_stall_window", stall_window)
-            max_wall_s = _dd.get("dmn_converge_max_wall_s", max_wall_s)
+            max_steps = int(_dd.get("dmn_converge_max_steps", max_steps))
+            stall_window = int(_dd.get("dmn_converge_stall_window", stall_window))
+            max_wall_s = int(_dd.get("dmn_converge_max_wall_s", max_wall_s))
         except Exception:
-            max_steps = max_steps
-            stall_window = stall_window
-            max_wall_s = max_wall_s
+            pass
         log.info(f"[cognitive_loop] DMN converge-loop starting "
                  f"(nodes={nodes_n} max_steps={max_steps} max_wall={max_wall_s}s stall={stall_window})")
 

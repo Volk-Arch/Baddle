@@ -37,19 +37,24 @@ def _safe_get(entry: dict, *path, default=None):
     return cur if cur is not None else default
 
 
-def analyze_tail(tail: list[dict]) -> dict:
+def analyze_tail(tail: list[dict], transitions: Optional[dict] = None) -> dict:
     """Анализ последних N state_nodes. Возвращает dict:
 
         {
           "pattern": "stuck_execution" | "action_monotony" | "rpe_negative_streak"
-                     | "high_rejection" | "normal" | "not_enough_data",
+                     | "high_rejection" | "markov_anomaly" | "normal" | "not_enough_data",
           "recommend": "ask" | "compare" | "stabilize" | None,
           "policy_nudge": {phase: delta, ...} | None,
-          "detail": "human-readable summary"
+          "detail": "human-readable summary",
+          "markov": {...} | None       # прогноз next action если transitions дан
         }
 
     Возвращает первый сработавший паттерн (приоритет: rejection > stuck >
-    rpe streak > monotony). «Normal» если ничего не сработало.
+    rpe streak > monotony > markov_anomaly). «Normal» если ничего не сработало.
+
+    transitions — опциональный результат `StateGraph.action_transitions()`.
+    Если передан, детектит markov_anomaly: текущий bigram редкий по истории
+    (< 10% при ≥20 наблюдениях) → система отклонилась от привычного паттерна.
     """
     if not tail or len(tail) < 5:
         return {"pattern": "not_enough_data", "recommend": None,
@@ -110,8 +115,41 @@ def analyze_tail(tail: list[dict]) -> dict:
                 "detail": f"5x '{actions[0]}' подряд — выход из рут'а",
             }
 
+    # Signal: markov_anomaly — последний bigram редок по истории
+    # (система делает нестандартный переход). Это не всегда плохо — новизна
+    # может означать адаптацию к новому контексту — но стоит зафиксировать.
+    markov_info = None
+    if transitions and len(tail) >= 2:
+        prev_a = tail[-2].get("action", "")
+        cur_a = tail[-1].get("action", "")
+        row = transitions.get("transitions", {}).get(prev_a, {})
+        total = transitions.get("totals", {}).get(prev_a, 0)
+        if row and total >= 20 and cur_a in row:
+            prob = row[cur_a]
+            top = max(row, key=row.get)
+            top_prob = row[top]
+            markov_info = {
+                "prev_action": prev_a,
+                "action": cur_a,
+                "prob": prob,
+                "typical_next": top,
+                "typical_prob": top_prob,
+                "total_observed": total,
+            }
+            if prob < 0.10 and cur_a != top:
+                return {
+                    "pattern": "markov_anomaly",
+                    "recommend": None,
+                    "policy_nudge": None,
+                    "detail": (f"Переход '{prev_a}→{cur_a}' редкий "
+                               f"({prob:.0%} по {total} записям); "
+                               f"обычно '{prev_a}→{top}' ({top_prob:.0%})"),
+                    "markov": markov_info,
+                }
+
     return {"pattern": "normal", "recommend": None,
-            "policy_nudge": None, "detail": "no anomaly"}
+            "policy_nudge": None, "detail": "no anomaly",
+            "markov": markov_info}
 
 
 def apply_policy_nudge(horizon, nudge: dict):

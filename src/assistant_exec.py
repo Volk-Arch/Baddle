@@ -527,15 +527,150 @@ HEAVY_MODES_DEEP = ("horizon", "dispute", "builder", "pipeline",
                      "scout", "vector", "free")
 
 
+def _pairwise_diversity(idxs: list[int]) -> tuple[float | None, tuple[int, int] | None]:
+    """Avg pairwise distinct distance для списка nodes + ближайшая пара.
+
+    Возвращает (avg_d, (i, j)) где (i, j) — пара с наименьшим d (наиболее
+    похожие). avg_d=None если нод без embedding'ов слишком много.
+    Используется diversity guard'ом в execute_deep.
+    """
+    import numpy as np
+    from .main import distinct
+    nodes = _graph.get("nodes", [])
+    vecs = []
+    for i in idxs:
+        if 0 <= i < len(nodes):
+            emb = nodes[i].get("embedding")
+            if emb:
+                vecs.append((i, np.array(emb, dtype=np.float32)))
+    if len(vecs) < 2:
+        return None, None
+    total, npairs = 0.0, 0
+    best_d = 2.0
+    best_pair = None
+    for a in range(len(vecs)):
+        for b in range(a + 1, len(vecs)):
+            d = float(distinct(vecs[a][1], vecs[b][1]))
+            total += d
+            npairs += 1
+            if d < best_d:
+                best_d = d
+                best_pair = (vecs[a][0], vecs[b][0])
+    if npairs == 0:
+        return None, None
+    return total / npairs, best_pair
+
+
+def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
+                   max_tokens: int, temp: float, top_k: int) -> dict:
+    """Один раунд углубления на конкретной hypothesis: elaborate (2 evidence)
+    → smartdc → confidence update. Возвращает detail dict для trace.
+
+    Используется iterative deepening'ом execute_deep'а. Один раунд меняет
+    уверенность ноды (вверх или вниз) на основе нового smartdc.
+    """
+    from .graph_logic import _graph_generate
+    nodes = _graph.get("nodes", [])
+    if not (0 <= weak_idx < len(nodes)):
+        return {"skipped": "invalid_idx"}
+    weak_text = nodes[weak_idx].get("text", "")
+    conf_before = nodes[weak_idx].get("confidence", 0.5)
+
+    # Elaborate
+    ev_added = []
+    try:
+        elab_prompt = (
+            f"Гипотеза: «{weak_text}».\n"
+            f"Контекст цели: {message[:150]}.\n"
+            f"Дай 2 новых evidence (факты/механизмы/примеры), каждый на "
+            f"своей строке, без нумерации. Избегай уже сказанного."
+            if lang == "ru" else
+            f"Hypothesis: «{weak_text}».\nContext: {message[:150]}.\n"
+            f"Give 2 NEW concrete evidence. One per line."
+        )
+        res, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": elab_prompt}],
+            max_tokens=max_tokens, temp=temp, top_k=top_k,
+        )
+        lines = [_clean_thought(l.strip(" -•*1234567890."), "")
+                 for l in res.split("\n") if len(l.strip()) > 8][:2]
+        directed = _graph["edges"].setdefault("directed", [])
+        for et in lines:
+            eidx = _add_node(et, depth=2, topic="", confidence=0.65,
+                             node_type="evidence")
+            _graph["nodes"][eidx]["evidence_target"] = weak_idx
+            ev_added.append(eidx)
+            directed.append([weak_idx, eidx])
+    except Exception as e:
+        return {"error": str(e)[:100], "phase": "elaborate"}
+
+    # SmartDC → pro vs con → update confidence
+    try:
+        dc_prompt = (
+            f"Гипотеза: «{weak_text}».\n"
+            f"Дай FOR/AGAINST/SYNTHESIS, три строки."
+            if lang == "ru" else
+            f"Hypothesis: «{weak_text}». Give FOR/AGAINST/SYNTHESIS."
+        )
+        dc, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": dc_prompt}],
+            max_tokens=max_tokens, temp=0.4, top_k=30,
+        )
+        fr = ag = sy = ""
+        for line in dc.split("\n"):
+            L = line.strip()
+            if L.upper().startswith(("FOR:", "ЗА:")):
+                fr = L.split(":", 1)[1].strip()
+            elif L.upper().startswith(("AGAINST:", "ПРОТИВ:")):
+                ag = L.split(":", 1)[1].strip()
+            elif L.upper().startswith(("SYNTHESIS:", "СИНТЕЗ:")):
+                sy = L.split(":", 1)[1].strip()
+        # Update: if AGAINST significantly longer than FOR → conf down
+        if fr and ag:
+            if len(ag) > len(fr) * 1.3:
+                new_conf = max(0.1, conf_before - 0.15)
+            else:
+                new_conf = min(0.95, conf_before + 0.12)
+        else:
+            new_conf = conf_before
+        _graph["nodes"][weak_idx]["confidence"] = new_conf
+        return {
+            "evidence_added": ev_added,
+            "conf_before": round(conf_before, 2),
+            "conf_after": round(new_conf, 2),
+            "synthesis": sy[:200] if sy else "",
+            "thesis": fr[:200] if fr else "",
+            "antithesis": ag[:200] if ag else "",
+        }
+    except Exception as e:
+        return {"error": str(e)[:100], "phase": "smartdc",
+                "evidence_added": ev_added}
+
+
 def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
-                 profile_hint: str = "", max_steps: int = 3) -> Dict:
-    """3-step deep research через реальные tools — реальное использование
+                 profile_hint: str = "", max_steps: int = None) -> Dict:
+    """Deep research через реальные tools — реальное использование
     того же engine что и в graph tab autorun, не замена одним brainstorm'ом.
 
-    Шаги:
-      1. Brainstorm → create goal-node + N hypotheses в content graph
-      2. Elaborate самую слабую hypothesis → evidence-ноды (углубляем)
-      3. SmartDC top-2 сильных → pro/contra/synthesis
+    Глубина (число iteration rounds) берётся из settings per-mode:
+      tournament/free/race — 2-3 (pairwise сам по себе дорогой)
+      horizon — 5 (research, глубокое исследование)
+      bayes — 7 (prior/observations/posterior циклы)
+
+    Базовые шаги (всегда):
+      1. Seed goal-node + brainstorm N hypotheses
+      2. Diversity guard: если avg pairwise d < deep_diversity_min — pump
+         между ближайшей парой для разброса (serendipity axis)
+      3. Per-option evidence (pro+con) для comparative/cluster/dialectical,
+         или single-hypothesis elaborate для остальных
+      4. Pairwise SmartDC между options (comparative/dialectical), или
+         single SmartDC на top hypothesis
+
+    Iterative deepening (если mode_steps > 3): дополнительно раундов
+    N-3, каждый = elaborate(weakest) → smartdc(weakest) → confidence update.
+    Exit: max confidence > 0.85 ИЛИ stall (2 раунда без +conf) ИЛИ wall-step.
 
     Возвращает `deep_research` card: trace шагов + final synthesis +
     список созданных нод (юзер видит реальную работу системы).
@@ -543,8 +678,12 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     from .prompts import _p
     from .graph_routes import _add_node as _add_node_route  # same module
     from .graph_logic import _compute_edges
-    from .api_backend import get_neural_defaults
+    from .api_backend import get_neural_defaults, get_mode_depth
     _nd = get_neural_defaults()
+    # Per-mode depth — если caller не передал явно max_steps
+    if max_steps is None:
+        max_steps = get_mode_depth(mode_id)
+    max_steps = max(1, min(10, int(max_steps)))
     # Эти значения override'ят hardcoded max_tokens если они больше дефолта
     _nd_maxtok = _nd.get("max_tokens") or 3000
     _nd_temp = _nd.get("temperature") or 0.7
@@ -618,6 +757,52 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         _ensure_embeddings([n.get("text", "") for n in _graph["nodes"]])
     except Exception:
         pass
+
+    # ── Diversity guard: pairwise distinct между hypotheses ──
+    # Если brainstorm вернул слипшиеся идеи (avg_d < min), synthesize
+    # будет работать на иллюзии разнообразия. Запускаем pump между
+    # ближайшей парой чтобы добавить альтернативную ось.
+    avg_d = None
+    if not use_user_options and len(added_hyp) >= 3:
+        try:
+            from .api_backend import get_depth_defaults
+            div_min = float(get_depth_defaults().get("deep_diversity_min", 0.30))
+        except Exception:
+            div_min = 0.30
+        try:
+            avg_d, closest_pair = _pairwise_diversity(added_hyp)
+        except Exception as e:
+            log.debug(f"[execute_deep] diversity calc failed: {e}")
+            closest_pair = None
+        if avg_d is not None and avg_d < div_min and closest_pair:
+            log.info(f"[execute_deep] diversity={avg_d:.2f} < {div_min} — "
+                     f"pumping {closest_pair} for axis injection")
+            try:
+                from .pump_logic import pump
+                pres = pump(closest_pair[0], closest_pair[1],
+                            max_iterations=1, lang=lang,
+                            temp=_nd_temp, top_k=_nd_topk)
+                bridge_text = (pres or {}).get("bridge", "")
+                if bridge_text and len(bridge_text) > 8:
+                    bridge_idx = _add_node(bridge_text[:300], depth=1,
+                                           topic="", confidence=0.55,
+                                           node_type="hypothesis")
+                    _graph["nodes"][bridge_idx]["diversity_seed"] = True
+                    added_hyp.append(bridge_idx)
+                    trace.append({
+                        "step": 2.5, "action": "diversity_pump",
+                        "detail": f"avg_d={avg_d:.2f} < {div_min}: добавил мост между "
+                                  f"#{closest_pair[0]} и #{closest_pair[1]}",
+                        "nodes_touched": [bridge_idx],
+                        "pair": list(closest_pair),
+                        "bridge_text": bridge_text[:200],
+                    })
+                    try:
+                        _ensure_embeddings([n.get("text", "") for n in _graph["nodes"]])
+                    except Exception:
+                        pass
+            except Exception as e:
+                log.debug(f"[execute_deep] diversity pump failed: {e}")
 
     # ── Deep branch per option (comparative/cluster/dialectical) ──
     # Каждая hypothesis получает **свой** evidence-branch: 2 pro + 2 con
@@ -830,9 +1015,112 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             log.warning(f"[execute_deep] smartdc failed: {e}")
             trace.append({"step": 4, "action": "smartdc", "error": str(e)[:100]})
 
+    # ── Iterative deepening (beyond base 3) ──
+    # Базовые шаги (seed/brainstorm/elaborate/smartdc) считаем как ~3
+    # раунда. При mode_steps=5 делаем +2 раунда углубления на weakest
+    # hypothesis. Exit через `should_stop(cl, graph, horizon, goal_node)` —
+    # тот же адаптивный алгоритм сходимости что в `tick_nand` STOP CHECK:
+    #   (1) subgoals AND/OR, (2) synthesis близко к goal (d < τ_in),
+    #   (3) convergence: 3+ verified, avg conf > 85%, нет pending,
+    #   (4) novelty exhaustion: precision > 0.85 + нет работы.
+    # Stall как safety net (если should_stop никогда не срабатывает).
+    STALL_LIMIT = 2
+    base_rounds = 3
+    extra_rounds = max(0, max_steps - base_rounds)
+    stall = 0
+    def _avg_conf():
+        vals = [_graph["nodes"][h].get("confidence", 0.5)
+                for h in added_hyp if h < len(_graph["nodes"])]
+        return sum(vals) / len(vals) if vals else 0.0
+    prev_avg_conf = _avg_conf()
+
+    # Готовим контекст для should_stop: horizon (global) + goal_node ссылка.
+    try:
+        from .horizon import get_global_state
+        from .thinking import classify_nodes
+        from .modes import should_stop
+        from .graph_logic import _compute_edges
+        _horizon = get_global_state()
+        _goal_node = _graph["nodes"][goal_idx] if 0 <= goal_idx < len(_graph["nodes"]) else None
+    except Exception as e:
+        log.debug(f"[execute_deep] stop-check setup failed: {e}")
+        _horizon = None
+        _goal_node = None
+
+    for r in range(extra_rounds):
+        # Per-round adaptive stop-check — использует те же 4 кейса что tick
+        if _horizon is not None and _goal_node is not None:
+            try:
+                _edges = _compute_edges(_graph["nodes"], 0.91, "embedding")
+                cl = classify_nodes(_graph["nodes"], _edges, _graph,
+                                     stable_threshold=0.8)
+                stop_res = should_stop(cl, _graph, _horizon, goal_node=_goal_node)
+                if stop_res.get("resolved"):
+                    trace.append({"step": 5 + r, "action": "iterate_exit",
+                                  "detail": f"should_stop: {stop_res.get('reason','')}"})
+                    break
+            except Exception as e:
+                log.debug(f"[execute_deep] should_stop failed: {e}")
+
+        # Pick weakest = most uncertain (conf ближе к 0.5 = максимальная
+        # энтропия 50/50). Если все ноды уже solved, loop всё равно выйдет
+        # на следующем should_stop или stall.
+        candidates = [(h, abs(_graph["nodes"][h].get("confidence", 0.5) - 0.5))
+                       for h in added_hyp if h < len(_graph["nodes"])]
+        if not candidates:
+            break
+        candidates.sort(key=lambda p: p[1])    # min abs → ближе к 0.5 = uncertain
+        weak_idx = candidates[0][0]
+        round_res = _deepen_round(weak_idx, message, lang, system,
+                                   max_tokens=int(_nd_maxtok),
+                                   temp=float(_nd_temp),
+                                   top_k=int(_nd_topk))
+        ev_added = round_res.get("evidence_added") or []
+        trace.append({
+            "step": 5 + r, "action": "deepen",
+            "detail": (f"Углубление #{r+1} на #{weak_idx}: "
+                       f"{round_res.get('conf_before','?')} → "
+                       f"{round_res.get('conf_after','?')}, "
+                       f"+{len(ev_added)} evidence"),
+            "parent": weak_idx,
+            "nodes_touched": ev_added,
+            "conf_before": round_res.get("conf_before"),
+            "conf_after": round_res.get("conf_after"),
+            "synthesis": round_res.get("synthesis", ""),
+        })
+        # Embeddings для новых evidence — чтобы distinct в following
+        # should_stop читал с нод корректно.
+        if ev_added:
+            try:
+                _ensure_embeddings([n.get("text", "") for n in _graph["nodes"]])
+            except Exception:
+                pass
+        # Stall safety net — avg confidence по всем гипотезам не растёт
+        # (мы deepen'им разные ноды раунд за раундом, лидер не меняется,
+        # поэтому max бесполезен). Avg ловит agenda-wide progress.
+        cur_avg_conf = _avg_conf()
+        if cur_avg_conf <= prev_avg_conf + 0.02:
+            stall += 1
+        else:
+            stall = 0
+        prev_avg_conf = cur_avg_conf
+        if stall >= STALL_LIMIT:
+            trace.append({"step": 6 + r, "action": "iterate_exit",
+                          "detail": f"stall safety: {stall} раунда avg_conf без progress "
+                                    f"({cur_avg_conf:.2f})"})
+            break
+        # Если synthesis_text не был вычислен из единственного smartdc,
+        # подхватываем последнюю синтезу из deepen-раунда.
+        if not synthesis_text and round_res.get("synthesis"):
+            synthesis_text = round_res["synthesis"]
+
     # ── Финальная сборка карточки ── зависит от mode.renderer_style
+    # Считаем все ноды трогаемые deepen/elaborate/per-option raунд'ами
+    _countable_actions = ("elaborate", "elaborate_per_option", "deepen",
+                           "diversity_pump")
     nodes_created = 1 + len(added_hyp) + sum(
-        len(t.get("nodes_touched") or []) for t in trace if t.get("action") == "elaborate")
+        len(t.get("nodes_touched") or []) for t in trace
+        if t.get("action") in _countable_actions)
 
     try:
         style = (get_mode(mode_id) or {}).get("renderer_style", "ideas")
@@ -854,16 +1142,31 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                f"{mode_id.title()} deep: {len(trace)} steps · {nodes_created} nodes")
 
     steps_human = []
+    deepen_count = 0
     for t in trace:
         a = t.get("action", "?")
         if a == "seed_goal":
             steps_human.append(f"① Записал цель в граф")
         elif a == "brainstorm":
             steps_human.append(f"② Сгенерировал {len(t.get('nodes_touched',[]))} гипотез")
+        elif a == "diversity_pump":
+            steps_human.append(f"⊕ Diversity guard: добавил мост-ось "
+                               f"({len(t.get('nodes_touched',[]))} новая нода)")
+        elif a == "elaborate_per_option":
+            steps_human.append(f"③ Pro+con на {len(t.get('per_option',{}))} опциях: "
+                               f"+{len(t.get('nodes_touched',[]))} evidence")
         elif a == "elaborate":
             steps_human.append(f"③ Углубил одну слабую: +{len(t.get('nodes_touched',[]))} evidence")
+        elif a == "pairwise_smartdc":
+            steps_human.append(f"④ Pairwise SmartDC: {len(t.get('pairs',[]))} пар")
         elif a == "smartdc":
             steps_human.append(f"④ SmartDC thesis vs antithesis → синтез")
+        elif a == "deepen":
+            deepen_count += 1
+            steps_human.append(f"↻ Раунд углубления #{deepen_count}: "
+                               f"conf {t.get('conf_before','?')} → {t.get('conf_after','?')}")
+        elif a == "iterate_exit":
+            steps_human.append(f"✓ {t.get('detail','')}")
 
     # Winner и детальная разборка для comparative/dialectical
     winner_info = None

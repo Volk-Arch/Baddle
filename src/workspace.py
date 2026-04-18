@@ -324,6 +324,110 @@ class WorkspaceManager:
                      or e.get("to_graph") == workspace_id]
         return edges
 
+    def find_serendipity_bridges(self, min_distinct: float = 0.05,
+                                   max_distinct: float = 0.30,
+                                   max_results: int = 3,
+                                   register: bool = True) -> list[dict]:
+        """Scan всех пар workspaces (не только active) для node-пар близких
+        в embedding space но не связанных в графе. Serendipity = неочевидная
+        но осмысленная связь между разными областями твоей жизни.
+
+        Окно `min_distinct < d < max_distinct` отсекает:
+        - near-duplicates (d < min_distinct = ~0.05) — это тривиальные копии
+        - unrelated (d > max_distinct = ~0.30) — слишком далёкие для моста
+
+        Если register=True, найденные мосты добавляются в cross_edges индекс
+        (dedup встроен в add_cross_edge). Возвращает список dict'ов с from/to.
+
+        Вызывается из DMN _check_dmn_cross_graph каждые 60 мин.
+        """
+        import numpy as np
+        from .main import distinct
+
+        self.load_index()
+        ws_ids = list(self._index.get("workspaces", {}).keys())
+        if len(ws_ids) < 2:
+            return []
+
+        # Cache nodes+embeddings per workspace, single read
+        ws_cache: dict[str, tuple[list, list]] = {}
+        for wid in ws_ids:
+            gf = self.graph_file(wid)
+            if not gf.exists():
+                continue
+            try:
+                data = json.loads(gf.read_text(encoding="utf-8"))
+                nodes_w = data.get("nodes", [])
+                embs_w = data.get("embeddings", [])
+                # v8b: fall back to node.embedding если parallel cache пустой
+                if not embs_w and nodes_w:
+                    embs_w = [n.get("embedding") for n in nodes_w]
+                ws_cache[wid] = (nodes_w, embs_w)
+            except Exception:
+                continue
+        if len(ws_cache) < 2:
+            return []
+
+        # Active workspace — исключаем его nodes (active уже в _graph RAM,
+        # включать = дубли с find_cross_candidates). Но всё равно сканируем
+        # все пары между disk-workspaces + active как специальный case.
+        bridges: list[dict] = []
+        # Перебираем неупорядоченные пары workspaces
+        ids = sorted(ws_cache.keys())
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a_id, b_id = ids[i], ids[j]
+                a_nodes, a_embs = ws_cache[a_id]
+                b_nodes, b_embs = ws_cache[b_id]
+                if not a_nodes or not b_nodes:
+                    continue
+                # Pre-vectorize with explicit index mapping (skip None)
+                a_vecs = []
+                for idx, emb in enumerate(a_embs):
+                    if emb:
+                        a_vecs.append((idx, np.array(emb, dtype=np.float32)))
+                b_vecs = []
+                for idx, emb in enumerate(b_embs):
+                    if emb:
+                        b_vecs.append((idx, np.array(emb, dtype=np.float32)))
+                if not a_vecs or not b_vecs:
+                    continue
+                # Cap candidates per workspace (O(N·M) expensive): берём
+                # до 30 нод каждой стороны — этого хватает для serendipity
+                a_vecs = a_vecs[:30]
+                b_vecs = b_vecs[:30]
+                for a_idx, a_vec in a_vecs:
+                    if a_vec.size == 0:
+                        continue
+                    for b_idx, b_vec in b_vecs:
+                        if b_vec.size == 0:
+                            continue
+                        d = float(distinct(a_vec, b_vec))
+                        if d <= min_distinct or d >= max_distinct:
+                            continue
+                        bridges.append({
+                            "from_graph": a_id, "from_node": a_idx,
+                            "to_graph": b_id,   "to_node":   b_idx,
+                            "from_text": (a_nodes[a_idx].get("text", "") if a_idx < len(a_nodes) else "")[:80],
+                            "to_text":   (b_nodes[b_idx].get("text", "") if b_idx < len(b_nodes) else "")[:80],
+                            "d": round(d, 3),
+                        })
+        # Sort by distance (closest=first, but past the min threshold)
+        bridges.sort(key=lambda x: x["d"])
+        bridges = bridges[:max_results]
+
+        # Register: persist into index as cross_edges (dedup внутри add_cross_edge)
+        if register:
+            for b in bridges:
+                try:
+                    self.add_cross_edge(
+                        b["from_graph"], b["from_node"],
+                        b["to_graph"], b["to_node"], b["d"],
+                    )
+                except Exception as e:
+                    log.debug(f"[workspace] add_cross_edge failed: {e}")
+        return bridges
+
     def find_cross_candidates(self, k: int = 5, tau_in: float = 0.3) -> list[dict]:
         """Scan random node pairs from OTHER workspaces, return those within τ_in.
 

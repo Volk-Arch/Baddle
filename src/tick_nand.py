@@ -305,8 +305,14 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         from .state_graph import get_state_graph
         from .meta_tick import analyze_tail, apply_policy_nudge
         from .horizon import INTEGRATION, PROTECTIVE_FREEZE
-        tail = get_state_graph().tail(20)
-        meta = analyze_tail(tail)
+        sg = get_state_graph()
+        tail = sg.tail(20)
+        # Markov transitions over larger window — для markov_anomaly детекции
+        try:
+            transitions = sg.action_transitions(tail_n=200)
+        except Exception:
+            transitions = None
+        meta = analyze_tail(tail, transitions=transitions)
         recommend = meta.get("recommend")
         not_frozen = horizon.state != PROTECTIVE_FREEZE
 

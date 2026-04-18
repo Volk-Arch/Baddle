@@ -12,26 +12,6 @@
 
 # ⬆ НЕ СДЕЛАНО
 
-## 🧠 Depth engine — оставшиеся пробелы
-
-Базовая глубина работает (execute_deep × 14 modes, pairwise SmartDC,
-DMN converge с forced synthesis, настраиваемые depth knobs). Остались:
-
-- [ ] **Per-mode depth config** — сейчас один `deep_chat_steps=3` на всё.
-  Вынести per-mode (tournament×3, horizon×5, bayes×7) в settings.
-- [ ] **Markov transition probabilities** — state_graph имеет действия но
-  нет явных `P(action|prev_action)` для policy-nudge. meta_tick бы
-  выиграл от этого.
-- [ ] **Diversity guard в brainstorm** — если 5 идей слишком похожи
-  (высокий distinct-score), auto-trigger `pump` для разброса прежде
-  чем synthesize. Сейчас просто рендерится.
-- [ ] **Deep chat iteration beyond step-3** — execute_deep фиксирован на
-  3 шагах. Сделать loop с exit criteria (confidence > X OR steps > N).
-  Аналогично DMN converge но для chat с более коротким лимитом.
-- [ ] **Cross-graph DMN actual implementation** — скелет есть, но
-  `find_serendipity_bridges()` не реализован в workspace.py. Нужен
-  алгоритм: embedding NN search между нодами разных workspace'ов.
-
 ## 🩺 Daily-use viability (остатки)
 
 - [ ] **Desktop / system-tray notifications.** Alerts работают только
