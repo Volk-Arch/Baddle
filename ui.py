@@ -110,7 +110,14 @@ def _load_templates():
 def index():
     s = get_settings()
     model = s.get("api_model") or "(not configured)"
-    return render_template("index.html", model=model)
+    return render_template("index.html", model=model, page_title="baddle")
+
+
+@app.route("/lab")
+def lab():
+    s = get_settings()
+    model = s.get("api_model") or "(not configured)"
+    return render_template("lab.html", model=model, page_title="baddle lab")
 
 
 @app.route("/roles")

@@ -1813,6 +1813,23 @@ select {
 .assist-fb-accept:hover { background: #052e16; color: #10b981; border-color: #166534; }
 .assist-fb-reject:hover { background: #450a0a; color: #ef4444; border-color: #991b1b; }
 
+/* Settings sub-page: workspace / lang блоки. Стиль общий с HRV sim. */
+.assist-settings-block {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.assist-settings-label {
+  color: #71717a;
+  font-size: 11px;
+  margin-bottom: 6px;
+  user-select: none;
+}
+
 /* HRV simulator panel */
 .assist-sim-panel {
   background: #18181b;

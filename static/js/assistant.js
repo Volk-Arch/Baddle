@@ -4078,7 +4078,7 @@ function assistAttachStepActions(cardDiv) {
 
 async function stepAction(action, btn) {
   if (action === 'graph') {
-    if (typeof setMode === 'function') setMode('graph');
+    window.location.href = '/lab';
     return;
   }
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
@@ -4307,13 +4307,10 @@ function _initSubtabs() {
   let saved = 'chat';
   try { saved = localStorage.getItem('baddle-subtab') || 'chat'; } catch(e) {}
   setBaddleSub(saved);
-  // Автопереход в graph-таб если была кнопка «Открыть» в workspaces modal
   try {
     if (localStorage.getItem('open-graph-after-load') === '1') {
       localStorage.removeItem('open-graph-after-load');
-      setTimeout(() => {
-        if (typeof setMode === 'function') setMode('graph');
-      }, 400);
+      window.location.href = '/lab';
     }
   } catch(e) {}
 }
