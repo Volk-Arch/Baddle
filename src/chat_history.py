@@ -25,12 +25,71 @@ _MAX_ENTRIES = 200
 _lock = threading.Lock()
 
 
+# Intro-строки для observation / Scout / DMN alert'ов. Если следом нет
+# card — intro висит в чате мусором («Я заметил паттерн — предлагаю:»
+# без тела). Было из-за бага persistence (card не push'илась). Теперь
+# фикс есть, но старые записи в jsonl остались — чистим read-through.
+_ORPHAN_INTRO_PREFIXES = (
+    "💡 Я заметил паттерн",
+    "💡 Пока ты не смотрел",
+    "💡 While you were away",
+    "🔗 DMN-инсайт",
+    "🔗 DMN insight",
+)
+
+
+def _is_orphan_intro(entry: dict, next_entry: Optional[dict]) -> bool:
+    if entry.get("kind") != "msg" or entry.get("role") != "assistant":
+        return False
+    content = entry.get("content") or ""
+    if not any(content.startswith(p) for p in _ORPHAN_INTRO_PREFIXES):
+        return False
+    return not (next_entry and next_entry.get("kind") == "card")
+
+
+_CARDS_WITH_INTRO = ("intent_confirm", "bridge")
+
+
+def _migrate_intro_into_card(entries: list[dict]) -> list[dict]:
+    """Legacy: intro был отдельным msg перед card. Новый формат — встроен
+    в card.intro (один атомарный persist). Если видим pattern
+    `(intro msg) + (intent_confirm|bridge card)` — сливаем intro в card
+    и выкидываем msg.
+    """
+    out: list[dict] = []
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        nxt = entries[i + 1] if i + 1 < len(entries) else None
+        content = (e.get("content") or "") if e.get("kind") == "msg" else ""
+        is_intro = (e.get("kind") == "msg"
+                    and e.get("role") == "assistant"
+                    and any(content.startswith(p) for p in _ORPHAN_INTRO_PREFIXES))
+        if is_intro and nxt and nxt.get("kind") == "card":
+            card = (nxt.get("card") or {})
+            if card.get("type") in _CARDS_WITH_INTRO:
+                merged_card = dict(card)
+                merged_card.setdefault("intro", content)
+                out.append({"kind": "card", "card": merged_card})
+                i += 2
+                continue
+        out.append(e)
+        i += 1
+    return out
+
+
 def load_history() -> list[dict]:
-    """Читает всю историю. Пропускает битые строки."""
+    """Читает всю историю. Пропускает битые строки.
+
+    Cleanup на чтении:
+      1) `(intro msg) + (card)` → merge intro в card.intro (новый формат)
+      2) orphan intros (intro без следующей card) — остаток старого бага
+    Если что-то изменилось — переписываем файл.
+    """
     path = CHAT_HISTORY_FILE
     if not path.exists():
         return []
-    out: list[dict] = []
+    raw: list[dict] = []
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -38,13 +97,26 @@ def load_history() -> list[dict]:
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    raw.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
     except OSError as e:
         log.warning(f"[chat_history] load failed: {e}")
         return []
-    return out
+
+    merged = _migrate_intro_into_card(raw)
+    filtered = [e for i, e in enumerate(merged)
+                if not _is_orphan_intro(e, merged[i + 1] if i + 1 < len(merged) else None)]
+    if len(filtered) != len(raw):
+        with _lock:
+            try:
+                _write_all(filtered)
+                log.info(f"[chat_history] cleanup: "
+                         f"{len(raw) - len(merged)} intros merged, "
+                         f"{len(merged) - len(filtered)} orphans pruned")
+            except Exception as e:
+                log.warning(f"[chat_history] rewrite failed: {e}")
+    return filtered
 
 
 def _write_all(entries: list[dict]) -> None:

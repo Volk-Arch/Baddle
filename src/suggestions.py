@@ -24,10 +24,85 @@ log = logging.getLogger(__name__)
 
 # ── Helper: LLM draft генератор ──────────────────────────────────────────
 
+def _get_recent_draft_texts(limit: int = 8) -> list[str]:
+    """Последние предложения для anti-repeat. Читаем из alerts_queue
+    cognitive_loop'а + из goals-архива (если юзер уже принял draft — его
+    тоже не надо повторно предлагать)."""
+    texts: list[str] = []
+    try:
+        from .cognitive_loop import get_cognitive_loop
+        cl = get_cognitive_loop()
+        for a in (cl._alerts_queue or []):
+            if a.get("type") == "observation_suggestion":
+                card = a.get("card") or {}
+                t = ((card.get("draft") or {}).get("text") or "").strip()
+                if t:
+                    texts.append(t)
+    except Exception:
+        pass
+    try:
+        from .recurring import list_recurring
+        for g in list_recurring():
+            t = (g.get("text") or "").strip()
+            if t:
+                texts.append(t)
+    except Exception:
+        pass
+    # Дедуп и limit
+    seen = set()
+    out: list[str] = []
+    for t in texts:
+        k = t.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(t)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _get_user_context_lines(max_activities: int = 3) -> list[str]:
+    """Короткий snapshot что юзер делал и чем живёт — чтобы LLM не гадал
+    generic, а зацеплялся за реальные данные. Возвращает список строк."""
+    lines: list[str] = []
+    try:
+        from .workspace import get_workspace_manager
+        ws = get_workspace_manager().active_id or "main"
+        lines.append(f"workspace: {ws}")
+    except Exception:
+        pass
+    try:
+        from .activity_log import list_activities
+        acts = list_activities(limit=max_activities)
+        if acts:
+            short = ", ".join(f"«{(a.get('name') or '')[:30]}»"
+                              for a in acts if a.get("name"))
+            if short:
+                lines.append(f"недавние задачи: {short}")
+    except Exception:
+        pass
+    try:
+        from .goals_store import list_goals
+        open_goals = [g for g in list_goals() if not g.get("solved")][:3]
+        if open_goals:
+            short = "; ".join(f"«{(g.get('text') or '')[:40]}»"
+                              for g in open_goals)
+            lines.append(f"открытые цели: {short}")
+    except Exception:
+        pass
+    return lines
+
+
 def _llm_draft_from_trigger(trigger_description: str,
-                             suggestion_hint: str = "",
+                             suggestion_hint: str = "",  # kept for signature compat, ignored
                              lang: str = "ru") -> Optional[dict]:
-    """Один LLM-вызов: «вот триггер и гипотеза, сгенерируй draft цели».
+    """Один LLM-вызов: «вот наблюдение + контекст, сгенерируй draft цели».
+
+    Prescriptive hints убраны — раньше LLM просто парафразил хинт
+    («прогулка 3 раза в день», «избегать многозадачности»). Теперь даём
+    только наблюдение + user context + список недавних предложений
+    (anti-repeat) — и просим придумать новое.
 
     Returns `{kind: "new_recurring"|"new_constraint", text, schedule?,
                polarity?}` или None если не получилось.
@@ -37,42 +112,73 @@ def _llm_draft_from_trigger(trigger_description: str,
     except Exception:
         return None
 
+    recent = _get_recent_draft_texts()
+    ctx = _get_user_context_lines()
+
     if lang == "ru":
         system = (
-            "/no_think\nТы помощник который на основе наблюдения за юзером "
-            "предлагает ОДНУ простую цель. Отвечай СТРОГО в формате:\n"
+            "/no_think\nТы ассистент который заметил паттерн в поведении юзера "
+            "и предлагает ОДНУ конкретную цель. Правила:\n"
+            "- Зацепись за РЕАЛЬНЫЕ данные из контекста, не давай generic советы.\n"
+            "- Избегай шаблонных формулировок вроде «прогулка 3 раза в день», "
+            "«избегать многозадачности» — ищи что-то специфичное ЭТОМУ юзеру.\n"
+            "- НЕ повторяй предложения из списка «уже предлагалось».\n\n"
+            "Отвечай СТРОГО в формате:\n"
             "KIND: recurring|constraint\n"
             "TEXT: <короткий текст цели, 1 строка>\n"
             "FREQ: <число> / <day|week>   (только для recurring)\n"
-            "POLARITY: avoid|prefer       (только для constraint)\n\n"
-            "recurring — если юзеру полезно делать что-то регулярно.\n"
-            "constraint — если полезно чего-то избегать.\n"
-            "FREQ: для recurring обязательно. '3/day' или '2/week'.\n"
+            "POLARITY: avoid|prefer       (только для constraint)\n"
             "Не добавляй пояснений, только 3-4 строки с ключами."
         )
-        user = (f"Наблюдение: {trigger_description}\n"
-                f"Подсказка для draft'а (опционально): {suggestion_hint}\n"
-                f"Ответ:")
+        parts = [f"Наблюдение: {trigger_description}"]
+        if ctx:
+            parts.append("Контекст юзера:\n  " + "\n  ".join(ctx))
+        if recent:
+            parts.append("Уже предлагалось (НЕ повторяй и НЕ парафразь):\n  - "
+                         + "\n  - ".join(recent))
+        parts.append("Ответ:")
+        user = "\n\n".join(parts)
     else:
         system = (
-            "/no_think\nBased on an observation, suggest ONE simple goal.\n"
+            "/no_think\nYou noticed a pattern in user behavior and suggest ONE "
+            "specific goal. Rules:\n"
+            "- Ground in REAL data from context, no generic advice.\n"
+            "- Avoid cliches like 'walk 3x/day' or 'avoid multitasking'.\n"
+            "- Do NOT repeat past suggestions.\n\n"
             "Format:\nKIND: recurring|constraint\nTEXT: <goal text>\n"
-            "FREQ: <n> / <day|week>\nPOLARITY: avoid|prefer\n"
-            "recurring for habits to build, constraint for things to avoid."
+            "FREQ: <n> / <day|week>\nPOLARITY: avoid|prefer"
         )
-        user = f"Observation: {trigger_description}\nHint: {suggestion_hint}\nAnswer:"
+        parts = [f"Observation: {trigger_description}"]
+        if ctx:
+            parts.append("User context:\n  " + "\n  ".join(ctx))
+        if recent:
+            parts.append("Already suggested (do NOT repeat):\n  - "
+                         + "\n  - ".join(recent))
+        parts.append("Answer:")
+        user = "\n\n".join(parts)
 
     try:
+        # Повысили temp 0.3→0.9 и top_k 20→50: прежние значения давали
+        # детерминированный default-ответ на generic триггер.
+        # max_tokens 120→400: qwen3 часто игнорирует /no_think и вставляет
+        # <think>…</think> на 80+ токенов, из-за чего TEXT: строка отрезалась
+        # и карточка получалась с пустым draft.text.
         result, _ = _graph_generate(
             [{"role": "system", "content": system},
              {"role": "user", "content": user}],
-            max_tokens=80, temp=0.3, top_k=20,
+            max_tokens=400, temp=0.9, top_k=50,
         )
     except Exception as e:
         log.debug(f"[suggestions] llm failed: {e}")
         return None
 
-    return _parse_draft_response(result or "")
+    parsed = _parse_draft_response(result or "")
+    if parsed is None:
+        # Видимо модель не попала в формат (или обрезало токенами).
+        # Логируем кусок raw-ответа — без этого «пустая карта» была слепым пятном.
+        snippet = (result or "").replace("\n", " / ")[:200]
+        log.info(f"[suggestions] draft parse failed, raw: {snippet}")
+    return parsed
 
 
 def _parse_draft_response(raw: str) -> Optional[dict]:
@@ -421,13 +527,56 @@ def suggest_from_stress_activity(tail_n: int = 50,
     }
 
 
+# ── 4. DMN bridge → suggestion ───────────────────────────────────────────
+
+def suggest_from_dmn_bridge(bridge: dict, lang: str = "ru") -> Optional[dict]:
+    """DMN/Scout нашёл мост между двумя нодами графа — предложить goal
+    на основе реальной найденной связи. Это настоящий «DMN → observation».
+
+    bridge format: {text, text_a, text_b, quality, synthesis?, source}
+    """
+    text = (bridge.get("text") or "").strip()
+    if len(text) < 3:
+        return None
+    quality = float(bridge.get("quality") or 0)
+    if quality < 0.4:
+        return None
+
+    ta = (bridge.get("text_a") or "").strip()
+    tb = (bridge.get("text_b") or "").strip()
+    synthesis = (bridge.get("synthesis") or "").strip()
+
+    # Описание для LLM — показываем реальную найденную связь, не generic hint
+    desc_parts = [f"Я связал две твои мысли — нашёл скрытую ось: «{text}»."]
+    if ta and tb:
+        desc_parts.append(f"Мост: «{ta[:80]}» ↔ «{tb[:80]}».")
+    if synthesis:
+        desc_parts.append(f"Синтез: {synthesis[:200]}")
+    desc_parts.append("Какая простая цель вытекает из этой связи?")
+    description = " ".join(desc_parts)
+
+    draft = _llm_draft_from_trigger(description, lang=lang)
+    if not draft:
+        return None
+    return {
+        "draft": draft,
+        "trigger": {
+            "type": "dmn_bridge",
+            "bridge_text": text[:120],
+            "quality": round(quality, 2),
+            "description": description[:300],
+        },
+    }
+
+
 # ── Unified: собрать все suggestions ─────────────────────────────────────
 
 def collect_suggestions(lang: str = "ru",
                         include_patterns: bool = True,
                         include_checkins: bool = True,
                         include_stress: bool = True,
-                        include_weekly: bool = True) -> list[dict]:
+                        include_weekly: bool = True,
+                        include_dmn: bool = True) -> list[dict]:
     """Прогнать все источники, вернуть список draft-suggestions.
 
     Cheap guard — пропускаем если нет данных. Не дублирует одинаковые
@@ -444,6 +593,24 @@ def collect_suggestions(lang: str = "ru",
             return
         seen_texts.add(key)
         results.append(item)
+
+    # DMN-driven первым — это настоящий «система нашла связь → предложила».
+    # Остальные триггеры (patterns/checkins/stress) — fallback на случай когда
+    # DMN ещё ничего не нашла (маленький граф / новый юзер).
+    if include_dmn:
+        try:
+            from .cognitive_loop import get_cognitive_loop
+            cl = get_cognitive_loop()
+            import time as _time
+            cutoff = _time.time() - 48 * 3600
+            bridges = [b for b in (cl._recent_bridges or [])
+                       if (b.get("ts") or 0) >= cutoff
+                       and float(b.get("quality") or 0) >= 0.4]
+            bridges.sort(key=lambda b: b.get("quality", 0), reverse=True)
+            for b in bridges[:2]:  # максимум 2 suggestion'a из мостов
+                _add(suggest_from_dmn_bridge(b, lang=lang))
+        except Exception as e:
+            log.debug(f"[suggestions] dmn bridge source failed: {e}")
 
     if include_patterns:
         try:
@@ -491,6 +658,17 @@ def make_suggestion_card(item: dict, lang: str = "ru") -> dict:
     trig_desc = trigger.get("description") or ""
     if not trig_desc and trigger.get("reasons"):
         trig_desc = "; ".join(trigger["reasons"])
+    if not trig_desc:
+        # Fallback на тип триггера — никогда не оставляем «Потому что:» пустым.
+        ttype = trigger.get("type") or ""
+        _TYPE_HINT = {
+            "pattern":        "замечен паттерн в твоём поведении",
+            "checkin_streak": "серия check-in'ов показала изменение",
+            "state_stress":   "накопился стресс от долгих задач",
+            "weekly_review":  "недельная динамика изменилась",
+            "dmn_bridge":     "DMN нашла связь в твоём графе",
+        }
+        trig_desc = _TYPE_HINT.get(ttype, "система заметила изменение")
     return {
         "type": "intent_confirm",
         "kind": sub,

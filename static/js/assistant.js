@@ -42,6 +42,38 @@ async function _chatStoreLoad() {
   }
 }
 
+async function reloadDemo() {
+  const typed = prompt(
+    'Загрузить DEMO-контент?\n\n' +
+    'Будут удалены:\n' +
+    '• Все графы (твой "main" со всеми нодами)\n' +
+    '• Все цели, привычки, активность, check-ins\n' +
+    '• История чата\n' +
+    '• User state, user profile\n\n' +
+    'Settings (API url/модель), roles, templates — сохранятся.\n\n' +
+    'Взамен появятся два workspace\'а: work-demo (релиз MVP) и personal-demo (wellbeing).\n\n' +
+    'Введи "DEMO" (заглавными) чтобы подтвердить:'
+  );
+  if (typed !== 'DEMO') {
+    if (typed !== null) alert('Отмена — подтверждение не совпало.');
+    return;
+  }
+  try {
+    const r = await fetch('/demo/reload', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({confirm: 'DEMO', active: 'personal-demo'}),
+    });
+    const d = await r.json();
+    if (d.error) { alert('Ошибка: ' + d.error); return; }
+    // Полная перезагрузка — runtime подхватит новый active workspace,
+    // bottom-nav и чат отрисуются с DEMO-данными.
+    window.location.reload();
+  } catch (e) {
+    alert('Reload failed: ' + e.message);
+  }
+}
+
 async function assistClearChat() {
   if (!confirm('Очистить историю чата?')) return;
   try {
@@ -155,13 +187,19 @@ function assistAddMsg(role, content, meta, persist) {
     div.appendChild(metaDiv);
   }
 
-  // Step-deeper toolbar для assistant-сообщений с meta (исключаем «Утро»/
-  // команды чтобы не спамить). Только для сообщений с полноценным mode.
+  // Step-deeper toolbar: скрыт под кнопкой «⋯» в углу сообщения.
+  // Исключаем mode_name'ы у которых graph-step actions бессмысленны
+  // (брифинг, команды, intro-карточки наблюдения/DMN/Scout).
+  const _noStepModes = new Set([
+    'Утро', 'утренний брифинг',
+    'Команды', 'Check-in', 'Ошибка',
+    'Наблюдение',                // «💡 Я заметил паттерн» intro
+    'DMN', 'Scout',              // «🔗 DMN-инсайт», «💡 Пока ты не смотрел»
+    'Защита', 'Guard',           // lowEnergyPostpone подтверждения
+    'Activity',                  // start/stop/switch трекера
+  ]);
   if (role === 'assistant' && meta && (meta.mode || meta.mode_name)
-      && meta.mode_name !== 'Утро'
-      && meta.mode_name !== 'Команды'
-      && meta.mode_name !== 'Check-in'
-      && meta.mode_name !== 'Ошибка'
+      && !_noStepModes.has(meta.mode_name)
       && typeof assistAttachStepActions === 'function') {
     assistAttachStepActions(div);
   }
@@ -527,7 +565,11 @@ function assistRenderCard(card) {
       details.push(`полярность: ${draft.polarity === 'prefer' ? 'предпочитать' : 'избегать'}`);
     if (draft.mode && draft.mode !== 'horizon')
       details.push(`режим: ${draft.mode}`);
+    // Intro (опционально) — «💡 Я заметил паттерн — предлагаю:» для
+    // observation suggestion'ов. Встроен в карту чтобы persist был атомарным.
+    const introHtml = card.intro ? `<div class="card-intro">${_esc(card.intro)}</div>` : '';
     wrapper.innerHTML = `
+      ${introHtml}
       <div class="card-intent-confirm" data-draft="${draftJson}">
         <div class="ic-header">${icon} ${title}</div>
         <div class="ic-desc">${desc}</div>
@@ -541,7 +583,8 @@ function assistRenderCard(card) {
   }
   else if (card.type === 'bridge') {
     // Scout/DMN bridge card. Используется и при live alert, и при restore
-    // chat history из localStorage. bridge_type: 'scout_bridge'|'dmn_bridge'.
+    // chat history. bridge_type: 'scout_bridge'|'dmn_bridge'. Intro встроен
+    // в card.intro — атомарный persist.
     const b = card.bridge || {};
     const lang = card.lang || 'ru';
     const quality = Math.round((b.quality || 0) * 100);
@@ -556,16 +599,19 @@ function assistRenderCard(card) {
         </div>`;
     }
     const axisLabel = lang === 'ru' ? 'Скрытая ось' : 'Hidden axis';
-    wrapper.style.cssText += 'padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px;';
+    const introHtml = card.intro ? `<div class="card-intro">${_esc(card.intro)}</div>` : '';
     wrapper.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="font-size:16px">🔗</span>
-        <span style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.5px">${label}</span>
-        <span style="font-size:10px;color:#52525b;margin-left:auto">quality: ${quality}%</span>
+      ${introHtml}
+      <div style="padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:16px">🔗</span>
+          <span style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.5px">${label}</span>
+          <span style="font-size:10px;color:#52525b;margin-left:auto">quality: ${quality}%</span>
+        </div>
+        ${ab_html}
+        <div style="font-size:13px;color:#e4e4e7;line-height:1.5">${axisLabel}: <span style="color:#818cf8;font-weight:500">«${_esc(b.text || '')}»</span></div>
+        ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis.substring(0, 200))}${b.synthesis.length > 200 ? '…' : ''}</div>` : ''}
       </div>
-      ${ab_html}
-      <div style="font-size:13px;color:#e4e4e7;line-height:1.5">${axisLabel}: <span style="color:#818cf8;font-weight:500">«${_esc(b.text || '')}»</span></div>
-      ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis.substring(0, 200))}${b.synthesis.length > 200 ? '…' : ''}</div>` : ''}
     `;
   }
   else if (card.type === 'activity_started') {
@@ -2673,19 +2719,21 @@ async function assistPollAlerts() {
         // intent_confirm что у router'а — юзер жмёт Да/Изменить/Нет.
         // Валидность (непустой draft/title) проверяется на Python-стороне
         // в _check_observation_suggestions — сюда битые alert'ы не доходят.
+        //
+        // Intro встроен в card.intro — один persist вместо двух, чтобы
+        // не было orphan intro'ев если render/push отвалится между ними.
         if (a.type === 'observation_suggestion' && a.card) {
           const draftText = ((a.card.draft || {}).text || '').slice(0, 40);
           const key = 'suggestion:' + draftText;
           if (_assistLastAlertTypes.has(key)) return;
           _assistLastAlertTypes.add(key);
-          // Лёгкий intro — assistAddMsg сам persist'ит
-          assistAddMsg('assistant', '💡 Я заметил паттерн — предлагаю:',
-                       { mode_name: 'Наблюдение' });
+          const cardWithIntro = Object.assign({}, a.card, {
+            intro: '💡 Я заметил паттерн — предлагаю:'
+          });
           const container = document.getElementById('assist-messages');
           if (container && typeof assistRenderCard === 'function') {
-            container.appendChild(assistRenderCard(a.card));
-            // Persist карточку: без этого после reload intro висит без тела.
-            _chatStorePush({ kind: 'card', card: a.card });
+            container.appendChild(assistRenderCard(cardWithIntro));
+            _chatStorePush({ kind: 'card', card: cardWithIntro });
             container.scrollTop = container.scrollHeight;
           }
           if (typeof _incrChatUnread === 'function') _incrChatUnread();
@@ -2702,12 +2750,14 @@ async function assistPollAlerts() {
           const intro = a.type === 'scout_bridge'
             ? (lang === 'ru' ? '💡 Пока ты не смотрел, я нашёл связь:' : '💡 While you were away, I found a connection:')
             : (lang === 'ru' ? '🔗 DMN-инсайт:' : '🔗 DMN insight:');
-          assistAddMsg('assistant', intro, { mode_name: a.type === 'scout_bridge' ? 'Scout' : 'DMN' });
 
-          // Bridge card: рендерим через assistRenderCard (type='bridge')
-          // и персистим в history — чтобы reload не оставлял пустое intro.
+          // Intro встроен в card.intro — атомарный persist, чтобы intro
+          // не висел orphan'ом если что-то упадёт между двумя push'ами.
           const container = document.getElementById('assist-messages');
-          const cardData = { type: 'bridge', bridge_type: a.type, bridge: b, lang: lang };
+          const cardData = {
+            type: 'bridge', bridge_type: a.type, bridge: b, lang: lang,
+            intro: intro,
+          };
           const el = assistRenderCard(cardData);
           container.appendChild(el);
           _chatStorePush({ kind: 'card', card: cardData });
@@ -2991,8 +3041,20 @@ const _BRIEF_ACTION_MAP = {
 };
 
 function briefingOpenPlan() {
+  // plan-panel живёт в sub-page «Задачи» — из чата он в DOM есть, но не
+  // виден (родительская sub-page display:none). Сначала переключаемся,
+  // потом раскрываем <details>, рендерим и фокусируемся на input.
+  try { setBaddleSub('tasks'); } catch(e) {}
   const det = document.getElementById('plan-panel');
-  if (det) { det.open = true; planRender(); det.scrollIntoView({block:'start'}); }
+  if (!det) return;
+  det.open = true;
+  try { planRender(); } catch(e) {}
+  try { planLinkRefresh(); } catch(e) {}
+  setTimeout(() => {
+    det.scrollIntoView({block: 'start'});
+    const inp = document.getElementById('plan-name');
+    if (inp) inp.focus();
+  }, 50);
 }
 
 // ── Morning briefing: structured sections renderer (mockup-style) ───
@@ -4102,22 +4164,83 @@ function _modeMenuEsc(ev) { if (ev.key === 'Escape') closeModeMenu(); }
 // последние N нод в активном workspace графе (те что были созданы
 // последним /assist call'ом или наибольшие по id).
 
+// Step-deeper actions для ассистент-сообщений. Раньше была горизонтальная
+// панель 5 кнопок под каждой карточкой — оверкилл. Теперь одна «⋯» в
+// верхнем правом углу, по клику — меню с действиями.
+const _STEP_ACTIONS = [
+  {act: 'elaborate', label: '🔬 Углубить', desc: 'LLM углубит последнюю мысль → evidence'},
+  {act: 'smartdc',   label: '⚖ Сомнение',  desc: 'Pro vs contra + синтез'},
+  {act: 'pump',      label: '🔀 Мост',     desc: 'Найти скрытую ось между двумя далёкими нодами'},
+  {act: 'more',      label: '➕ Ещё',      desc: 'Сгенерировать N идей на ту же тему'},
+  {act: 'graph',     label: '🕸 Graph',    desc: 'Открыть граф workspace\'a в Lab'},
+];
+
 function assistAttachStepActions(cardDiv) {
   if (!cardDiv || cardDiv.dataset.stepAttached) return;
   cardDiv.dataset.stepAttached = '1';
-  const bar = document.createElement('div');
-  bar.className = 'msg-step-actions';
-  bar.innerHTML = `
-    <button class="msg-step-btn" data-act="elaborate" title="Elaborate: LLM углубит последнюю ноду — сгенерирует evidence">🔬 Углубить</button>
-    <button class="msg-step-btn" data-act="smartdc"   title="SmartDC: pro vs contra + синтез над последней нодой">⚖ Сомнение</button>
-    <button class="msg-step-btn" data-act="pump"      title="Pump: найти скрытую ось между двумя далёкими нодами">🔀 Мост</button>
-    <button class="msg-step-btn" data-act="more"      title="Think more: сгенерировать ещё N идей на ту же тему">➕ Ещё</button>
-    <button class="msg-step-btn" data-act="graph"     title="Открыть граф workspace'a">🕸 Graph</button>
-  `;
-  bar.querySelectorAll('.msg-step-btn').forEach(b => {
-    b.addEventListener('click', () => stepAction(b.dataset.act, b));
+  cardDiv.classList.add('has-step-actions');
+
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-step-wrap';
+
+  const toggle = document.createElement('button');
+  toggle.className = 'msg-step-toggle';
+  toggle.setAttribute('aria-label', 'Действия над сообщением');
+  toggle.title = 'Углубить / Сомнение / Мост / Ещё / Graph';
+  toggle.textContent = '⋯';
+
+  const menu = document.createElement('div');
+  menu.className = 'msg-step-menu';
+  menu.innerHTML = _STEP_ACTIONS.map(a => `
+    <button class="msg-step-item" data-act="${a.act}">
+      <span class="msi-label">${_esc(a.label)}</span>
+      <span class="msi-desc">${_esc(a.desc)}</span>
+    </button>
+  `).join('');
+
+  const close = () => { menu.classList.remove('open'); };
+  const onOutside = (ev) => {
+    if (!wrap.contains(ev.target)) { close(); document.removeEventListener('click', onOutside, true); }
+  };
+
+  const positionMenu = () => {
+    // Fixed позиционирование — сообщения узкие, absolute-menu внутри
+    // wrap вылезал бы за левый край viewport. Считаем координаты
+    // относительно toggle и clamp'им в пределы экрана.
+    const tr = toggle.getBoundingClientRect();
+    const margin = 8;
+    const menuW = 240;
+    let left = tr.right - menuW;              // правый край меню = правый край toggle
+    left = Math.max(margin, Math.min(left, window.innerWidth - menuW - margin));
+    menu.style.position = 'fixed';
+    menu.style.top = (tr.bottom + 4) + 'px';
+    menu.style.left = left + 'px';
+    menu.style.right = 'auto';
+  };
+
+  toggle.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const willOpen = !menu.classList.contains('open');
+    // закрыть другие открытые
+    document.querySelectorAll('.msg-step-menu.open').forEach(m => m.classList.remove('open'));
+    if (willOpen) {
+      positionMenu();
+      menu.classList.add('open');
+      setTimeout(() => document.addEventListener('click', onOutside, true), 0);
+    }
   });
-  cardDiv.appendChild(bar);
+
+  menu.querySelectorAll('.msg-step-item').forEach(b => {
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      close();
+      stepAction(b.dataset.act, b);
+    });
+  });
+
+  wrap.appendChild(toggle);
+  wrap.appendChild(menu);
+  cardDiv.appendChild(wrap);
 }
 
 async function stepAction(action, btn) {

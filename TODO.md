@@ -61,6 +61,25 @@
   с альтернативным reader. Детали → [docs/hrv-design.md](docs/hrv-design.md)
   таблица «Источники данных».
 
+## 📌 Завтра (2026-04-20)
+
+- [ ] **Cross-workspace semantic search (максимальный scope).** Фундамент
+  уже работает: `_check_dmn_cross_graph` в `cognitive_loop.py:871` раз в
+  60 мин сравнивает embedding'и всех workspace'ов и сохраняет `cross_edges`
+  в `workspaces/index.json`. Нужны:
+  - Endpoint `POST /search/cross` — text → embedding → cosine vs все
+    ноды всех workspace'ов, вернуть top-K с `{ws_id, node_idx, text, sim}`.
+  - UI-поле «🔍 Искать везде» в Baddle header или отдельной sub-page.
+  - Клик по результату → `workspaceSwitch(ws_id)` + scroll to node в Lab.
+  - Semantic navigation: на открытой ноде показывать «связано в других
+    workspace'ах» (читаем cross_edges index). Делает мультиграф связным
+    пространством, а не коллекцией изолированных.
+  - Scope: ~2-3ч. Infrastructure готова, нужны только endpoint + UI.
+
+- [ ] **Кнопка «⚡ Сбросить энергию» в Settings sub-page.** Для демо и
+  отладки: `daily_energy = max`, `decisions_today = 0`, long_reserve не
+  трогаем. Endpoint `POST /user_state/reset-energy`. ~10 мин.
+
 ## UI / визуализация
 
 - [ ] **Polar H10 cone viz с θ/φ** — сейчас конус рендерится по precision +

@@ -259,11 +259,58 @@ select {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 9999;
   display: flex;
   justify-content: center;
   align-items: center;
+}
+
+/* Dark override для модалов в Baddle UI. Родительский .modal-content
+   использует light-theme CSS-vars (остаток старого Notion-стиля). Мы
+   не перетираем :root — это сломает /lab — а переопределяем только внутри
+   .dark-modal. Класс навешан на #settings-modal в partials/settings_modal.html. */
+.dark-modal .modal-content {
+  background: #18181b;
+  border-color: #27272a;
+  color: #e4e4e7;
+}
+.dark-modal .modal-content > div > span[style*="color:var(--text-primary)"] {
+  color: #e4e4e7 !important;
+}
+.dark-modal .modal-label {
+  color: #a1a1aa !important;
+}
+.dark-modal .modal-input,
+.dark-modal .modal-select {
+  background: #0a0a0f;
+  border-color: #27272a;
+  color: #e4e4e7;
+}
+.dark-modal .modal-input:focus,
+.dark-modal .modal-select:focus {
+  border-color: #818cf8;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
+}
+.dark-modal .btn-secondary {
+  background: #27272a;
+  border-color: #3f3f46;
+  color: #e4e4e7;
+}
+.dark-modal .btn-secondary:hover {
+  background: #3f3f46;
+}
+.dark-modal .btn-primary {
+  background: #4f46e5;
+}
+.dark-modal .btn-primary:hover {
+  background: #6366f1;
+}
+.dark-modal details > summary {
+  color: #a1a1aa;
+}
+.dark-modal details[open] > summary {
+  color: #e4e4e7;
 }
 
 .modal-content {
@@ -670,29 +717,79 @@ select {
 .mode-menu-item .mode-name { font-weight: 500; min-width: 110px; color: #e4e4e7; }
 .mode-menu-item .mode-desc { font-size: 11px; color: #71717a; flex: 1; }
 
-/* Step-deeper actions toolbar (под card) */
-.msg-step-actions {
-  display: flex;
-  gap: 4px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #27272a;
-  flex-wrap: wrap;
+/* Step-deeper actions: collapsed кнопка «⋯» в углу сообщения +
+   dropdown menu. Раньше была горизонтальная панель 5 кнопок — перегружала
+   каждое сообщение. Кнопка показывается только при hover ассистент-
+   сообщения / .has-step-actions, чтобы не мозолила глаз в спокойном виде. */
+.assist-msg.has-step-actions {
+  position: relative;
 }
-.msg-step-btn {
+.msg-step-wrap {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 5;
+}
+.msg-step-toggle {
   background: transparent;
-  color: #a1a1aa;
-  border: 1px solid #3f3f46;
+  color: #52525b;
+  border: 1px solid transparent;
   border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 11px;
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 20px;
+  height: 22px;
   cursor: pointer;
-  white-space: nowrap;
-  transition: all .15s;
+  opacity: 0;
+  transition: opacity .15s, color .15s, background .15s;
 }
-.msg-step-btn:hover { background: #27272a; color: #e4e4e7; border-color: #52525b; }
-.msg-step-btn:disabled { opacity: 0.4; cursor: wait; }
-.msg-step-btn.busy::after {
+.assist-msg.has-step-actions:hover .msg-step-toggle,
+.msg-step-menu.open ~ .msg-step-toggle,
+.msg-step-wrap:hover .msg-step-toggle {
+  opacity: 1;
+}
+.msg-step-toggle:hover {
+  color: #e4e4e7;
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.msg-step-menu {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  min-width: 240px;
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.5);
+  display: none;
+}
+.msg-step-menu.open { display: block; }
+.msg-step-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.msg-step-item:hover { background: #27272a; }
+.msg-step-item .msi-label {
+  color: #e4e4e7;
+  font-size: 12px;
+}
+.msg-step-item .msi-desc {
+  color: #71717a;
+  font-size: 10px;
+}
+.msg-step-item:disabled { opacity: 0.4; cursor: wait; }
+.msg-step-item.busy::after {
   content: ' ⋯';
   animation: step-pulse 1s ease-in-out infinite;
 }
@@ -1518,21 +1615,32 @@ select {
 .chat-active-btn:hover { background: #1e293b; color: #e4e4e7; }
 .chat-active-btn-stop:hover { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
 
-/* Intent confirm card — draft от router'а */
+/* Card intro — «💡 Я заметил паттерн», «🔗 DMN-инсайт» и т.п.
+   Встроен внутрь card'ы (intent_confirm / bridge) чтобы persist был
+   атомарным и intro не висел orphan'ом если render/push упадёт. */
+.card-intro {
+  font-size: 12px;
+  color: #a1a1aa;
+  margin-bottom: 8px;
+  padding-left: 2px;
+}
+
+/* Intent confirm card — draft от router'а. Нейтральная dark-палитра,
+   как у остальных ассистент-сообщений; акцент только в primary-кнопке. */
 .card-intent-confirm {
   padding: 12px 14px;
-  background: #1e1b4b;
-  border: 1px solid #4338ca;
+  background: #18181b;
+  border: 1px solid #27272a;
   border-radius: 12px;
 }
 .card-intent-confirm .ic-header {
-  font-size: 13px; font-weight: 600; color: #c7d2fe; margin-bottom: 6px;
+  font-size: 13px; font-weight: 600; color: #e4e4e7; margin-bottom: 6px;
 }
 .card-intent-confirm .ic-desc {
-  font-size: 11px; color: #a5b4fc; margin-bottom: 8px;
+  font-size: 11px; color: #a1a1aa; margin-bottom: 8px;
 }
 .card-intent-confirm .ic-details {
-  font-size: 12px; color: #e0e7ff; margin-bottom: 12px;
+  font-size: 12px; color: #d4d4d8; margin-bottom: 12px;
 }
 .card-intent-confirm .ic-actions {
   display: flex; gap: 8px; justify-content: flex-end;
@@ -1546,9 +1654,9 @@ select {
 }
 .card-intent-confirm .ic-actions .primary:hover { background: #6366f1; }
 .card-intent-confirm .ic-actions .secondary {
-  background: #312e81; color: #c7d2fe;
+  background: #27272a; color: #a1a1aa;
 }
-.card-intent-confirm .ic-actions .secondary:hover { background: #3730a3; }
+.card-intent-confirm .ic-actions .secondary:hover { background: #3f3f46; color: #e4e4e7; }
 
 /* Profile modal — per-category sections */
 .profile-category {
@@ -2263,13 +2371,39 @@ select {
 .plan-item .plan-btn.skip { color: #ef4444; border-color: #7f1d1d; }
 
 .plan-add-form {
-  display: grid;
-  grid-template-columns: 2fr 1fr 90px auto auto auto;
+  /* Две строки: (1) широкий input названия, (2) category/time/link/диф/Add.
+     Раньше был grid с 6 колонок в одну строку — input «Что запланировать?»
+     сжимался до 2-3 символов. */
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 8px 0 4px;
   align-items: center;
   font-size: 12px;
-  flex-wrap: wrap;
+}
+.plan-add-form #plan-name {
+  flex: 1 1 100%;   /* занимает всю ширину → строка 1 */
+}
+.plan-add-form #plan-category,
+.plan-add-form #plan-goal-link {
+  flex: 1 1 100px;  /* растягиваются, минимум 100px */
+}
+.plan-add-form #plan-time {
+  flex: 0 0 90px;
+}
+.plan-add-form .plan-difficulty {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #a1a1aa;
+  flex: 0 0 auto;
+}
+.plan-add-form .plan-difficulty select {
+  min-width: 60px;
+}
+.plan-add-form button.activity-btn {
+  flex: 0 0 auto;
+  margin-left: auto;  /* Add справа */
 }
 .plan-add-form input[type="text"],
 .plan-add-form input[type="time"],

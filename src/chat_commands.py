@@ -277,10 +277,24 @@ def _card_plan_today(lang: str = "ru") -> dict:
     import datetime as _dt
     sched = schedule_for_day()
     if not sched:
-        text = "На сегодня ничего не запланировано. Открой «Задачи» → «+ Добавить»." if lang == "ru" \
+        text = "На сегодня ничего не запланировано." if lang == "ru" \
                else "Nothing planned for today."
+        # Вместо «Открой Задачи → +Добавить» в text — actionable карточка
+        # с кнопкой. Клик переключает на sub-page Задачи и раскрывает
+        # форму добавления (см. briefingOpenPlan в assistant.js).
+        sections = [{
+            "emoji": "📋",
+            "title": "Ничего не запланировано" if lang == "ru" else "Nothing planned",
+            "subtitle": "Добавь событие на сегодня" if lang == "ru"
+                        else "Add an event for today",
+            "kind": "neutral",
+            "actions": [{"label": "＋ Добавить событие" if lang == "ru"
+                         else "＋ Add event",
+                         "action": "open_plan"}],
+        }]
         return {"text": text, "intro": text, "mode": "free", "mode_name": "План",
-                "cards": [], "steps": [], "awaiting_input": False,
+                "cards": [{"type": "status_briefing", "sections": sections}],
+                "steps": [], "awaiting_input": False,
                 "graph_updated": False, "chat_command": "plan_today"}
     sections = []
     for it in sched:
