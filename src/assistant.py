@@ -2237,6 +2237,38 @@ def assist_decompose():
 
 # ── Morning briefing ──────────────────────────────────────────────────
 
+# ── Chat history (ранее жил в browser localStorage) ───────────────────
+# GET /assist/chat/history — возвращает весь сохранённый список entries.
+# POST /assist/chat/append — добавить одну entry (fire-and-forget из JS).
+# POST /assist/chat/clear — очистить историю (кнопка «Очистить чат»).
+
+@assistant_bp.route("/assist/chat/history", methods=["GET"])
+def assist_chat_history():
+    from .chat_history import load_history
+    return jsonify({"entries": load_history()})
+
+
+@assistant_bp.route("/assist/chat/append", methods=["POST"])
+def assist_chat_append():
+    from .chat_history import append_entry
+    entry = request.get_json(force=True, silent=True)
+    if not isinstance(entry, dict):
+        return jsonify({"error": "entry must be object"}), 400
+    try:
+        append_entry(entry)
+        return jsonify({"ok": True})
+    except Exception as e:
+        log.warning(f"[/assist/chat/append] failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@assistant_bp.route("/assist/chat/clear", methods=["POST"])
+def assist_chat_clear():
+    from .chat_history import clear_history
+    removed = clear_history()
+    return jsonify({"ok": True, "removed": removed})
+
+
 @assistant_bp.route("/assist/morning", methods=["POST"])
 def assist_morning():
     """Generate a morning briefing based on HRV recovery + pending tasks."""
@@ -2270,11 +2302,26 @@ def assist_morning():
     _log_decision(state, kind="morning_briefing")
     _save_state(state)
 
+    # Rich sections: тот же builder что использует cognitive_loop для push-alert'ов
+    # (sleep / recovery / energy / overnight bridges / activity / goals / pattern).
+    # UI рендерит их как мокап-карточку; text остаётся fallback'ом.
+    sections: list = []
+    try:
+        from .cognitive_loop import get_cognitive_loop
+        cl = get_cognitive_loop()
+        if hasattr(cl, "_build_morning_briefing_sections"):
+            sections = cl._build_morning_briefing_sections() or []
+    except Exception as e:
+        log.debug(f"[/assist/morning] sections builder failed: {e}")
+
+    import datetime as _dt
     return jsonify({
         "text": greeting,
+        "sections": sections,
         "energy": energy,
         "hrv": hrv_state,
         "recovery_pct": recovery_pct,
+        "hour": _dt.datetime.now().hour,
     })
 
 

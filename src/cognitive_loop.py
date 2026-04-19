@@ -917,12 +917,16 @@ class CognitiveLoop:
             return
 
         bridge = self._run_pump_bridge(max_iterations=1, save=False)
-        if bridge and bridge.get("quality", 0) > 0.5:
+        # Guard: пустой/слишком короткий текст моста = LLM-generation failed,
+        # alert без тела выглядит как пустой «🔗 DMN-инсайт:» в чате. Лучше
+        # не пушить и попробовать на следующей итерации.
+        bridge_text = (bridge or {}).get("text", "").strip() if bridge else ""
+        if bridge and bridge.get("quality", 0) > 0.5 and len(bridge_text) >= 10:
             self._add_alert({
                 "type": "dmn_bridge",
                 "severity": "info",
-                "text": f"DMN-инсайт: {bridge['text'][:80]} (quality {bridge.get('quality', 0):.0%})",
-                "text_en": f"DMN insight: {bridge['text'][:80]} (quality {bridge.get('quality', 0):.0%})",
+                "text": f"DMN-инсайт: {bridge_text[:80]} (quality {bridge.get('quality', 0):.0%})",
+                "text_en": f"DMN insight: {bridge_text[:80]} (quality {bridge.get('quality', 0):.0%})",
                 "bridge": bridge,
             }, dedupe=True)
             self._recent_bridges.append({
@@ -1096,15 +1100,52 @@ class CognitiveLoop:
         ts_disp = str(best.get("timestamp", "?"))[:10]
         action = best.get("action", "?")
         reason = (best.get("reason") or "")[:100]
+        # Internal tick-reasons ("EMERGENT: 0/5 nodes. Need mass.") не лезут
+        # в UI. Вместо них — краткая человеческая формулировка что система
+        # делала в тот момент. Переводим action → глагол.
+        _ACTION_RU = {
+            "think_toward":    "генерировал новые идеи",
+            "elaborate":       "углублял важную мысль",
+            "elaborate_toward":"углублял в сторону цели",
+            "smartdc":         "проверял противоречия",
+            "doubt":           "ставил гипотезу под сомнение",
+            "expand":          "расширял линию мышления",
+            "collapse":        "сжимал похожие идеи",
+            "compare":         "сравнивал варианты",
+            "pump":            "искал мост между далёкими идеями",
+            "synthesize":      "собирал итог",
+            "ask":             "задавал вопрос",
+            "stable":          "отдыхал (достиг стабильности)",
+            "merge":           "объединял близкие идеи",
+            "walk":            "гулял по графу мыслей",
+        }
+        _ACTION_EN = {
+            "think_toward":    "generated new ideas",
+            "elaborate":       "deepened a key thought",
+            "elaborate_toward":"deepened toward a goal",
+            "smartdc":         "checked contradictions",
+            "doubt":           "doubted a hypothesis",
+            "expand":          "expanded a line of thinking",
+            "collapse":        "merged similar ideas",
+            "compare":         "compared options",
+            "pump":            "searched bridges between distant ideas",
+            "synthesize":      "synthesized",
+            "ask":             "asked a question",
+            "stable":          "rested (converged)",
+            "merge":           "merged close ideas",
+            "walk":            "walked the graph",
+        }
+        verb_ru = _ACTION_RU.get(action, action)
+        verb_en = _ACTION_EN.get(action, action)
         self._add_alert({
             "type": "state_walk",
             "severity": "info",
-            "text": f"Похожий момент в прошлом ({ts_disp}): {action} — {reason}",
-            "text_en": f"Similar past moment ({ts_disp}): {action} — {reason}",
+            "text": f"🕰 Похожий момент ({ts_disp}): тогда я {verb_ru}.",
+            "text_en": f"🕰 Similar moment ({ts_disp}): back then I {verb_en}.",
             "match": {
                 "hash": best.get("hash"),
                 "action": action,
-                "reason": reason,
+                "reason": reason,        # internal — только в meta, не в text
                 "timestamp": best.get("timestamp"),
             },
         }, dedupe=True)
@@ -1920,6 +1961,14 @@ class CognitiveLoop:
         for item in items[:self.SUGGESTIONS_MAX_PER_DAY]:
             try:
                 card = make_suggestion_card(item, lang="ru")
+                # Guard: если LLM-draft получился слабым (пустой text, нет title),
+                # не пушим — иначе в чате висит «💡 Я заметил паттерн:» без тела.
+                draft_text = ((card.get("draft") or {}).get("text") or "").strip()
+                card_title = (card.get("title") or "").strip()
+                if len(draft_text) < 3 or not card_title:
+                    log.info(f"[cognitive_loop] suggestion skipped: empty draft/title "
+                             f"({(item.get('trigger') or {}).get('type', '?')})")
+                    continue
                 trigger = (item.get("trigger") or {}).get("type", "")
                 self._add_alert({
                     "type": "observation_suggestion",
@@ -1929,8 +1978,7 @@ class CognitiveLoop:
                     "card": card,       # UI рендерит через card.type=intent_confirm
                     "source": trigger,
                 })
-                log.info(f"[cognitive_loop] suggestion: {trigger} → "
-                         f"{(item.get('draft') or {}).get('text','')[:60]}")
+                log.info(f"[cognitive_loop] suggestion: {trigger} → {draft_text[:60]}")
             except Exception as e:
                 log.debug(f"[cognitive_loop] suggestion card build failed: {e}")
 

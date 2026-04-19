@@ -4,72 +4,89 @@ let _assistEnergy = { energy: 100, max: 100, decisions_today: 0 };
 let _assistHRV = null;
 let _assistAlertsPolling = false;
 
-// ── Chat persistence (localStorage) ────────────────────────────────
-const CHAT_STORE_KEY = 'baddle-chat-history';
-const CHAT_STORE_MAX = 100;  // keep last N turns
+// ── Chat persistence (server-side) ─────────────────────────────────
+// Раньше чат жил в browser localStorage — терялся при смене устройства
+// и ломал симметрию с другими персистентными данными (goals/activity/
+// state_graph — все на сервере). Сейчас через /assist/chat/* endpoints:
+//   GET    /assist/chat/history  → [{kind, ...}, ...]
+//   POST   /assist/chat/append   ← одна entry
+//   POST   /assist/chat/clear
+// Dedup morning briefing'ов живёт на сервере (chat_history._dedup_morning).
 
-function _chatStoreLoad() {
-  try { return JSON.parse(localStorage.getItem(CHAT_STORE_KEY) || '[]'); }
-  catch { return []; }
-}
+// One-time migration: убираем старый localStorage-ключ. Данные не
+// переносим — серверная история уже заменила клиентскую.
+try {
+  if (localStorage.getItem('baddle-chat-history') !== null) {
+    localStorage.removeItem('baddle-chat-history');
+    console.info('[chat] migrated: cleared legacy localStorage chat-history');
+  }
+} catch(e) { /* silent */ }
 
 function _chatStorePush(entry) {
-  try {
-    const hist = _chatStoreLoad();
-    hist.push(entry);
-    while (hist.length > CHAT_STORE_MAX) hist.shift();
-    localStorage.setItem(CHAT_STORE_KEY, JSON.stringify(hist));
-  } catch(e) { console.warn('[chat] persist failed:', e); }
+  // Fire-and-forget: не ждём response, не блокируем UI-поток.
+  fetch('/assist/chat/append', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(entry),
+  }).catch(e => console.warn('[chat] append failed:', e));
 }
 
-function _chatStoreDedupMorning() {
-  // Убирает дубликаты morning_briefing'ов в chat history — один раз при
-  // рестарте сервер пересылал briefing заново, старые дубли уже в
-  // localStorage. Оставляем только ПОСЛЕДНИЙ briefing за день.
+async function _chatStoreLoad() {
   try {
-    const hist = _chatStoreLoad();
-    if (!hist.length) return;
-    // Индекс последнего briefing'а (по mode_name)
-    let lastBriefingIdx = -1;
-    hist.forEach((e, i) => {
-      if (e?.kind === 'msg' && e?.meta?.mode_name === 'Утро') lastBriefingIdx = i;
-    });
-    if (lastBriefingIdx < 0) return;
-    const filtered = hist.filter((e, i) => {
-      if (e?.kind === 'msg' && e?.meta?.mode_name === 'Утро' && i !== lastBriefingIdx) return false;
-      return true;
-    });
-    if (filtered.length !== hist.length) {
-      localStorage.setItem(CHAT_STORE_KEY, JSON.stringify(filtered));
-      console.info(`[chat] dedup morning briefings: removed ${hist.length - filtered.length}`);
-    }
-  } catch(e) { /* silent */ }
+    const r = await fetch('/assist/chat/history');
+    const d = await r.json();
+    return Array.isArray(d.entries) ? d.entries : [];
+  } catch(e) {
+    console.warn('[chat] load failed:', e);
+    return [];
+  }
 }
 
-function assistClearChat() {
+async function assistClearChat() {
   if (!confirm('Очистить историю чата?')) return;
-  localStorage.removeItem(CHAT_STORE_KEY);
+  try {
+    await fetch('/assist/chat/clear', {method: 'POST'});
+  } catch(e) { console.warn('[chat] clear failed:', e); }
   const container = document.getElementById('assist-messages');
   if (container) container.innerHTML = '<div class="assist-empty">Baddle готов. Напиши что угодно — цель, вопрос, гипотезу.</div>';
 }
 
-function _restoreChatHistory() {
-  _chatStoreDedupMorning();
-  const hist = _chatStoreLoad();
+// Intro-строки observation/scout/DMN alert'ов — если следом нет card'а
+// (из-за старого бага persistence), intro висит как мусор. Фильтруем.
+const _ORPHAN_INTRO_PATTERNS = [
+  '💡 Я заметил паттерн',
+  '💡 Пока ты не смотрел',
+  '💡 While you were away',
+  '🔗 DMN-инсайт',
+  '🔗 DMN insight',
+];
+
+function _isOrphanIntro(entry, next) {
+  if (!entry || entry.kind !== 'msg' || entry.role !== 'assistant') return false;
+  const content = entry.content || '';
+  const matches = _ORPHAN_INTRO_PATTERNS.some(p => content.startsWith(p));
+  if (!matches) return false;
+  return !(next && next.kind === 'card');
+}
+
+async function _restoreChatHistory() {
+  const hist = await _chatStoreLoad();
   if (!hist.length) return false;
   const container = document.getElementById('assist-messages');
   if (!container) return false;
   // Clear empty-state placeholder
   const empty = container.querySelector('.assist-empty');
   if (empty) empty.remove();
-  hist.forEach(entry => {
+  // Фильтр сиротских intro (defensive — сервер таких не должен отдавать
+  // после всех фиксов, но legacy-записи могут остаться).
+  const filtered = hist.filter((e, i) => !_isOrphanIntro(e, hist[i + 1]));
+  filtered.forEach(entry => {
     if (entry.kind === 'msg') {
       assistAddMsg(entry.role, entry.content, entry.meta, /*persist=*/false);
     } else if (entry.kind === 'card') {
       const el = assistRenderCard(entry.card);
       container.appendChild(el);
     }
-    // Skip 'warning' entries on restore — they're ephemeral alerts from /assist/alerts polling
   });
   container.scrollTop = container.scrollHeight;
   return true;
@@ -521,6 +538,35 @@ function assistRenderCard(card) {
           <button class="primary" onclick="intentConfirmAccept(this.closest('.card-intent-confirm'))">Да, создать</button>
         </div>
       </div>`;
+  }
+  else if (card.type === 'bridge') {
+    // Scout/DMN bridge card. Используется и при live alert, и при restore
+    // chat history из localStorage. bridge_type: 'scout_bridge'|'dmn_bridge'.
+    const b = card.bridge || {};
+    const lang = card.lang || 'ru';
+    const quality = Math.round((b.quality || 0) * 100);
+    const label = lang === 'ru' ? 'МОСТ НАЙДЕН' : 'BRIDGE FOUND';
+    let ab_html = '';
+    if (b.text_a && b.text_b) {
+      ab_html = `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_a)}</div>
+          <span style="color:#4338ca;font-size:14px">⟶</span>
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_b)}</div>
+        </div>`;
+    }
+    const axisLabel = lang === 'ru' ? 'Скрытая ось' : 'Hidden axis';
+    wrapper.style.cssText += 'padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px;';
+    wrapper.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:16px">🔗</span>
+        <span style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.5px">${label}</span>
+        <span style="font-size:10px;color:#52525b;margin-left:auto">quality: ${quality}%</span>
+      </div>
+      ${ab_html}
+      <div style="font-size:13px;color:#e4e4e7;line-height:1.5">${axisLabel}: <span style="color:#818cf8;font-weight:500">«${_esc(b.text || '')}»</span></div>
+      ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis.substring(0, 200))}${b.synthesis.length > 200 ? '…' : ''}</div>` : ''}
+    `;
   }
   else if (card.type === 'activity_started') {
     // Chat → taskplayer: auto-started трекер. Кнопка «отменить» если не хотели.
@@ -1343,10 +1389,17 @@ async function _refreshBackgroundStatus() {
       dashBG.style.color = '#a1a1aa';
     }
 
-    // Sub: heartbeat + blocked reason
+    // Sub: heartbeat + blocked reason (technical → user-friendly)
     const hb = hbAge !== null ? `heartbeat ${Math.round(hbAge/60)}м назад` : 'heartbeat —';
-    const blockedShort = dmn.blocked_by ? dmn.blocked_by.split(' (')[0] : 'готов';
-    dashDMN.textContent = `${hb} · ${blockedShort}`;
+    const blockedRaw = dmn.blocked_by ? dmn.blocked_by.split(' (')[0] : '';
+    const _BLOCK_MAP = {
+      'DMN_INTERVAL not elapsed': 'ждёт интервал',
+      'PROTECTIVE_FREEZE': 'защитный режим',
+      'NE too high': 'возбуждён',
+      'user active recently': 'ты был недавно активен',
+    };
+    const blockedHuman = blockedRaw ? (_BLOCK_MAP[blockedRaw] || blockedRaw) : 'готов';
+    dashDMN.textContent = `${hb} · ${blockedHuman}`;
   } catch(e) { /* silent */ }
 }
 
@@ -2570,7 +2623,12 @@ async function assistMorningBriefing() {
       body: JSON.stringify({ lang: lang })
     });
     const d = await r.json();
-    if (d.text) {
+    // Rich sections (sleep / recovery / energy / goals / ...) → карточка в стиле
+    // mockup. Text остаётся fallback'ом если builder ничего не собрал.
+    const sections = Array.isArray(d.sections) ? d.sections : [];
+    if (sections.length) {
+      renderMorningBriefingCard(sections, d.hour);
+    } else if (d.text) {
       assistAddMsg('assistant', d.text, { mode_name: 'утренний брифинг' });
     }
     if (d.energy) _assistEnergy = d.energy;
@@ -2613,17 +2671,21 @@ async function assistPollAlerts() {
         // Observation suggestion: система заметила паттерн → предлагает
         // создать recurring/constraint. Используем тот же card type
         // intent_confirm что у router'а — юзер жмёт Да/Изменить/Нет.
+        // Валидность (непустой draft/title) проверяется на Python-стороне
+        // в _check_observation_suggestions — сюда битые alert'ы не доходят.
         if (a.type === 'observation_suggestion' && a.card) {
           const draftText = ((a.card.draft || {}).text || '').slice(0, 40);
           const key = 'suggestion:' + draftText;
           if (_assistLastAlertTypes.has(key)) return;
           _assistLastAlertTypes.add(key);
-          // Лёгкий intro, потом карточка через общий renderer
+          // Лёгкий intro — assistAddMsg сам persist'ит
           assistAddMsg('assistant', '💡 Я заметил паттерн — предлагаю:',
                        { mode_name: 'Наблюдение' });
           const container = document.getElementById('assist-messages');
           if (container && typeof assistRenderCard === 'function') {
             container.appendChild(assistRenderCard(a.card));
+            // Persist карточку: без этого после reload intro висит без тела.
+            _chatStorePush({ kind: 'card', card: a.card });
             container.scrollTop = container.scrollHeight;
           }
           if (typeof _incrChatUnread === 'function') _incrChatUnread();
@@ -2631,6 +2693,8 @@ async function assistPollAlerts() {
         }
         if ((a.type === 'scout_bridge' || a.type === 'dmn_bridge') && a.bridge) {
           const b = a.bridge;
+          // Валидность bridge.text проверяется на Python-стороне в
+          // _check_dmn_continuous — битые bridge'ы сюда не доходят.
           const key = a.type + ':' + (b.text || '').substring(0, 30);
           if (_assistLastAlertTypes.has(key)) return;
           _assistLastAlertTypes.add(key);
@@ -2640,36 +2704,13 @@ async function assistPollAlerts() {
             : (lang === 'ru' ? '🔗 DMN-инсайт:' : '🔗 DMN insight:');
           assistAddMsg('assistant', intro, { mode_name: a.type === 'scout_bridge' ? 'Scout' : 'DMN' });
 
-          // Bridge card в стиле mockup: BRIDGE FOUND badge + A→B layout + hidden axis
+          // Bridge card: рендерим через assistRenderCard (type='bridge')
+          // и персистим в history — чтобы reload не оставлял пустое intro.
           const container = document.getElementById('assist-messages');
-          const card = document.createElement('div');
-          card.style.cssText = 'align-self:stretch;margin-bottom:12px;padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px;';
-          const quality = Math.round((b.quality || 0) * 100);
-          const labelRu = 'МОСТ НАЙДЕН';
-          const labelEn = 'BRIDGE FOUND';
-          const label = lang === 'ru' ? labelRu : labelEn;
-          // A → B блоки если доступны (pump возвращает text_a/text_b)
-          let ab_html = '';
-          if (b.text_a && b.text_b) {
-            ab_html = `
-              <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-                <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_a)}</div>
-                <span style="color:#4338ca;font-size:14px">⟶</span>
-                <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_b)}</div>
-              </div>`;
-          }
-          const axisLabel = lang === 'ru' ? 'Скрытая ось' : 'Hidden axis';
-          card.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <span style="font-size:16px">🔗</span>
-              <span style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.5px">${label}</span>
-              <span style="font-size:10px;color:#52525b;margin-left:auto">quality: ${quality}%</span>
-            </div>
-            ${ab_html}
-            <div style="font-size:13px;color:#e4e4e7;line-height:1.5">${axisLabel}: <span style="color:#818cf8;font-weight:500">«${_esc(b.text)}»</span></div>
-            ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis.substring(0, 200))}${b.synthesis.length > 200 ? '…' : ''}</div>` : ''}
-          `;
-          container.appendChild(card);
+          const cardData = { type: 'bridge', bridge_type: a.type, bridge: b, lang: lang };
+          const el = assistRenderCard(cardData);
+          container.appendChild(el);
+          _chatStorePush({ kind: 'card', card: cardData });
           container.scrollTop = container.scrollHeight;
           return;
         }
@@ -3164,7 +3205,7 @@ function assistToggleAdvanced() {
 
 // ── Init on page load ──────────────────────────────────────────────────
 
-function assistInit() {
+async function assistInit() {
   // Bind input enter
   const input = document.getElementById('assist-input');
   if (input) {
@@ -3176,13 +3217,16 @@ function assistInit() {
     });
   }
 
-  // Restore chat history from localStorage
-  _restoreChatHistory();
+  // Restore chat history from server (async fetch)
+  await _restoreChatHistory();
 
   // Status on load
   assistRefreshStatus();
 
-  // Show morning briefing if first open after 6 AM
+  // Show morning briefing if first open after 6 AM.
+  // Дедуп в тот же день делает сервер (chat_history._dedup_morning), так
+  // что дополнительный localStorage-флаг не нужен — он остался как
+  // cheap cache чтобы не делать лишний /assist/morning запрос.
   const now = new Date();
   const hour = now.getHours();
   const lastBriefing = localStorage.getItem('assist-last-briefing');
@@ -4178,22 +4222,28 @@ async function stepAction(action, btn) {
 // Список берётся из src/chat_commands.py — синхронизация через обычай.
 // autoSubmit=true → отправить сразу (no-arg команды). false → вставить
 // в инпут чтобы юзер заполнил аргумент.
+// Команды в / меню. `requiresActiveTask: true` — показываем только когда
+// есть активная activity (стоп / следующая без задачи бессмысленны).
 const _CHAT_COMMANDS = [
   {icon: '💬', name: 'как я?',        template: 'как я?',        desc: 'Текущее состояние: резерв, нейрохим, задача, план', autoSubmit: true},
   {icon: '📋', name: 'план',          template: 'план',           desc: 'Что у меня на сегодня', autoSubmit: true},
   {icon: '▶', name: 'запусти ...',   template: 'запусти ',       desc: 'Стартовать задачу в трекере', autoSubmit: false},
-  {icon: '⏹', name: 'стоп',          template: 'стоп',           desc: 'Остановить текущую задачу', autoSubmit: true},
-  {icon: '↻', name: 'следующая ...', template: 'следующая ',     desc: 'Переключить на другую задачу', autoSubmit: false},
-  {icon: '🍽', name: 'что я ел',      template: 'что я ел за неделю', desc: 'История food-активностей', autoSubmit: true},
+  {icon: '⏹', name: 'стоп',          template: 'стоп',           desc: 'Остановить текущую задачу', autoSubmit: true, requiresActiveTask: true},
+  {icon: '↻', name: 'следующая ...', template: 'следующая ',     desc: 'Переключить на другую задачу', autoSubmit: false, requiresActiveTask: true},
   {icon: '📝', name: 'check-in',     template: 'check-in',       desc: 'Subjective energy/focus/stress', autoSubmit: true},
   {icon: '?',  name: 'help',          template: 'help',           desc: 'Список всех команд', autoSubmit: true},
 ];
 
 function _renderCmdMenu() {
   const host = document.getElementById('chat-cmd-menu');
-  if (!host || host.dataset.rendered) return;
-  host.dataset.rendered = '1';
-  host.innerHTML = _CHAT_COMMANDS.map((c, i) => `
+  if (!host) return;
+  // Перестраиваем каждый раз: список зависит от активной задачи.
+  // `стоп` / `следующая` видны только если сейчас что-то трекается.
+  const hasActive = !!_activityStartedAt;
+  const visible = _CHAT_COMMANDS
+    .map((c, i) => ({c, i}))
+    .filter(({c}) => !c.requiresActiveTask || hasActive);
+  host.innerHTML = visible.map(({c, i}) => `
     <button class="chat-cmd-item" data-cmd-idx="${i}">
       <span class="cmd-icon">${_esc(c.icon)}</span>
       <div class="cmd-body">
