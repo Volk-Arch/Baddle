@@ -53,25 +53,47 @@
 
 **Файл:** `goals.jsonl` — append-only event log (как state_graph).
 
+**Три вида цели:**
+- `kind="oneshot"` — обычная цель, закрывается complete/abandon
+- `kind="recurring"` — привычка с частотой (`schedule.times_per_day|week`),
+  копит `instance` events
+- `kind="constraint"` — граница (`polarity=avoid|prefer`), копит
+  `violation` events
+
+Подробнее см. [closure-architecture.md](closure-architecture.md).
+
 **События:**
 ```json
 {"action": "create", "id", "workspace", "text", "mode", "priority",
- "deadline", "category", "ts"}
+ "deadline", "category", "kind",
+ "schedule":{...}?, "polarity"?, "ts"}
 {"action": "complete", "id", "reason", "snapshot_ref", "ts"}
 {"action": "abandon",  "id", "reason", "ts"}
 {"action": "update",   "id", "fields": {...}, "ts"}
+{"action": "instance", "id", "note", "ts"}           // recurring +1
+{"action": "violation","id", "note", "detected", "ts"}  // constraint
 ```
 
 Current state replay'ится из event log через `_replay()`. Status lifecycle:
-`open → (done | abandoned)`. Update переcсчитывает поля (priority/deadline/category).
+`open → (done | abandoned)`. Recurring/constraint всегда `open`.
+Update пересчитывает поля (priority/deadline/category).
 
 **API:**
-- `add_goal(text, mode, workspace, priority, deadline, category) → id`
+- `add_goal(text, mode, workspace, kind, schedule, polarity, ...) → id`
+- `record_instance(goal_id, note)` — для recurring
+- `record_violation(goal_id, note, detected)` — для constraint
 - `complete_goal(id, reason, snapshot_ref)`
 - `abandon_goal(id, reason)`
 - `update_goal(id, fields)`
 - `list_goals(status, workspace, category, limit)` — current state
 - `goal_stats()` — completion_rate, avg_time_to_done, by_mode, by_category
+
+**Progress helpers** ([src/recurring.py](../src/recurring.py)):
+- `get_progress(goal_id)` — `{done_today, expected_by_now, lag, period}`
+- `list_lagging()` — recurring с отставанием
+- `list_constraint_status(days)` — violations за неделю
+- `build_active_context_summary()` — текст для LLM prompt с active
+  recurring/constraints (инжектится в `/assist`)
 
 **Lifecycle hook:**
 - `/graph/add` с `node_type=goal` → автоматически вызывает `add_goal()`,
@@ -82,7 +104,9 @@ Current state replay'ится из event log через `_replay()`. Status life
 
 ### 3. Solved Archive ([src/solved_archive.py](../src/solved_archive.py))
 
-**Каталог:** `solved/{snapshot_ref}.json`, один файл на решённую задачу.
+**Каталог:** `graphs/<workspace>/solved/{snapshot_ref}.json` — per-workspace
+архив, один файл на решённую задачу. Снапшот живёт рядом с графом из
+которого пришла цель, а не в глобальной папке.
 
 **Payload:**
 ```json

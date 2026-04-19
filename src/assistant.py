@@ -496,6 +496,192 @@ def assist():
     except Exception as e:
         log.warning(f"[/assist] chat-command prefilter failed: {e}")
 
+    # ── Intent router prefilter ────────────────────────────────────────
+    # Двухуровневый LLM-классификатор: сначала определяем что вообще юзер
+    # хочет (task/fact/constraint_event/chat), потом подтип. Для некоторых
+    # kind'ов обрабатываем прямо тут без execute_mode/classify_intent_llm —
+    # это сильно экономит tokens на простых сообщениях.
+    #
+    # Workspace-aware: router видит только recurring/constraints текущего
+    # воркспейса (+ глобальные без workspace поля). Personal и work не
+    # смешиваются — «выпил воды» в work не триггерит personal recurring.
+    router_intent = None
+    _active_ws = "main"
+    try:
+        from .workspace import get_workspace_manager
+        _active_ws = get_workspace_manager().active_id or "main"
+    except Exception:
+        pass
+    try:
+        from .intent_router import route as _route_intent
+        router_intent = _route_intent(message, lang=lang, workspace=_active_ws)
+    except Exception as _e:
+        log.debug(f"[/assist] intent_router failed: {_e}")
+
+    # Быстрый путь: юзер начал активность («начал тренировку» / «пошёл гулять»).
+    # Автоматически запускаем taskplayer — симметрично с тем как «Обед» из
+    # taskplayer засчитывается как instance recurring-цели.
+    if (router_intent
+            and router_intent.get("kind") == "fact"
+            and router_intent.get("subtype") == "activity"
+            and router_intent.get("confidence_sub", 0) >= 0.7):
+        try:
+            from .intent_router import extract_activity_name
+            from .activity_log import start_activity, try_match_recurring_instance, detect_category
+            from .workspace import get_workspace_manager
+            act_name = extract_activity_name(message, lang=lang)
+            if act_name:
+                ws_id = "main"
+                try:
+                    ws_id = get_workspace_manager().active_id or "main"
+                except Exception:
+                    pass
+                category = detect_category(act_name)
+                aid = start_activity(name=act_name, category=category,
+                                      workspace=ws_id)
+                # Матчинг recurring тоже — симметрично с /activity/start
+                matched_rec = None
+                try:
+                    matched_rec = try_match_recurring_instance(
+                        activity_name=act_name, activity_category=category,
+                        lang=lang,
+                    )
+                except Exception:
+                    pass
+                reply_parts = [f"🎬 Запустил трекер: «{act_name}»"
+                               + (f" ({category})" if category else "")]
+                if matched_rec:
+                    p = matched_rec.get("progress") or {}
+                    reply_parts.append(
+                        f"♻✓ Засчитано в «{matched_rec['goal_text']}» — "
+                        f"{p.get('done_today', 0)}/{p.get('times_per_day', 0)}"
+                    )
+                reply = "\n".join(reply_parts)
+                ctx_e = _get_context()
+                return jsonify({
+                    "text": reply,
+                    "mode": "activity_started", "mode_name": "Запустил",
+                    "message_echo": message,
+                    "cards": [{
+                        "type": "activity_started",
+                        "activity_id": aid,
+                        "activity_name": act_name,
+                        "category": category,
+                        "matched_recurring": matched_rec,
+                    }],
+                    "steps": [],
+                    "energy": ctx_e.get("energy"),
+                    "hrv": ctx_e.get("hrv"),
+                    "intent_router": router_intent,
+                    "lang": lang, "graph_updated": False,
+                    "api_offline": False, "warnings": [],
+                })
+        except Exception as _e:
+            log.warning(f"[/assist] activity auto-start failed: {_e}")
+
+    # Быстрый путь: юзер отметил выполнение recurring («только что выпил воды»)
+    if (router_intent
+            and router_intent.get("kind") == "fact"
+            and router_intent.get("subtype") == "instance"
+            and router_intent.get("target_goal_id")
+            and router_intent.get("confidence_sub", 0) >= 0.7):
+        try:
+            from .goals_store import record_instance, get_goal
+            from .recurring import get_progress
+            gid = router_intent["target_goal_id"]
+            goal = get_goal(gid)
+            if goal:
+                record_instance(gid, note=message[:200])
+                progress = get_progress(gid)
+                txt = goal.get("text", "")
+                done = progress.get("done_today", 0) if progress else 0
+                tpd = progress.get("times_per_day", 0) if progress else 0
+                reply = (f"✓ Засчитал «{txt}» — прогресс {done}/{tpd} сегодня"
+                         if lang == "ru" else
+                         f"✓ Recorded «{txt}» — progress {done}/{tpd} today")
+                ctx_e = _get_context()
+                return jsonify({
+                    "text": reply, "mode": "instance_ack", "mode_name": "Отметил",
+                    "message_echo": message,
+                    "cards": [{
+                        "type": "instance_ack",
+                        "goal_id": gid,
+                        "goal_text": txt,
+                        "progress": progress,
+                    }],
+                    "steps": [],
+                    "energy": ctx_e.get("energy"),
+                    "hrv": ctx_e.get("hrv"),
+                    "intent_router": router_intent,
+                    "lang": lang, "graph_updated": False,
+                    "api_offline": False, "warnings": [],
+                })
+        except Exception as _e:
+            log.warning(f"[/assist] instance fast-path failed: {_e}")
+
+    # Свободный chat: простой LLM ответ без графа
+    if (router_intent
+            and router_intent.get("kind") == "chat"
+            and router_intent.get("confidence_top", 0) >= 0.7):
+        try:
+            from .graph_logic import _graph_generate
+            sys_p = ("/no_think\nТы дружелюбный ассистент. Отвечай кратко "
+                     "и по делу, 1-2 предложения."
+                     if lang == "ru" else
+                     "/no_think\nYou're a friendly assistant. Reply briefly, 1-2 sentences.")
+            reply, _ = _graph_generate(
+                [{"role": "system", "content": sys_p},
+                 {"role": "user", "content": message[:400]}],
+                max_tokens=200, temp=0.7, top_k=40,
+            )
+            ctx_e = _get_context()
+            return jsonify({
+                "text": (reply or "").strip() or ("..." if lang == "ru" else "..."),
+                "mode": "chat", "mode_name": "Разговор",
+                "message_echo": message,
+                "cards": [],
+                "steps": [],
+                "energy": ctx_e.get("energy"),
+                "hrv": ctx_e.get("hrv"),
+                "intent_router": router_intent,
+                "lang": lang, "graph_updated": False,
+                "api_offline": False, "warnings": [],
+            })
+        except Exception as _e:
+            log.warning(f"[/assist] chat fast-path failed: {_e}")
+
+    # Draft-confirm: юзер высказал намерение создать recurring/constraint/goal.
+    # Возвращаем карточку с черновиком, юзер подтверждает кнопкой → создание.
+    # Не тратим токены на execute_mode пока юзер не решил что создавать.
+    if (router_intent
+            and router_intent.get("kind") == "task"
+            and router_intent.get("subtype") in ("new_recurring", "new_constraint", "new_goal")
+            and router_intent.get("confidence_sub", 0) >= 0.7):
+        try:
+            from .intent_router import make_draft_card
+            card = make_draft_card(
+                router_intent["kind"], router_intent["subtype"],
+                message, lang=lang,
+            )
+            ctx_e = _get_context()
+            return jsonify({
+                "text": card.get("title", ""),
+                "mode": router_intent["subtype"],
+                "mode_name": "Подтверди",
+                "message_echo": message,
+                "cards": [card],
+                "steps": [],
+                "energy": ctx_e.get("energy"),
+                "hrv": ctx_e.get("hrv"),
+                "intent_router": router_intent,
+                "lang": lang, "graph_updated": False,
+                "api_offline": False, "warnings": [],
+                "awaiting_input": True,
+            })
+        except Exception as _e:
+            log.warning(f"[/assist] draft-confirm failed: {_e}")
+    # ── конец router prefilter ─────────────────────────────────────────
+
     # Inject NE spike — user engagement = Horizon takes budget from DMN
     from .horizon import get_global_state
     from .user_state import get_user_state
@@ -526,6 +712,36 @@ def assist():
     profile_hint = (profile_summary_for_prompt([detected_category], lang=lang,
                                                 profile=_user_profile)
                     if detected_category else "")
+
+    # Recurring/constraint context: активные вечные цели и ограничения
+    # из goals_store. LLM видит текущий прогресс и учитывает при ответе.
+    # Пример: юзер спрашивает «что поесть» — в промпте видит
+    # «привычка: покушать 3 раза (1/3 сегодня)» + «ограничение: не орехи».
+    try:
+        from .recurring import build_active_context_summary
+        # workspace-scoped — не смешиваем привычки work и personal
+        recurring_ctx = build_active_context_summary(workspace=_active_ws)
+        if recurring_ctx:
+            profile_hint = (profile_hint + "\n" + recurring_ctx).strip()
+    except Exception as _e:
+        log.debug(f"[assist] recurring context failed: {_e}")
+
+    # Solved archive RAG: если юзер уже решал похожее — подтягиваем
+    # synthesis. Это даёт continuity между сессиями: «2 недели назад ты
+    # решил похожее вопросом X, ответ был Y».
+    similar_past = []
+    try:
+        from .solved_archive import find_similar_solved
+        similar_past = find_similar_solved(message, top_k=2, min_similarity=0.6)
+        if similar_past:
+            rag_lines = ["Похожие решённые раньше задачи (для контекста):"]
+            for s in similar_past:
+                synth = (s.get("final_synthesis") or "")[:200]
+                rag_lines.append(f"  — «{s['goal_text'][:80]}» "
+                                 f"(sim {s['similarity']:.2f}): {synth}")
+            profile_hint = (profile_hint + "\n" + "\n".join(rag_lines)).strip()
+    except Exception as _e:
+        log.debug(f"[assist] solved archive RAG failed: {_e}")
 
     # Recent context from state_graph (last 3 user-initiated actions)
     context_parts = []
@@ -698,6 +914,30 @@ def assist():
             "hint": ("Задача выглядит сложной. Разбить на подзадачи?" if lang == "ru"
                      else "Task looks complex. Split into subtasks?"),
             "cta": "Разбить" if lang == "ru" else "Split",
+        })
+
+    # Auto-detect constraint violations: один LLM-скан сообщения юзера
+    # против активных constraint-целей. Если есть — добавляем info-карточку
+    # юзеру (прозрачность: «я записал нарушение») и пишем в goals.jsonl.
+    # Skipped если api_offline или constraints нет.
+    violations_found = []
+    if not api_offline:
+        try:
+            from .recurring import scan_message_for_violations
+            violations_found = scan_message_for_violations(
+                message, lang=lang, workspace=_active_ws,
+            )
+        except Exception as _e:
+            log.debug(f"[assist] violation scan failed: {_e}")
+    if violations_found:
+        cards = list(cards)
+        v_list = ", ".join(f"«{v['text']}»" for v in violations_found)
+        cards.append({
+            "type": "constraint_violation",
+            "violations": violations_found,
+            "text": (f"⚠ Зафиксировал нарушение ограничений: {v_list}"
+                     if lang == "ru" else
+                     f"⚠ Recorded constraint violation: {v_list}"),
         })
 
     # Log this interaction
@@ -1113,9 +1353,14 @@ def goals_stats():
 
 @assistant_bp.route("/goals/add", methods=["POST"])
 def goals_add():
-    """Manual add (obычно создаётся автоматом из /graph/add node_type=goal).
+    """Manual add (обычно создаётся автоматом из /graph/add node_type=goal).
 
-    Body: {text, mode, workspace, priority, deadline, category}
+    Body: {text, mode, workspace, priority, deadline, category,
+           kind?, schedule?, polarity?}
+
+    kind: "oneshot" (default) | "recurring" | "constraint"
+    schedule: {times_per_day, days?, time_windows?} — для recurring
+    polarity: "avoid" | "prefer" — для constraint
     """
     from .goals_store import add_goal
     d = request.get_json(force=True) or {}
@@ -1126,8 +1371,122 @@ def goals_add():
         priority=d.get("priority"),
         deadline=d.get("deadline"),
         category=d.get("category"),
+        kind=d.get("kind", "oneshot"),
+        schedule=d.get("schedule"),
+        polarity=d.get("polarity"),
     )
     return jsonify({"ok": True, "id": gid})
+
+
+@assistant_bp.route("/goals/instance", methods=["POST"])
+def goals_instance():
+    """Отметить выполнение recurring-цели. Body: {id, note?}"""
+    from .goals_store import record_instance, get_goal
+    d = request.get_json(force=True) or {}
+    gid = d.get("id", "")
+    g = get_goal(gid)
+    if not g:
+        return jsonify({"error": "goal_not_found"}), 404
+    if g.get("kind") != "recurring":
+        return jsonify({"error": "not_recurring",
+                        "kind": g.get("kind")}), 400
+    record_instance(gid, note=d.get("note", ""))
+    from .recurring import get_progress
+    return jsonify({"ok": True, "progress": get_progress(gid)})
+
+
+@assistant_bp.route("/goals/violation", methods=["POST"])
+def goals_violation():
+    """Отметить нарушение constraint. Body: {id, note?, detected?}
+
+    detected: "manual" (default) | "llm_scan" | "tick"
+    """
+    from .goals_store import record_violation, get_goal
+    d = request.get_json(force=True) or {}
+    gid = d.get("id", "")
+    g = get_goal(gid)
+    if not g:
+        return jsonify({"error": "goal_not_found"}), 404
+    if g.get("kind") != "constraint":
+        return jsonify({"error": "not_constraint",
+                        "kind": g.get("kind")}), 400
+    record_violation(gid, note=d.get("note", ""),
+                     detected=d.get("detected", "manual"))
+    return jsonify({"ok": True})
+
+
+@assistant_bp.route("/suggestions/pending", methods=["GET"])
+def suggestions_pending():
+    """Вернуть текущие observation-suggestions (on-demand).
+
+    Юзер может вызвать вручную «что ты мне предложишь?» вместо ждания
+    24ч cycle. Alert `observation_suggestion` — асинхронный путь;
+    этот endpoint — синхронный.
+    """
+    try:
+        from .suggestions import collect_suggestions, make_suggestion_card
+        items = collect_suggestions(lang="ru")
+        cards = [make_suggestion_card(it, lang="ru") for it in items]
+        return jsonify({"suggestions": cards, "count": len(cards)})
+    except Exception as e:
+        return jsonify({"error": str(e)[:200], "suggestions": []}), 500
+
+
+@assistant_bp.route("/goals/confirm-draft", methods=["POST"])
+def goals_confirm_draft():
+    """Подтверждение черновика от intent_router.
+
+    Body: {draft: {kind: "new_recurring"|"new_constraint"|"new_goal",
+                   text, schedule?, polarity?, mode?, category?}}
+
+    Создаёт соответствующий goal через `add_goal` и возвращает ID.
+    """
+    from .goals_store import add_goal
+    d = request.get_json(force=True) or {}
+    draft = d.get("draft") or {}
+    kind_sub = draft.get("kind") or "new_goal"
+    text = (draft.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "empty text"}), 400
+
+    kind_map = {
+        "new_goal":        "oneshot",
+        "new_recurring":   "recurring",
+        "new_constraint":  "constraint",
+    }
+    kind = kind_map.get(kind_sub, "oneshot")
+    try:
+        gid = add_goal(
+            text=text,
+            mode=draft.get("mode") or ("rhythm" if kind == "recurring"
+                                        else "horizon"),
+            category=draft.get("category"),
+            kind=kind,
+            schedule=draft.get("schedule"),
+            polarity=draft.get("polarity"),
+        )
+        return jsonify({"ok": True, "id": gid, "kind": kind})
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+@assistant_bp.route("/goals/recurring", methods=["GET"])
+def goals_recurring_list():
+    """Recurring-цели с прогрессом за сегодня."""
+    from .recurring import list_recurring, get_progress
+    out = []
+    for g in list_recurring(active_only=True):
+        p = get_progress(g["id"])
+        if p:
+            out.append(p)
+    return jsonify({"recurring": out})
+
+
+@assistant_bp.route("/goals/constraints", methods=["GET"])
+def goals_constraints_list():
+    """Constraint-цели со статусом нарушений за 7 дней."""
+    from .recurring import list_constraint_status
+    return jsonify({"constraints": list_constraint_status(days=7)})
 
 
 @assistant_bp.route("/goals/complete", methods=["POST"])
@@ -1307,8 +1666,36 @@ def activity_start():
     if node_idx is not None:
         update_activity(aid, {"node_index": node_idx})
 
-    return jsonify({"ok": True, "id": aid, "node_index": node_idx,
-                    "name": name, "workspace": ws_id})
+    # Activity ↔ recurring: если activity-имя похоже на одну из recurring-целей,
+    # auto-записать instance. Например start_activity("Обед") → +1 для
+    # цели «покушать 3 раза в день». Не блокирующий LLM-call (~0.5-1 сек).
+    matched_recurring = None
+    try:
+        from .activity_log import try_match_recurring_instance
+        matched_recurring = try_match_recurring_instance(
+            activity_name=name, activity_category=category, lang="ru",
+            workspace=ws_id,
+        )
+    except Exception as _e:
+        log.debug(f"[/activity/start] recurring match failed: {_e}")
+
+    # Activity ↔ constraint: если activity-имя нарушает один из constraints,
+    # пишем violation. Scoped к тому же workspace.
+    violations = []
+    try:
+        from .activity_log import try_detect_constraint_violation
+        violations = try_detect_constraint_violation(name, lang="ru",
+                                                      workspace=ws_id)
+    except Exception as _e:
+        log.debug(f"[/activity/start] violation scan failed: {_e}")
+
+    resp = {"ok": True, "id": aid, "node_index": node_idx,
+            "name": name, "workspace": ws_id}
+    if matched_recurring:
+        resp["matched_recurring"] = matched_recurring
+    if violations:
+        resp["violations"] = violations
+    return jsonify(resp)
 
 
 @assistant_bp.route("/activity/stop", methods=["POST"])
@@ -1429,7 +1816,11 @@ def plans_today():
 @assistant_bp.route("/plan/add", methods=["POST"])
 def plans_add():
     """Body: {name, category?, ts_start?, ts_end?, recurring?{days:[0..6],time:"HH:MM"},
-             expected_difficulty?, note?}."""
+             expected_difficulty?, note?, goal_id?}.
+
+    `goal_id` — привязка к recurring-цели (goals_store). Complete plan
+    будет auto-увеличивать прогресс этой цели.
+    """
     from .plans import add_plan
     d = request.get_json(force=True) or {}
     name = (d.get("name") or "").strip()
@@ -1443,19 +1834,24 @@ def plans_add():
         recurring=d.get("recurring"),
         expected_difficulty=d.get("expected_difficulty"),
         note=d.get("note", ""),
+        goal_id=d.get("goal_id"),
     )
     return jsonify({"ok": True, "id": pid})
 
 
 @assistant_bp.route("/plan/complete", methods=["POST"])
 def plans_complete():
-    """Body: {id, for_date?, actual_ts?, actual_difficulty?, note?}"""
+    """Body: {id, for_date?, actual_ts?, actual_difficulty?, note?}
+
+    Если у plan есть `goal_id`, возвращает `linked_goal` с прогрессом
+    увеличенной recurring-цели (UI показывает badge «♻✓»).
+    """
     from .plans import complete_plan
     d = request.get_json(force=True) or {}
     pid = d.get("id")
     if not pid:
         return jsonify({"error": "id_required"}), 400
-    complete_plan(
+    link_info = complete_plan(
         plan_id=pid, for_date=d.get("for_date"),
         actual_ts=d.get("actual_ts"),
         actual_difficulty=d.get("actual_difficulty"),
@@ -1474,7 +1870,10 @@ def plans_complete():
             user.surprise = user.surprise * 0.6 + s * 0.4
     except Exception:
         pass
-    return jsonify({"ok": True})
+    resp = {"ok": True}
+    if link_info and link_info.get("linked_goal"):
+        resp["linked_goal"] = link_info["linked_goal"]
+    return jsonify(resp)
 
 
 @assistant_bp.route("/plan/skip", methods=["POST"])

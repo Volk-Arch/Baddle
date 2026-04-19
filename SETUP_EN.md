@@ -105,9 +105,28 @@ baddle/
 │   ├── css/style.css
 │   └── js/              # graph, chat, modes, settings
 ├── templates/index.html
-├── graphs/              # saved graphs
-└── settings.json        # API endpoint config
+├── data/                # 🔒 gitignored — all runtime data
+│   ├── settings.json        # API config (created on first run)
+│   ├── user_state.json      # body state + neurochem
+│   ├── user_profile.json    # preferences & constraints
+│   ├── goals.jsonl          # goals event log
+│   ├── roles.json           # personas (seeded from src/defaults.py)
+│   ├── templates.json       # prompt templates (seeded)
+│   └── …                    # activity/checkins/patterns/plans
+├── graphs/              # 🔒 gitignored — per-workspace graphs
+│   └── <ws>/
+│       ├── graph.json       # thought graph
+│       ├── state_graph.jsonl  # tick history
+│       ├── solved/          # archive of resolved goals
+│       └── meta.json
+└── workspaces/          # 🔒 gitignored — workspace registry
+    └── index.json           # list + cross_edges
 ```
+
+**On first run** `data/` and `workspaces/` are created automatically.
+`roles.json` + `templates.json` get seeded from defaults in
+`src/defaults.py` — feel free to edit them, they won't be overwritten.
+Full layout → [docs/storage-layout.md](docs/storage-layout.md).
 
 ---
 

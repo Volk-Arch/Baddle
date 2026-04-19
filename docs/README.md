@@ -106,6 +106,8 @@ Foundation пропусти (пара абзацев). Основное врем
 25. **[cross-graph-design.md](cross-graph-design.md)** *(10 мин)* — continuity между сессиями: seed-ноды при switch, перенос embedding'ов.
 26. **[workspace-design.md](workspace-design.md)** *(15 мин)* — multi-graph архитектура: WorkspaceManager, cross-graph edges (серендипити), meta-graph.
 27. **[storage-layout.md](storage-layout.md)** *(10 мин)* — где что лежит на диске: `data/` vs `graphs/<ws>/` vs `workspaces/`, data flow, reset.
+28. **[closure-architecture.md](closure-architecture.md)** *(20 мин)* — как замкнуты все инструменты: intent router, recurring/constraints, plan↔goal link, observation→suggestion, RAG поверх solved archive.
+29. **[ui-split-plan.md](ui-split-plan.md)** *(10 мин)* — план разделения Baddle (daily assistant) и Graph Lab (dev/research) UI. Future work, не блокер.
 
 **После этой главы ты знаешь:** *как* Baddle находит связи и *как* всё собрано в единую систему.
 

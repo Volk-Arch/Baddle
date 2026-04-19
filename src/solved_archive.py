@@ -153,6 +153,85 @@ def _iter_archive_files():
             yield from sd.glob("*.json")
 
 
+def find_similar_solved(query_text: str, top_k: int = 3,
+                         min_similarity: float = 0.55) -> list[dict]:
+    """RAG-lite: поиск похожих решённых задач для нового запроса юзера.
+
+    Считает cosine similarity между embedding query и goal-text
+    каждого solved archive. Возвращает топ-K с similarity >= min.
+
+    Используется в /assist когда юзер задаёт новый вопрос — система
+    может подтянуть «ты уже решал похожее 2 недели назад, вот синтез».
+
+    Быстрая версия: читает только goal.text + final_synthesis.text из
+    каждого snapshot. Не грузит весь граф. На 100 архивов — ~200ms +
+    1 embedding-call (для query).
+    """
+    import numpy as np
+    try:
+        from .api_backend import api_get_embedding
+        from .main import cosine_similarity
+    except Exception:
+        return []
+    q_text = (query_text or "").strip()
+    if not q_text:
+        return []
+    try:
+        q_emb = api_get_embedding(q_text)
+    except Exception as e:
+        log.debug(f"[solved_archive] query embedding failed: {e}")
+        return []
+    if not q_emb:
+        return []
+    q_vec = np.array(q_emb, dtype=np.float32)
+    if q_vec.size == 0:
+        return []
+
+    scored = []
+    for f in _iter_archive_files():
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        goal = data.get("goal") or {}
+        goal_text = goal.get("text", "")
+        if not goal_text:
+            continue
+        # Используем cached embedding если есть в graph_snapshot (goal-нода)
+        snap_nodes = (data.get("graph_snapshot") or {}).get("nodes") or []
+        goal_emb = None
+        for n in snap_nodes:
+            if n.get("type") == "goal" and n.get("embedding"):
+                goal_emb = n["embedding"]
+                break
+        # Если нет embedding в архиве — считаем на лету
+        if not goal_emb:
+            try:
+                goal_emb = api_get_embedding(goal_text)
+            except Exception:
+                continue
+        if not goal_emb:
+            continue
+        g_vec = np.array(goal_emb, dtype=np.float32)
+        if g_vec.size == 0:
+            continue
+        sim = float(cosine_similarity(q_vec, g_vec))
+        if sim < min_similarity:
+            continue
+        final_synth = data.get("final_synthesis") or {}
+        scored.append({
+            "snapshot_ref": data.get("snapshot_ref") or f.stem,
+            "goal_text": goal_text,
+            "workspace": goal.get("workspace"),
+            "archived_at": goal.get("archived_at"),
+            "final_synthesis": (final_synth.get("text") or "")[:400],
+            "similarity": round(sim, 3),
+        })
+
+    scored.sort(key=lambda x: -x["similarity"])
+    return scored[:top_k]
+
+
 def list_solved(limit: int = 50) -> list[dict]:
     """List archive index, newest first. Each entry — short summary.
 

@@ -1,9 +1,8 @@
 # CognitiveState — адаптивный контроллер
 
-> Класс называется **`CognitiveState`** (legacy alias `CognitiveHorizon`
-> удалён). Это **единый объект**: Horizon-слой (precision, policy, γ, τ)
-> + нейрохимический слой через композицию с `Neurochem` (dopamine /
-> serotonin / norepinephrine) и `ProtectiveFreeze`. Спецификация
+> **`CognitiveState`** — единый объект контроля. Horizon-слой (precision,
+> policy, γ, τ) + нейрохимия через композицию с `Neurochem` (dopamine /
+> serotonin / norepinephrine) + `ProtectiveFreeze`. Спецификация
 > нейрохимии → [neurochem-design.md](neurochem-design.md).
 
 ## Идея

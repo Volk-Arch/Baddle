@@ -17,7 +17,7 @@
 │                                                                │
 │  USER PROFILE           GOALS STORE          SOLVED ARCHIVE    │
 │  (who you are)          (what you solve)     (how you solved)  │
-│  user_profile.json      goals.jsonl          solved/{ref}.json │
+│  data/user_profile.json data/goals.jsonl     graphs/<ws>/solved/ │
 │                                                                │
 │  • 5 категорий          • append-only        • snapshot графа  │
 │  • preferences          • create/done/ab     • state_trace     │
@@ -96,15 +96,36 @@ burnout). Любая фича оценивается тем, **снижает л
   │     │
   │     └─ НЕТ → profile_summary = "ест: овощи; избег.: орехи"  [static read]
   │
-  ├─ classify_intent_llm(message, state_hint, profile_hint)
+  ├─ recurring_ctx = build_active_context_summary()   [active habits/constraints]
+  │     → "покушать 3/день (1/3 сегодня) · не орехи"
+  │
+  ├─ find_similar_solved(message) — RAG по архиву    [past syntheses]
+  │     → инжектится в profile_hint если sim ≥ 0.6
+  │
+  ├─ intent_router.route(message) — 2-level LLM      [NEW: fast-path prefilter]
   │     ↓
-  │     mode=tournament, intent=direct, confidence=0.85         [dynamic LLM]
+  │     kind ∈ {task/fact/constraint_event/chat}
+  │     │
+  │     ├─ fact/instance → record_instance, return   [~1.5s, no execute_deep]
+  │     ├─ fact/activity → start_activity + match    [~1.5s]
+  │     ├─ task/new_*    → intent_confirm card       [draft с кнопками]
+  │     ├─ chat          → свободный LLM ответ       [~1.5s]
+  │     └─ fallthrough → classify_intent_llm → execute_deep
+  │
+  ├─ classify_intent_llm(message, state_hint, profile_hint)  [если router не решил]
+  │     ↓
+  │     mode=tournament, intent=direct, confidence=0.85      [dynamic LLM]
   │
   ├─ execute_via_zones(message, mode, profile_hint)
   │     ↓
-  │     LLM генерит 5 идей С УЧЁТОМ constraints                  [dynamic LLM]
+  │     LLM генерит 5 идей С УЧЁТОМ constraints + recurring + RAG  [dynamic LLM]
   │     distinct-matrix → zones CONFIRM/EXPLORE/CONFLICT          [dynamic]
   │     _render_card → tournament → LLM-judge выбирает           [dynamic LLM]
+  │
+  └─ scan_message_for_violations(message)            [после execute]
+        ↓
+        LLM проверяет нарушил ли юзер активные constraints
+        если да → record_violation + constraint_violation card
   │
   ├─ _log_decision(mode_id="tournament")
   │     ↓
@@ -233,7 +254,7 @@ Decision cost → user.burnout, long     ─┘         advice + alert
 ### Static
 - [src/user_profile.py](../src/user_profile.py) — load/save, add_item, parse_category_answer. Файл: `user_profile.json`
 - [src/goals_store.py](../src/goals_store.py) — add_goal/complete/abandon/replay/stats. Файл: `goals.jsonl`
-- [src/solved_archive.py](../src/solved_archive.py) — archive_solved/load/list. Каталог: `solved/{ref}.json`
+- [src/solved_archive.py](../src/solved_archive.py) — archive_solved/load/list. Каталог per-workspace: `graphs/<ws>/solved/{ref}.json`
 
 ### Dynamic — состояние
 - [src/user_state.py](../src/user_state.py) — UserState + Voronoi named_state + signed surprise + valence + dual-pool

@@ -492,6 +492,81 @@ function assistRenderCard(card) {
         </button>
       </div>`;
   }
+  else if (card.type === 'intent_confirm') {
+    // Draft-confirm карточка: router распознал new_recurring/new_constraint/new_goal,
+    // юзер подтверждает (Да), редактирует (Изменить) или отменяет (Нет).
+    const draft = card.draft || {};
+    const draftJson = JSON.stringify(draft).replace(/"/g, '&quot;');
+    const title = _esc(card.title || 'Подтверди');
+    const desc = _esc(card.description_ru || card.description_en || '');
+    const kind = card.kind || 'new_goal';
+    const icon = kind === 'new_recurring' ? '♻' : kind === 'new_constraint' ? '⛔' : '🎯';
+    // Детали текста и полей
+    const details = [];
+    details.push(`<b>${_esc(draft.text || '')}</b>`);
+    if (draft.schedule && draft.schedule.times_per_day)
+      details.push(`раз в день: ${draft.schedule.times_per_day}`);
+    if (draft.polarity)
+      details.push(`полярность: ${draft.polarity === 'prefer' ? 'предпочитать' : 'избегать'}`);
+    if (draft.mode && draft.mode !== 'horizon')
+      details.push(`режим: ${draft.mode}`);
+    wrapper.innerHTML = `
+      <div class="card-intent-confirm" data-draft="${draftJson}">
+        <div class="ic-header">${icon} ${title}</div>
+        <div class="ic-desc">${desc}</div>
+        <div class="ic-details">${details.join(' · ')}</div>
+        <div class="ic-actions">
+          <button class="secondary" onclick="intentConfirmReject(this.closest('.card-intent-confirm'))">Нет</button>
+          <button class="secondary" onclick="intentConfirmEdit(this.closest('.card-intent-confirm'))">Изменить</button>
+          <button class="primary" onclick="intentConfirmAccept(this.closest('.card-intent-confirm'))">Да, создать</button>
+        </div>
+      </div>`;
+  }
+  else if (card.type === 'activity_started') {
+    // Chat → taskplayer: auto-started трекер. Кнопка «отменить» если не хотели.
+    const aid = _esc(card.activity_id || '');
+    const name = _esc(card.activity_name || '');
+    const cat = card.category ? ` · ${_esc(card.category)}` : '';
+    const mr = card.matched_recurring;
+    const mrLine = mr ? `<div style="font-size:11px;color:#86efac;margin-top:4px">♻✓ ${_esc(mr.goal_text)} — ${(mr.progress || {}).done_today || 0}/${(mr.progress || {}).times_per_day || 0}</div>` : '';
+    wrapper.innerHTML = `
+      <div style="padding:10px 14px;background:#0c2a3e;border:1px solid #1e40af;border-radius:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:16px">🎬</span>
+          <div style="flex:1;font-size:13px;color:#93c5fd">
+            Трекер запущен: <b>${name}</b>${cat}
+          </div>
+          <button onclick="activityCancelAutoStart('${aid}', this)"
+            style="background:none;border:1px solid #334155;color:#94a3b8;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">
+            отменить
+          </button>
+        </div>
+        ${mrLine}
+      </div>`;
+  }
+  else if (card.type === 'instance_ack') {
+    // Fast-path подтверждение: «✓ засчитал X, прогресс N/M»
+    const p = card.progress || {};
+    const done = p.done_today || 0;
+    const tpd = p.times_per_day || 0;
+    const lag = p.lag || 0;
+    const lagMark = lag > 0 ? ` · отстаёт ${lag}` : '';
+    wrapper.innerHTML = `
+      <div style="padding:10px 14px;background:#052e16;border:1px solid #14532d;border-radius:10px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:16px">♻✓</span>
+        <div style="flex:1;font-size:13px;color:#86efac">
+          «${_esc(card.goal_text || '')}» — <b>${done}/${tpd}</b>${lagMark}
+        </div>
+      </div>`;
+  }
+  else if (card.type === 'constraint_violation') {
+    const v = (card.violations || []).map(x => _esc(x.text)).join(', ');
+    wrapper.innerHTML = `
+      <div style="padding:10px 14px;background:#450a0a;border:1px solid #7f1d1d;border-radius:10px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:16px">⚠</span>
+        <div style="flex:1;font-size:12px;color:#fca5a5">${_esc(card.text || '')}</div>
+      </div>`;
+  }
   else if (card.type === 'clarify') {
     wrapper.innerHTML = `
       <div style="padding:14px;background:#1c1917;border:1px solid #78350f;border-radius:12px;">
@@ -1862,8 +1937,10 @@ function goalsClose(ev) {
 
 async function _refreshGoals() {
   try {
-    const [openR, solvedR, statsR] = await Promise.all([
+    const [openR, recR, conR, solvedR, statsR] = await Promise.all([
       fetch('/goals?status=open').then(r => r.json()),
+      fetch('/goals/recurring').then(r => r.json()),
+      fetch('/goals/constraints').then(r => r.json()),
       fetch('/goals/solved').then(r => r.json()),
       fetch('/goals/stats').then(r => r.json()),
     ]);
@@ -1872,9 +1949,10 @@ async function _refreshGoals() {
       statsEl.innerHTML = `Всего: <b>${statsR.total || 0}</b> · открыто: <b>${statsR.open || 0}</b> · завершено: <b>${statsR.done || 0}</b> · заброшено: <b>${statsR.abandoned || 0}</b> · completion-rate: <b>${((statsR.completion_rate || 0) * 100).toFixed(0)}%</b>` +
         (statsR.avg_time_to_done_h != null ? ` · avg time: <b>${statsR.avg_time_to_done_h}ч</b>` : '');
     }
+    // В «Открытые цели» показываем только kind=oneshot (recurring/constraint — в своих секциях)
     const openEl = document.getElementById('goals-open');
     if (openEl) {
-      const items = openR.goals || [];
+      const items = (openR.goals || []).filter(g => (g.kind || 'oneshot') === 'oneshot');
       openEl.innerHTML = items.length ? items.map(g => {
         const date = g.created_at ? new Date(g.created_at * 1000).toLocaleDateString() : '';
         return `<div class="goals-row status-open">
@@ -1887,6 +1965,62 @@ async function _refreshGoals() {
           </span>
         </div>`;
       }).join('') : '<div style="color:#52525b;font-size:10px">нет открытых целей</div>';
+    }
+    // Recurring (вечные привычки) с прогрессом за сегодня
+    const recEl = document.getElementById('goals-recurring');
+    if (recEl) {
+      const items = recR.recurring || [];
+      recEl.innerHTML = items.length ? items.map(p => {
+        const lag = p.lag || 0;
+        const lagMark = lag > 0 ? ` <span style="color:#f59e0b">· отстаёт ${lag}</span>` : '';
+        // Weekly vs daily отображение
+        let countStr, periodStr;
+        if (p.period === 'week') {
+          countStr = `${p.done_this_week || 0}/${p.times_per_week || 0}`;
+          periodStr = ' /нед';
+        } else {
+          countStr = `${p.done_today || 0}/${p.times_per_day || 0}`;
+          periodStr = ' /день';
+        }
+        const activeMark = p.active_today ? '' : ' <span style="color:#52525b">· сегодня не требуется</span>';
+        const textAttr = (p.text || '').replace(/'/g, "&#39;");
+        return `<div class="goals-row status-open">
+          <span class="goal-status">♻</span>
+          <span class="goal-text" title="${_esc(p.text)}">${_esc(p.text)}</span>
+          <span class="goal-meta"><b>${countStr}</b><span style="color:#52525b">${periodStr}</span>${lagMark}${activeMark}</span>
+          <span class="goal-actions">
+            <button onclick="recurringInstance('${p.goal_id}')" title="Отметить выполнение">+1</button>
+            <button onclick="goalAskHelp('${textAttr}')" title="Спросить про эту привычку">?</button>
+            <button onclick="goalAbandon('${p.goal_id}')" title="Удалить">×</button>
+          </span>
+        </div>`;
+      }).join('') : '<div style="color:#52525b;font-size:10px">нет привычек</div>';
+    }
+    // Constraints
+    const conEl = document.getElementById('goals-constraints');
+    if (conEl) {
+      const items = conR.constraints || [];
+      conEl.innerHTML = items.length ? items.map(c => {
+        const today = c.violations_today || 0;
+        const week = c.violations_7d || 0;
+        const clean = today === 0 && week === 0;
+        const status = clean ? '<span style="color:#10b981">чисто</span>'
+          : (today > 0
+            ? `<span style="color:#ef4444">сегодня ${today}</span>`
+            : `<span style="color:#f59e0b">за 7д: ${week}</span>`);
+        const pol = c.polarity === 'prefer' ? 'предпочитать' : 'избегать';
+        const textAttr = (c.text || '').replace(/'/g, "&#39;");
+        return `<div class="goals-row status-open">
+          <span class="goal-status">⛔</span>
+          <span class="goal-text" title="${_esc(c.text)}">${_esc(c.text)}</span>
+          <span class="goal-meta">${pol} · ${status}</span>
+          <span class="goal-actions">
+            <button onclick="constraintViolation('${c.goal_id}')" title="Отметить нарушение">−1</button>
+            <button onclick="goalAskHelp('${textAttr}')" title="Спросить как держать это ограничение">?</button>
+            <button onclick="goalAbandon('${c.goal_id}')" title="Удалить">×</button>
+          </span>
+        </div>`;
+      }).join('') : '<div style="color:#52525b;font-size:10px">нет ограничений</div>';
     }
     const solvedEl = document.getElementById('goals-solved');
     if (solvedEl) {
@@ -1922,6 +2056,147 @@ async function goalAbandon(id) {
     });
     await _refreshGoals();
   } catch(e) { console.warn('[goals] abandon failed:', e); }
+}
+
+// ── Intent confirm (draft cards от intent_router) ──────────────────────
+
+async function intentConfirmAccept(cardEl) {
+  try {
+    const draftRaw = cardEl.getAttribute('data-draft') || '{}';
+    const draft = JSON.parse(draftRaw.replace(/&quot;/g, '"'));
+    const r = await fetch('/goals/confirm-draft', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({draft}),
+    }).then(r => r.json());
+    if (r && r.ok) {
+      const label = draft.kind === 'new_recurring' ? 'Привычка создана'
+                  : draft.kind === 'new_constraint' ? 'Ограничение создано'
+                  : 'Цель создана';
+      cardEl.outerHTML = `<div style="padding:10px 14px;background:#052e16;border:1px solid #14532d;border-radius:10px;color:#86efac;font-size:12px">✓ ${label}</div>`;
+      // Если модал целей открыт — обновим
+      if (typeof _refreshGoals === 'function' &&
+          document.getElementById('goals-modal').style.display !== 'none') {
+        await _refreshGoals();
+      }
+    } else {
+      cardEl.querySelector('.ic-actions').insertAdjacentHTML('beforebegin',
+        `<div style="color:#fca5a5;font-size:11px">Ошибка: ${r.error || '?'}</div>`);
+    }
+  } catch(e) { console.warn('[intent] confirm failed:', e); }
+}
+
+function intentConfirmEdit(cardEl) {
+  // Открываем соответствующий модал с формой и preload'ом текста
+  const draftRaw = cardEl.getAttribute('data-draft') || '{}';
+  let draft = {};
+  try { draft = JSON.parse(draftRaw.replace(/&quot;/g, '"')); } catch(_){}
+  if (typeof goalsOpen === 'function') goalsOpen();
+  // После открытия модала подставим текст в форму
+  setTimeout(() => {
+    if (draft.kind === 'new_recurring') {
+      recurringShowAddForm();
+      const inp = document.getElementById('rec-text');
+      if (inp) inp.value = draft.text || '';
+      if (draft.schedule && draft.schedule.times_per_day) {
+        const tpd = document.getElementById('rec-tpd');
+        if (tpd) tpd.value = draft.schedule.times_per_day;
+      }
+    } else if (draft.kind === 'new_constraint') {
+      constraintShowAddForm();
+      const inp = document.getElementById('con-text');
+      if (inp) inp.value = draft.text || '';
+    }
+    cardEl.outerHTML = '<div style="color:#a1a1aa;font-size:11px">→ открыл форму для редактирования</div>';
+  }, 100);
+}
+
+function intentConfirmReject(cardEl) {
+  cardEl.outerHTML = '<div style="color:#71717a;font-size:11px">× отменено</div>';
+}
+
+// ── Recurring (вечные привычки) ────────────────────────────────────────
+
+function recurringShowAddForm() {
+  const f = document.getElementById('goals-recurring-form');
+  if (f) f.style.display = 'flex';
+  const inp = document.getElementById('rec-text');
+  if (inp) inp.focus();
+}
+function recurringHideAddForm() {
+  const f = document.getElementById('goals-recurring-form');
+  if (f) f.style.display = 'none';
+}
+async function recurringSubmit() {
+  const text   = (document.getElementById('rec-text').value || '').trim();
+  const count  = parseInt(document.getElementById('rec-count').value) || 1;
+  const period = document.getElementById('rec-period').value || 'day';
+  const cat    = document.getElementById('rec-category').value || null;
+  if (!text) return;
+  const schedule = period === 'week'
+    ? {times_per_week: count}
+    : {times_per_day: count};
+  try {
+    await fetch('/goals/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        text, kind: 'recurring', schedule,
+        category: cat, mode: 'rhythm',
+      }),
+    });
+    document.getElementById('rec-text').value = '';
+    recurringHideAddForm();
+    await _refreshGoals();
+  } catch(e) { console.warn('[rec] add failed:', e); }
+}
+async function recurringInstance(id) {
+  try {
+    await fetch('/goals/instance', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id, note: ''}),
+    });
+    await _refreshGoals();
+  } catch(e) { console.warn('[rec] instance failed:', e); }
+}
+
+// ── Constraints ────────────────────────────────────────────────────────
+
+function constraintShowAddForm() {
+  const f = document.getElementById('goals-constraint-form');
+  if (f) f.style.display = 'flex';
+  const inp = document.getElementById('con-text');
+  if (inp) inp.focus();
+}
+function constraintHideAddForm() {
+  const f = document.getElementById('goals-constraint-form');
+  if (f) f.style.display = 'none';
+}
+async function constraintSubmit() {
+  const text = (document.getElementById('con-text').value || '').trim();
+  const pol  = document.getElementById('con-polarity').value || 'avoid';
+  const cat  = document.getElementById('con-category').value || null;
+  if (!text) return;
+  try {
+    await fetch('/goals/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        text, kind: 'constraint', polarity: pol,
+        category: cat, mode: 'free',
+      }),
+    });
+    document.getElementById('con-text').value = '';
+    constraintHideAddForm();
+    await _refreshGoals();
+  } catch(e) { console.warn('[con] add failed:', e); }
+}
+async function constraintViolation(id) {
+  const note = prompt('Что случилось? (опционально)') || '';
+  try {
+    await fetch('/goals/violation', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id, note, detected: 'manual'}),
+    });
+    await _refreshGoals();
+  } catch(e) { console.warn('[con] violation failed:', e); }
 }
 
 // ── Profile-clarify card handler (when /assist returns profile_clarify) ──
@@ -2105,16 +2380,35 @@ async function workspaceRefresh() {
     const d = await r.json();
     const sel = document.getElementById('workspace-select');
     if (!sel) return;
-    const current = sel.value;
-    sel.innerHTML = (d.workspaces || []).map(w =>
+    const list = d.workspaces || [];
+    let opts = list.map(w =>
       `<option value="${w.id}">${_esc(w.title || w.id)} (${w.node_count || 0})</option>`
     ).join('');
+    // Добавляем служебную опцию — клик создаёт новый workspace.
+    // Пользователь видит явный способ что делать если workspace один.
+    opts += `<option value="__new__" style="color:#818cf8">＋ создать новый…</option>`;
+    sel.innerHTML = opts;
     sel.value = d.active || 'main';
   } catch(e) { /* silent */ }
 }
 
 async function workspaceSwitch(wsId) {
   if (!wsId) return;
+  // Служебная опция «+ создать новый» из selector → сразу prompt
+  if (wsId === '__new__') {
+    // Вернуть selector в предыдущее значение чтобы не залипло на __new__
+    const sel = document.getElementById('workspace-select');
+    if (sel) {
+      // find active option
+      try {
+        const r = await fetch('/workspace/list');
+        const d = await r.json();
+        sel.value = d.active || 'main';
+      } catch(_) {}
+    }
+    await workspaceNewPrompt();
+    return;
+  }
   try {
     const r = await fetch('/workspace/switch', {
       method: 'POST',
@@ -2227,9 +2521,15 @@ async function workspacesDelete(wsId, ev) {
 }
 
 async function workspaceNewPrompt() {
-  const title = prompt('Название нового workspace?');
+  const title = prompt(
+    'Название нового workspace?\n\n' +
+    'Workspace — отдельный контекст для графа, привычек и целей.\n' +
+    'Примеры: work, personal, research, health.\n' +
+    'Цели созданные в одном workspace не пересекаются с другими.'
+  );
   if (!title) return;
   const id = title.toLowerCase().replace(/[^a-z0-9_]/g, '_').substring(0, 20);
+  if (!id) { alert('Название должно содержать буквы/цифры.'); return; }
   try {
     const r = await fetch('/workspace/create', {
       method: 'POST',
@@ -2239,7 +2539,7 @@ async function workspaceNewPrompt() {
     const d = await r.json();
     if (d.error) { alert('Ошибка: ' + d.error); return; }
     await workspaceRefresh();
-    if (confirm(`Workspace "${title}" создан. Переключиться?`)) {
+    if (confirm(`Workspace "${title}" создан.\nПереключиться туда сейчас?`)) {
       workspaceSwitch(id);
     }
   } catch(e) {
@@ -2310,8 +2610,28 @@ async function assistPollAlerts() {
           if (typeof _incrChatUnread === 'function') _incrChatUnread();
           return;
         }
+        // Observation suggestion: система заметила паттерн → предлагает
+        // создать recurring/constraint. Используем тот же card type
+        // intent_confirm что у router'а — юзер жмёт Да/Изменить/Нет.
+        if (a.type === 'observation_suggestion' && a.card) {
+          const draftText = ((a.card.draft || {}).text || '').slice(0, 40);
+          const key = 'suggestion:' + draftText;
+          if (_assistLastAlertTypes.has(key)) return;
+          _assistLastAlertTypes.add(key);
+          // Лёгкий intro, потом карточка через общий renderer
+          assistAddMsg('assistant', '💡 Я заметил паттерн — предлагаю:',
+                       { mode_name: 'Наблюдение' });
+          const container = document.getElementById('assist-messages');
+          if (container && typeof assistRenderCard === 'function') {
+            container.appendChild(assistRenderCard(a.card));
+            container.scrollTop = container.scrollHeight;
+          }
+          if (typeof _incrChatUnread === 'function') _incrChatUnread();
+          return;
+        }
         if ((a.type === 'scout_bridge' || a.type === 'dmn_bridge') && a.bridge) {
-          const key = a.type + ':' + (a.bridge.text || '').substring(0, 30);
+          const b = a.bridge;
+          const key = a.type + ':' + (b.text || '').substring(0, 30);
           if (_assistLastAlertTypes.has(key)) return;
           _assistLastAlertTypes.add(key);
 
@@ -2319,14 +2639,35 @@ async function assistPollAlerts() {
             ? (lang === 'ru' ? '💡 Пока ты не смотрел, я нашёл связь:' : '💡 While you were away, I found a connection:')
             : (lang === 'ru' ? '🔗 DMN-инсайт:' : '🔗 DMN insight:');
           assistAddMsg('assistant', intro, { mode_name: a.type === 'scout_bridge' ? 'Scout' : 'DMN' });
-          // Bridge as card
+
+          // Bridge card в стиле mockup: BRIDGE FOUND badge + A→B layout + hidden axis
           const container = document.getElementById('assist-messages');
           const card = document.createElement('div');
-          card.style.cssText = 'align-self:stretch;margin-bottom:12px;padding:12px;background:#1e1b4b;border:1px solid #4338ca;border-radius:12px;';
+          card.style.cssText = 'align-self:stretch;margin-bottom:12px;padding:14px;background:#1e1b4b;border:1px solid #312e81;border-radius:12px;';
+          const quality = Math.round((b.quality || 0) * 100);
+          const labelRu = 'МОСТ НАЙДЕН';
+          const labelEn = 'BRIDGE FOUND';
+          const label = lang === 'ru' ? labelRu : labelEn;
+          // A → B блоки если доступны (pump возвращает text_a/text_b)
+          let ab_html = '';
+          if (b.text_a && b.text_b) {
+            ab_html = `
+              <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+                <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_a)}</div>
+                <span style="color:#4338ca;font-size:14px">⟶</span>
+                <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_b)}</div>
+              </div>`;
+          }
+          const axisLabel = lang === 'ru' ? 'Скрытая ось' : 'Hidden axis';
           card.innerHTML = `
-            <div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:6px;">BRIDGE · quality ${Math.round((a.bridge.quality||0)*100)}%</div>
-            <div style="font-size:14px;color:#e4e4e7;margin-bottom:8px;">${_esc(a.bridge.text)}</div>
-            ${a.bridge.synthesis ? `<div style="font-size:12px;color:#cbd5e1;font-style:italic;">${_esc(a.bridge.synthesis.substring(0, 200))}${a.bridge.synthesis.length > 200 ? '...' : ''}</div>` : ''}
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span style="font-size:16px">🔗</span>
+              <span style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.5px">${label}</span>
+              <span style="font-size:10px;color:#52525b;margin-left:auto">quality: ${quality}%</span>
+            </div>
+            ${ab_html}
+            <div style="font-size:13px;color:#e4e4e7;line-height:1.5">${axisLabel}: <span style="color:#818cf8;font-weight:500">«${_esc(b.text)}»</span></div>
+            ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis.substring(0, 200))}${b.synthesis.length > 200 ? '…' : ''}</div>` : ''}
           `;
           container.appendChild(card);
           container.scrollTop = container.scrollHeight;
@@ -2880,8 +3221,13 @@ function _activityFmt(sec) {
 
 function _activityTick() {
   if (_activityStartedAt == null) return;
+  const s = (Date.now() - _activityStartedAt) / 1000;
+  const str = _activityFmt(s);
   const el = document.getElementById('activity-timer');
-  if (el) el.textContent = _activityFmt((Date.now() - _activityStartedAt) / 1000);
+  if (el) el.textContent = str;
+  // Мини-панель в chat тоже тикает
+  const chatTimer = document.querySelector('#chat-active-task .chat-active-timer');
+  if (chatTimer) chatTimer.textContent = str;
 }
 
 async function activityRefresh() {
@@ -2921,6 +3267,7 @@ function _renderActivityState(data) {
   const startBtn = document.getElementById('activity-start-btn');
   const nextBtn  = document.getElementById('activity-next-btn');
   const stopBtn  = document.getElementById('activity-stop-btn');
+  const helpBtn  = document.getElementById('activity-help-btn');
 
   if (!statusEl) return;
 
@@ -2942,6 +3289,11 @@ function _renderActivityState(data) {
   // Stop local timer
   if (_activityTimerInt) { clearInterval(_activityTimerInt); _activityTimerInt = null; }
 
+  // Мини-панель в chat sub-page
+  const chatPanel = document.getElementById('chat-active-task');
+  const chatName  = chatPanel && chatPanel.querySelector('.chat-active-name');
+  const chatTimer = chatPanel && chatPanel.querySelector('.chat-active-timer');
+
   if (active) {
     statusEl.classList.remove('activity-status-idle');
     statusEl.classList.add('activity-status-active');
@@ -2953,6 +3305,14 @@ function _renderActivityState(data) {
     if (startBtn) startBtn.style.display = 'none';
     if (nextBtn) nextBtn.style.display = '';
     if (stopBtn) stopBtn.style.display = '';
+    if (helpBtn) helpBtn.style.display = '';
+    // Запомним имя активной задачи для help-кнопки
+    window._activityActiveName = active.name || '';
+    // Chat panel: показать
+    if (chatPanel) {
+      chatPanel.style.display = 'flex';
+      if (chatName) chatName.textContent = active.name || '(без названия)';
+    }
   } else {
     statusEl.classList.remove('activity-status-active');
     statusEl.classList.add('activity-status-idle');
@@ -2963,7 +3323,87 @@ function _renderActivityState(data) {
     if (startBtn) { startBtn.style.display = ''; startBtn.textContent = '＋ Начать'; }
     if (nextBtn) nextBtn.style.display = 'none';
     if (stopBtn) stopBtn.style.display = 'none';
+    if (helpBtn) helpBtn.style.display = 'none';
+    window._activityActiveName = '';
+    if (chatPanel) chatPanel.style.display = 'none';
   }
+}
+
+// Undo auto-start из chat: юзер не хотел трекать
+async function activityCancelAutoStart(activityId, btn) {
+  if (!activityId) return;
+  try {
+    await fetch('/activity/stop', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reason: 'user_cancel'}),
+    });
+    if (btn) {
+      const card = btn.closest('div[style*="0c2a3e"]') || btn.parentElement;
+      if (card) card.outerHTML = '<div style="color:#71717a;font-size:11px">× трекер отменён</div>';
+    }
+    if (typeof activityRefresh === 'function') await activityRefresh();
+  } catch (e) { console.warn('[activity] cancel failed:', e); }
+}
+
+// Pre-fill ассистента любым запросом (используется help-кнопками везде)
+function assistPreFill(text) {
+  if (!text) return;
+  // Переключиться на sub-page assist/chat
+  const assistSubBtn = document.querySelector('[data-sub-page-btn="assist"]')
+                    || document.querySelector('[data-sub-page-btn="chat"]');
+  if (assistSubBtn) assistSubBtn.click();
+  else if (typeof setBaddleSubPage === 'function') setBaddleSubPage('assist');
+  // Закрыть открытые модалы
+  ['goals-modal', 'profile-modal', 'weekly-modal'].forEach(id => {
+    const m = document.getElementById(id);
+    if (m && m.style.display !== 'none') m.style.display = 'none';
+  });
+  setTimeout(() => {
+    const inp = document.getElementById('assistant-input')
+             || document.querySelector('#baddle-chat-input')
+             || document.querySelector('textarea.auto-grow');
+    if (inp) {
+      inp.value = text;
+      inp.focus();
+      if (inp.tagName === 'TEXTAREA') {
+        inp.style.height = 'auto';
+        inp.style.height = inp.scrollHeight + 'px';
+      }
+    }
+  }, 100);
+}
+
+// Help из любой точки: спросить ассистента про конкретную тему
+function goalAskHelp(text) {
+  assistPreFill(`Помоги с «${text}» — что делать?`);
+}
+
+// Help из taskplayer — переключение в чат с pre-fill запросом про задачу
+function activityAskHelpClick() {
+  const name = (window._activityActiveName || '').trim();
+  if (!name) {
+    // Нет активной задачи — универсальный pre-fill
+    assistPreFill('Помоги: ');
+    return;
+  }
+  // Переключиться на sub-page "chat" если в таске/активити
+  const chatSubBtn = document.querySelector('[data-sub-page-btn="chat"]');
+  if (chatSubBtn) chatSubBtn.click();
+  else if (typeof setBaddleSubPage === 'function') setBaddleSubPage('chat');
+  // Pre-fill input ассистента контекстом активной задачи
+  setTimeout(() => {
+    const inp = document.getElementById('assistant-input')
+             || document.querySelector('#baddle-chat-input')
+             || document.querySelector('textarea.auto-grow');
+    if (inp) {
+      inp.value = `Помоги с задачей «${name}» — что делать дальше?`;
+      inp.focus();
+      if (inp.tagName === 'TEXTAREA') {
+        inp.style.height = 'auto';
+        inp.style.height = inp.scrollHeight + 'px';
+      }
+    }
+  }, 100);
 }
 
 function activityStartClick() {
@@ -3016,6 +3456,24 @@ async function _activityStartRequest(name, category) {
     const d = await r.json();
     if (d && d.error) {
       assistAddMsg('system', 'Activity start: ' + d.error);
+    }
+    // Если activity auto-matched recurring цель — уведомим юзера в chat
+    if (d && d.matched_recurring) {
+      const mr = d.matched_recurring;
+      const p = mr.progress || {};
+      const done = p.done_today || 0;
+      const tpd = p.times_per_day || 0;
+      if (typeof assistAddMsg === 'function') {
+        assistAddMsg('assistant',
+          `♻✓ Засчитал в «${mr.goal_text}» — прогресс ${done}/${tpd} сегодня`);
+      }
+    }
+    // Если activity нарушает constraint — алерт юзеру
+    if (d && d.violations && d.violations.length) {
+      const vs = d.violations.map(v => `«${v.text}»`).join(', ');
+      if (typeof assistAddMsg === 'function') {
+        assistAddMsg('assistant', `⚠ Нарушение ограничения: ${vs}`);
+      }
     }
   } catch (e) { /* silent */ }
   await activityRefresh();
@@ -3146,19 +3604,30 @@ async function planRender() {
   const badge = document.getElementById('plan-badge');
   if (!host) return;
   try {
-    const r = await fetch('/plan/today');
-    const d = await r.json();
-    const items = d.schedule || [];
+    // Unified: plans (time-boxed events) + recurring goals (частотные привычки)
+    const [planR, recR] = await Promise.all([
+      fetch('/plan/today').then(r => r.json()),
+      fetch('/goals/recurring').then(r => r.json()).catch(_ => ({recurring:[]})),
+    ]);
+    const plans = planR.schedule || [];
+    const recs = (recR.recurring || []).filter(p => p.active_today !== false);
+
+    // Unified badge counter: plans (todo) + recurring (lagging)
     if (badge) {
-      const todo = items.filter(i => !i.done && !i.skipped).length;
-      badge.textContent = items.length ? `· ${todo}/${items.length}` : '';
+      const planTodo = plans.filter(i => !i.done && !i.skipped).length;
+      const recLag = recs.filter(p => (p.lag || 0) > 0).length;
+      const total = planTodo + recLag;
+      badge.textContent = total ? `· ${total}` : '';
     }
-    if (!items.length) {
-      host.innerHTML = '<div style="padding:10px;color:#52525b;font-size:11px;text-align:center">Пусто на сегодня. Добавь событие или habit ниже.</div>';
+
+    if (!plans.length && !recs.length) {
+      host.innerHTML = '<div style="padding:10px;color:#52525b;font-size:11px;text-align:center">Пусто на сегодня. Добавь событие ниже или привычку в 🎯 Цели.</div>';
       return;
     }
+
+    // ─── plans block (time-boxed events) ───
     const now = Date.now() / 1000;
-    host.innerHTML = items.map(it => {
+    const plansHtml = plans.map(it => {
       const t = new Date((it.planned_ts || 0) * 1000).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
       const cls = it.done ? 'done' : (it.skipped ? 'skipped' : (it.planned_ts && it.planned_ts < now - 3600 ? 'overdue' : ''));
       const badges = [];
@@ -3166,6 +3635,8 @@ async function planRender() {
         const streakStr = it.streak > 0 ? `🔥${it.streak}` : '↻';
         badges.push(`<span class="plan-badge plan-badge-${it.streak > 0 ? 'streak' : 'recurring'}">${streakStr}</span>`);
       }
+      // Бейдж linked goal
+      if (it.goal_id) badges.push(`<span class="plan-badge" style="background:#052e16;color:#86efac" title="связано с привычкой">♻</span>`);
       if (it.category) badges.push(`<span class="plan-badge">${_esc(it.category)}</span>`);
       if (it.expected_difficulty) badges.push(`<span class="plan-badge plan-badge-diff">диф ${it.expected_difficulty}</span>`);
       const forDate = it.for_date || '';
@@ -3183,7 +3654,64 @@ async function planRender() {
         </span>
       </div>`;
     }).join('');
-  } catch (e) { /* silent */ }
+
+    // ─── recurring goals block (habits без жёсткого времени) ───
+    const recsHtml = recs.map(p => {
+      let countStr, periodStr;
+      if (p.period === 'week') {
+        countStr = `${p.done_this_week || 0}/${p.times_per_week || 0}`;
+        periodStr = ' /нед';
+      } else {
+        countStr = `${p.done_today || 0}/${p.times_per_day || 0}`;
+        periodStr = ' /день';
+      }
+      const lag = p.lag || 0;
+      const lagMark = lag > 0 ? ` <span style="color:#f59e0b">· отстаёт ${lag}</span>` : '';
+      const textAttr = (p.text || '').replace(/'/g, "&#39;");
+      return `<div class="plan-item plan-item-habit">
+        <span class="plan-time">♻</span>
+        <span class="plan-name">${_esc(p.text)}</span>
+        <span class="plan-badges">
+          <span class="plan-badge" style="background:#052e16;color:#86efac"><b>${countStr}</b>${periodStr}</span>
+          ${lagMark}
+        </span>
+        <span class="plan-actions">
+          <button class="plan-btn done" title="+1 выполнил"
+            onclick="recurringInstanceFromPlan('${p.goal_id}',event)">+1</button>
+          <button class="plan-btn" title="Спросить ассистента"
+            onclick="goalAskHelp('${textAttr}')">?</button>
+        </span>
+      </div>`;
+    }).join('');
+
+    // Combined: plans сверху (time-sorted), recurring внизу
+    let html = '';
+    if (plansHtml) html += plansHtml;
+    if (recsHtml) {
+      if (plansHtml) html += '<div class="plan-divider">— привычки —</div>';
+      html += recsHtml;
+    }
+    host.innerHTML = html;
+  } catch (e) { console.warn('[plan] render failed:', e); }
+}
+
+// recurring instance из plan-UI (refresh = и plan-день, и goals-modal)
+async function recurringInstanceFromPlan(goalId, ev) {
+  if (ev) ev.stopPropagation();
+  if (!goalId) return;
+  try {
+    await fetch('/goals/instance', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({id: goalId, note: 'plan-day UI'}),
+    });
+    await planRender();
+    // goals modal тоже может быть открыт
+    if (typeof _refreshGoals === 'function' &&
+        document.getElementById('goals-modal') &&
+        document.getElementById('goals-modal').style.display !== 'none') {
+      await _refreshGoals();
+    }
+  } catch(e) { console.warn('[plan] +1 failed:', e); }
 }
 
 async function planAddNew() {
@@ -3191,27 +3719,48 @@ async function planAddNew() {
   if (!name) return;
   const category = document.getElementById('plan-category').value || null;
   const time = document.getElementById('plan-time').value || '09:00';
-  const recurring = document.getElementById('plan-recurring').checked;
   const diff = document.getElementById('plan-difficulty').value;
+  const goalLink = (document.getElementById('plan-goal-link')
+                     && document.getElementById('plan-goal-link').value) || '';
   const body = { name, category };
-  if (recurring) {
-    body.recurring = { days: [0,1,2,3,4,5,6], time };
-  } else {
-    const today = new Date();
-    const [h, m] = time.split(':').map(x => parseInt(x, 10) || 0);
-    const ts = new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m).getTime() / 1000;
-    body.ts_start = ts;
-  }
+  // Plan — time-boxed event. Для recurring-привычек используется 🎯 → Привычки.
+  // Если нужно линковать plan к существующей привычке — поле plan-goal-link.
+  const today = new Date();
+  const [h, m] = time.split(':').map(x => parseInt(x, 10) || 0);
+  const ts = new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m).getTime() / 1000;
+  body.ts_start = ts;
   if (diff) body.expected_difficulty = parseInt(diff, 10);
+  if (goalLink) body.goal_id = goalLink;
   try {
     await fetch('/plan/add', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body),
     });
     document.getElementById('plan-name').value = '';
-    document.getElementById('plan-recurring').checked = false;
     document.getElementById('plan-difficulty').value = '';
+    const glEl = document.getElementById('plan-goal-link');
+    if (glEl) glEl.value = '';
     await planRender();
+  } catch (e) { /* silent */ }
+}
+
+// Populate «привязать к привычке» dropdown активными recurring goals
+async function planLinkRefresh() {
+  const sel = document.getElementById('plan-goal-link');
+  if (!sel) return;
+  try {
+    const r = await fetch('/goals/recurring').then(r => r.json());
+    const items = r.recurring || [];
+    // Сохранить выбранное
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">без привычки</option>';
+    items.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.goal_id;
+      opt.textContent = '♻ ' + (p.text || '—').slice(0, 40);
+      sel.appendChild(opt);
+    });
+    if (cur) sel.value = cur;
   } catch (e) { /* silent */ }
 }
 
@@ -3223,10 +3772,22 @@ async function planCompleteClick(id, forDate, ev) {
   const diff = parseInt(diffStr, 10);
   if (!isNaN(diff) && diff >= 1 && diff <= 5) body.actual_difficulty = diff;
   try {
-    await fetch('/plan/complete', {
+    const r = await fetch('/plan/complete', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body),
-    });
+    }).then(r => r.json());
+    // Если plan был linked к recurring — уведомим в chat
+    if (r && r.linked_goal) {
+      const lg = r.linked_goal;
+      const p = lg.progress || {};
+      const done = p.period === 'week'
+        ? `${p.done_this_week || 0}/${p.times_per_week || 0} /нед`
+        : `${p.done_today || 0}/${p.times_per_day || 0} /день`;
+      if (typeof assistAddMsg === 'function') {
+        assistAddMsg('assistant',
+          `♻✓ Plan «${lg.goal_text}» увеличил прогресс привычки — ${done}`);
+      }
+    }
     await planRender();
   } catch (e) { /* silent */ }
 }

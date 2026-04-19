@@ -15,11 +15,10 @@ Baddle до этого знал **скаляры** (HRV, DA/S/NE, daily_remainin
 - Pattern detector из TODO («3 четверга подряд пропустил завтрак →
   crash») без activity-лога неоткуда брать substrate.
 
-Activity log — append-only event stream ручных context-свитчей. Идея
-взята из прототипа [Time Player/v2](file:///C:/Users/Volk/Desktop/Projects/Time%20Player/v2/index.html)
-(Telegram Mini App): **Начать → (ввод названия) → активная задача →
-«Следующая» (переключение) → «Стоп»**. Шаблоны (Обед / Совещание / Пауза)
-для быстрого переключения.
+Activity log — append-only event stream ручных context-свитчей. Модель
+простая, как у таск-трекера: **Начать → (ввод названия) → активная
+задача → «Следующая» (переключение) → «Стоп»**. Есть шаблоны (Обед /
+Совещание / Пауза) для быстрого переключения.
 
 ## Data model
 
@@ -78,8 +77,7 @@ GET  /activity/history  ?limit=100 → [...]
 ```
 
 **Поведение `/activity/start` при уже активной задаче:** автостоп текущей
-со `stop_reason='switch'`, начало новой (это поведение кнопки
-«Следующая» в прототипе Time Player).
+со `stop_reason='switch'`, начало новой — это поведение кнопки «Следующая».
 
 ## UI
 

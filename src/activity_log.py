@@ -191,6 +191,91 @@ def start_activity(name: str,
     return aid
 
 
+# ── Связка activity ↔ recurring goals ────────────────────────────────────
+# Когда юзер пишет «Начать: Обед» в taskplayer — логично автоматически
+# засчитать это как instance recurring-цели «покушать 3 раза в день».
+# Матчинг через intent_router'овский классификатор (fact → instance).
+# Вызывается из /activity/start после записи события.
+
+def try_match_recurring_instance(activity_name: str,
+                                  activity_category: Optional[str] = None,
+                                  lang: str = "ru",
+                                  workspace: Optional[str] = None) -> Optional[dict]:
+    """Если activity-имя похоже на одну из recurring целей, записать
+    instance и вернуть {goal_id, goal_text, progress}. Иначе None.
+
+    workspace: ограничить матчинг целями этого воркспейса (+ глобальные).
+
+    Использует `intent_router._classify_subtype_fact` который через LLM
+    выбирает подходящую recurring цель из списка (или говорит что не
+    подходит). Быстрый — max_tokens=10.
+    """
+    try:
+        from .recurring import list_recurring, get_progress
+        from .goals_store import record_instance
+        from .intent_router import _classify_subtype_fact
+    except Exception as e:
+        log.debug(f"[activity→recurring] import failed: {e}")
+        return None
+
+    recs = list_recurring(active_only=True, workspace=workspace)
+    # Сужаем по категории если известна (меньше LLM токенов + меньше FP)
+    if activity_category:
+        recs = [r for r in recs if r.get("category") == activity_category] or recs
+    if not recs:
+        return None
+
+    try:
+        sub, conf, gid = _classify_subtype_fact(
+            activity_name, lang=lang, recurring_list=recs,
+        )
+    except Exception as e:
+        log.debug(f"[activity→recurring] match failed: {e}")
+        return None
+
+    if sub != "instance" or not gid or conf < 0.7:
+        return None
+
+    try:
+        record_instance(gid, note=f"activity: {activity_name}")
+        progress = get_progress(gid)
+        goal_text = next((r["text"] for r in recs if r["id"] == gid), "")
+        log.info(f"[activity→recurring] auto-matched '{activity_name}' → "
+                 f"recurring '{goal_text[:40]}' (conf={conf:.2f})")
+        return {
+            "goal_id": gid,
+            "goal_text": goal_text,
+            "progress": progress,
+        }
+    except Exception as e:
+        log.warning(f"[activity→recurring] record failed: {e}")
+        return None
+
+
+def try_detect_constraint_violation(activity_name: str,
+                                     lang: str = "ru",
+                                     workspace: Optional[str] = None) -> list[dict]:
+    """Activity → constraint: если имя активности нарушает один из активных
+    constraint'ов юзера («Пиво в баре» при constraint «не пью»), пишем
+    violation через LLM-скан.
+
+    workspace: ограничить проверку constraints этого воркспейса.
+
+    Возвращает список записанных violations — симметрично с
+    `scan_message_for_violations` для /assist.
+    """
+    try:
+        from .recurring import scan_message_for_violations
+    except Exception:
+        return []
+    try:
+        return scan_message_for_violations(activity_name, lang=lang,
+                                             workspace=workspace)
+    except Exception as e:
+        log.debug(f"[activity→constraint] scan failed: {e}")
+        return []
+
+
 def stop_activity(reason: str = "manual") -> Optional[dict]:
     """Остановить текущую активную задачу. Возвращает завершённую запись или None."""
     cur = get_active()

@@ -1440,6 +1440,117 @@ select {
 }
 .goals-row .goal-actions button:hover { background: #27272a; color: #e4e4e7; }
 
+/* Inline add-form для recurring/constraint в goals modal */
+.goals-add-form {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px; margin-bottom: 8px; padding: 8px;
+  background: #18181b; border-radius: 6px; font-size: 11px;
+}
+.goals-add-form input[type=text] {
+  flex: 1; min-width: 150px;
+  background: #0a0a0b; border: 1px solid #3f3f46; color: #e4e4e7;
+  padding: 4px 8px; font-size: 11px; border-radius: 3px;
+}
+.goals-add-form input[type=number] {
+  background: #0a0a0b; border: 1px solid #3f3f46; color: #e4e4e7;
+  padding: 2px 4px; font-size: 11px; border-radius: 3px;
+}
+.goals-add-form select {
+  background: #0a0a0b; border: 1px solid #3f3f46; color: #e4e4e7;
+  padding: 3px 6px; font-size: 11px; border-radius: 3px;
+}
+.goals-add-form label { color: #a1a1aa; font-size: 10px; display: flex; gap: 4px; align-items: center; }
+.goals-add-form button {
+  background: #18181b; border: 1px solid #3f3f46; color: #a1a1aa;
+  padding: 4px 10px; font-size: 11px; border-radius: 3px; cursor: pointer;
+}
+.goals-add-form button:hover { background: #27272a; color: #e4e4e7; }
+
+/* «+» кнопка в заголовке секции */
+.weekly-add-btn {
+  background: none; border: 1px solid #3f3f46; color: #a1a1aa;
+  font-size: 11px; padding: 1px 8px; border-radius: 3px; cursor: pointer;
+  margin-left: 8px; line-height: 1;
+}
+.weekly-add-btn:hover { background: #27272a; color: #e4e4e7; }
+
+/* plan-list divider между events и recurring */
+.plan-divider {
+  padding: 6px 10px; margin: 4px 0;
+  color: #52525b; font-size: 10px;
+  text-align: center; letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.plan-item-habit {
+  background: #052e16 !important;
+  border-color: #14532d !important;
+}
+
+/* Активная задача в chat sub-page: мини-панель под хедером */
+.chat-active-task {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; margin-bottom: 8px;
+  background: #0c2a3e; border: 1px solid #1e40af;
+  border-radius: 6px; font-size: 11px; color: #93c5fd;
+}
+.chat-active-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #3b82f6; flex-shrink: 0;
+  animation: pulse-blue 2s infinite;
+}
+@keyframes pulse-blue {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+.chat-active-name {
+  font-weight: 500; color: #dbeafe;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 180px;
+}
+.chat-active-timer {
+  font-variant-numeric: tabular-nums; color: #94a3b8;
+}
+.chat-active-spacer { flex: 1; }
+.chat-active-btn {
+  background: none; border: 1px solid #334155; color: #94a3b8;
+  font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
+  line-height: 1.2;
+}
+.chat-active-btn:hover { background: #1e293b; color: #e4e4e7; }
+.chat-active-btn-stop:hover { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
+
+/* Intent confirm card — draft от router'а */
+.card-intent-confirm {
+  padding: 12px 14px;
+  background: #1e1b4b;
+  border: 1px solid #4338ca;
+  border-radius: 12px;
+}
+.card-intent-confirm .ic-header {
+  font-size: 13px; font-weight: 600; color: #c7d2fe; margin-bottom: 6px;
+}
+.card-intent-confirm .ic-desc {
+  font-size: 11px; color: #a5b4fc; margin-bottom: 8px;
+}
+.card-intent-confirm .ic-details {
+  font-size: 12px; color: #e0e7ff; margin-bottom: 12px;
+}
+.card-intent-confirm .ic-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.card-intent-confirm .ic-actions button {
+  padding: 5px 12px; font-size: 12px; border-radius: 6px; cursor: pointer;
+  border: 0;
+}
+.card-intent-confirm .ic-actions .primary {
+  background: #4f46e5; color: white; font-weight: 500;
+}
+.card-intent-confirm .ic-actions .primary:hover { background: #6366f1; }
+.card-intent-confirm .ic-actions .secondary {
+  background: #312e81; color: #c7d2fe;
+}
+.card-intent-confirm .ic-actions .secondary:hover { background: #3730a3; }
+
 /* Profile modal — per-category sections */
 .profile-category {
   border: 1px solid #27272a;

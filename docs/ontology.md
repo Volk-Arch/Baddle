@@ -6,6 +6,10 @@
 Принцип: **append-only JSONL** для всего что меняется во времени,
 **single JSON** для snapshot-состояний.
 
+**Где физически:** person-level данные в `data/`, per-workspace графы
+в `graphs/<ws>/`, workspace registry в `workspaces/index.json`. Layout
+целиком → [storage-layout.md](storage-layout.md).
+
 ---
 
 ## 1. `user_state.json` (snapshot, не append-only)
@@ -297,8 +301,14 @@ Snapshot графа + state_trace + final_synthesis при `complete_goal()`.
   "neural_max_tokens": 3000,
   "neural_seed": -1,
   // Depth knobs — сколько циклов мышления на каждом уровне.
-  // Читаются через api_backend.get_depth_defaults().
-  "deep_chat_steps": 3,
+  // Читаются через api_backend.get_depth_defaults() / get_mode_depth().
+  "deep_chat_steps": 3,                 // global fallback
+  "deep_mode_steps": {                  // per-mode override
+    "horizon": 5, "bayes": 7, "tournament": 3, "dispute": 4,
+    "builder": 4, "pipeline": 4, "cascade": 3, "scales": 3,
+    "race": 2, "fan": 3, "scout": 3, "vector": 3, "free": 3
+  },
+  "deep_diversity_min": 0.30,           // diversity guard threshold
   "dmn_converge_max_steps": 100,
   "dmn_converge_stall_window": 12,
   "dmn_converge_max_wall_s": 900,
@@ -306,29 +316,28 @@ Snapshot графа + state_trace + final_synthesis при `complete_goal()`.
 }
 ```
 
-### Новые типы нод content-графа (добавлены в этой сессии):
+### Новые типы нод content-графа:
 - `type="synthesis"` — результат `force_synthesize_top()` (финальный
   collapse после autorun loop). Confidence = avg(top_N source nodes).
 - `evidence_polarity: "pro"|"con"|"why"|"how"` — маркировка evidence-нод
   при comparative/dialectical deep pipeline.
 - `evidence_target: int` — индекс hypothesis к которой привязан evidence.
+- `diversity_seed: true` — нода добавлена diversity guard'ом через pump
+  между ближайшей парой при слипшемся brainstorm'е.
 
 ---
 
-## Migration policy
+## Schema-additions policy
 
-Все изменения формата = **additions only**. Правила:
+Single-path, без миграций и legacy кода. Правила эволюции схем:
 
-1. **Никогда не удалять поля** на уже записанных entries.
-2. **Новые required-поля** = сначала добавить backfill в `src/migrations.py`.
-3. **Rename** = добавить новое имя, читать оба, писать новое. Через 6 мес
-   удалить старое.
-4. **Breaking schema changes** → **новый файл** (`v2`-суффикс) + migration
-   script + grace period чтения обеих версий.
-
-`src/migrations.py:run_all()` вызывается при старте ui.py. Логирует
-summary всех форматов. Fails soft — не ломает startup при странных данных,
-только warning.
+1. **Additions only** — добавление новых полей не ломает прошлые записи.
+2. **Значения по умолчанию в коде** — при чтении, не через backfill-скрипт.
+3. **Breaking schema changes** → **новый файл** с `v2`-суффиксом + явный
+   импорт из старого при старте (если нужен). Без grace period — single
+   path значит один формат.
+4. **Rename** = одномоментный: переименовываем поле во всех readers + писателях
+   в одном commit'е. Старые записи получают default при чтении.
 
 ---
 

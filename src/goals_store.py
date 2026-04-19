@@ -7,12 +7,20 @@
 Файл: `goals.jsonl`. Каждая строка = одно событие:
 
     {"action": "create", "id", "workspace", "text", "mode", "priority",
-     "deadline", "category", "ts"}
+     "deadline", "category", "kind", "schedule", "polarity", "ts"}
     {"action": "complete", "id", "reason", "snapshot_ref", "energy_pct", "ts"}
     {"action": "abandon",  "id", "reason", "ts"}
     {"action": "update",   "id", "fields": {...}, "ts"}
+    {"action": "instance", "id", "note", "ts"}           # выполнение recurring
+    {"action": "violation","id", "note", "detected", "ts"}  # нарушение constraint
+
+Kind'ы целей (в create event):
+  - "oneshot"   — обычная цель (default, закрывается complete/abandon)
+  - "recurring" — привычка с расписанием, instances копятся
+  - "constraint"— граница (избегать чего-то), violations копятся
 
 Status юзера replay'ится из событий: open → (done | abandoned).
+Recurring и constraint всегда open — они не закрываются автоматически.
 
 Статистика: completion_rate, avg_time_to_done, by_mode, by_category.
 """
@@ -135,10 +143,30 @@ def add_goal(text: str,
              workspace: str = "main",
              priority: Optional[int] = None,
              deadline: Optional[str] = None,
-             category: Optional[str] = None) -> str:
-    """Создать новую цель. Возвращает её ID."""
+             category: Optional[str] = None,
+             kind: str = "oneshot",
+             schedule: Optional[dict] = None,
+             polarity: Optional[str] = None) -> str:
+    """Создать новую цель. Возвращает её ID.
+
+    kind:
+      - "oneshot"   — обычная цель, закрывается complete/abandon
+      - "recurring" — привычка, требует schedule (см. `schedule` dict)
+      - "constraint"— граница, требует polarity ("avoid" | "prefer")
+
+    schedule (для recurring):
+      {
+        "times_per_day": 3,              # сколько раз в день
+        "days": [0, 1, 2, 3, 4, 5, 6],   # дни недели (0=пн, опционально, default все)
+        "time_windows": [[6,10],[12,15],[18,22]]  # окна в часах (optional)
+      }
+
+    polarity (для constraint):
+      - "avoid"  — избегать (не есть орехи, не работать после 23)
+      - "prefer" — предпочитать (есть меньше сахара) — soft constraint
+    """
     goal_id = uuid.uuid4().hex[:12]
-    _append({
+    entry = {
         "action": "create",
         "id": goal_id,
         "workspace": workspace,
@@ -147,8 +175,43 @@ def add_goal(text: str,
         "priority": priority,
         "deadline": deadline,
         "category": category,
-    })
+        "kind": kind,
+    }
+    if kind == "recurring" and schedule:
+        entry["schedule"] = schedule
+    if kind == "constraint":
+        entry["polarity"] = polarity or "avoid"
+    _append(entry)
     return goal_id
+
+
+def record_instance(goal_id: str, note: str = "", ts: Optional[float] = None):
+    """Отметить выполнение recurring goal (юзер или автомат)."""
+    _append({
+        "action": "instance",
+        "id": goal_id,
+        "note": (note or "")[:200],
+        "ts": ts if ts is not None else time.time(),
+    })
+
+
+def record_violation(goal_id: str, note: str = "",
+                     detected: str = "manual",
+                     ts: Optional[float] = None):
+    """Отметить нарушение constraint.
+
+    detected:
+      - "manual"    — юзер сам сказал
+      - "llm_scan"  — LLM детектил в сообщении юзера
+      - "tick"      — детектил tick-хук по pattern'у
+    """
+    _append({
+        "action": "violation",
+        "id": goal_id,
+        "note": (note or "")[:200],
+        "detected": detected,
+        "ts": ts if ts is not None else time.time(),
+    })
 
 
 def complete_goal(goal_id: str, reason: str = "",
@@ -190,7 +253,8 @@ def _replay() -> dict[str, dict]:
     """Построить current-state dict по event log.
 
     Возвращает {goal_id: {id, text, mode, workspace, priority, deadline,
-                          category, status, created_at, completed_at, ...}}
+                          category, kind, schedule, polarity, status,
+                          created_at, completed_at, instances, violations}}
     """
     state: dict[str, dict] = {}
     for e in _read_all():
@@ -207,8 +271,14 @@ def _replay() -> dict[str, dict]:
                 "priority": e.get("priority"),
                 "deadline": e.get("deadline"),
                 "category": e.get("category"),
+                # Legacy records без kind считаем oneshot.
+                "kind": e.get("kind") or "oneshot",
+                "schedule": e.get("schedule"),
+                "polarity": e.get("polarity"),
                 "status": "open",
                 "created_at": e.get("ts"),
+                "instances": [],     # [{ts, note}, ...]
+                "violations": [],    # [{ts, note, detected}, ...]
             }
         elif gid in state:
             g = state[gid]
@@ -225,6 +295,17 @@ def _replay() -> dict[str, dict]:
             elif action == "update":
                 for k, v in (e.get("fields") or {}).items():
                     g[k] = v
+            elif action == "instance":
+                g["instances"].append({
+                    "ts": e.get("ts"),
+                    "note": e.get("note", ""),
+                })
+            elif action == "violation":
+                g["violations"].append({
+                    "ts": e.get("ts"),
+                    "note": e.get("note", ""),
+                    "detected": e.get("detected", "manual"),
+                })
     return state
 
 

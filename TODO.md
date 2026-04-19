@@ -12,6 +12,39 @@
 
 # ⬆ НЕ СДЕЛАНО
 
+## 🔁 Замыкание инструментов — все основные пути закрыты
+
+После серии сессий замкнулись:
+- intent_router (chat → все действия через двухуровневый LLM)
+- activity ↔ recurring/constraint (taskplayer ↔ goals)
+- plan ↔ recurring (plan.goal_id → +1 instance)
+- observation → suggestion (patterns + checkins + stress + weekly)
+- solved archive → RAG в /assist profile_hint
+- workspace scoping в router + recurring/constraints (work vs personal)
+
+Концептуальный обзор → [docs/closure-architecture.md](docs/closure-architecture.md).
+
+Осталось по замыканию: **ничего критичного**. Возможные мелочи:
+- Обогащение `make_suggestion_card` второй кнопкой «попробовать 1 неделю»
+  (временная рекурсивная цель → через неделю abandon если не помогает)
+- Patterns × intent_router: если детектор нашёл паттерн но юзер молчит
+  2+ недели — auto-abandon предложения чтобы не накапливать старые alerts
+
+- [ ] **Multi-context (workspace) aware router**. intent_router сейчас
+  знает только активные recurring/constraints глобально. Если юзер в
+  workspace=work пишет что-то — не использует рабочий контекст vs
+  personal. Низкий приоритет (пока single-user).
+
+## 🎨 UI split — Baddle vs Graph Lab (future)
+
+По мере роста функциональности разделить UI на два:
+- **Baddle** (daily-use) — ассистент, цели, привычки, HRV, план дня
+- **Graph Lab** (research/dev) — визуализация графа, tick controls, modes
+
+Подробный план — [docs/ui-split-plan.md](docs/ui-split-plan.md).
+Не блокер — делать когда появится не-разработчик пользователь или
+захочется mobile UI для Baddle отдельно от desktop Lab.
+
 ## 🩺 Daily-use viability (остатки)
 
 - [ ] **Desktop / system-tray notifications.** Alerts работают только
@@ -120,16 +153,16 @@ world`). Baddle — мозг, Hermes — руки. Интересный вари
 - [ ] **Извлечение графа из текста** — статья → граф.
 - [ ] **Demo mode** — ускоренная симуляция «недели Baddle».
 - [ ] **SSE/WebSocket** — push вместо polling для HRV/alerts (instant feel).
-- [ ] **Telegram Mini App wrapper (Activity + Briefing + Alerts)** — взять
-  прототип `Time Player/v2/index.html` (его цикл Начать/Следующая/Стоп +
-  шаблоны + история) как основу TMA-клиента к Baddle. Бэкенд уже готов
-  (/activity/* endpoints). На входе — `tg.initDataUnsafe.user.id` как
-  namespace для multi-user в будущем. Что даёт: (а) OS-уведомления
-  бесплатно через Telegram на phone+desktop даже при закрытом браузере
-  (закрывает блокер «Desktop / system-tray notifications»), (б) мобильный
-  ввод activity на ходу, (в) morning_briefing приходит как push. Scope:
-  переписать фронт HTML → обёртка над теми же endpoints + WebApp.sendData
-  для auth handshake. Backend-pairing: эндпоинт `/tma/link` с OTP.
+- [ ] **Telegram Mini App wrapper (Activity + Briefing + Alerts).** Простой
+  цикл Начать/Следующая/Стоп + шаблоны + история как TMA-клиент к Baddle.
+  Бэкенд уже готов (`/activity/*` endpoints). На входе —
+  `tg.initDataUnsafe.user.id` как namespace для multi-user в будущем.
+  Что даёт: (а) OS-уведомления бесплатно через Telegram на phone+desktop
+  даже при закрытом браузере (закрывает блокер «Desktop / system-tray
+  notifications»), (б) мобильный ввод activity на ходу, (в) morning_briefing
+  приходит как push. Scope: лёгкий фронт → обёртка над теми же endpoints
+  + WebApp.sendData для auth handshake. Backend-pairing: эндпоинт
+  `/tma/link` с OTP.
 
 ## Архитектурно открытые (edge cases, не блокеры)
 

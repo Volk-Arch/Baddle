@@ -1,4 +1,4 @@
-# State-граф Baddle (v5e)
+# State-граф
 
 > Второй граф, живущий рядом с контент-графом. Append-only история
 > собственной жизни системы. Каждый тик — одна нода (одна строка JSONL).
@@ -52,7 +52,7 @@
 - `user_initiated` — был ли триггером юзер-ввод (NE spike)
 - `content_touched` — индексы content-нод, на которые подействовали
 - `state_snapshot` — полный `CognitiveState.get_metrics()` в момент тика
-- `state_origin` — 1_rest (покой) / 1_held (напряжение), см. v8c
+- `state_origin` — 1_rest (покой) / 1_held (напряжение), см. [nand-architecture.md](nand-architecture.md)
 - `rpe` — reward prediction error (когда было measurable)
 - `user_feedback` — accept/reject/ignore (когда юзер дал)
 
@@ -90,9 +90,9 @@ hash для parent chain.
 
 ## Git-аудит реализация
 
-Из nand-architecture.md был описан Git-коммит каждого байесовского шага
-с полной трассой. В v5e это **та же структура** — одна append-only запись,
-не два параллельных лога:
+В [nand-architecture.md](nand-architecture.md) описан Git-коммит каждого
+байесовского шага с полной трассой. State-граф использует **ту же
+структуру** — одна append-only запись, не два параллельных лога:
 
 - `hash` + `parent` = commit DAG
 - `state_snapshot` = полная трасса параметров

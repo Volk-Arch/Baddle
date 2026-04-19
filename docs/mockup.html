@@ -464,6 +464,126 @@
     </div>
     <div class="chat-input-area"><input class="chat-input" placeholder="Ask anything..." disabled><div class="chat-send">&#8593;</div></div>
   </div>
+
+  <!-- ─── TUESDAY NOON: Natural language → tracker + habit ─── -->
+  <div class="day-label">Tuesday &middot; 1:15 PM &middot; "Finished lunch"</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text" style="color:#10b981">🟢 healthy_load &middot; workspace: personal</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:700;color:#10b981">64<span style="font-size:12px;color:#52525b">/100</span></div>
+        <div style="font-size:10px;color:#52525b">daily energy</div>
+      </div>
+    </div>
+    <div class="chat-messages">
+      <div class="msg msg-user">Just had lunch — pasta with salad</div>
+      <div class="msg msg-ai">
+        <!-- instance_ack card: auto record_instance на recurring habit -->
+        <div style="padding:10px 14px;background:#052e16;border:1px solid #14532d;border-radius:10px;display:flex;align-items:center;gap:10px">
+          <span style="font-size:16px">♻✓</span>
+          <div style="flex:1;font-size:13px;color:#86efac">
+            «eat 3 meals/day» — <b>2/3</b> today
+          </div>
+        </div>
+        <div style="font-size:11px;color:#52525b;margin-top:6px">no pasta question, no mode switch — router detected "fact/instance" and matched to your recurring habit.</div>
+      </div>
+      <div class="msg msg-user">Going to the gym</div>
+      <div class="msg msg-ai">
+        <!-- activity_started card: auto-start taskplayer -->
+        <div style="padding:10px 14px;background:#0c2a3e;border:1px solid #1e40af;border-radius:10px;display:flex;align-items:center;gap:10px">
+          <span style="font-size:16px">🎬</span>
+          <div style="flex:1;font-size:13px;color:#93c5fd">Tracker started: <b>Gym</b> (health)</div>
+          <button style="background:none;border:1px solid #334155;color:#94a3b8;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">cancel</button>
+        </div>
+        <div style="font-size:11px;color:#52525b;margin-top:6px">↳ also +1 to «exercise 3× per week» (1/3 this week)</div>
+      </div>
+    </div>
+    <div class="chat-input-area"><input class="chat-input" placeholder="Say what's happening..." disabled><div class="chat-send">&#8593;</div></div>
+  </div>
+
+  <!-- ─── THURSDAY EVENING: System-initiated suggestion ─── -->
+  <div class="day-label">Thursday &middot; 8:45 PM &middot; System noticed a pattern</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar" style="background:linear-gradient(135deg, #4338ca, #6366f1)">💡</div>
+      <div>
+        <div class="chat-name">Baddle &middot; Observation</div>
+        <div class="chat-status-text" style="color:#818cf8">noticed 3 Thursdays in a row</div>
+      </div>
+    </div>
+    <div style="padding:24px;display:flex;flex-direction:column;gap:16px">
+      <div style="color:#52525b;font-size:11px">Checking your patterns, I noticed something:</div>
+
+      <!-- observation_suggestion card in intent_confirm style -->
+      <div style="padding:14px;background:#1e1b4b;border:1px solid #4338ca;border-radius:12px">
+        <div style="font-size:13px;font-weight:600;color:#c7d2fe;margin-bottom:6px">♻ Create a habit?</div>
+        <div style="font-size:11px;color:#a5b4fc;margin-bottom:8px">💡 Because: last 3 Thursdays you skipped breakfast (usually you eat mornings 86% of days).</div>
+        <div style="font-size:12px;color:#e0e7ff;margin-bottom:12px"><b>Breakfast every morning at 8:00</b> · 1/day · food</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button style="padding:5px 12px;font-size:12px;border-radius:6px;border:0;background:#312e81;color:#c7d2fe;cursor:pointer">No</button>
+          <button style="padding:5px 12px;font-size:12px;border-radius:6px;border:0;background:#312e81;color:#c7d2fe;cursor:pointer">Edit</button>
+          <button style="padding:5px 12px;font-size:12px;border-radius:6px;border:0;background:#4f46e5;color:#fff;font-weight:500;cursor:pointer">Yes, create</button>
+        </div>
+      </div>
+
+      <div style="color:#3f3f46;font-size:11px;text-align:center">pattern detector &middot; 1 suggestion today &middot; max 2/day, no spam</div>
+    </div>
+  </div>
+
+  <!-- ─── SATURDAY MORNING: Plan day + unified view ─── -->
+  <div class="day-label">Saturday &middot; 9:00 AM &middot; Plan for the day</div>
+  <div class="chat-mockup" style="margin-bottom:48px">
+    <div class="chat-header">
+      <div class="chat-avatar">B</div>
+      <div>
+        <div class="chat-name">Baddle</div>
+        <div class="chat-status-text">📋 plan · 2/5 · workspace: personal</div>
+      </div>
+      <span style="flex:1"></span>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:700;color:#10b981">95<span style="font-size:12px;color:#52525b">/100</span></div>
+        <div style="font-size:10px;color:#52525b">rested</div>
+      </div>
+    </div>
+    <div style="padding:16px;display:flex;flex-direction:column;gap:6px;font-size:12px">
+      <!-- time-boxed plan events -->
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#27272a;border-radius:6px">
+        <span style="color:#52525b">09:00</span>
+        <span style="flex:1;color:#e4e4e7">Morning walk</span>
+        <span style="background:#052e16;color:#86efac;padding:2px 6px;border-radius:4px;font-size:10px" title="linked to recurring">♻</span>
+        <span style="background:#18181b;color:#a1a1aa;padding:2px 6px;border-radius:4px;font-size:10px">health</span>
+        <button style="background:none;border:1px solid #3f3f46;color:#a1a1aa;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer">✓</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#27272a;border-radius:6px">
+        <span style="color:#52525b">14:00</span>
+        <span style="flex:1;color:#e4e4e7">Call with parents</span>
+        <span style="background:#18181b;color:#a1a1aa;padding:2px 6px;border-radius:4px;font-size:10px">social</span>
+        <button style="background:none;border:1px solid #3f3f46;color:#a1a1aa;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer">✓</button>
+      </div>
+
+      <!-- divider — recurring habits (always-visible frequencies) -->
+      <div style="padding:6px 10px;margin:4px 0;color:#52525b;font-size:10px;text-align:center;letter-spacing:1px">— HABITS —</div>
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#052e16;border:1px solid #14532d;border-radius:6px">
+        <span>♻</span>
+        <span style="flex:1;color:#e4e4e7">Drink water 4×/day</span>
+        <span style="background:#18181b;color:#86efac;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600">2/4 /day</span>
+        <button style="background:none;border:1px solid #14532d;color:#86efac;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:600">+1</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#052e16;border:1px solid #14532d;border-radius:6px">
+        <span>♻</span>
+        <span style="flex:1;color:#e4e4e7">Exercise 3×/week</span>
+        <span style="background:#18181b;color:#86efac;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600">1/3 /week</span>
+        <button style="background:none;border:1px solid #14532d;color:#86efac;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:600">+1</button>
+      </div>
+
+      <div style="padding:8px 10px;margin-top:6px;color:#52525b;font-size:10px;text-align:center">plans, habits, constraints — one unified view</div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══ 4. HOW IT WORKS ═══ -->

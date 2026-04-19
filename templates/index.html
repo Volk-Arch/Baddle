@@ -150,19 +150,22 @@
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
     <span style="flex:1"></span>
-    <!-- Workspace selector + management (v4, FE-4) -->
-    <div style="position:relative;display:inline-block;margin-right:6px">
+    <!-- Workspace selector + management -->
+    <!-- Селектор переключает активный workspace. Рядом — «+ Новый» создаёт
+         work/personal/research контекст, «🗂» открывает полный список. -->
+    <div style="position:relative;display:inline-flex;align-items:center;gap:3px;margin-right:6px">
+      <span style="font-size:10px;color:var(--text-tertiary)" title="Активный контекст — влияет на recurring цели, chat и привычки">🗂</span>
       <select id="workspace-select" onchange="workspaceSwitch(this.value)"
-        style="font-size:11px;padding:2px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);max-width:120px"
-        title="Active workspace">
+        style="font-size:11px;padding:2px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);max-width:140px;cursor:pointer"
+        title="Активный workspace. Переключение перезагружает страницу с новым контекстом.">
         <option value="main">main</option>
       </select>
-      <button onclick="workspacesOpen()" class="btn-secondary"
-        style="padding:3px 6px;font-size:11px;margin-left:2px"
-        title="Все workspaces (подробный список)">🗂</button>
       <button onclick="workspaceNewPrompt()" class="btn-secondary"
-        style="padding:3px 6px;font-size:11px;margin-left:2px"
-        title="Новый workspace">+</button>
+        style="padding:3px 8px;font-size:11px;font-weight:500"
+        title="Создать новый workspace (work / personal / research / …)">＋ Новый</button>
+      <button onclick="workspacesOpen()" class="btn-secondary"
+        style="padding:3px 8px;font-size:11px"
+        title="Список всех workspaces — переключение, удаление, nodes-счётчики">Все</button>
     </div>
     <div style="position:relative;display:inline-block">
       <button onclick="graphLoadList()" class="btn-secondary" style="padding:3px 10px;font-size:11px" title="Load saved graph">Load</button>
@@ -473,17 +476,83 @@
       </div>
     </div>
 
-    <!-- Goals modal (🎯) — open/done/abandoned + stats -->
+    <!-- Goals modal (🎯) — цели + привычки + ограничения + архив -->
     <div id="goals-modal" class="weekly-modal" style="display:none" onclick="goalsClose(event)">
       <div class="weekly-content" onclick="event.stopPropagation()">
         <div class="weekly-header">
-          Цели <button class="weekly-close" onclick="goalsClose()">×</button>
+          Цели · Привычки · Ограничения
+          <button class="weekly-close" onclick="goalsClose()">×</button>
         </div>
         <div id="goals-stats" class="weekly-summary"></div>
+
+        <!-- Обычные (oneshot) цели -->
         <div class="weekly-chart-block">
-          <div class="weekly-chart-title">Открытые</div>
+          <div class="weekly-chart-title">Открытые цели</div>
           <div id="goals-open" class="goals-list"></div>
         </div>
+
+        <!-- Recurring — вечные привычки -->
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">
+            Привычки (recurring)
+            <button class="weekly-add-btn"
+              onclick="recurringShowAddForm()"
+              title="Добавить привычку">＋</button>
+          </div>
+          <div id="goals-recurring-form" class="goals-add-form" style="display:none">
+            <input type="text" id="rec-text" placeholder="Что делать регулярно?" maxlength="200">
+            <label>раз
+              <input type="number" id="rec-count" value="3" min="1" max="14" style="width:40px">
+            </label>
+            <label>в
+              <select id="rec-period" style="width:80px">
+                <option value="day" selected>день</option>
+                <option value="week">неделю</option>
+              </select>
+            </label>
+            <select id="rec-category">
+              <option value="">категория</option>
+              <option value="food">🍽 food</option>
+              <option value="work">💼 work</option>
+              <option value="health">🧘 health</option>
+              <option value="social">👥 social</option>
+              <option value="learning">📚 learning</option>
+            </select>
+            <button onclick="recurringSubmit()">добавить</button>
+            <button onclick="recurringHideAddForm()">×</button>
+          </div>
+          <div id="goals-recurring" class="goals-list"></div>
+        </div>
+
+        <!-- Constraints — ограничения -->
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">
+            Ограничения (constraints)
+            <button class="weekly-add-btn"
+              onclick="constraintShowAddForm()"
+              title="Добавить ограничение">＋</button>
+          </div>
+          <div id="goals-constraint-form" class="goals-add-form" style="display:none">
+            <input type="text" id="con-text" placeholder="Чего избегать? (например «не ем сахар»)" maxlength="200">
+            <select id="con-polarity">
+              <option value="avoid">избегать</option>
+              <option value="prefer">предпочитать</option>
+            </select>
+            <select id="con-category">
+              <option value="">категория</option>
+              <option value="food">🍽 food</option>
+              <option value="work">💼 work</option>
+              <option value="health">🧘 health</option>
+              <option value="social">👥 social</option>
+              <option value="learning">📚 learning</option>
+            </select>
+            <button onclick="constraintSubmit()">добавить</button>
+            <button onclick="constraintHideAddForm()">×</button>
+          </div>
+          <div id="goals-constraints" class="goals-list"></div>
+        </div>
+
+        <!-- Архив решённых -->
         <div class="weekly-chart-block">
           <div class="weekly-chart-title">Завершённые / архив решений</div>
           <div id="goals-solved" class="goals-list"></div>
@@ -535,6 +604,10 @@
           <button id="activity-next-btn" class="activity-btn activity-btn-secondary"
                   onclick="activityNextClick()" title="Закрыть текущую и начать новую"
                   style="display:none">↻ Следующая</button>
+          <button id="activity-help-btn" class="activity-btn activity-btn-secondary"
+                  onclick="activityAskHelpClick()"
+                  title="Спросить Baddle про эту задачу"
+                  style="display:none">? Помощь</button>
           <button id="activity-stop-btn" class="activity-btn activity-btn-danger"
                   onclick="activityStopClick()" title="Остановить"
                   style="display:none">⏹</button>
@@ -542,11 +615,11 @@
       </div>
       <div id="activity-templates" class="activity-templates"></div>
       <!-- План дня: запланированные события + recurring habits -->
-      <details id="plan-panel" class="activity-timeline-panel" ontoggle="if(this.open) planRender()">
+      <details id="plan-panel" class="activity-timeline-panel" ontoggle="if(this.open){ planRender(); planLinkRefresh(); }">
         <summary>📋 План дня <span id="plan-badge" class="activity-timeline-badge"></span></summary>
         <div id="plan-list" class="plan-list"></div>
         <div class="plan-add-form">
-          <input type="text" id="plan-name" placeholder="Что запланировать?" maxlength="200">
+          <input type="text" id="plan-name" placeholder="Что запланировать? (событие на сегодня)" maxlength="200">
           <select id="plan-category">
             <option value="">категория</option>
             <option value="food">🍽 food</option>
@@ -556,9 +629,11 @@
             <option value="learning">📚 learning</option>
           </select>
           <input type="time" id="plan-time" placeholder="time" value="09:00">
-          <label class="plan-recurring-toggle" title="Повторять как привычку">
-            <input type="checkbox" id="plan-recurring"> <span>каждый день</span>
-          </label>
+          <!-- Linkup к существующей привычке — опционально. Complete plan
+               автоматом увеличит прогресс linked recurring goal. -->
+          <select id="plan-goal-link" title="Привязать к привычке (опционально)">
+            <option value="">без привычки</option>
+          </select>
           <label class="plan-difficulty" title="Ожидаемая сложность 1-5 (для байесовского surprise)">
             диф
             <select id="plan-difficulty">
@@ -571,6 +646,9 @@
             </select>
           </label>
           <button class="activity-btn activity-btn-primary" onclick="planAddNew()">＋ Добавить</button>
+          <!-- deprecated: plans.recurring=True не создаётся через UI.
+               Для привычек используй 🎯 Цели → Привычки. -->
+          <input type="checkbox" id="plan-recurring" style="display:none">
         </div>
       </details>
       <!-- Timeline дня: горизонтальная лента 0-24h с блоками по категории -->
@@ -626,6 +704,18 @@
 
     <!-- ═══ Sub-page: Chat (messages + input) ═══ -->
     <div class="baddle-sub-page" data-sub-page="chat">
+    <!-- Активная задача: мини-панель, показывается только когда есть active -->
+    <div id="chat-active-task" class="chat-active-task" style="display:none">
+      <span class="chat-active-dot"></span>
+      <span class="chat-active-name">—</span>
+      <span class="chat-active-timer">00:00:00</span>
+      <span class="chat-active-spacer"></span>
+      <button class="chat-active-btn" onclick="activityNextClick()"
+        title="Закрыть текущую и начать новую">↻</button>
+      <button class="chat-active-btn chat-active-btn-stop"
+        onclick="activityStopClick()" title="Остановить">⏹</button>
+    </div>
+
     <!-- Messages area -->
     <div id="assist-messages" class="assist-messages">
       <div class="assist-empty">

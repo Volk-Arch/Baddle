@@ -16,13 +16,20 @@ expected_difficulty (1-5, опционально). Выполнение трек
 Файл: `plans.jsonl` append-only. Events:
 
     {action:"create", id, name, category, ts_start, ts_end?,
-     recurring?:{days:[0..6], time:"HH:MM"}, expected_difficulty, note}
+     recurring?:{days:[0..6], time:"HH:MM"},
+     goal_id?,                       # link к recurring goal (goals_store)
+     expected_difficulty, note}
     {action:"complete", id, actual_ts, actual_difficulty?, note?}
     {action:"skip",     id, reason?, ts}
     {action:"update",   id, fields}
     {action:"delete",   id}
 
 Для recurring: каждое выполнение = complete-event с `for_date` в meta.
+
+Plan ↔ Recurring goal: `goal_id` связывает plan с recurring-целью из
+`goals_store`. При complete plan автоматически вызывается
+`record_instance(goal_id)` → прогресс recurring увеличивается.
+Одно действие в UI — два обновлённых источника истины.
 """
 from __future__ import annotations
 import json
@@ -89,6 +96,7 @@ def _replay() -> dict[str, dict]:
                 "ts_start": e.get("ts_start"),
                 "ts_end": e.get("ts_end"),
                 "recurring": e.get("recurring"),
+                "goal_id": e.get("goal_id"),  # link к recurring goal
                 "expected_difficulty": e.get("expected_difficulty"),
                 "note": e.get("note", ""),
                 "created_at": e.get("ts"),
@@ -116,7 +124,8 @@ def _replay() -> dict[str, dict]:
             elif act == "update":
                 for k, v in (e.get("fields") or {}).items():
                     if k in {"name", "category", "ts_start", "ts_end",
-                            "recurring", "expected_difficulty", "note"}:
+                            "recurring", "goal_id",
+                            "expected_difficulty", "note"}:
                         p[k] = v
             elif act == "delete":
                 p["status"] = "deleted"
@@ -131,9 +140,14 @@ def add_plan(name: str,
              ts_end: Optional[float] = None,
              recurring: Optional[dict] = None,
              expected_difficulty: Optional[int] = None,
-             note: str = "") -> str:
+             note: str = "",
+             goal_id: Optional[str] = None) -> str:
     """Создать plan. Для одноразового события — `ts_start`. Для recurring —
     `recurring={days:[0..6], time:"HH:MM"}` вместо конкретного ts_start.
+
+    `goal_id` — привязка к recurring-цели из goals_store. Если указан,
+    complete plan будет автоматически увеличивать прогресс этой цели
+    через `record_instance`.
     """
     pid = uuid.uuid4().hex[:12]
     if expected_difficulty is not None:
@@ -149,6 +163,7 @@ def add_plan(name: str,
         "ts_start": ts_start,
         "ts_end": ts_end,
         "recurring": recurring,
+        "goal_id": goal_id,
         "expected_difficulty": expected_difficulty,
         "note": (note or "")[:300],
     }
@@ -158,7 +173,7 @@ def add_plan(name: str,
 
 def update_plan(plan_id: str, fields: dict):
     allowed = {"name", "category", "ts_start", "ts_end",
-               "recurring", "expected_difficulty", "note"}
+               "recurring", "goal_id", "expected_difficulty", "note"}
     clean = {k: v for k, v in (fields or {}).items() if k in allowed}
     if not clean:
         return
@@ -173,9 +188,13 @@ def complete_plan(plan_id: str,
                   for_date: Optional[str] = None,
                   actual_ts: Optional[float] = None,
                   actual_difficulty: Optional[int] = None,
-                  note: str = ""):
+                  note: str = "") -> Optional[dict]:
     """Отметить выполнение. Для recurring `for_date` = YYYY-MM-DD
     (день на который выполнено). Для одноразового — можно пропустить.
+
+    Если у plan есть `goal_id` — auto-увеличивает прогресс linked
+    recurring-цели через `record_instance`. Возвращает dict с полями
+    `linked_goal` (если сработала связь) для UI feedback.
     """
     if actual_difficulty is not None:
         try:
@@ -190,6 +209,29 @@ def complete_plan(plan_id: str,
         "actual_difficulty": actual_difficulty,
         "note": (note or "")[:200],
     })
+    # Link → recurring goal
+    p = get_plan(plan_id)
+    if not p or not p.get("goal_id"):
+        return {"linked_goal": None}
+    gid = p["goal_id"]
+    try:
+        from .goals_store import record_instance, get_goal
+        from .recurring import get_progress
+        goal = get_goal(gid)
+        if goal and goal.get("kind") == "recurring" and goal.get("status") == "open":
+            record_instance(gid, note=f"plan: {p.get('name','')}")
+            log.info(f"[plans→goal] plan {plan_id} complete → "
+                     f"instance on recurring '{goal.get('text','')[:40]}'")
+            return {
+                "linked_goal": {
+                    "goal_id": gid,
+                    "goal_text": goal.get("text", ""),
+                    "progress": get_progress(gid),
+                },
+            }
+    except Exception as e:
+        log.debug(f"[plans→goal] link propagation failed: {e}")
+    return {"linked_goal": None}
 
 
 def skip_plan(plan_id: str, for_date: Optional[str] = None, reason: str = ""):

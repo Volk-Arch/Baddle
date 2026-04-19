@@ -149,6 +149,17 @@ class CognitiveLoop:
     PLAN_REMINDER_MINUTES = 10        # за сколько минут до события пушить
     PLAN_REMINDER_CHECK_INTERVAL = 60 # раз в минуту проверяем upcoming
 
+    # Recurring goals lag: для «вечных» целей (kind=recurring) проверяем
+    # отставание от расписания (expected_by_now vs done_today).
+    RECURRING_LAG_CHECK_INTERVAL = 30 * 60   # каждые 30 мин
+    RECURRING_LAG_MIN = 1                    # alert когда отстаём ≥1 instance
+
+    # Observation suggestions: раз в сутки собираем draft-карточки из
+    # patterns / checkins / stress-зон. Юзер видит в alerts, может
+    # подтвердить создание recurring/constraint или отклонить.
+    SUGGESTIONS_CHECK_INTERVAL = 24 * 3600   # раз в сутки
+    SUGGESTIONS_MAX_PER_DAY = 2              # не спамить карточками
+
     # Evening retrospective: раз в сутки поздним вечером
     EVENING_RETRO_HOUR_OFFSET = 14    # wake_hour + 14h = typical 21:00
 
@@ -198,6 +209,9 @@ class CognitiveLoop:
         self._last_dmn_deep = 0.0  # таймер DMN autonomous deep-research
         self._last_dmn_converge = 0.0  # таймер server-side tick-autorun до STABLE
         self._last_dmn_cross = 0.0  # таймер cross-graph bridge scan
+        self._last_recurring_check = 0.0  # таймер recurring lag check
+        self._notified_lag: dict[str, float] = {}  # goal_id → ts последнего alert
+        self._last_suggestions_check = 0.0  # таймер observation suggestions
         # Persist overnight findings отдельно от alerts_queue — UI drain'ит очередь
         # быстрее чем briefing её читает. Briefing читает recent_bridges напрямую.
         self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
@@ -320,6 +334,8 @@ class CognitiveLoop:
                 self._check_plan_reminders()
                 self._check_evening_retro()
                 self._check_heartbeat()
+                self._check_recurring_lag()
+                self._check_observation_suggestions()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -1832,6 +1848,91 @@ class CognitiveLoop:
                 log.info(f"[cognitive_loop] plan_reminder: {it.get('name')} in {mins_left}min")
         except Exception as e:
             log.debug(f"[cognitive_loop] plan reminder failed: {e}")
+
+    def _check_recurring_lag(self):
+        """Recurring-цели с отставанием — push alert.
+
+        Для каждой recurring-цели у которой `lag ≥ RECURRING_LAG_MIN`,
+        отдаём alert. Dedup через `_notified_lag[goal_id]` — один alert
+        на goal за RECURRING_LAG_CHECK_INTERVAL, чтобы не спамить.
+        """
+        if not self._throttled("_last_recurring_check",
+                                self.RECURRING_LAG_CHECK_INTERVAL):
+            return
+        try:
+            from .recurring import list_lagging
+        except Exception:
+            return
+        try:
+            lagging = list_lagging(min_lag=self.RECURRING_LAG_MIN)
+        except Exception as e:
+            log.debug(f"[cognitive_loop] lag check failed: {e}")
+            return
+        if not lagging:
+            return
+        now = time.time()
+        for p in lagging:
+            gid = p.get("goal_id") or ""
+            # Dedup: не шлём чаще чем раз в 2×interval
+            last = self._notified_lag.get(gid, 0.0)
+            if now - last < self.RECURRING_LAG_CHECK_INTERVAL * 2:
+                continue
+            self._notified_lag[gid] = now
+            lag = p.get("lag", 0)
+            done = p.get("done_today", 0)
+            tpd = p.get("times_per_day", 0)
+            text = (f"⏰ «{p.get('text','')}» — отставание {lag} "
+                    f"(сегодня {done}/{tpd}). Напомню через 30 мин если не отметишь.")
+            self._add_alert({
+                "type": "recurring_lag",
+                "severity": "info",
+                "text": text,
+                "text_en": (f"«{p.get('text','')}» lagging {lag} ({done}/{tpd} today)."),
+                "goal_id": gid,
+                "lag": lag,
+                "done_today": done,
+                "times_per_day": tpd,
+            })
+            log.info(f"[cognitive_loop] recurring_lag alert: {p.get('text','')[:40]} "
+                     f"lag={lag}")
+
+    def _check_observation_suggestions(self):
+        """Раз в сутки: собрать draft-карточки из patterns / checkins /
+        stress-зон → положить в alerts. Юзер видит их в chat как
+        `intent_confirm` карточки с кнопками Да/Изменить/Нет.
+        """
+        if not self._throttled("_last_suggestions_check",
+                                self.SUGGESTIONS_CHECK_INTERVAL):
+            return
+        try:
+            from .suggestions import collect_suggestions, make_suggestion_card
+        except Exception as e:
+            log.debug(f"[cognitive_loop] suggestions import failed: {e}")
+            return
+        try:
+            items = collect_suggestions(lang="ru")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] collect_suggestions failed: {e}")
+            return
+        if not items:
+            return
+        # Ограничиваем количество карточек в день
+        for item in items[:self.SUGGESTIONS_MAX_PER_DAY]:
+            try:
+                card = make_suggestion_card(item, lang="ru")
+                trigger = (item.get("trigger") or {}).get("type", "")
+                self._add_alert({
+                    "type": "observation_suggestion",
+                    "severity": "info",
+                    "text": f"💡 {card.get('title', 'Предложение')}",
+                    "text_en": card.get("title", "Suggestion"),
+                    "card": card,       # UI рендерит через card.type=intent_confirm
+                    "source": trigger,
+                })
+                log.info(f"[cognitive_loop] suggestion: {trigger} → "
+                         f"{(item.get('draft') or {}).get('text','')[:60]}")
+            except Exception as e:
+                log.debug(f"[cognitive_loop] suggestion card build failed: {e}")
 
     def _check_evening_retro(self):
         """Вечернее ретро — раз в день, после wake_hour + 14h.

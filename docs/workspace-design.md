@@ -1,17 +1,19 @@
-# Multi-graph Workspaces (v4)
+# Multi-graph Workspaces
 
-> Несколько параллельных графов, переключение через UI, cross-graph bridges
-> via DMN, meta-graph как derived view. Реализовано в `src/workspace.py`.
+> Несколько параллельных графов + привычек + ограничений, переключение
+> через UI, cross-graph bridges via DMN, meta-graph как derived view.
+> Реализовано в `src/workspace.py`.
 
 ## Зачем
 
-Один граф в `_graph` = одна область размышления. Юзер может захотеть:
+Один граф = одна область размышления. Юзер может захотеть:
 - Разделить work / personal / hobby графы
 - Держать long-running исследование рядом с ad-hoc задачами
 - Найти **неожиданные связи** между разными контекстами (cross-graph edges)
+- Чтобы «стендап» в work не путался с «йога» в personal
 
 Нейрохимия **общая** (один человек — один `CognitiveState` singleton). Меняется
-только контент + его state-граф.
+контент + его state-граф + **scope recurring/constraint целей** (см. ниже).
 
 ## Layout на диске
 
@@ -60,6 +62,88 @@ wm.meta_graph()             # derived view: graph-of-graphs
 
 Нейрохимия и CognitiveState **не сбрасываются** при switch — это continuity
 с человеком, не с графом.
+
+---
+
+## Workspace scoping для целей/привычек/ограничений
+
+После введения intent_router (→ [closure-architecture.md](closure-architecture.md))
+**recurring / constraint / oneshot goals** привязаны к workspace через поле
+`workspace` в `goals.jsonl` create-event'е. Правила scope'а:
+
+| Ситуация | Что видно |
+|----------|-----------|
+| `/assist` в work, ищем recurring-match | Цели с `workspace="work"` + цели без workspace поля (global) |
+| `build_active_context_summary(workspace="work")` в LLM prompt | То же — только work + global |
+| `scan_message_for_violations(workspace="work")` | Constraints work + global |
+| `/activity/start` в work | Матчит recurring/constraints work + global |
+| `find_similar_solved(query)` | **Не scoped** — RAG смотрит все архивы (семантика cross-context полезна) |
+
+**Global цели** — это цели у которых `workspace=None` в create-event. Такие
+цели видны из всех воркспейсов. Используется для базовых привычек («пить
+воду 4 раза в день») которые не зависят от контекста работы.
+
+**Как создать global recurring:** сейчас через UI цели создаются в активном
+workspace. Чтобы сделать global — редактировать `goals.jsonl` напрямую
+(удалить `workspace` ключ) или через `/goals/update` с явным `workspace=null`.
+
+---
+
+## Solved archive per-workspace
+
+Когда tick эмитит `action=stable, reason=GOAL REACHED`, `archive_solved()`
+пишет snapshot в `graphs/<workspace>/solved/{snapshot_ref}.json`.
+Поэтому архив цели всегда живёт **рядом со своим графом**.
+
+`find_similar_solved(query_text)` (RAG в `/assist`) читает все архивы из
+всех workspaces — даёт cross-context continuity («ты это решал в personal
+2 недели назад»).
+
+---
+
+## User flow: практический workflow
+
+Базовое использование Baddle → один `main`. Создавать дополнительные
+workspace'ы стоит если есть чёткая **граница контекстов**.
+
+### Когда делить
+
+✅ **Разумно:**
+- `work` + `personal` — разные домены решений
+- `research_<topic>` — временный длинный проект с деталями
+- `health_tracking` — long-term sensor data отдельно
+
+❌ **Не стоит:**
+- Каждая мелкая задача — один workspace. Цель workspace — **контекст**, не
+  tag. Используй category / priority вместо этого.
+- Разделять по дням или неделям — для этого есть plans + recurring goals.
+
+### Типичный сценарий
+
+1. **Создать workspace:** Header → 🗂 → `+` → ввести id (`work`) и title
+2. **Переключиться:** клик по workspace в списке → `window.location.reload()`
+3. **Создавать цели в этом контексте:**
+   - «стендап ежедневно» (recurring, ws=work)
+   - «не работать после 23» (constraint, ws=work)
+4. **Переключиться в personal:**
+   - В chat написать «сделал стендап» → router проверит recurring в
+     personal + global, **не найдёт** → классифицирует как `thought`
+   - То же сообщение в work → match к «стендап ежедневно» → instance +1
+5. **Cross-graph bridges:** DMN раз в час сканит пары workspaces,
+   находит связи. Alert `🔗 Cross-graph мост: work ↔ personal` если
+   нашёл близкие по смыслу ноды.
+
+### Когда сообщение универсальное
+
+«Пить воду» — не work, не personal. Две опции:
+- **Global цель**: одна recurring, видна в обоих контекстах (трекается
+  независимо от workspace)
+- **Дубль**: одна в work, одна в personal — разные счётчики (редко
+  имеет смысл)
+
+По умолчанию цели **per-workspace**. Для global — явный выбор через API.
+
+---
 
 ## Cross-graph edges (serendipity engine)
 
