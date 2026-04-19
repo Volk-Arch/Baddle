@@ -108,6 +108,7 @@ Foundation пропусти (пара абзацев). Основное врем
 27. **[storage-layout.md](storage-layout.md)** *(10 мин)* — где что лежит на диске: `data/` vs `graphs/<ws>/` vs `workspaces/`, data flow, reset.
 28. **[closure-architecture.md](closure-architecture.md)** *(20 мин)* — как замкнуты все инструменты: intent router, recurring/constraints, plan↔goal link, observation→suggestion, RAG поверх solved archive.
 29. **[ui-split-plan.md](ui-split-plan.md)** *(10 мин)* — план разделения Baddle (daily assistant) и Graph Lab (dev/research) UI. Future work, не блокер.
+30. **[article_ai_view.md](article_ai_view.md)** *(12 мин)* — статья от лица AI, наблюдавшего сборку: что удивило, что работает, что беспокоит в архитектуре. Для Habr.
 
 **После этой главы ты знаешь:** *как* Baddle находит связи и *как* всё собрано в единую систему.
 
