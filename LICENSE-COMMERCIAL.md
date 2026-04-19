@@ -59,7 +59,6 @@ developer, company, rebrand/resell, etc.).
 - Private repository access for download (time-limited)
 - Documentation (`docs/`)
 - Install scripts and presets
-- License key file (`LICENSE_KEY.txt`) — optional local verification
 
 ---
 
@@ -108,7 +107,7 @@ preferences. Contact for details.
 
 1. Contact `kriusovia@gmail.com` with use case and scale.
 2. Receive a quote and payment instructions.
-3. After payment — access to the private repository + `LICENSE_KEY.txt`.
+3. After payment — access to the private repository.
 
 ---
 
