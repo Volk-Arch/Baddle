@@ -74,12 +74,60 @@
         <input id="settings-ctx" type="number" value="32768" class="modal-input" style="width:100px;padding:4px 8px;font-size:12px">
       </div>
 
+      <!-- Neural defaults — общие для baddle chat, DMN, graph tab -->
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <label class="modal-label" style="margin-bottom:6px" title="Общие neural-параметры для baddle chat, DMN, graph tab. Раньше жили только в graph tab.">
+          Neural defaults
+        </label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Temperature (0.1-1.5)</label>
+            <input id="settings-neural-temp" type="number" step="0.05" min="0.1" max="1.5" value="0.7" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Top-K</label>
+            <input id="settings-neural-topk" type="number" step="1" min="1" max="200" value="40" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Distinct threshold (0.5-1.0)</label>
+            <input id="settings-neural-threshold" type="number" step="0.01" min="0.5" max="1.0" value="0.91" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Novelty gate (0-1)</label>
+            <input id="settings-neural-novelty" type="number" step="0.01" min="0" max="1" value="0.85" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px" title="Max tokens per LLM call. 3000+ даёт неограниченный ответ для любого режима.">Max tokens (3000+)</label>
+            <input id="settings-neural-maxtok" type="number" step="500" min="500" max="16000" value="3000" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Seed (-1 = random)</label>
+            <input id="settings-neural-seed" type="number" step="1" value="-1" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+        </div>
+      </div>
+
       <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
         <label class="modal-label" style="margin-bottom:6px">Experimental</label>
         <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
           title="Update hypothesis confidence via Bayesian formula when auto-evidence is created during Elaborate/Expand. Off = confidence only changes via Smart DC (Verify).">
           <input id="settings-live-bayes" type="checkbox"> Live Bayesian update on auto-evidence
         </label>
+      </div>
+
+      <!-- Danger zone: полная очистка runtime данных -->
+      <div style="border-top:1px solid #7a1818;margin-top:12px;padding-top:12px">
+        <label class="modal-label" style="margin-bottom:6px;color:#d88">Danger zone</label>
+        <p style="color:var(--text-tertiary);font-size:11px;margin:0 0 8px 0;line-height:1.4">
+          Удалит все графы, state_graph, user_state, goals, profile, solved
+          archive. Settings, roles и templates сохранятся.
+        </p>
+        <button onclick="resetAllData()"
+          style="background:#5a0f0f;color:#fff;border:1px solid #7a1818;padding:6px 12px;
+                 font-size:12px;border-radius:4px;cursor:pointer">
+          🗑 Reset all user data
+        </button>
+        <span id="settings-reset-status" style="margin-left:10px;color:var(--text-tertiary);font-size:11px"></span>
       </div>
 
       <div style="margin-top:12px">
@@ -95,11 +143,30 @@
 
   <!-- Mode tabs + Load + Lang -->
   <div class="tab-bar flex items-center" style="margin:0 -12px;padding:0 12px;">
+    <button id="tab-assist"  onclick="setMode('assist')"
+      class="tab-active px-4 py-2 text-sm">baddle</button>
     <button id="tab-graph"   onclick="setMode('graph')"
-      class="tab-active px-4 py-2 text-sm">graph</button>
+      class="tab-inactive px-4 py-2 text-sm">graph</button>
     <button id="tab-chat"    onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
     <span style="flex:1"></span>
+    <!-- Workspace selector + management -->
+    <!-- Селектор переключает активный workspace. Рядом — «+ Новый» создаёт
+         work/personal/research контекст, «🗂» открывает полный список. -->
+    <div style="position:relative;display:inline-flex;align-items:center;gap:3px;margin-right:6px">
+      <span style="font-size:10px;color:var(--text-tertiary)" title="Активный контекст — влияет на recurring цели, chat и привычки">🗂</span>
+      <select id="workspace-select" onchange="workspaceSwitch(this.value)"
+        style="font-size:11px;padding:2px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);max-width:140px;cursor:pointer"
+        title="Активный workspace. Переключение перезагружает страницу с новым контекстом.">
+        <option value="main">main</option>
+      </select>
+      <button onclick="workspaceNewPrompt()" class="btn-secondary"
+        style="padding:3px 8px;font-size:11px;font-weight:500"
+        title="Создать новый workspace (work / personal / research / …)">＋ Новый</button>
+      <button onclick="workspacesOpen()" class="btn-secondary"
+        style="padding:3px 8px;font-size:11px"
+        title="Список всех workspaces — переключение, удаление, nodes-счётчики">Все</button>
+    </div>
     <div style="position:relative;display:inline-block">
       <button onclick="graphLoadList()" class="btn-secondary" style="padding:3px 10px;font-size:11px" title="Load saved graph">Load</button>
       <div id="graph-load-panel-top" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px;z-index:50;min-width:320px;max-width:450px;max-height:350px;overflow-y:auto;box-shadow:var(--shadow-lg)"></div>
@@ -111,8 +178,598 @@
     </select>
   </div>
 
-  <!-- ══ GRAPH mode ══ (first, visible by default) -->
-  <div id="cfg-graph">
+  <!-- ══ ASSISTANT mode ══ (default, mockup-styled) -->
+  <div id="cfg-assist" class="assist-root">
+    <!-- Header: brand + HRV chart + energy (daily + reserve side-by-side) + HRV btn -->
+    <div class="assist-header">
+      <div class="assist-brand">
+        <div class="assist-logo">B</div>
+        <div>
+          <div class="assist-brand-name">Baddle</div>
+          <div id="assist-hrv-status" class="assist-brand-status">HRV off</div>
+          <div id="assist-lm-status" class="assist-lm-status" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="assist-hrv-chart" id="assist-hrv-chart" aria-hidden="true"></div>
+
+      <!-- Energy: daily и резерв рядом, каждый со своим баром -->
+      <div class="assist-energy-grid">
+        <div class="assist-energy-cell" title="Daily energy: сбрасывается за ночь">
+          <div class="assist-energy-values">
+            <span id="assist-energy-value" class="assist-energy-big">100</span>
+            <span id="assist-energy-max" class="assist-energy-max">/100</span>
+          </div>
+          <div class="assist-energy-bar-bg">
+            <div id="assist-energy-bar" class="assist-energy-bar"></div>
+          </div>
+          <div class="assist-energy-label">daily</div>
+        </div>
+        <div class="assist-energy-cell" title="Долгий резерв: общий пул, не сбрасывается (0-2000)">
+          <div class="assist-energy-values">
+            <span id="assist-reserve-big" class="assist-energy-big assist-reserve-big">75</span>
+            <span class="assist-energy-max">%</span>
+          </div>
+          <div class="assist-energy-bar-bg">
+            <div id="assist-reserve-bar" class="assist-reserve-bar"></div>
+          </div>
+          <div class="assist-energy-label">
+            резерв <span id="assist-reserve-value" class="assist-reserve-abs">—</span>
+          </div>
+        </div>
+      </div>
+
+      <button onclick="assistHRVToggle('simulator')" class="assist-hrv-btn" title="Старт/стоп HRV симулятора">Start HRV</button>
+    </div>
+
+    <!-- ═══ Sub-page: Dashboard (состояние системы + нейрохимия) ═══ -->
+    <div class="baddle-sub-page" data-sub-page="dashboard" style="display:none">
+
+    <!-- Live status strip: главное одной лентой -->
+    <div class="dash-status-strip">
+      <div class="dash-stat" title="Симбиоз: близость ТЫ↔BADDLE в 4D нейро-пространстве. Прайм-директива.">
+        <div class="dash-stat-label">Симбиоз</div>
+        <div class="dash-stat-value" id="dash-sync-regime">—</div>
+        <div class="dash-stat-sub" id="dash-sync-error">sync —</div>
+      </div>
+      <div class="dash-stat" title="Voronoi регион юзера — куда тебя кладёт 2D пространство activity × stability">
+        <div class="dash-stat-label">Твоё состояние</div>
+        <div class="dash-stat-value" id="dash-named">—</div>
+        <div class="dash-stat-sub" id="dash-named-advice">—</div>
+      </div>
+      <div class="dash-stat" title="Horizon state — когнитивный режим системы">
+        <div class="dash-stat-label">Режим системы</div>
+        <div class="dash-stat-value" id="dash-horizon">—</div>
+        <div class="dash-stat-sub" id="dash-origin">—</div>
+      </div>
+      <div class="dash-stat" title="Фоновый heartbeat + DMN: автономная работа когда юзер idle">
+        <div class="dash-stat-label">Фон</div>
+        <div class="dash-stat-value" id="dash-background">…</div>
+        <div class="dash-stat-sub" id="dash-dmn">—</div>
+      </div>
+    </div>
+
+    <!-- Toolbar: иконки + подписи, горизонтальная полоса -->
+    <div class="dash-toolbar">
+      <button onclick="openCheckin()" id="checkin-btn" class="dash-action" title="Daily check-in — ручной ввод energy/focus/stress + expected/reality">
+        <span class="dash-action-icon">📝</span><span class="dash-action-label">Check-in</span>
+      </button>
+      <button onclick="assistToggleSparkline()" id="neuro-spark-btn" class="dash-action" title="История нейрохимии — 30 последних тиков">
+        <span class="dash-action-icon">📈</span><span class="dash-action-label">Sparkline</span>
+      </button>
+      <button onclick="assistToggleSyncDash()" id="neuro-sync-btn" class="dash-action" title="Sync-dashboard — график sync_error + топ ошибки">
+        <span class="dash-action-icon">📊</span><span class="dash-action-label">Sync-график</span>
+      </button>
+      <button onclick="assistToggleTimeline()" id="neuro-timeline-btn" class="dash-action" title="Хронология — последние 20 action'ов системы">
+        <span class="dash-action-icon">⏱</span><span class="dash-action-label">Timeline</span>
+      </button>
+      <button onclick="assistWeeklyReview()" id="neuro-weekly-btn" class="dash-action" title="Weekly review — графики за неделю">
+        <span class="dash-action-icon">📆</span><span class="dash-action-label">Weekly</span>
+      </button>
+      <button onclick="assistToggleCamera()" id="neuro-camera-btn" class="dash-action" title="Камера / медитация — без LLM, distinct только на существующих нодах">
+        <span class="dash-action-icon">📷</span><span class="dash-action-label">Камера</span>
+      </button>
+      <span id="neuro-camera" class="neuro-camera-badge" style="display:none" title="Camera: сенсорная депривация, без LLM">📷 медитация</span>
+    </div>
+
+    <!-- Symbiosis panel: USER ↕ BADDLE с explicit labels на каждый bar -->
+    <div id="assist-neurochem" class="assist-neurochem assist-neurochem-labeled">
+      <!-- ═ ТЫ side ═ -->
+      <div class="neuro-side-card neuro-user-card" title="Твоё состояние: питается HRV, таймингами, feedback'ом">
+        <div class="neuro-side-header">
+          <span class="neuro-side-title">🧍 ТЫ</span>
+          <div class="neuro-side-chips">
+            <span id="neuro-user-named" class="neuro-named-badge clickable-chip" onclick="chipInfoNamedState(this)" title="Named state (Voronoi) — клик для списка всех регионов">😐 нейтральное</span>
+            <span id="neuro-activity-zone" class="neuro-zone-badge clickable-chip" style="display:none" onclick="chipInfoActivityZone(this)" title="Activity zone — клик для 4 зон"></span>
+          </div>
+        </div>
+        <div class="neuro-labeled-bars">
+          <div class="neuro-lbar" title="Интерес: скорость вовлечения + принятые ответы. Высокий → в потоке новизны">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Интерес</span>
+              <span class="neuro-lbar-tech">DA · dopamine</span>
+              <span id="user-da-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track"><div id="user-da-fill" class="neuro-fill" style="background:#10b981"></div></div>
+          </div>
+          <div class="neuro-lbar" title="Стабильность: HRV coherence + постоянство длины сообщений">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Стабильность</span>
+              <span class="neuro-lbar-tech">S · serotonin</span>
+              <span id="user-s-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track"><div id="user-s-fill" class="neuro-fill" style="background:#a78bfa"></div></div>
+          </div>
+          <div class="neuro-lbar" title="Напряжение: HRV stress-level">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Напряжение</span>
+              <span class="neuro-lbar-tech">NE · norepinephrine</span>
+              <span id="user-ne-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track"><div id="user-ne-fill" class="neuro-fill" style="background:#f59e0b"></div></div>
+          </div>
+          <div class="neuro-lbar" title="Усталость: decisions_today + накопленные rejects. Высокий → нужна пауза">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Усталость</span>
+              <span class="neuro-lbar-tech">B · burnout</span>
+              <span id="user-burn-val" class="neuro-lbar-val">0.00</span>
+            </div>
+            <div class="neuro-track"><div id="user-burn-fill" class="neuro-fill" style="background:#ef4444"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sync divider между ТЫ и BADDLE -->
+      <div class="sync-divider" title="‖user − system‖ в 4-мерном пространстве нейрохимии — прайм-директива">
+        <span class="sync-icon">⚡</span>
+        <span id="sync-regime" class="sync-regime">FLOW</span>
+        <span id="sync-error" class="sync-error">sync 100%</span>
+      </div>
+
+      <!-- ═ BADDLE side ═ -->
+      <div class="neuro-side-card neuro-system-card" title="Baddle-сторона: питается динамикой графа (distinct-matrix в tick'ах)">
+        <div class="neuro-side-header">
+          <span class="neuro-side-title">🤖 BADDLE</span>
+          <div class="neuro-side-chips">
+            <span id="neuro-mode" class="neuro-mode-badge clickable-chip" onclick="chipInfoHorizonState(this)" title="Horizon state + 14 thinking modes — клик для списка">исследует</span>
+            <span id="neuro-origin" class="neuro-origin-badge clickable-chip" onclick="chipInfoOrigin(this)" title="State origin — клик для списка">◌ покой</span>
+            <span id="neuro-action" class="neuro-action-badge" title="Последнее действие системы" style="display:none">—</span>
+          </div>
+        </div>
+        <div class="neuro-labeled-bars">
+          <div class="neuro-lbar" title="Дофамин — реакция на новизну, EMA от d в tick'е">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Новизна</span>
+              <span class="neuro-lbar-tech">DA · dopamine</span>
+              <span id="neuro-da-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track">
+              <div id="neuro-da-fill" class="neuro-fill" style="background:#10b981"></div>
+              <div id="neuro-da-phasic" class="neuro-phasic" style="display:none">▲</div>
+            </div>
+          </div>
+          <div class="neuro-lbar" title="Серотонин — стабильность весов, уверенность в приорах">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Уверенность</span>
+              <span class="neuro-lbar-tech">S · serotonin</span>
+              <span id="neuro-s-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track"><div id="neuro-s-fill" class="neuro-fill" style="background:#a78bfa"></div></div>
+          </div>
+          <div class="neuro-lbar" title="Норадреналин — энтропия распределения весов">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Активность</span>
+              <span class="neuro-lbar-tech">NE · norepinephrine</span>
+              <span id="neuro-ne-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track"><div id="neuro-ne-fill" class="neuro-fill" style="background:#f59e0b"></div></div>
+          </div>
+          <div class="neuro-lbar" title="Burnout — защитный режим при хроническом конфликте (много rejects)">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Перегрев</span>
+              <span class="neuro-lbar-tech">B · burnout</span>
+              <span id="neuro-burn-val" class="neuro-lbar-val">0.00</span>
+            </div>
+            <div class="neuro-track"><div id="neuro-burn-fill" class="neuro-fill" style="background:#ef4444"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sparklines: dopamine/serotonin/NE/burnout over last 30 ticks -->
+      <div id="neuro-sparklines" class="neuro-sparklines" style="display:none">
+        <div class="neuro-sparkline-title">История нейрохимии · последние 30 тиков</div>
+        <svg id="neuro-sparkline-svg" viewBox="0 0 240 40" preserveAspectRatio="none"></svg>
+      </div>
+
+      <!-- Sync-dashboard: график sync_error + top rejected modes -->
+      <div id="sync-dashboard" class="sync-dashboard" style="display:none">
+        <div class="dash-header">Sync dashboard <span id="sync-dash-count" class="dash-count"></span></div>
+        <svg id="sync-dash-svg" viewBox="0 0 360 80" preserveAspectRatio="none"></svg>
+        <div class="dash-subhead">Топ режимов с rejects</div>
+        <div id="sync-dash-top" class="dash-top"></div>
+      </div>
+      <!-- State-graph timeline (hidden by default, toggle with button) -->
+      <div id="neuro-timeline" class="neuro-timeline" style="display:none">
+        <div class="neuro-timeline-header">
+          Timeline · последние <span id="neuro-timeline-count">0</span> action'ов
+        </div>
+        <div id="neuro-timeline-list" class="neuro-timeline-list"></div>
+      </div>
+    </div>
+    </div>
+    <!-- ═══ /Sub-page: Dashboard ═══ -->
+
+    <!-- Profile modal (👤) — preferences + constraints per category -->
+    <div id="profile-modal" class="weekly-modal" style="display:none" onclick="profileClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Профиль <button class="weekly-close" onclick="profileClose()">×</button>
+        </div>
+        <div class="weekly-summary">
+          Preferences и constraints по категориям. Система подтягивает их
+          в LLM-промпты когда видит релевантную тему.
+        </div>
+        <div id="profile-body"></div>
+      </div>
+    </div>
+
+    <!-- Workspaces management modal — список всех графов -->
+    <div id="workspaces-modal" class="weekly-modal" style="display:none" onclick="workspacesClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Мои графы <button class="weekly-close" onclick="workspacesClose()">×</button>
+        </div>
+        <div class="weekly-summary" style="font-size:12px;color:#a1a1aa">
+          Каждый workspace — отдельный граф с нодами, embeddings и state_graph.
+          Клик по строке = переключиться и открыть в graph-табе.
+        </div>
+        <div id="workspaces-list" class="workspaces-list"></div>
+        <div class="baddle-quick-actions" style="margin-top:12px">
+          <button class="activity-btn activity-btn-primary" onclick="workspaceNewPrompt()">＋ Новый workspace</button>
+          <button class="activity-btn" onclick="workspacesOpen()">Обновить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Check-in modal (📝) — ручной ввод subjective-сигналов без HRV -->
+    <div id="checkin-modal" class="weekly-modal" style="display:none" onclick="closeCheckin(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Check-in <button class="weekly-close" onclick="closeCheckin()">×</button>
+        </div>
+        <div class="weekly-summary" style="font-size:12px;color:#a1a1aa">
+          Как ты сейчас? Эти значения кормят UserState вместо HRV, когда трекера нет.
+        </div>
+        <div class="checkin-sliders">
+          <label>
+            <span>Энергия <span id="checkin-energy-val">60</span></span>
+            <input id="checkin-energy" type="range" min="0" max="100" value="60" oninput="document.getElementById('checkin-energy-val').textContent = this.value">
+          </label>
+          <label>
+            <span>Фокус / ясность <span id="checkin-focus-val">60</span></span>
+            <input id="checkin-focus" type="range" min="0" max="100" value="60" oninput="document.getElementById('checkin-focus-val').textContent = this.value">
+          </label>
+          <label>
+            <span>Стресс / напряжение <span id="checkin-stress-val">40</span></span>
+            <input id="checkin-stress" type="range" min="0" max="100" value="40" oninput="document.getElementById('checkin-stress-val').textContent = this.value">
+          </label>
+          <div class="weekly-chart-title" style="margin-top:12px">Ожидание vs реальность</div>
+          <label>
+            <span>Как ожидал что пойдёт день <span id="checkin-expected-val">0</span></span>
+            <input id="checkin-expected" type="range" min="-2" max="2" step="1" value="0" oninput="document.getElementById('checkin-expected-val').textContent = this.value">
+            <small>−2 плохо · 0 нейтрально · +2 отлично</small>
+          </label>
+          <label>
+            <span>Как пошло на самом деле <span id="checkin-reality-val">0</span></span>
+            <input id="checkin-reality" type="range" min="-2" max="2" step="1" value="0" oninput="document.getElementById('checkin-reality-val').textContent = this.value">
+          </label>
+          <label>
+            <span>Заметка (опционально)</span>
+            <textarea id="checkin-note" rows="2" maxlength="300" placeholder="Что повлияло? Какой контекст?"></textarea>
+          </label>
+        </div>
+        <div class="checkin-history" id="checkin-history"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+          <button class="btn-secondary" onclick="closeCheckin()">Отмена</button>
+          <button class="btn-primary" onclick="saveCheckin()">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Goals modal (🎯) — цели + привычки + ограничения + архив -->
+    <div id="goals-modal" class="weekly-modal" style="display:none" onclick="goalsClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Цели · Привычки · Ограничения
+          <button class="weekly-close" onclick="goalsClose()">×</button>
+        </div>
+        <div id="goals-stats" class="weekly-summary"></div>
+
+        <!-- Обычные (oneshot) цели -->
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Открытые цели</div>
+          <div id="goals-open" class="goals-list"></div>
+        </div>
+
+        <!-- Recurring — вечные привычки -->
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">
+            Привычки (recurring)
+            <button class="weekly-add-btn"
+              onclick="recurringShowAddForm()"
+              title="Добавить привычку">＋</button>
+          </div>
+          <div id="goals-recurring-form" class="goals-add-form" style="display:none">
+            <input type="text" id="rec-text" placeholder="Что делать регулярно?" maxlength="200">
+            <label>раз
+              <input type="number" id="rec-count" value="3" min="1" max="14" style="width:40px">
+            </label>
+            <label>в
+              <select id="rec-period" style="width:80px">
+                <option value="day" selected>день</option>
+                <option value="week">неделю</option>
+              </select>
+            </label>
+            <select id="rec-category">
+              <option value="">категория</option>
+              <option value="food">🍽 food</option>
+              <option value="work">💼 work</option>
+              <option value="health">🧘 health</option>
+              <option value="social">👥 social</option>
+              <option value="learning">📚 learning</option>
+            </select>
+            <button onclick="recurringSubmit()">добавить</button>
+            <button onclick="recurringHideAddForm()">×</button>
+          </div>
+          <div id="goals-recurring" class="goals-list"></div>
+        </div>
+
+        <!-- Constraints — ограничения -->
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">
+            Ограничения (constraints)
+            <button class="weekly-add-btn"
+              onclick="constraintShowAddForm()"
+              title="Добавить ограничение">＋</button>
+          </div>
+          <div id="goals-constraint-form" class="goals-add-form" style="display:none">
+            <input type="text" id="con-text" placeholder="Чего избегать? (например «не ем сахар»)" maxlength="200">
+            <select id="con-polarity">
+              <option value="avoid">избегать</option>
+              <option value="prefer">предпочитать</option>
+            </select>
+            <select id="con-category">
+              <option value="">категория</option>
+              <option value="food">🍽 food</option>
+              <option value="work">💼 work</option>
+              <option value="health">🧘 health</option>
+              <option value="social">👥 social</option>
+              <option value="learning">📚 learning</option>
+            </select>
+            <button onclick="constraintSubmit()">добавить</button>
+            <button onclick="constraintHideAddForm()">×</button>
+          </div>
+          <div id="goals-constraints" class="goals-list"></div>
+        </div>
+
+        <!-- Архив решённых -->
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Завершённые / архив решений</div>
+          <div id="goals-solved" class="goals-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Weekly review modal (открывается по клику 📆) -->
+    <div id="weekly-modal" class="weekly-modal" style="display:none" onclick="assistCloseWeekly(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()">
+        <div class="weekly-header">
+          Weekly review
+          <button class="weekly-close" onclick="assistCloseWeekly()">×</button>
+        </div>
+        <div id="weekly-summary" class="weekly-summary"></div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Решения по дням</div>
+          <svg id="weekly-daily-svg" viewBox="0 0 360 80" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Режимы (распределение)</div>
+          <div id="weekly-modes" class="weekly-modes"></div>
+        </div>
+        <div class="weekly-chart-block">
+          <div class="weekly-chart-title">Streaks привычек</div>
+          <div id="weekly-streaks" class="weekly-streaks"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Sub-page: Tasks (activity + plans + history) ═══ -->
+    <div class="baddle-sub-page" data-sub-page="tasks" style="display:none">
+    <!-- Activity bar: «что я сейчас делаю» (ручной трекер) -->
+    <!-- Ground-truth слой: без этого Baddle не знает во что юзер тратит время. -->
+    <div id="activity-bar" class="activity-bar">
+      <div class="activity-main">
+        <div id="activity-status" class="activity-status activity-status-idle">
+          <span class="activity-dot"></span>
+          <span id="activity-name" class="activity-name">Нет активной задачи</span>
+          <span id="activity-timer" class="activity-timer">00:00:00</span>
+          <span id="activity-today-summary" class="activity-today-summary" title="Сегодня отслежено"></span>
+        </div>
+        <div class="activity-controls">
+          <input id="activity-input" class="activity-input" type="text"
+                 placeholder="Что делаешь? Enter → старт"
+                 maxlength="200" style="display:none">
+          <button id="activity-start-btn" class="activity-btn activity-btn-primary"
+                  onclick="activityStartClick()" title="Начать новую задачу">＋ Начать</button>
+          <button id="activity-next-btn" class="activity-btn activity-btn-secondary"
+                  onclick="activityNextClick()" title="Закрыть текущую и начать новую"
+                  style="display:none">↻ Следующая</button>
+          <button id="activity-help-btn" class="activity-btn activity-btn-secondary"
+                  onclick="activityAskHelpClick()"
+                  title="Спросить Baddle про эту задачу"
+                  style="display:none">? Помощь</button>
+          <button id="activity-stop-btn" class="activity-btn activity-btn-danger"
+                  onclick="activityStopClick()" title="Остановить"
+                  style="display:none">⏹</button>
+        </div>
+      </div>
+      <div id="activity-templates" class="activity-templates"></div>
+      <!-- План дня: запланированные события + recurring habits -->
+      <details id="plan-panel" class="activity-timeline-panel" ontoggle="if(this.open){ planRender(); planLinkRefresh(); }">
+        <summary>📋 План дня <span id="plan-badge" class="activity-timeline-badge"></span></summary>
+        <div id="plan-list" class="plan-list"></div>
+        <div class="plan-add-form">
+          <input type="text" id="plan-name" placeholder="Что запланировать? (событие на сегодня)" maxlength="200">
+          <select id="plan-category">
+            <option value="">категория</option>
+            <option value="food">🍽 food</option>
+            <option value="work">💼 work</option>
+            <option value="health">🧘 health</option>
+            <option value="social">👥 social</option>
+            <option value="learning">📚 learning</option>
+          </select>
+          <input type="time" id="plan-time" placeholder="time" value="09:00">
+          <!-- Linkup к существующей привычке — опционально. Complete plan
+               автоматом увеличит прогресс linked recurring goal. -->
+          <select id="plan-goal-link" title="Привязать к привычке (опционально)">
+            <option value="">без привычки</option>
+          </select>
+          <label class="plan-difficulty" title="Ожидаемая сложность 1-5 (для байесовского surprise)">
+            диф
+            <select id="plan-difficulty">
+              <option value="">—</option>
+              <option value="1">1 (легко)</option>
+              <option value="2">2</option>
+              <option value="3">3 (средне)</option>
+              <option value="4">4</option>
+              <option value="5">5 (тяжело)</option>
+            </select>
+          </label>
+          <button class="activity-btn activity-btn-primary" onclick="planAddNew()">＋ Добавить</button>
+          <!-- deprecated: plans.recurring=True не создаётся через UI.
+               Для привычек используй 🎯 Цели → Привычки. -->
+          <input type="checkbox" id="plan-recurring" style="display:none">
+        </div>
+      </details>
+      <!-- Timeline дня: горизонтальная лента 0-24h с блоками по категории -->
+      <details id="activity-timeline-panel" class="activity-timeline-panel" ontoggle="if(this.open) activityRenderTimeline()">
+        <summary>🕒 Timeline дня <span id="activity-timeline-badge" class="activity-timeline-badge"></span></summary>
+        <div class="activity-timeline-wrap">
+          <svg id="activity-timeline-svg" viewBox="0 0 1440 56" preserveAspectRatio="none"></svg>
+          <div class="activity-timeline-axis">
+            <span>0</span><span>6</span><span>12</span><span>18</span><span>24</span>
+          </div>
+        </div>
+      </details>
+      <!-- История: прошлые задачи (не только сегодня) с редактированием + фильтр -->
+      <details id="activity-history-panel" class="activity-timeline-panel" ontoggle="if(this.open) activityRenderHistory()">
+        <summary>📜 История задач <span id="activity-history-badge" class="activity-timeline-badge"></span></summary>
+        <div class="activity-history-filters">
+          <button class="activity-filter-chip active" data-cat="" onclick="activityFilterSet('', 30)">все</button>
+          <button class="activity-filter-chip" data-cat="food" onclick="activityFilterSet('food', 7)">🍽 еда за неделю</button>
+          <button class="activity-filter-chip" data-cat="work" onclick="activityFilterSet('work', 7)">💼 работа</button>
+          <button class="activity-filter-chip" data-cat="health" onclick="activityFilterSet('health', 30)">🧘 здоровье (30д)</button>
+        </div>
+        <div id="activity-history-list" class="activity-history-list"></div>
+      </details>
+      <!-- Shared edit popup (используется и timeline, и историей) -->
+      <div id="activity-edit-popup" class="activity-edit-popup" style="display:none"></div>
+    </div>
+    <div class="baddle-quick-actions">
+      <button class="activity-btn" onclick="goalsOpen()" title="Цели — open/done/archived + статистика">🎯 Цели</button>
+      <button class="activity-btn" onclick="assistWeeklyReview()" title="Weekly review">📆 Weekly</button>
+    </div>
+    </div>
+    <!-- ═══ /Sub-page: Tasks ═══ -->
+
+    <!-- ═══ Sub-page: Settings (HRV sim + profile + dev toggles) ═══ -->
+    <div class="baddle-sub-page" data-sub-page="settings" style="display:none">
+    <!-- HRV simulator controls (collapsible) -->
+    <details id="assist-sim-panel" class="assist-sim-panel" open>
+      <summary>⚙ HRV simulator</summary>
+      <div class="assist-sim-controls">
+        <label>HR <input id="sim-hr" type="range" min="50" max="120" value="70" oninput="assistHRVSimSliders()"></label>
+        <label>Coherence <input id="sim-coherence" type="range" min="0" max="1" step="0.05" value="0.7" oninput="assistHRVSimSliders()"></label>
+        <label title="Activity magnitude: 0=лежишь · 1=ходьба · 2+=бег. Дает физический контекст 4-зоны (recovery/overload/...)">Activity <input id="sim-activity" type="range" min="0" max="3" step="0.1" value="0" oninput="assistHRVSimSliders()"></label>
+        <button onclick="assistHRVStart('simulator')">Restart</button>
+      </div>
+    </details>
+    <div class="baddle-quick-actions">
+      <button class="activity-btn" onclick="profileOpen()" title="Preferences и constraints по категориям">👤 Профиль</button>
+      <button class="activity-btn" onclick="openSettings()" title="API url / модель">⚙ API / workspace</button>
+      <button class="activity-btn" onclick="openCheckin()" title="Daily check-in">📝 Check-in</button>
+    </div>
+    </div>
+    <!-- ═══ /Sub-page: Settings ═══ -->
+
+    <!-- ═══ Sub-page: Chat (messages + input) ═══ -->
+    <div class="baddle-sub-page" data-sub-page="chat">
+    <!-- Активная задача: мини-панель, показывается только когда есть active -->
+    <div id="chat-active-task" class="chat-active-task" style="display:none">
+      <span class="chat-active-dot"></span>
+      <span class="chat-active-name">—</span>
+      <span class="chat-active-timer">00:00:00</span>
+      <span class="chat-active-spacer"></span>
+      <button class="chat-active-btn" onclick="activityNextClick()"
+        title="Закрыть текущую и начать новую">↻</button>
+      <button class="chat-active-btn chat-active-btn-stop"
+        onclick="activityStopClick()" title="Остановить">⏹</button>
+    </div>
+
+    <!-- Messages area -->
+    <div id="assist-messages" class="assist-messages">
+      <div class="assist-empty">
+        Baddle готов. Напиши «как я?», «запусти код», «план на сегодня» —
+        или любой вопрос.
+      </div>
+    </div>
+
+    <!-- Mode chip: показывает выбранный вручную режим (клик → dropdown) -->
+    <div id="mode-chip-row" class="mode-chip-row">
+      <button id="mode-chip-btn" class="mode-chip-btn" onclick="toggleModeMenu(event)" title="Выбрать режим Baddle (как в graph). По умолчанию — auto">
+        <span class="mode-chip-label">Режим:</span>
+        <span id="mode-chip-name" class="mode-chip-name">auto</span>
+        <span class="mode-chip-caret">▾</span>
+      </button>
+      <div id="mode-chip-menu" class="mode-chip-menu" style="display:none" onclick="event.stopPropagation()"></div>
+    </div>
+
+    <!-- Input (textarea + / команды + Send) -->
+    <div class="assist-input-row">
+      <textarea id="assist-input" placeholder="Спроси или поставь задачу..." rows="1"></textarea>
+      <div class="chat-cmd-wrap">
+        <button id="chat-cmd-btn" class="chat-cmd-btn" onclick="toggleCmdMenu(event)" aria-label="Команды" title="Быстрые команды">/</button>
+        <div id="chat-cmd-menu" class="chat-cmd-menu" style="display:none" onclick="event.stopPropagation()"></div>
+      </div>
+      <button id="assist-send-btn" onclick="assistSend()" aria-label="Send">→</button>
+    </div>
+    </div>
+    <!-- ═══ /Sub-page: Chat ═══ -->
+
+    <!-- Bottom nav — мобильный стиль, внизу окна -->
+    <div id="baddle-subtabs" class="baddle-subtabs">
+      <button class="baddle-subtab active" data-sub="chat" onclick="setBaddleSub('chat')">
+        <span class="subtab-icon">💬</span>
+        <span class="subtab-label">Чат</span>
+        <span id="sub-badge-chat" class="sub-badge" style="display:none"></span>
+      </button>
+      <button class="baddle-subtab" data-sub="dashboard" onclick="setBaddleSub('dashboard')">
+        <span class="subtab-icon">📊</span>
+        <span class="subtab-label">Состояние</span>
+      </button>
+      <button class="baddle-subtab" data-sub="tasks" onclick="setBaddleSub('tasks')">
+        <span class="subtab-icon">✅</span>
+        <span class="subtab-label">Задачи</span>
+      </button>
+      <button class="baddle-subtab" data-sub="settings" onclick="setBaddleSub('settings')">
+        <span class="subtab-icon">⚙</span>
+        <span class="subtab-label">Настройки</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ GRAPH mode ══ (advanced view) -->
+  <div id="cfg-graph" class="hidden" style="display:none">
     <!-- Mode + Topic + Add (BEFORE actions bar) -->
     <div class="card p-2 mb-1">
       <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
@@ -250,6 +907,35 @@
       <div style="flex:1;min-width:0;">
         <div id="graph-svg-wrap" style="position:relative;">
           <svg id="graph-svg" width="100%" height="520" style="user-select:none;"></svg>
+          <!-- Legend: что означают цвета/формы нод -->
+          <div id="graph-legend" class="graph-legend" title="Легенда типов нод. Клик = свернуть.">
+            <div class="gl-title" onclick="this.parentElement.classList.toggle('collapsed')">Легенда ▾</div>
+            <div class="gl-items">
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24"></span>мысль / thought</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px dashed #a78bfa"></span>гипотеза</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #06b6d4"></span>evidence</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #10b981"></span>факт</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #f43f5e"></span>цель (goal)</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#6366f1;border:2px solid #166534"></span>activity · done</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#6366f1;border:2px dashed #ef4444"></span>activity · active</div>
+              <div class="gl-item gl-tip">Размер ~ degree · цвет заливки ≈ тип · обводка = статус</div>
+            </div>
+          </div>
+          <!-- Meta-graph overlay: кружки per-workspace + cross_edges между ними -->
+          <svg id="meta-graph-svg" width="260" height="180"
+               style="position:absolute;top:8px;right:8px;display:none;
+                      background:rgba(24,24,27,0.92);border:1px solid #3f3f46;
+                      border-radius:8px;pointer-events:auto;">
+          </svg>
+          <button id="meta-graph-toggle" onclick="metaGraphToggle()"
+                  style="position:absolute;top:196px;right:8px;font-size:10px;
+                         background:#18181b;color:#a1a1aa;border:1px solid #3f3f46;
+                         border-radius:4px;padding:2px 6px;cursor:pointer;"
+                  title="Meta-graph overlay (workspace connections)">🗺</button>
+          <!-- Cognitive cone — visualization of precision × state × pump (FE-3, v5b) -->
+          <svg id="graph-cone-viz" width="180" height="180" style="position:absolute;top:8px;left:8px;pointer-events:none;opacity:0.9;">
+            <!-- Populated by graphRenderCone() in graph.js -->
+          </svg>
           <div id="graph-run-overlay" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.92);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:11px;color:var(--text-secondary);pointer-events:none;min-width:160px;box-shadow:var(--shadow);">
             <div style="font-weight:bold;color:var(--text-primary);margin-bottom:4px" id="graph-run-status">—</div>
             <div style="display:flex;gap:12px;margin-bottom:4px">
@@ -420,6 +1106,7 @@
 <script src="/static/js/settings.js"></script>
 <script src="/static/js/chat.js"></script>
 <script src="/static/js/graph.js"></script>
+<script src="/static/js/assistant.js"></script>
 
 <!-- Generation Studio Modal -->
 <div id="studio-modal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.3);align-items:center;justify-content:center">

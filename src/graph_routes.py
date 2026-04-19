@@ -9,15 +9,18 @@ import numpy as np
 from flask import Blueprint, request, jsonify
 
 from .prompts import _p
-from .main import cosine_similarity
+from .main import cosine_similarity, distinct, distinct_decision
 from .graph_logic import (
     _graph, graph_lock, reset_graph,
-    _auto_type_and_confidence, _auto_evidence_relation, _bayesian_update,
+    _auto_type_and_confidence, _auto_evidence_relation,
+    _bayesian_update_distinct, _d_from_relation,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
     _graph_generate, _clean_thought, _generate_thought,
     _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
     _detect_traps, _compute_alpha_beta,
+    sample_in_embedding_space,
 )
+from .hrv_manager import get_manager as get_hrv_manager
 
 graph_bp = Blueprint("graph", __name__)
 
@@ -246,15 +249,32 @@ def graph_add():
     manual_links = _graph["edges"]["manual_links"]
 
     if node_type == "goal":
-        # Store mode config on goal node and graph meta
+        # Store only mode_id — Horizon preset handles behavior (no primitive switches)
         from .modes import get_mode
+        from .goals_store import add_goal
+        from .workspace import get_workspace_manager
         mode_id = d.get("mode", "horizon")
         mode_cfg = get_mode(mode_id)
         nodes[new_idx]["mode"] = mode_id
-        nodes[new_idx]["primitive"] = mode_cfg.get("primitive")
-        nodes[new_idx]["strategy"] = mode_cfg.get("strategy")
-        nodes[new_idx]["goal_type"] = mode_cfg.get("goal_type")
         _graph["meta"]["mode"] = mode_id
+
+        # Persistent goal lifecycle: регистрируем в goals_store
+        try:
+            ws_id = get_workspace_manager().active_id or "main"
+        except Exception:
+            ws_id = "main"
+        try:
+            goal_id = add_goal(
+                text=text,
+                mode=mode_id,
+                workspace=ws_id,
+                priority=d.get("priority"),
+                deadline=d.get("deadline"),
+                category=d.get("category"),
+            )
+            nodes[new_idx]["goal_id"] = goal_id  # связь node ↔ persistent record
+        except Exception as e:
+            print(f"[goal/add] goals_store persist failed: {e}")
 
         # Parse subgoals from multiline text for multi-goal modes
         subgoal_indices = []
@@ -598,10 +618,9 @@ def graph_expand():
             from .api_backend import _settings
             if _settings.get("live_bayes"):
                 old_conf = nodes[idx]["confidence"]
-                p_e_h = strength if rel == "supports" else (1 - strength)
-                p_e_nh = (1 - strength) if rel == "supports" else strength
-                nodes[idx]["confidence"] = _bayesian_update(old_conf, p_e_h, p_e_nh)
-                print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
+                d_val = _d_from_relation(rel, strength)
+                nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
 
@@ -689,10 +708,9 @@ def graph_elaborate():
             from .api_backend import _settings as _s2
             if _s2.get("live_bayes"):
                 old_conf = nodes[idx]["confidence"]
-                p_e_h = strength if rel == "supports" else (1 - strength)
-                p_e_nh = (1 - strength) if rel == "supports" else strength
-                nodes[idx]["confidence"] = _bayesian_update(old_conf, p_e_h, p_e_nh)
-                print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
+                d_val = _d_from_relation(rel, strength)
+                nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
 
@@ -846,32 +864,32 @@ def graph_smartdc():
             f"Найденный мост: {pump_context.get('bridge', '')}"
         )
 
-    # Phase 1: Divergence — generate 3 poles
+    # Phase 1: Divergence — generate 3 poles (shared with execute_dispute)
+    from .dialectic import generate_poles, synthesize
     context_block = ""
     if evidence_context:
         context_block = "\n\nExisting evidence:\n" + "\n".join(evidence_context[:5])
 
-    poles = []
-    for role_key in ["dc_thesis", "dc_antithesis", "dc_neutral"]:
-        messages = [
-            {"role": "system", "content": _p(d["lang"], role_key)},
-            {"role": "user", "content": f"{_p(d['lang'], 'dc_statement')}: {statement}{context_block}"},
-        ]
-        text, ent = _graph_generate(messages, max_tokens=200, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-        print(f"[smartdc] {role_key}: {text[:80]}...")
-        poles.append({"role": role_key, "text": text, "entropy": ent})
-
-    # Phase 2: Convergence — synthesize from 3 poles (BEFORE embeddings to keep KV cache clean)
-    synthesis_messages = [
-        {"role": "system", "content": _p(d["lang"], "dc_synthesis")},
-        {"role": "user", "content":
-            f"{_p(d['lang'], 'dc_statement')}: {statement}\n\n"
-            f"{_p(d['lang'], 'dc_for')}:\n{poles[0]['text']}\n\n"
-            f"{_p(d['lang'], 'dc_against')}:\n{poles[1]['text']}\n\n"
-            f"{_p(d['lang'], 'dc_context')}:\n{poles[2]['text']}"
-        },
+    poles_dict = generate_poles(
+        statement, lang=d["lang"], temp=d["temp"], top_k=d["top_k"],
+        seed=d["seed"], pole_tokens=200, context_block=context_block,
+        return_entropy=True,
+    )
+    poles = [
+        {"role": "dc_thesis", "text": poles_dict["thesis"]["text"], "entropy": poles_dict["thesis"]["entropy"]},
+        {"role": "dc_antithesis", "text": poles_dict["antithesis"]["text"], "entropy": poles_dict["antithesis"]["entropy"]},
+        {"role": "dc_neutral", "text": poles_dict["neutral"]["text"], "entropy": poles_dict["neutral"]["entropy"]},
     ]
-    synthesis_text, synthesis_ent = _graph_generate(synthesis_messages, max_tokens=300, temp=0.7, top_k=d["top_k"], seed=d["seed"])
+    for p in poles:
+        print(f"[smartdc] {p['role']}: {p['text'][:80]}...")
+
+    # Phase 2: Convergence — synthesize (not concise — full tokens for essay-grade output)
+    synthesis_text, synthesis_ent = synthesize(
+        statement,
+        poles[0]["text"], poles[1]["text"], poles[2]["text"],
+        lang=d["lang"], temp=0.7, top_k=d["top_k"], max_tokens=300,
+        concise=False, seed=d["seed"], return_entropy=True,
+    )
     print(f"[smartdc] synthesis: {synthesis_text[:80]}...")
 
     # Phase 3: Get embeddings for centroid confidence
@@ -983,10 +1001,10 @@ def graph_pump():
 @graph_bp.route("/graph/horizon-params")
 def graph_horizon_params():
     """Get current Horizon LLM params for manual operations."""
-    from .horizon import CognitiveHorizon, create_horizon
+    from .horizon import CognitiveState, create_horizon
     horizon_data = _graph.get("_horizon")
     if horizon_data:
-        h = CognitiveHorizon.from_dict(horizon_data)
+        h = CognitiveState.from_dict(horizon_data)
     else:
         mode_id = _graph["meta"].get("mode", "horizon")
         h = create_horizon(mode_id)
@@ -1171,7 +1189,7 @@ def graph_bayes_suggest():
 
 @graph_bp.route("/graph/horizon-feedback", methods=["POST"])
 def graph_horizon_feedback():
-    """Store feedback for CognitiveHorizon. Applied on next tick."""
+    """Store feedback for CognitiveState. Applied on next tick."""
     data = request.get_json(force=True)
     _graph["_horizon_feedback"] = {
         "surprise": data.get("surprise"),
@@ -1184,24 +1202,392 @@ def graph_horizon_feedback():
 
 # --------------- tick() — phase-based automatic thinking ---------------
 
+@graph_bp.route("/workspace/list", methods=["GET"])
+def workspace_list():
+    """List all workspaces with active flag + node counts."""
+    from .workspace import get_workspace_manager
+    wm = get_workspace_manager()
+    return jsonify({
+        "workspaces": wm.list_workspaces(),
+        "active": wm.active_id,
+    })
+
+
+@graph_bp.route("/workspace/create", methods=["POST"])
+def workspace_create():
+    """Create a new workspace (directory + meta entry)."""
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    ws_id = (d.get("id") or "").strip().lower().replace(" ", "_")
+    title = d.get("title", ws_id)
+    tags = d.get("tags", [])
+    if not ws_id:
+        return jsonify({"error": "id required"})
+    try:
+        info = get_workspace_manager().create(ws_id, title, tags)
+        return jsonify({"ok": True, "workspace": info})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@graph_bp.route("/workspace/switch", methods=["POST"])
+def workspace_switch():
+    """Switch active workspace. Flushes current, loads target graph into _graph.
+
+    Cross-graph auto-seed: если target content-граф пустой И есть history
+    за последние 7 дней по этому graph_id — подбросим 3 seed-ноды.
+    """
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    ws_id = d.get("id", "").strip().lower()
+    auto_seed = bool(d.get("auto_seed", True))
+    if not ws_id:
+        return jsonify({"error": "id required"})
+    try:
+        get_workspace_manager().switch(ws_id)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+    seeded = None
+    if auto_seed and not _graph.get("nodes"):
+        try:
+            from .cross_graph import seed_from_history
+            seeded = seed_from_history(days=7, limit=3, graph_id=ws_id)
+        except Exception as e:
+            print(f"[workspace/switch] auto-seed failed: {e}")
+
+    return jsonify({"ok": True, "active": ws_id, "seeded": seeded})
+
+
+@graph_bp.route("/workspace/save", methods=["POST"])
+def workspace_save():
+    """Flush current _graph to active workspace's graph.json."""
+    from .workspace import get_workspace_manager
+    get_workspace_manager().save_active()
+    return jsonify({"ok": True})
+
+
+@graph_bp.route("/workspace/delete", methods=["POST"])
+def workspace_delete():
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    ws_id = d.get("id", "").strip().lower()
+    try:
+        get_workspace_manager().delete(ws_id)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@graph_bp.route("/workspace/cross-edges", methods=["GET"])
+def workspace_cross_edges():
+    from .workspace import get_workspace_manager
+    ws_filter = request.args.get("workspace")
+    return jsonify({
+        "edges": get_workspace_manager().list_cross_edges(ws_filter),
+    })
+
+
+@graph_bp.route("/workspace/find-cross", methods=["POST"])
+def workspace_find_cross():
+    """Scan other workspaces for distinct candidates. Saves matches as cross_edges."""
+    from .workspace import get_workspace_manager
+    d = request.get_json(force=True) or {}
+    k = int(d.get("k", 5))
+    tau = float(d.get("tau_in", 0.3))
+    wm = get_workspace_manager()
+    hits = wm.find_cross_candidates(k=k, tau_in=tau)
+    saved = 0
+    for h in hits:
+        if wm.add_cross_edge(h["from_graph"], h["from_node"],
+                             h["to_graph"], h["to_node"], h["d"]):
+            saved += 1
+    return jsonify({"hits": hits, "saved": saved})
+
+
+@graph_bp.route("/workspace/seed-from-history", methods=["POST"])
+def workspace_seed_from_history():
+    """Continuity между сессиями: выводы из state_graph → seeds в текущем графе.
+
+    Body (всё опционально):
+      {
+        "days": 7,            # окно истории
+        "limit": 5,            # максимум seeds
+        "graph_id": "main",    # фильтр по workspace (пусто = любой)
+        "topic_hint": ""       # топик для новых нод
+      }
+
+    Создаёт `rendered=false` ноды с embedding'ами из state_embeddings.
+    provenance: `node.seeded_from = <state_hash>`.
+    """
+    from .cross_graph import seed_from_history
+    d = request.get_json(force=True) or {}
+    result = seed_from_history(
+        days=float(d.get("days", 7)),
+        limit=int(d.get("limit", 5)),
+        graph_id=d.get("graph_id"),
+        topic_hint=(d.get("topic_hint") or "").strip(),
+    )
+    return jsonify(result)
+
+
+@graph_bp.route("/workspace/meta", methods=["GET"])
+def workspace_meta():
+    """Meta-graph: derived view of graph-of-graphs."""
+    from .workspace import get_workspace_manager
+    return jsonify(get_workspace_manager().meta_graph())
+
+
+@graph_bp.route("/graph/self", methods=["GET"])
+def graph_self():
+    """Read state graph — system's history-as-graph.
+
+    Query params:
+      limit: int (default 50)
+      action: str (filter by action)
+      user_initiated: "true"/"false" (filter)
+      tail: "true" → last N instead of first N
+    """
+    from .state_graph import get_state_graph
+    sg = get_state_graph()
+    limit = int(request.args.get("limit", 50))
+    action = request.args.get("action")
+    ui_arg = request.args.get("user_initiated")
+    want_tail = request.args.get("tail", "true").lower() == "true"
+
+    def filt(entry):
+        if action and entry.get("action") != action:
+            return False
+        if ui_arg is not None:
+            want = ui_arg.lower() == "true"
+            if bool(entry.get("user_initiated")) != want:
+                return False
+        return True
+
+    entries = sg.read_all(filter_fn=filt)
+    total = len(entries)
+    if want_tail:
+        entries = entries[-limit:]
+    else:
+        entries = entries[:limit]
+
+    return jsonify({
+        "entries": entries,
+        "total": total,
+        "returned": len(entries),
+        "last_hash": sg._last_hash,
+    })
+
+
+@graph_bp.route("/graph/self/similar", methods=["POST"])
+def graph_self_similar():
+    """Episodic query: find k past state_nodes most similar to given text/state.
+
+    Body: { "query": "text to embed", "k": 5 } OR { "embedding": [...], "k": 5 }
+    """
+    from .state_graph import get_state_graph
+    from .api_backend import api_get_embedding
+    d = request.get_json(force=True) or {}
+    k = int(d.get("k", 5))
+    query_emb = d.get("embedding")
+    if not query_emb:
+        query_text = d.get("query", "").strip()
+        if not query_text:
+            return jsonify({"error": "missing query or embedding"})
+        try:
+            query_emb = api_get_embedding(query_text)
+        except Exception as e:
+            return jsonify({"error": f"embedding failed: {e}"})
+    sg = get_state_graph()
+    results = sg.query_similar(query_emb, k=k)
+    return jsonify({"results": results, "count": len(results)})
+
+
+@graph_bp.route("/graph/brainstorm-seed", methods=["POST"])
+def graph_brainstorm_seed():
+    """Embedding-first brainstorm: topic → N пертурбированных векторов без LLM текста.
+
+    Для каждого seed создаётся node с `rendered=false, text='💭'`, но с
+    реальным embedding'ом. distinct/routing работают сразу. Текст
+    рендерится лениво через POST /graph/render-node когда юзер откроет.
+
+    Body: { "topic": "...", "n": 5, "sigma": 0.15, "novelty_threshold": 0.25 }
+    """
+    from .api_backend import api_get_embedding
+    d = request.get_json(force=True) or {}
+    topic = (d.get("topic") or "").strip()
+    n = int(d.get("n", 5))
+    sigma = float(d.get("sigma", 1.0))
+    novelty = float(d.get("novelty_threshold", 0.2))
+    if not topic:
+        return jsonify({"error": "empty topic"})
+
+    try:
+        seed_emb = api_get_embedding(topic)
+    except Exception as e:
+        return jsonify({"error": f"seed embedding failed: {e}"})
+    if not seed_emb:
+        return jsonify({"error": "seed embedding returned empty"})
+
+    existing = [nd.get("embedding") for nd in _graph["nodes"] if nd.get("embedding")]
+    samples = sample_in_embedding_space(
+        seed_emb, n=n, sigma=sigma,
+        novelty_threshold=novelty,
+        existing_embeddings=existing,
+    )
+
+    created = []
+    for emb in samples:
+        idx = _add_node(
+            text="💭",
+            depth=0,
+            topic=topic,
+            node_type="hypothesis",
+            embedding=emb,
+            rendered=False,
+        )
+        created.append(idx)
+
+    _graph["meta"].setdefault("topic", topic)
+    return jsonify({
+        "created": created,
+        "n_requested": n,
+        "n_sampled": len(samples),
+        "topic": topic,
+    })
+
+
+@graph_bp.route("/graph/render-node", methods=["POST"])
+def graph_render_node():
+    """Text-on-demand: разворачиваем unrendered-ноду в текст через LLM.
+
+    Использует топик + тексты соседей (incoming directed) как контекст.
+    Idempotent: если нода уже rendered, возвращает cached text.
+
+    Body: { "index": N, "lang": "ru" }
+    """
+    d = request.get_json(force=True) or {}
+    idx = int(d.get("index", -1))
+    lang = d.get("lang", "ru")
+    nodes = _graph["nodes"]
+    if idx < 0 or idx >= len(nodes):
+        return jsonify({"error": "invalid index"})
+
+    node = nodes[idx]
+    if node.get("rendered", True) and node.get("text") and node["text"] != "💭":
+        return jsonify({"ok": True, "text": node["text"], "cached": True, "index": idx})
+
+    topic = _graph["meta"].get("topic", "") or node.get("topic", "")
+    neighbor_texts: list[str] = []
+    for pair in _graph["edges"].get("directed", []):
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            continue
+        src, dst = pair
+        if dst == idx and 0 <= src < len(nodes):
+            t = nodes[src].get("text", "")
+            if t and nodes[src].get("rendered", True):
+                neighbor_texts.append(t[:80])
+
+    if lang == "ru":
+        system = ("/no_think\nРазверни seed-идею в одно короткое предложение "
+                  "по теме. Без вступлений. Одно предложение.")
+        user = f"Тема: {topic or '(не задана)'}"
+        if neighbor_texts:
+            user += "\nСоседние мысли:\n" + "\n".join(f"- {t}" for t in neighbor_texts[:3])
+        user += "\n\nСформулируй новую идею одним предложением:"
+    else:
+        system = ("/no_think\nExpand the seed into one short sentence on topic. "
+                  "No preamble. One sentence.")
+        user = f"Topic: {topic or '(unset)'}"
+        if neighbor_texts:
+            user += "\nNeighbor thoughts:\n" + "\n".join(f"- {t}" for t in neighbor_texts[:3])
+        user += "\n\nOne-sentence new idea:"
+
+    try:
+        text, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user}],
+            max_tokens=80, temp=0.7, top_k=40,
+        )
+    except Exception as e:
+        return jsonify({"error": f"generation failed: {e}"})
+
+    rendered_text = _clean_thought(text or "", topic) or "[unable to render]"
+    node["text"] = rendered_text
+    node["rendered"] = True
+    node["last_accessed"] = datetime.now(timezone.utc).isoformat()
+    # Embedding cache может стать stale: новый текст ≠ seed perturbation.
+    # Оставляем старый embedding — он всё ещё описывает позицию ноды в
+    # пространстве мыслей (rendered text подстроен под эту позицию).
+    return jsonify({"ok": True, "text": rendered_text, "cached": False, "index": idx})
+
+
+@graph_bp.route("/graph/consolidate", methods=["POST"])
+def graph_consolidate():
+    """Консолидация памяти — прунинг слабых нод + архив старого state_graph.
+
+    Body (всё опционально):
+      {
+        "dry_run": false,
+        "confidence_threshold": 0.3,  # content: ниже = кандидат к удалению
+        "content_age_days": 30,       # content: давность last_accessed
+        "state_retain_days": 14       # state_graph: новее этого — держим в main
+      }
+
+    Возвращает summary {content, state}.
+    """
+    from .consolidation import consolidate_all
+
+    d = request.get_json(force=True) or {}
+    result = consolidate_all(
+        confidence_threshold=float(d.get("confidence_threshold", 0.3)),
+        content_age_days=float(d.get("content_age_days", 30)),
+        state_retain_days=float(d.get("state_retain_days", 14)),
+        dry_run=bool(d.get("dry_run", False)),
+    )
+    return jsonify(result)
+
+
+@graph_bp.route("/graph/synthesize", methods=["POST"])
+def graph_synthesize():
+    """Forced synthesis: top-N hypothesis/evidence/thought → LLM-синтез →
+    synthesis-нода. Общий endpoint для graph-tab autorun и для юзер-вызова.
+
+    Body: {n: 5, lang: "ru", max_tokens: 3000}
+    """
+    from .graph_logic import force_synthesize_top
+    d = _p_data()
+    n = int(d.get("n", 5))
+    max_tokens = int(d.get("max_tokens", 3000))
+    syn = force_synthesize_top(n=n, lang=d.get("lang", "ru"), max_tokens=max_tokens)
+    if not syn:
+        return jsonify({"error": "no_nodes_to_synthesize"})
+    return jsonify({"ok": True, **syn})
+
+
 @graph_bp.route("/graph/tick", methods=["POST"])
 def graph_tick():
-    """Phase-based automatic thinking: EXPLORE → DEEPEN → VERIFY → META → SYNTHESIZE."""
-    from .thinking import tick
+    """Foreground tick — ping в CognitiveLoop.
+
+    Единый когнитивный контур (cognitive_loop.py) владеет и фоновой работой
+    (Scout/DMN/NE decay), и foreground тиком. Юзер-инициированный тик
+    разделяет timestamp с фоном, чтобы DMN не лез следующие 30 секунд
+    (общий NE-бюджет).
+
+    Mode config тюнит Horizon пресеты (τ_in/τ_out/γ/policy); логика сама
+    эмерджентна из distinct-зон в tick_nand.
+    """
+    from .cognitive_loop import get_cognitive_loop
 
     d = _p_data()
-    stable_threshold = float(d.get("stable_threshold", 0.8))
-    force_collapse = d.get("force_collapse", False)
-    max_meta = int(d.get("max_meta", 2))
-    min_hyp = int(d.get("min_hyp", 5))
-
-    nodes = _graph["nodes"]
-    edges = _compute_edges(nodes, d["threshold"], d["sim_mode"])
-
-    result = tick(nodes, edges, _graph,
-                  threshold=d["threshold"], stable_threshold=stable_threshold,
-                  force_collapse=force_collapse,
-                  max_meta=max_meta, min_hyp=min_hyp)
+    result = get_cognitive_loop().tick_foreground(
+        threshold=d["threshold"],
+        sim_mode=d["sim_mode"],
+        stable_threshold=float(d.get("stable_threshold", 0.8)),
+        force_collapse=d.get("force_collapse", False),
+        max_meta=int(d.get("max_meta", 2)),
+        min_hyp=int(d.get("min_hyp", 5)),
+    )
     return jsonify(result)
 
 
@@ -1241,15 +1627,9 @@ def graph_add_evidence():
         hyp["type"] = "hypothesis"
     prior = hyp["confidence"]
 
-    # Bayesian update: P(H|E) = P(E|H) * P(H) / P(E)
-    if relation == "supports":
-        p_e_h = strength       # likely to see this evidence if H true
-        p_e_nh = 1 - strength  # unlikely if H false
-    else:
-        p_e_h = 1 - strength   # unlikely to see this evidence if H true
-        p_e_nh = strength      # likely if H false
-
-    posterior = _bayesian_update(prior, p_e_h, p_e_nh)
+    # NAND Bayesian update via distinct distance (d derived from relation+strength)
+    d_val = _d_from_relation(relation, strength)
+    posterior = _bayesian_update_distinct(prior, d_val)
 
     # Update hypothesis confidence
     old_conf = hyp["confidence"]
@@ -1498,3 +1878,79 @@ def graph_delete():
         path.unlink()
         return jsonify({"ok": True})
     return jsonify({"error": f"graph '{name}' not found"})
+
+
+# ═══ HRV integration ═══════════════════════════════════════════════════════
+
+@graph_bp.route("/hrv/start", methods=["POST"])
+def hrv_start():
+    """Start HRV monitoring. mode: simulator (default) or polar."""
+    d = request.get_json(force=True) if request.is_json else {}
+    mode = d.get("mode", "simulator")
+    kwargs = {}
+    if "target_hr" in d:
+        kwargs["target_hr"] = float(d["target_hr"])
+    if "target_coherence" in d:
+        kwargs["target_coherence"] = float(d["target_coherence"])
+    mgr = get_hrv_manager()
+    ok = mgr.start(mode=mode, **kwargs)
+    return jsonify({"ok": ok, "status": mgr.get_status()})
+
+
+@graph_bp.route("/hrv/stop", methods=["POST"])
+def hrv_stop():
+    mgr = get_hrv_manager()
+    mgr.stop()
+    return jsonify({"ok": True})
+
+
+@graph_bp.route("/hrv/status", methods=["GET"])
+def hrv_status():
+    mgr = get_hrv_manager()
+    return jsonify(mgr.get_status())
+
+
+@graph_bp.route("/hrv/metrics", methods=["GET"])
+def hrv_metrics():
+    mgr = get_hrv_manager()
+    metrics = mgr.get_metrics()
+    state = mgr.get_baddle_state()
+
+    # Push to UserState — HRV — сигнал тела пользователя, не системы.
+    # Системная нейрохимия эволюционирует по собственным сигналам графа.
+    from .user_state import get_user_state
+    get_user_state().update_from_hrv(
+        coherence=state.get("coherence"),
+        rmssd=state.get("rmssd"),
+        stress=state.get("stress"),
+        activity=state.get("activity_magnitude"),
+    )
+
+    return jsonify({
+        "metrics": metrics,
+        "baddle_state": state,
+    })
+
+
+@graph_bp.route("/hrv/calibrate", methods=["POST"])
+def hrv_calibrate():
+    mgr = get_hrv_manager()
+    baseline = mgr.calibrate()
+    return jsonify({"ok": bool(baseline), "baseline": baseline})
+
+
+@graph_bp.route("/hrv/simulate", methods=["POST"])
+def hrv_simulate():
+    """Adjust simulator params at runtime (for demo).
+
+    Принимает: hr, coherence, activity (все опциональны).
+    activity ∈ [0, 5] — magnitude движения (0=лежишь, 1=ходьба, 2+=бег).
+    """
+    d = request.get_json(force=True)
+    mgr = get_hrv_manager()
+    mgr.set_simulator_state(
+        target_hr=d.get("hr"),
+        target_coherence=d.get("coherence"),
+        activity=d.get("activity"),
+    )
+    return jsonify({"ok": True, "status": mgr.get_status()})

@@ -5,11 +5,11 @@ import time
 import logging
 import urllib.request
 import urllib.error
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
+from .paths import SETTINGS_FILE as _SETTINGS_FILE, ensure_data_dir
+ensure_data_dir()
 
 _settings = {
     "api_url": "http://localhost:1234",   # LM Studio default, or OpenAI/etc
@@ -17,6 +17,45 @@ _settings = {
     "api_model": "",                       # e.g. "qwen/qwen3-8b"
     "embedding_model": "",                 # e.g. "text-embedding-nomic-embed-text-v1.5"
     "local_ctx": 32768,                    # hint only, server enforces its own ctx
+    # Neural defaults — раньше жили только в graph tab. Теперь общие
+    # для baddle chat + DMN + graph. Если value задан — используется
+    # вместо hardcoded per-call defaults.
+    "neural_threshold": 0.91,              # distinct edge threshold
+    "neural_temp": 0.7,                    # LLM sampling temperature (дефолт)
+    "neural_top_k": 40,                    # LLM top-k sampling
+    "neural_seed": -1,                     # -1 = random
+    "neural_novelty": 0.85,                # novelty gate (distinct) for dedup
+    "neural_max_tokens": 3000,             # single-call упpер лимит
+    # Depth knobs — сколько циклов thinking на каждом уровне.
+    # Чем больше — тем глубже и дольше обрабатываем.
+    "deep_chat_steps":       3,            # execute_deep: global fallback (если mode не в dict)
+    # Per-mode depth override. Ключ = mode_id, значение = число итераций.
+    # После базовых brainstorm+elaborate+smartdc делаем ещё N-3 раундов
+    # углубления на weakest hypothesis, пока confidence не > 0.85 или не stall.
+    # horizon/bayes тяжёлые по задумке (глубокое исследование), tournament
+    # лёгкий (pairwise уже дорогой), free/scout средние.
+    "deep_mode_steps": {
+        "horizon":    5,    # research — deep exploration
+        "bayes":      7,    # bayesian — prior+observations+posterior cycles
+        "dispute":    4,    # dialectical — thesis/anti/synth ходит глубже
+        "tournament": 3,    # comparative — pairwise SmartDC уже N² heavy
+        "builder":    4,    # assembly — parts deeper
+        "pipeline":   4,    # steps — walks longer
+        "cascade":    3,    # priorities
+        "scales":     3,    # balance
+        "race":       2,    # any option — first match
+        "fan":        3,    # brainstorm
+        "scout":      3,    # wander
+        "vector":     3,    # focus
+        "free":       3,    # manual
+    },
+    "dmn_converge_max_steps":   100,       # server-side autorun до stable
+    "dmn_converge_stall_window": 12,       # шагов без роста нод → stop
+    "dmn_converge_max_wall_s":   900,      # абсолютный лимит wall-time (15 мин)
+    # Diversity guard в brainstorm: если avg pairwise distinct между hypotheses
+    # < этого порога, auto-trigger pump между двумя ближайшими для разброса
+    # (serendipity axis injection) — иначе synthesize работает на слипшемся.
+    "deep_diversity_min":       0.30,
     # Experimental
     "live_bayes": False,
 }
@@ -51,9 +90,60 @@ def get_settings():
     return dict(_settings)
 
 
+def get_neural_defaults() -> dict:
+    """Общие settings.json neural-дефолты. Используются execute_deep, DMN
+    executor и всеми эндпоинтами которым нужны temp/top_k/max_tokens.
+    Позволяет юзеру overrид'нуть без правки кода.
+    """
+    return {
+        "temperature": float(_settings.get("neural_temp", 0.7)),
+        "top_k": int(_settings.get("neural_top_k", 40)),
+        "max_tokens": int(_settings.get("neural_max_tokens", 3000)),
+        "threshold": float(_settings.get("neural_threshold", 0.91)),
+        "novelty": float(_settings.get("neural_novelty", 0.85)),
+        "seed": int(_settings.get("neural_seed", -1)),
+    }
+
+
+def get_depth_defaults() -> dict:
+    """Depth knobs — сколько циклов на каждом уровне мышления."""
+    mode_steps = _settings.get("deep_mode_steps") or {}
+    if not isinstance(mode_steps, dict):
+        mode_steps = {}
+    return {
+        "deep_chat_steps":          int(_settings.get("deep_chat_steps", 3)),
+        "deep_mode_steps":          dict(mode_steps),
+        "deep_diversity_min":       float(_settings.get("deep_diversity_min", 0.30)),
+        "dmn_converge_max_steps":   int(_settings.get("dmn_converge_max_steps", 100)),
+        "dmn_converge_stall_window":int(_settings.get("dmn_converge_stall_window", 12)),
+        "dmn_converge_max_wall_s":  int(_settings.get("dmn_converge_max_wall_s", 900)),
+    }
+
+
+def get_mode_depth(mode_id: str) -> int:
+    """Число thinking iterations для конкретного mode. Fallback → deep_chat_steps.
+
+    Читается execute_deep'ом чтобы варьировать глубину per-mode (tournament
+    дешевле, horizon/bayes глубже). Без правки кода — через settings.json.
+    """
+    mode_steps = _settings.get("deep_mode_steps") or {}
+    if isinstance(mode_steps, dict) and mode_id in mode_steps:
+        try:
+            val = int(mode_steps[mode_id])
+            return max(1, min(10, val))
+        except (TypeError, ValueError):
+            pass
+    return max(1, min(10, int(_settings.get("deep_chat_steps", 3))))
+
+
 def update_settings(new: dict):
     for k in ("api_url", "api_key", "api_model",
-              "embedding_model", "local_ctx", "live_bayes"):
+              "embedding_model", "local_ctx", "live_bayes",
+              "neural_threshold", "neural_temp", "neural_top_k",
+              "neural_seed", "neural_novelty", "neural_max_tokens",
+              "deep_chat_steps", "deep_mode_steps", "deep_diversity_min",
+              "dmn_converge_max_steps",
+              "dmn_converge_stall_window", "dmn_converge_max_wall_s"):
         if k in new:
             _settings[k] = new[k]
     _save_settings()
@@ -84,20 +174,74 @@ def fetch_models(api_url: str, api_key: str) -> dict:
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = (1, 3, 8)  # seconds
 
+# ── API health (для graceful degradation) ───────────────────────────────
+# Держим trailing-state: last success/failure + consecutive failures.
+# Статус выводится: ok (недавно успешный вызов), degraded (1-2 consecutive
+# failures), offline (>=3 подряд или экплицитная ошибка retry-exhausted).
+_api_health = {
+    "last_ok_ts": 0.0,
+    "last_fail_ts": 0.0,
+    "consecutive_failures": 0,
+    "last_error": "",
+}
+
+# Cooldown: если оффлайн — первый call после 60с всё равно пробуется
+# (не смысла держать permanent offline, LM-сервер может вернуться).
+_OFFLINE_RETRY_COOLDOWN = 60.0
+
+
+def _health_mark_ok():
+    _api_health["last_ok_ts"] = time.time()
+    _api_health["consecutive_failures"] = 0
+    _api_health["last_error"] = ""
+
+
+def _health_mark_fail(err: str):
+    _api_health["last_fail_ts"] = time.time()
+    _api_health["consecutive_failures"] += 1
+    _api_health["last_error"] = (err or "")[:200]
+
+
+def get_api_health() -> dict:
+    """Возвращает {status: ok|degraded|offline, ...}. Для UI-индикатора."""
+    now = time.time()
+    cf = _api_health["consecutive_failures"]
+    last_ok = _api_health["last_ok_ts"]
+    if cf == 0 and last_ok > 0:
+        status = "ok"
+    elif cf < 3:
+        status = "degraded" if cf > 0 else ("unknown" if last_ok == 0 else "ok")
+    else:
+        status = "offline"
+    return {
+        "status": status,
+        "consecutive_failures": cf,
+        "last_ok_ts": last_ok,
+        "last_fail_ts": _api_health["last_fail_ts"],
+        "last_error": _api_health["last_error"],
+        "seconds_since_ok": (now - last_ok) if last_ok else None,
+    }
+
 
 def _api_request(url: str, data: bytes = None, headers: dict = None,
                  method: str = "POST", timeout: int = 120) -> dict:
-    """HTTP request with retry + exponential backoff on 5xx/timeout."""
+    """HTTP request with retry + exponential backoff on 5xx/timeout.
+
+    Обновляет `_api_health` на каждом итоге — чтобы UI мог показать
+    статус «LM offline» без тихих полома.
+    """
     last_err = None
     for attempt in range(_MAX_RETRIES):
         req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                result = json.loads(resp.read().decode("utf-8"))
+            _health_mark_ok()
+            return result
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8", errors="replace")
             if e.code < 500 and e.code != 429:
-                # Client error (4xx except 429) — don't retry
+                # Client error (4xx except 429) — don't retry, не offline
                 log.error(f"[api] HTTP {e.code}: {error_body[:500]}")
                 raise RuntimeError(f"API error {e.code}: {error_body[:200]}")
             last_err = f"HTTP {e.code}: {error_body[:200]}"
@@ -110,6 +254,7 @@ def _api_request(url: str, data: bytes = None, headers: dict = None,
         log.warning(f"[api] Attempt {attempt + 1}/{_MAX_RETRIES} failed: {last_err}. Retrying in {wait}s...")
         time.sleep(wait)
 
+    _health_mark_fail(last_err or "unknown")
     log.error(f"[api] All {_MAX_RETRIES} attempts failed: {last_err}")
     raise RuntimeError(f"API failed after {_MAX_RETRIES} retries: {last_err}")
 

@@ -107,9 +107,28 @@ baddle/
 │   ├── css/style.css
 │   └── js/              # graph, chat, modes, settings
 ├── templates/index.html
-├── graphs/              # сохранённые графы
-└── settings.json        # конфиг API endpoint
+├── data/                # 🔒 gitignored — все runtime-данные
+│   ├── settings.json        # API config (создаётся при первом запуске)
+│   ├── user_state.json      # состояние тела + нейрохимия
+│   ├── user_profile.json    # предпочтения и ограничения
+│   ├── goals.jsonl          # журнал целей
+│   ├── roles.json           # персоны (seeded из src/defaults.py)
+│   ├── templates.json       # шаблоны промптов (seeded)
+│   └── …                    # activity/checkins/patterns/plans
+├── graphs/              # 🔒 gitignored — per-workspace графы
+│   └── <ws>/
+│       ├── graph.json       # граф мыслей
+│       ├── state_graph.jsonl  # история tick'ов
+│       ├── solved/          # архив решённых задач
+│       └── meta.json
+└── workspaces/          # 🔒 gitignored — registry воркспейсов
+    └── index.json           # список + cross_edges
 ```
+
+**При первом запуске** `data/` и `workspaces/` создаются автоматически.
+`roles.json` + `templates.json` заполнятся дефолтами из `src/defaults.py`,
+можешь править их свободно — не перезапишутся. Layout подробно →
+[docs/storage-layout.md](docs/storage-layout.md).
 
 ---
 

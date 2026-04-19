@@ -1,18 +1,65 @@
-# CognitiveHorizon — адаптивный контроллер
+# CognitiveState — адаптивный контроллер
+
+> **`CognitiveState`** — единый объект контроля. Horizon-слой (precision,
+> policy, γ, τ) + нейрохимия через композицию с `Neurochem` (dopamine /
+> serotonin / norepinephrine) + `ProtectiveFreeze`. Спецификация
+> нейрохимии → [neurochem-design.md](neurochem-design.md).
 
 ## Идея
 
-Без Horizon все фазы tick используют одинаковые параметры: temperature=0.9, top_k=40. Brainstorm, SmartDC, Collapse — всё с одинаковой "шириной мышления". Это как ехать на одной передаче.
+Без контроллера все фазы tick'а использовали бы одинаковые LLM-параметры:
+temperature=0.9, top_k=40. Brainstorm, SmartDC, Collapse — всё с одинаковой
+«шириной мышления». Это как ехать на одной передаче.
 
-CognitiveHorizon (`src/horizon.py`) — контроллер между tick и LLM. Не генерирует контент — управляет **как** генерировать. Один параметр (precision) управляет всем сразу.
+`CognitiveState` (`src/horizon.py`) — контроллер между tick и LLM. Не
+генерирует контент — управляет **как** генерировать. Один параметр
+(precision) управляет Horizon-слоем; нейрохимия модулирует параметры
+динамически (γ·S в Байесе, NE → T, и т.д.).
 
-## Три параметра
+**Глобальный singleton** `get_global_state()` — один `CognitiveState` на систему
+(одна нейрохимия на человека, sync-prime). Workspace'ы имеют свой Horizon
+snapshot в graph state, но neurochem остаётся общим.
 
+## Параметры
+
+Horizon-слой:
 | Параметр | Что контролирует | Как обновляется |
 |----------|-----------------|-----------------|
-| **Π (precision)** | Уверенность в модели мира (0–1). Управляет температурой, top_k, novelty | Prediction error: `P += α·(target_surprise - surprise)` |
-| **Λ (policy_weights)** | Веса фаз {generate, merge, elaborate, doubt}. Какую фазу выбрать | Gradient: успешная фаза → вес ↑, неуспешная → вес ↓ |
-| **Γ (context_frame)** | Активная рамка, промпт, правила | Переключается при высокой novelty |
+| **Π (precision)** | Уверенность в модели мира (0–1). Управляет temp, top_k, novelty | Prediction error: `P += α·(target − surprise)` |
+| **Λ (policy_weights)** | Веса фаз {generate, merge, elaborate, doubt} | Gradient: успех → вес ↑, провал → вес ↓ |
+| **γ (gamma)** | Байесовская чувствительность (NAND) | Autocal через EMA(d(A,A)) + HRV nudge |
+| **T (temperature_nand)** | «Резкость» выбора в NAND | `T₀·(1−κ·NE) + T_floor` — NE обостряет |
+| **τ_in / τ_out** | Пороги distinct-зон CONFIRM/EXPLORE/CONFLICT | HRV nudge + S modulation |
+
+Нейрохимический слой (детально → [neurochem-design.md](neurochem-design.md)):
+| Скаляр | Роль | Влияние |
+|--------|------|---------|
+| **serotonin** | Стабильность весов, уверенность | входит в γ: низкий S → γ растёт |
+| **norepinephrine** | Arousal, Horizon/DMN бюджет | `T_eff`, `budget_H`, входит в γ |
+| **dopamine** | Новизна (EMA от distinct) | «тянет в сторону нового» в DMN |
+| **freeze.accumulator** | Хронический конфликт | Триггер `PROTECTIVE_FREEZE` |
+
+γ — derived property: `γ = 2.0 + 3.0 · norepinephrine · (1 − serotonin)`.
+Отдельного поля gamma нет.
+
+## Maturity drift (младенец → зрелый)
+
+Отдельный скаляр `maturity ∈ [0, 1]` растёт логистически на verified-
+события (node crossed conf ≥ 0.8, или goal resolved). **Effective precision**
+= `raw_precision + 0.4 · (maturity − 0.5)` — центр диапазона сдвигается
+на ±0.2 вокруг raw.
+
+```
+maturity=0.0  → effective = raw − 0.2   (младенец, wide cone, temp высокая)
+maturity=0.5  → effective = raw         (нейтрально)
+maturity=1.0  → effective = raw + 0.2   (зрелый, narrow cone, temp низкая)
+```
+
+`to_llm_params()` и `_target_state` читают **effective**, не raw. UI видит
+оба через `/assist/state: {precision, effective_precision, maturity}`.
+
+Параметры: `MATURITY_GROWTH_RATE = 0.003`, `MATURITY_GAIN = 0.4`. ~1000
+verifications нужно для maturity ≈ 0.95 — медленный биологический рост.
 
 ## Precision → параметры LLM
 
@@ -43,7 +90,7 @@ surprise ≈ target → зона потока
 
 target_surprise > 0 **всегда**. Система хочет чтобы реальность чуть не совпадала с ожиданием — иначе зачем думать.
 
-## Четыре состояния
+## Семь состояний (было 4, расширено)
 
 | Состояние | Precision | Триггер |
 |-----------|-----------|---------|
@@ -63,7 +110,14 @@ EXECUTION   → выход:  precision < 0.65 (не 0.70)
 
 Система "залипает" в текущем состоянии, пока precision не уйдёт достаточно далеко. Предотвращает колебания на границах.
 
-Планируется расширение до 7 состояний: +STABILIZE (сброс/калибровка), +SHIFT (поворот φ), +CONFLICT (несовместимые приоры). См. [hrv-design.md](hrv-design.md).
+**Расширенный набор (активен):**
+- EXPLORATION / EXECUTION / RECOVERY / INTEGRATION — базовые 4, precision-driven
+- STABILIZE — сработает при HRV coherence < 0.3 (сброс/калибровка)
+- CONFLICT — при sync_error > 0.75 (система не понимает юзера)
+- **PROTECTIVE_FREEZE** — при `freeze.accumulator > 0.15` (THETA_ACTIVE).
+  Блокирует Bayes обновления (`apply_to_bayes` возвращает prior). Recovery
+  гистерезисом: выход при `accumulator < 0.08` (THETA_RECOVERY).
+  См. [neurochem-design.md](neurochem-design.md).
 
 ## Выбор фазы
 
@@ -104,6 +158,16 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`
 
 ## Файлы
 
-- `src/horizon.py` — CognitiveHorizon, create_horizon(), 13 presets
-- `src/thinking.py` — tick() загружает/создаёт Horizon, вызывает select_phase(), передаёт horizon_params
+- `src/horizon.py` — `CognitiveState`, `get_global_state()`, `create_horizon()`,
+  14 presets. Методы: `apply_to_bayes`, `update_neurochem`, `update_from_hrv`,
+  `inject_ne`, `effective_temperature`, `horizon_budget`, `get_metrics`,
+  `to_dict`/`from_dict`. Композиция: `self.neuro` (Neurochem) + `self.freeze`
+  (ProtectiveFreeze)
+- `src/neurochem.py` — `Neurochem` + `ProtectiveFreeze`, 3 скаляра + derived γ
+- `src/tick_nand.py` — tick загружает/создаёт Horizon, считает distinct-matrix,
+  кормит нейрохимию (`update_neurochem(d, weights)`), маршрутизирует по зонам
 - `src/graph_routes.py` — autorun отправляет feedback через `/graph/horizon-feedback`
+
+---
+
+**Навигация:** [← Tick](tick-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Neurochem →](neurochem-design.md)

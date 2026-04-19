@@ -135,6 +135,8 @@ def pump(node_a_idx: int, node_b_idx: int, max_iterations: int = 3,
         "bridge": all_bridges[0]["text"],
         "confidence": round(best_confidence, 3),
         "all_bridges": all_bridges,
+        "text_a": text_a[:120],        # для UI scout-card: A → B layout
+        "text_b": text_b[:120],
         "cloud_a": cloud_a[:10],
         "cloud_b": cloud_b[:10],
         "iterations": iteration + 1,

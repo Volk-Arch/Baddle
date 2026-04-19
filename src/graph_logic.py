@@ -6,6 +6,7 @@ import logging
 import threading
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from typing import Optional
 
 import numpy as np
 
@@ -96,29 +97,172 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
     return ("supports", 0.7)
 
 
-def _bayesian_update(prior: float, p_e_h: float, p_e_nh: float) -> float:
-    """Compute Bayesian posterior: P(H|E) = P(E|H)*P(H) / P(E)."""
-    p_e = p_e_h * prior + p_e_nh * (1 - prior)
-    if p_e > 0:
-        return round(min(0.99, max(0.01, (p_e_h * prior) / p_e)), 3)
-    return prior
+def _bayesian_update_distinct(prior: float, d: float) -> float:
+    """NAND Bayes update через глобальную нейрохимию (γ derived).
+
+    d ∈ [0,1]: дистанция между evidence и hypothesis. Делегирует в
+    `CognitiveState.apply_to_bayes` (γ из neuro.gamma, блокируется при
+    PROTECTIVE_FREEZE), затем кормит **RPE** (prior, posterior) в neurochem
+    — автономный dopamine drift по неожиданности Δconfidence (без юзера).
+    """
+    from .horizon import get_global_state
+    cs = get_global_state()
+    posterior = cs.apply_to_bayes(prior, d)
+    try:
+        cs.neuro.record_outcome(prior, posterior)
+    except Exception as e:
+        log.debug(f"[bayes] RPE record failed: {e}")
+    # Maturity drift: нода пересекла verified threshold → система взрослеет
+    try:
+        if prior < 0.8 and posterior >= 0.8:
+            cs.note_verified()
+    except Exception as e:
+        log.debug(f"[bayes] maturity note failed: {e}")
+    return posterior
+
+
+def sample_in_embedding_space(
+    seed_embedding: list[float],
+    n: int = 5,
+    sigma: float = 1.0,
+    novelty_threshold: float = 0.2,
+    max_distance_from_seed: float = 0.6,
+    existing_embeddings: list | None = None,
+    max_attempts: int = 100,
+) -> list[list[float]]:
+    """Brainstorm в embedding space — N перturb'овских векторов без LLM текста.
+
+    sigma = desired L2 norm шума (dimension-invariant, scaled per-dim как
+    sigma/sqrt(dim)). sigma=1.0 → distinct(candidate, seed) ≈ 0.25. Больше
+    sigma → дальше от seed.
+
+    Returns unit-normalized candidate embeddings, каждый:
+      • distinct(candidate, seed) < max_distance_from_seed  (не улетел в область)
+      • distinct(candidate, e) > novelty_threshold ∀ e ∈ existing + accepted
+        (новизна относительно графа + уже принятых sample'ов)
+
+    Используется в /graph/brainstorm-seed: дешёвая генерация идей в виде
+    векторов; текст рендерится лениво только для тех что пользователь откроет.
+    Экономит токены (не генерируем текст до вычисления novelty).
+    """
+    import numpy as np
+    from .main import distinct
+
+    seed_vec = np.asarray(seed_embedding, dtype=np.float32)
+    if seed_vec.size == 0:
+        return []
+
+    existing = [np.asarray(e, dtype=np.float32) for e in (existing_embeddings or []) if e]
+    results: list[np.ndarray] = []
+    attempts = 0
+    rng = np.random.default_rng()
+    # Scale noise stddev с размерностью: expected ‖noise‖ ≈ sigma независимо от dim.
+    # Без этого в 768-d noise тонет/доминирует — dimension-invariance важна.
+    per_dim = float(sigma) / (seed_vec.size ** 0.5)
+
+    while len(results) < n and attempts < max_attempts:
+        attempts += 1
+        noise = rng.normal(0.0, per_dim, size=seed_vec.shape).astype(np.float32)
+        cand = seed_vec + noise
+        norm = float(np.linalg.norm(cand))
+        if norm < 1e-6:
+            continue
+        cand = cand / norm   # unit-normalize как настоящие embeddings
+
+        if distinct(cand, seed_vec) > max_distance_from_seed:
+            continue
+        if any(distinct(cand, e) < novelty_threshold for e in existing):
+            continue
+        if any(distinct(cand, r) < novelty_threshold for r in results):
+            continue
+        results.append(cand)
+
+    return [r.tolist() for r in results]
+
+
+def _d_from_relation(relation: str, strength: float) -> float:
+    """Map (relation, strength) → distinct distance d.
+
+    supports,   strength s → d = 1 − s  (high s = low d = close to H)
+    contradicts,strength s → d = s      (high s = high d = far from H)
+    neutral,    any        → d = 0.5    (no update)
+    """
+    s = max(0.0, min(1.0, float(strength)))
+    if relation == "supports":
+        return 1.0 - s
+    if relation == "contradicts":
+        return s
+    return 0.5
+
+
+def _beta_prior_update(alpha: float, beta: float, supports: bool, strength: float = 1.0) -> tuple:
+    """Beta distribution prior update.
+
+    Prior: Beta(alpha, beta) → mean = alpha/(alpha+beta), confidence ~ alpha+beta
+    Observation: supports (True/False) with strength in [0,1]
+    Returns: (new_alpha, new_beta)
+
+    Gives both probability AND confidence in that probability.
+    See docs/nand-architecture.md
+    """
+    alpha = max(0.5, float(alpha))
+    beta = max(0.5, float(beta))
+    if supports:
+        alpha += strength
+    else:
+        beta += strength
+    return (round(alpha, 2), round(beta, 2))
+
+
+def _beta_mean_ci(alpha: float, beta: float) -> dict:
+    """Extract mean and 95% credible interval from Beta(alpha, beta)."""
+    import math
+    alpha = max(0.5, float(alpha))
+    beta = max(0.5, float(beta))
+    total = alpha + beta
+    mean = alpha / total if total > 0 else 0.5
+    # Approximation for variance/std
+    var = (alpha * beta) / ((total ** 2) * (total + 1)) if total > 1 else 0.25
+    std = math.sqrt(var)
+    ci_lower = max(0.0, mean - 1.96 * std)
+    ci_upper = min(1.0, mean + 1.96 * std)
+    return {
+        "mean": round(mean, 3),
+        "std": round(std, 3),
+        "ci_lower": round(ci_lower, 3),
+        "ci_upper": round(ci_upper, 3),
+        "confidence_strength": round(total, 2),  # higher = more certain
+    }
 
 
 # ── node helpers ─────────────────────────────────────────────────────────────
 
 def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
                entropy: dict | None = None, confidence: float = 0.5,
-               node_type: str = "thought") -> dict:
-    """Create a node dict with all required fields."""
+               node_type: str = "thought",
+               embedding: list | None = None,
+               rendered: bool = True) -> dict:
+    """Create a node dict with all required fields.
+
+    embeddings-first: embedding field is primary. Text stays for display.
+    If `embedding` is None, it'll be populated by _ensure_embeddings on next pass.
+    distinct() can read from node["embedding"] directly, no LLM hop required.
+
+    `rendered=False` обозначает ноду созданную через embedding-first путь
+    (brainstorm-seed: perturbed vectors без текста). UI рендерит text только
+    по клику через /graph/render-node — text-on-demand.
+    """
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": node_id,
         "text": text,
+        "embedding": embedding,
         "entropy": entropy or {"avg": 0.0, "unc": 0.0},
         "depth": depth,
         "topic": topic,
         "confidence": round(confidence, 2),
-        "type": node_type,  # "thought", "hypothesis", "evidence", "fact", "question"
+        "type": node_type,
+        "rendered": rendered,
         "created_at": now,
         "last_accessed": now,
     }
@@ -134,6 +278,7 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("topic", "")
         node.setdefault("confidence", 0.5)
         node.setdefault("type", "thought")
+        node.setdefault("rendered", True)    # legacy nodes считаются уже отрендеренными
         node.setdefault("created_at", None)
         node.setdefault("last_accessed", None)
 
@@ -145,14 +290,76 @@ def _get_texts(nodes: list[dict] | None = None) -> list[str]:
     return [n["text"] for n in nodes]
 
 
+def force_synthesize_top(n: int = 5, lang: str = "ru",
+                          max_tokens: int = 3000) -> Optional[dict]:
+    """Forced collapse: top-N hypothesis/evidence/thought по confidence
+    + LLM-синтез одним абзацем + добавление synthesis-ноды в граф.
+
+    Общий helper используется `_check_dmn_converge` (фон) и `/graph/synthesize`
+    endpoint'ом для graph tab autorun. Source of truth — один.
+
+    Возвращает {text, confidence, node_idx} или None если граф пустой.
+    """
+    nodes = _graph.get("nodes", [])
+    if not nodes:
+        return None
+    cand = [(i, n) for i, n in enumerate(nodes)
+            if n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
+    if not cand:
+        return None
+    cand.sort(key=lambda p: p[1].get("confidence", 0.5), reverse=True)
+    top = cand[:n]
+    avg_conf = round(sum(p[1].get("confidence", 0.5) for p in top) / len(top), 2)
+    texts = "\n".join(f"- {p[1].get('text','')[:200]} (conf {p[1].get('confidence',0.5):.2f})"
+                       for p in top)
+    goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
+    if lang == "ru":
+        prompt = (f"Цель: {goal_text}\n"
+                  f"Найденные мысли (от сильной к слабой):\n{texts}\n\n"
+                  f"Напиши финальный синтез одним абзацем (3-5 предложений). "
+                  f"Если уверенность низкая — честно признайся об этом.")
+        system = "/no_think\nТы ассистент-синтезатор."
+    else:
+        prompt = (f"Goal: {goal_text}\nThoughts (strong to weak):\n{texts}\n\n"
+                  f"Final synthesis, one paragraph (3-5 sentences). Be honest "
+                  f"about low confidence.")
+        system = "/no_think\nYou are a synthesizer."
+    try:
+        res, _ = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": prompt}],
+            max_tokens=max_tokens, temp=0.5, top_k=30,
+        )
+    except Exception as e:
+        log.debug(f"[force_synthesize_top] LLM failed: {e}")
+        return None
+    text = (res or "").strip()[:2000]
+    if not text:
+        return None
+    try:
+        idx = _add_node(text[:500], depth=0, topic="",
+                        confidence=avg_conf, node_type="synthesis")
+    except Exception:
+        idx = None
+    return {"text": text, "confidence": avg_conf, "node_idx": idx,
+            "source_indices": [p[0] for p in top]}
+
+
 def _add_node(text: str, depth: int = 0, topic: str = "",
               entropy: dict | None = None, confidence: float = 0.5,
-              node_type: str = "thought") -> int:
-    """Create node with next id, append to graph, return new index."""
+              node_type: str = "thought",
+              embedding: list | None = None,
+              rendered: bool = True) -> int:
+    """Create node with next id, append to graph, return new index.
+
+    embedding/rendered передаются в _make_node — для embedding-first brainstorm
+    (unrendered seed с perturbed embedding без реального текста).
+    """
     with graph_lock:
         nodes = _graph["nodes"]
         new_id = len(nodes)
-        nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence, node_type))
+        nodes.append(_make_node(new_id, text, depth, topic, entropy, confidence,
+                                node_type, embedding=embedding, rendered=rendered))
         _graph.pop("_tick_tried", None)
         return new_id
 
@@ -203,7 +410,7 @@ def reset_graph():
 
 def _graph_generate(messages: list[dict], max_tokens: int = 60, temp: float = 0.9, top_k: int = 40, seed: int = -1, horizon_params: dict = None) -> tuple[str, dict]:
     """Generate text from chat messages via OpenAI-compatible API backend.
-    If horizon_params provided, uses dynamic temperature/top_k from CognitiveHorizon.
+    If horizon_params provided, uses dynamic temperature/top_k from CognitiveState.
     Returns (text, entropy_info)."""
     from .api_backend import api_chat_completion
 
@@ -237,6 +444,43 @@ def _clean_thinking(raw: str) -> str:
         text = text if text.strip() else raw
     text = re.sub(r"<[^>]*>", "", text)
     return text.strip()
+
+
+def parse_lines_clean(raw: str, min_len: int = 8, max_n: int = 5,
+                       topic: str = "") -> list[str]:
+    """Универсальный парсер multi-line LLM ответа → список чистых идей.
+
+    Шаги: split по \\n → strip маркеры (- • * цифры.) → фильтр по min_len →
+    `_clean_thought` на каждой → обрезать max_n. Заменяет 7+ дублирующих
+    мест в execute_deep / _deepen_round / execute_via_zones / cognitive_loop.
+    """
+    lines = [l.strip(" -•*1234567890.") for l in (raw or "").split("\n") if l.strip()]
+    cleaned = [_clean_thought(l, topic) for l in lines if len(l) > min_len]
+    # Фильтр опустошённых после clean
+    cleaned = [c for c in cleaned if c]
+    return cleaned[:max_n]
+
+
+def parse_smartdc_triple(raw: str) -> tuple[str, str, str]:
+    """Парсит FOR/AGAINST/SYNTHESIS (а также ЗА/ПРОТИВ/СИНТЕЗ) из LLM ответа.
+
+    Возвращает (thesis, antithesis, synthesis). Пустые строки если секция
+    не найдена. Заменяет 3-4 дублирующих места в execute_deep / _deepen_round /
+    cognitive_loop._check_dmn_converge.
+    """
+    thesis = antithesis = synthesis = ""
+    for line in (raw or "").split("\n"):
+        L = line.strip()
+        if not L:
+            continue
+        up = L.upper()
+        if up.startswith("FOR:") or up.startswith("ЗА:"):
+            thesis = L.split(":", 1)[1].strip()
+        elif up.startswith("AGAINST:") or up.startswith("ПРОТИВ:"):
+            antithesis = L.split(":", 1)[1].strip()
+        elif up.startswith("SYNTHESIS:") or up.startswith("СИНТЕЗ:"):
+            synthesis = L.split(":", 1)[1].strip()
+    return thesis, antithesis, synthesis
 
 
 def _clean_thought(text: str, topic: str) -> str:
@@ -276,16 +520,33 @@ def _generate_thought(topic: str, existing: list[str], lang: str = "en", temp: f
 # ── similarity & clustering ──────────────────────────────────────────────────
 
 def _ensure_embeddings(texts: list[str]):
-    """Compute and cache embeddings for all texts via API backend."""
+    """Compute and cache embeddings. v8b: mirror into node["embedding"] too.
+
+    Camera mode (v8c): if CognitiveState.llm_disabled is True and an API call
+    would be needed, fall back to None (system keeps thinking on existing
+    embeddings only, no new fetches).
+    """
     from .api_backend import api_get_embedding
+    try:
+        from .horizon import get_global_state
+        llm_off = get_global_state().llm_disabled
+    except Exception:
+        llm_off = False
 
     cache = _graph.setdefault("embeddings", [])
+    nodes = _graph.get("nodes", [])
     while len(cache) < len(texts):
         idx = len(cache)
-        emb = api_get_embedding(texts[idx])
+        emb = None if llm_off else api_get_embedding(texts[idx])
         cache.append(emb if emb else None)
     while len(cache) > len(texts):
         cache.pop()
+
+    # v8b: mirror cache into node.embedding so downstream distinct() reads
+    # directly off the node, no parallel-list juggling.
+    for i, n in enumerate(nodes):
+        if i < len(cache) and cache[i] and not n.get("embedding"):
+            n["embedding"] = cache[i]
 
 
 def _jaccard(i: int, j: int, texts: list[str]) -> float:

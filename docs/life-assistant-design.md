@@ -46,36 +46,35 @@ Task tracker (Telegram Mini App). Планирование дня, задачи 
 
 **Связь с Baddle:** AND mode (приоритеты/по шагам), энергетическая стоимость задач из MindBalance.
 
-### 4. HRV Reader — готовый стек Polar H10
+### 4. HRV Reader — стек Polar H10
 
-**Уже написан и работает.** Polar H10 → BLE → RR интервалы → HRV метрики → реалтайм UI.
+Чтение вариабельности сердечного ритма через Polar H10: BLE → RR-интервалы
+→ HRV-метрики → реалтайм-UI.
 
-Компоненты:
-- `polar_reader.py` — BLE scan, connect через bleak + bleakheart, RR callback с throttling, акселерометр
-- `hrv_calculator.py` — RMSSD, SDNN, pNN50, LF/HF через FFT
-- `app.py` — Flask + SocketIO сервер, история 24ч, API endpoints
+Ключевые метрики:
+- **RMSSD** — парасимпатический тонус
+- **SDNN** — общая вариабельность
+- **pNN50** — процент интервалов с разницей >50мс
+- **LF/HF** — баланс симпатика/парасимпатика через FFT
+- **Coherence** — синхронизация дыхания и сердца
 
-Метрики уже реализованы:
-```python
-calculate_rmssd(rr_intervals)           # Парасимпатический тонус
-calculate_sdnn(rr_intervals)            # Общая вариабельность
-calculate_pnn50(rr_intervals)           # % интервалов с разницей >50мс
-calculate_frequency_domain(rr_intervals) # LF, HF, LF/HF ratio через FFT
-```
-
-**Связь с Baddle:** Готовый MVP для HRV-интеграции (v5b). Не надо писать с нуля.
+**Связь с Baddle:** в `src/hrv_manager.py` + `src/hrv_metrics.py` уже
+реализован симулятор этих метрик (Polar-like модель) и интеграция
+в UserState. Реальный Polar H10 через BLE — задача в TODO
+(«экосистема / Polar H10 BLE»). См. подробности →
+[hrv-design.md](hrv-design.md).
 
 ## Как всё объединяется
 
 ```
 ┌─────────────────────┐
-│  Polar H10 (BLE)    │──→ polar_reader.py ──→ hrv_calculator.py
-└─────────────────────┘                              │
-                                            RMSSD, LF/HF, coherence
+│  Polar H10 (BLE)    │──→ hrv_manager ──→ hrv_metrics
+└─────────────────────┘                        │
+                                      RMSSD, LF/HF, coherence
                                                      │
                                                      ▼
 ┌─────────────────────┐              ┌──────────────────────────┐
-│  MindBalance        │──→ ID/IP/T/A │  Baddle CognitiveHorizon │
+│  MindBalance        │──→ ID/IP/T/A │  Baddle CognitiveState   │
 │  (энергия, решения) │              │  θ = f(coherence, rmssd)  │
 └─────────────────────┘              │  φ = f(lf_hf_ratio)       │
                                      │  energy = f(daily, reserve)│
@@ -123,8 +122,12 @@ HRV coherence — прямой индикатор: высокая = энерги
 
 ## Шаги реализации
 
-1. **Import HRV** — подключить `hrv_calculator.py` к Baddle (уже Flask, совместимо)
+1. **HRV из симулятора в реальное устройство** — `hrv_manager.start(mode="polar")` через BLE (сейчас `mode="simulator"`)
 2. **Energy overlay** — MindBalance формулы как слой поверх Horizon (daily/reserve energy meters)
 3. **Persist energy** — сохранение энергии между сессиями (JSON)
 4. **Daily routines** — repeatable mode + интерактивный ассистент для питания/задач
 5. **Auto-decision** — XOR comparative с авто-выбором при параличе (timer → LLM judge)
+
+---
+
+**Навигация:** [← Origin story](origin-story.md)  ·  [Индекс](README.md)  ·  [Следующее: Epilogue →](epilogue.md)
