@@ -30,11 +30,6 @@
 - Patterns × intent_router: если детектор нашёл паттерн но юзер молчит
   2+ недели — auto-abandon предложения чтобы не накапливать старые alerts
 
-- [ ] **Multi-context (workspace) aware router**. intent_router сейчас
-  знает только активные recurring/constraints глобально. Если юзер в
-  workspace=work пишет что-то — не использует рабочий контекст vs
-  personal. Низкий приоритет (пока single-user).
-
 ## 🎨 UI split — Baddle vs Graph Lab (future)
 
 По мере роста функциональности разделить UI на два:

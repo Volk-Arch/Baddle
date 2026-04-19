@@ -1106,7 +1106,6 @@ GET /loop/status → {running, alerts_pending, last_scout, last_dmn,
                     last_foreground_tick}
 POST /graph/tick → foreground путь, обновляет last_foreground_tick
 ```
-(Алиас `/watchdog/*` сохранён для обратной совместимости.)
 
 **Влияет на:**
 - Фоновые инсайты (Scout bridges → сохраняются в граф)
@@ -1124,12 +1123,8 @@ POST /graph/tick → foreground путь, обновляет last_foreground_tic
   `last_foreground_tick` ≈ now, следующие 30с DMN не лезет.
 
 **Красный флаг.**
-- `/loop/status` не существует, только `/watchdog/status` — значит URL
-  alias'ы пропали. Проверить `assistant.py` add_url_rule.
-- Watchdog AttributeError на legacy ключи в логах — значит где-то остался
-  импорт `from .watchdog`, надо мигрировать.
-
-**Красный флаг.**
+- `/loop/status` возвращает 404 → URL rules не зарегистрированы,
+  проверить `assistant.py` add_url_rule.
 - `last_dmn` не обновляется → background thread не идёт
 - DMN запускается при высоком NE → NE-гейт не работает
 

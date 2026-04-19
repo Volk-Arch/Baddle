@@ -7,7 +7,6 @@ import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional, Dict
 
 from flask import Blueprint, request, jsonify
@@ -2648,7 +2647,7 @@ def assist_alerts():
     })
 
 
-# ── Cognitive loop control (/loop/* — canonical; /watchdog/* alias for compat) ─
+# ── Cognitive loop control ──────────────────────────────────────────────
 
 def _loop_start():
     loop = get_cognitive_loop()
@@ -2666,7 +2665,3 @@ def _loop_status():
 assistant_bp.add_url_rule("/loop/start",  "loop_start",  _loop_start,  methods=["POST"])
 assistant_bp.add_url_rule("/loop/stop",   "loop_stop",   _loop_stop,   methods=["POST"])
 assistant_bp.add_url_rule("/loop/status", "loop_status", _loop_status, methods=["GET"])
-# Legacy URL aliases — существующие клиенты (docs/TODO примеры) дёргают /watchdog/*
-assistant_bp.add_url_rule("/watchdog/start",  "watchdog_start",  _loop_start,  methods=["POST"])
-assistant_bp.add_url_rule("/watchdog/stop",   "watchdog_stop",   _loop_stop,   methods=["POST"])
-assistant_bp.add_url_rule("/watchdog/status", "watchdog_status", _loop_status, methods=["GET"])
