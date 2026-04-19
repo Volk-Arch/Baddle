@@ -105,6 +105,7 @@ Foundation пропусти (пара абзацев). Основное врем
 24. **[novelty-design.md](novelty-design.md)** *(10 мин)* — фильтр повторов через similarity + rephrase-before-reject.
 25. **[cross-graph-design.md](cross-graph-design.md)** *(10 мин)* — continuity между сессиями: seed-ноды при switch, перенос embedding'ов.
 26. **[workspace-design.md](workspace-design.md)** *(15 мин)* — multi-graph архитектура: WorkspaceManager, cross-graph edges (серендипити), meta-graph.
+27. **[storage-layout.md](storage-layout.md)** *(10 мин)* — где что лежит на диске: `data/` vs `graphs/<ws>/` vs `workspaces/`, data flow, reset.
 
 **После этой главы ты знаешь:** *как* Baddle находит связи и *как* всё собрано в единую систему.
 

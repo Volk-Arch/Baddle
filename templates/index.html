@@ -115,6 +115,21 @@
         </label>
       </div>
 
+      <!-- Danger zone: полная очистка runtime данных -->
+      <div style="border-top:1px solid #7a1818;margin-top:12px;padding-top:12px">
+        <label class="modal-label" style="margin-bottom:6px;color:#d88">Danger zone</label>
+        <p style="color:var(--text-tertiary);font-size:11px;margin:0 0 8px 0;line-height:1.4">
+          Удалит все графы, state_graph, user_state, goals, profile, solved
+          archive. Settings, roles и templates сохранятся.
+        </p>
+        <button onclick="resetAllData()"
+          style="background:#5a0f0f;color:#fff;border:1px solid #7a1818;padding:6px 12px;
+                 font-size:12px;border-radius:4px;cursor:pointer">
+          🗑 Reset all user data
+        </button>
+        <span id="settings-reset-status" style="margin-left:10px;color:var(--text-tertiary);font-size:11px"></span>
+      </div>
+
       <div style="margin-top:12px">
         <span id="settings-current-model" style="color:var(--text-tertiary);font-size:11px"></span>
       </div>

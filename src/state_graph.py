@@ -45,7 +45,10 @@ log = logging.getLogger(__name__)
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 
-_DEFAULT_DIR = Path(__file__).parent.parent  # project root
+# Legacy (pre multi-workspace): state_graph.jsonl жил в корне. Теперь в
+# `data/` (если base_dir=None) для workspace=main fallback. Новые воркспейсы
+# передают свой base_dir из WorkspaceManager → graphs/<ws>/.
+from .paths import DATA_DIR as _DEFAULT_DIR
 _STATE_GRAPH_FILE = "state_graph.jsonl"
 _STATE_EMBEDDINGS_FILE = "state_embeddings.jsonl"
 

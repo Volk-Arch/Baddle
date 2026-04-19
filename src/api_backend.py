@@ -9,7 +9,8 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
+from .paths import SETTINGS_FILE as _SETTINGS_FILE, ensure_data_dir
+ensure_data_dir()
 
 _settings = {
     "api_url": "http://localhost:1234",   # LM Studio default, or OpenAI/etc

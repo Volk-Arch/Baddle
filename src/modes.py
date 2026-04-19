@@ -216,6 +216,11 @@ def should_stop(cl: dict, graph: dict, horizon, goal_node: dict = None) -> dict:
                 if emb:
                     sub_vecs.append(np.array(emb, dtype=np.float32))
 
+        # Edge case: subgoals ссылки невалидны или без embedding'ов —
+        # не делаем выводов по distinct-зоне, просто считаем по confidences.
+        if len(sub_vecs) < 2 and not sub_confidences:
+            return {"resolved": False, "reason": ""}
+
         avg_d = 0.5
         if len(sub_vecs) >= 2:
             sum_d = 0.0
@@ -231,16 +236,24 @@ def should_stop(cl: dict, graph: dict, horizon, goal_node: dict = None) -> dict:
         verified_count = sum(1 for c in sub_confidences if c >= 0.8)
 
         if sub_confidences:
-            if avg_d > tau_out:
+            # Emergent AND/OR через distinct-зону subgoals:
+            #   avg_d ≤ τ_in  (близкие) — subgoals семантически ПОХОЖИ
+            #     = альтернативы одного (React/Vue/Svelte) → OR, первый хватит
+            #   avg_d ≥ τ_out (разнесённые) — subgoals про РАЗНЫЕ части
+            #     = компоненты целого (frontend/backend/db) → AND, все нужны
+            #   τ_in < avg_d < τ_out — промежуточная зона, вывод не делаем
+            if avg_d <= tau_in:
                 # OR-like: первый verified побеждает
                 if verified_count >= 1:
                     return {"resolved": True,
-                            "reason": f"avg_d(subgoals)={avg_d:.2f}>τ_out: first verified ({verified_count}/{len(sub_confidences)})"}
-            else:
+                            "reason": f"avg_d(subgoals)={avg_d:.2f}≤τ_in={tau_in:.2f} (похожие): "
+                                      f"first verified ({verified_count}/{len(sub_confidences)})"}
+            elif avg_d >= tau_out:
                 # AND-like: все нужны
                 if verified_count >= len(sub_confidences):
                     return {"resolved": True,
-                            "reason": f"avg_d(subgoals)={avg_d:.2f}≤τ_out: all {verified_count} verified"}
+                            "reason": f"avg_d(subgoals)={avg_d:.2f}≥τ_out={tau_out:.2f} (разные): "
+                                      f"all {verified_count} verified"}
 
     # ── Case 2: synthesis близко к цели ──
     if goal_idx is not None and 0 <= goal_idx < len(embeddings) and cl["verified"]:

@@ -446,6 +446,43 @@ def _clean_thinking(raw: str) -> str:
     return text.strip()
 
 
+def parse_lines_clean(raw: str, min_len: int = 8, max_n: int = 5,
+                       topic: str = "") -> list[str]:
+    """Универсальный парсер multi-line LLM ответа → список чистых идей.
+
+    Шаги: split по \\n → strip маркеры (- • * цифры.) → фильтр по min_len →
+    `_clean_thought` на каждой → обрезать max_n. Заменяет 7+ дублирующих
+    мест в execute_deep / _deepen_round / execute_via_zones / cognitive_loop.
+    """
+    lines = [l.strip(" -•*1234567890.") for l in (raw or "").split("\n") if l.strip()]
+    cleaned = [_clean_thought(l, topic) for l in lines if len(l) > min_len]
+    # Фильтр опустошённых после clean
+    cleaned = [c for c in cleaned if c]
+    return cleaned[:max_n]
+
+
+def parse_smartdc_triple(raw: str) -> tuple[str, str, str]:
+    """Парсит FOR/AGAINST/SYNTHESIS (а также ЗА/ПРОТИВ/СИНТЕЗ) из LLM ответа.
+
+    Возвращает (thesis, antithesis, synthesis). Пустые строки если секция
+    не найдена. Заменяет 3-4 дублирующих места в execute_deep / _deepen_round /
+    cognitive_loop._check_dmn_converge.
+    """
+    thesis = antithesis = synthesis = ""
+    for line in (raw or "").split("\n"):
+        L = line.strip()
+        if not L:
+            continue
+        up = L.upper()
+        if up.startswith("FOR:") or up.startswith("ЗА:"):
+            thesis = L.split(":", 1)[1].strip()
+        elif up.startswith("AGAINST:") or up.startswith("ПРОТИВ:"):
+            antithesis = L.split(":", 1)[1].strip()
+        elif up.startswith("SYNTHESIS:") or up.startswith("СИНТЕЗ:"):
+            synthesis = L.split(":", 1)[1].strip()
+    return thesis, antithesis, synthesis
+
+
 def _clean_thought(text: str, topic: str) -> str:
     """Clean generated thought text — remove thinking, pick best line."""
     text = re.split(r"\s*(?:Human|User|Assistant)\s*:", text, flags=re.IGNORECASE)[0]

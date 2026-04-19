@@ -27,7 +27,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_CHECKIN_FILE = Path(__file__).parent.parent / "checkins.jsonl"
+from .paths import CHECKINS_FILE as _CHECKIN_FILE
 
 
 def _append(entry: dict):

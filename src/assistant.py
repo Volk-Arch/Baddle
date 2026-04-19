@@ -78,7 +78,7 @@ assistant_bp = Blueprint("assistant", __name__)
 
 # ── Energy / decisions store ────────────────────────────────────────────
 
-_STATE_FILE = Path(__file__).parent.parent / "user_state.json"
+from .paths import USER_STATE_FILE as _STATE_FILE
 
 # In-process lock сериализует load↔save между параллельными Flask-threads.
 # Устраняет race: thread A читает dump, thread B читает тот же dump,

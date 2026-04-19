@@ -36,7 +36,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_PATTERNS_FILE = Path(__file__).parent.parent / "patterns.jsonl"
+from .paths import PATTERNS_FILE as _PATTERNS_FILE, ACTIVITY_FILE as _ACTIVITY_FILE
 
 # Интервалы (в ISO weekday: 0=понедельник ... 6=воскресенье)
 WEEKDAYS_RU = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
@@ -58,7 +58,7 @@ def _window_for_hour(h: int) -> str:
 
 
 def _read_activity_events() -> list[dict]:
-    f = Path(__file__).parent.parent / "activity.jsonl"
+    f = _ACTIVITY_FILE
     if not f.exists():
         return []
     out = []

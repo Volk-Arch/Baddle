@@ -27,8 +27,8 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_GOALS_FILE = Path(__file__).parent.parent / "goals.jsonl"
-_GOALS_ARCHIVE_DIR = Path(__file__).parent.parent / "archives"
+from .paths import GOALS_FILE as _GOALS_FILE, DATA_DIR
+_GOALS_ARCHIVE_DIR = DATA_DIR / "archives"
 
 # Rotation parameters
 _ROTATE_SIZE_BYTES = 2 * 1024 * 1024   # 2 MB

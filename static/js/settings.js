@@ -127,6 +127,36 @@ function onEmbeddingSelectChange() {
   if (sel) document.getElementById('settings-embedding-model').value = sel.value;
 }
 
+// ── Reset user data ──────────────────────────────────────────────────────
+
+function resetAllData() {
+  const status = document.getElementById('settings-reset-status');
+  const typed = prompt(
+    'Полная очистка данных: удалит графы, state_graph, user_state, goals, profile, archive.\n\n' +
+    'Settings, roles, templates останутся.\n\n' +
+    'Введи "RESET" (заглавными) чтобы подтвердить:'
+  );
+  if (typed !== 'RESET') {
+    if (typed !== null) alert('Отмена — подтверждение не совпало.');
+    return;
+  }
+  if (status) status.textContent = 'удаляю...';
+  fetch('/data/reset', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({confirm: 'RESET'})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      if (status) status.textContent = `✓ удалено: ${d.removed_count} файлов/папок`;
+      setTimeout(() => { window.location.reload(); }, 1200);
+    } else {
+      if (status) status.textContent = `ошибка: ${d.error || '?'}`;
+    }
+  }).catch(e => {
+    if (status) status.textContent = `ошибка: ${e.message}`;
+  });
+}
+
 // Close modal on Escape
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && document.getElementById('settings-modal').style.display === 'flex') closeSettings();

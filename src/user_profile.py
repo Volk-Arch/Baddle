@@ -22,7 +22,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_PROFILE_FILE = Path(__file__).parent.parent / "user_profile.json"
+from .paths import USER_PROFILE_FILE as _PROFILE_FILE
 
 CATEGORIES = ("food", "work", "health", "social", "learning")
 CATEGORY_LABELS_RU = {

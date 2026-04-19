@@ -138,18 +138,3 @@ world`). Baddle — мозг, Hermes — руки. Интересный вари
 - [ ] **UserState global per-person** — один UserState на все workspaces.
   Если захочется разных `profile.food` для work vs personal — потребуется
   UserState per-workspace + context-switcher.
-
-
----
-
-# ✅ Проверить что работает
-
-Все тесты (narrative user-кейсы A-K + живые API-проверки по блокам) вынесены в отдельный файл → [TESTS.md](TESTS.md).
-
-Кратко что там есть:
-- **🧪 Пользовательские кейсы A-K** — end-to-end сценарии через UI с «→ Ожидаешь».
-- **Проверка / красный флаг** на каждую реализованную фичу (HRV, neurochem, morning briefing, state_graph, decisive cycle, DMN, Scout, symbiosis, cross-graph, embedding-first, Horizon, REM, activity log, plans, checkins, chat commands и т.д.).
-- Сквозной sanity check в конце.
-
-Актуализируй TESTS.md когда добавляешь фичу: кейс + API-проверка + красный флаг.
-

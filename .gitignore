@@ -9,32 +9,18 @@ Article/
 *.pyc
 *.pyo
 
-# User config (содержит API key)
-settings.json
+# Runtime data dir — settings, user_state, user_profile, goals, activity,
+# checkins, patterns, plans, legacy state_graph/embeddings/archive,
+# roles/templates (copy of ship-defaults).
+data/
 
-# Runtime per-workspace storage (graphs/<id>/graph.json,
-# state_graph.jsonl, state_embeddings.jsonl, meta.json, solved/*).
-# graphs/* — wildcard т.к. git не заглядывает внутрь ignored dir,
-# поэтому паттерн «ignore everything, except .gitkeep» требует звёздочку.
+# Per-workspace storage: graphs/<id>/graph.json + state_graph.jsonl +
+# state_embeddings.jsonl + meta.json + solved/*. graphs/* — wildcard т.к.
+# git не заглядывает внутрь ignored dir, поэтому «ignore everything except
+# .gitkeep» требует звёздочку.
 graphs/*
 !graphs/.gitkeep
 
 # Workspace index (список воркспейсов + cross_edges — user-specific)
 workspaces/*
 !workspaces/.gitkeep
-
-# Legacy (v4- до multi-graph) — остались в корне, persist через migrations
-state_graph.jsonl
-state_embeddings.jsonl
-state_graph.archive.jsonl
-
-# Solved archive (goal snapshots). Per-workspace хранение в будущем,
-# пока в корне solved/ — всегда user-specific.
-solved/
-
-# Goals event log — персональные цели и deadlines юзера
-goals.jsonl
-
-# Personal runtime state (eaten habits, activities, check-ins, HRV)
-user_state.json
-user_profile.json

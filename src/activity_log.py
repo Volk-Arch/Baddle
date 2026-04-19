@@ -31,7 +31,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_ACTIVITY_FILE = Path(__file__).parent.parent / "activity.jsonl"
+from .paths import ACTIVITY_FILE as _ACTIVITY_FILE
 
 
 # ── Keyword → category mapping (быстрый фолбэк для шаблонов) ──────────────

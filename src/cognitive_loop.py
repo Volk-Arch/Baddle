@@ -205,6 +205,23 @@ class CognitiveLoop:
         self._alerts_queue: list = []
         self._lock = threading.Lock()
 
+    # ── Throttle helper ────────────────────────────────────────────────
+
+    def _throttled(self, attr: str, interval_s: float) -> bool:
+        """True если пора бежать _check_*, иначе False. Пишет `now` в attr при True.
+
+        Заменяет 12 одинаковых двустрочников вида:
+            if now - self._last_X < self.X_INTERVAL: return
+            self._last_X = now
+        Теперь: `if not self._throttled("_last_X", self.X_INTERVAL): return`.
+        """
+        now = time.time()
+        last = getattr(self, attr, 0.0) or 0.0
+        if now - last < interval_s:
+            return False
+        setattr(self, attr, now)
+        return True
+
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     def start(self):
@@ -330,10 +347,8 @@ class CognitiveLoop:
              в path-графе получают manual_link (парадоксальные связи)
           4. Consolidation — прунинг слабых + архив state_graph (было 24h)
         """
-        now = time.time()
-        if now - self._last_night_cycle < self.NIGHT_CYCLE_INTERVAL:
+        if not self._throttled("_last_night_cycle", self.NIGHT_CYCLE_INTERVAL):
             return
-        self._last_night_cycle = now
         log.info("[cognitive_loop] night cycle starting")
 
         summary: dict = {}
@@ -577,8 +592,7 @@ class CognitiveLoop:
         Guard: только если есть хотя бы 1 open-goal + в графе меньше 30 нод
         (иначе не спамим). Лимит: один deep run в 30 мин.
         """
-        now = time.time()
-        if now - self._last_dmn_deep < self.DMN_DEEP_INTERVAL:
+        if not self._throttled("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
             return
         # Хотя бы 1 open goal и не слишком раздутый граф
         try:
@@ -590,8 +604,6 @@ class CognitiveLoop:
             return
         if len(_graph.get("nodes", [])) > 30:
             return
-
-        self._last_dmn_deep = now
         # Берём первую open goal (по порядку создания)
         goal = open_goals[0]
         goal_text = (goal.get("text") or "")[:200]
@@ -650,14 +662,12 @@ class CognitiveLoop:
 
         Результат: alert + entry в `_recent_bridges` → morning briefing.
         """
-        now = time.time()
-        if now - self._last_dmn_converge < self.DMN_CONVERGE_INTERVAL:
+        if not self._throttled("_last_dmn_converge", self.DMN_CONVERGE_INTERVAL):
             return
         nodes_n = len(_graph.get("nodes", []))
         if nodes_n < 5 or nodes_n > 40:
             # Слишком пусто или слишком большой граф — не запускаем
             return
-        self._last_dmn_converge = now
         # Depth config из settings — юзер может override class-level дефолты
         max_steps = self.DMN_CONVERGE_MAX_STEPS
         stall_window = self.DMN_CONVERGE_STALL_WINDOW
@@ -850,10 +860,8 @@ class CognitiveLoop:
         Суть: система ищет связи между твоими «исследование» и «личное»,
         «работа» и «здоровье» и т.д. — скрытые оси между разными областями.
         """
-        now = time.time()
-        if now - self._last_dmn_cross < self.DMN_CROSS_GRAPH_INTERVAL:
+        if not self._throttled("_last_dmn_cross", self.DMN_CROSS_GRAPH_INTERVAL):
             return
-        self._last_dmn_cross = now
         try:
             from .workspace import get_workspace_manager
             wm = get_workspace_manager()
@@ -887,12 +895,10 @@ class CognitiveLoop:
             log.debug(f"[cognitive_loop] cross_graph failed: {e}")
 
     def _check_dmn_continuous(self):
-        now = time.time()
-        if now - self._last_dmn < self.DMN_INTERVAL:
-            return
         if len(_graph.get("nodes", [])) < 4:
+            return  # pre-check дёшево, throttle дороже (timestamp write)
+        if not self._throttled("_last_dmn", self.DMN_INTERVAL):
             return
-        self._last_dmn = now
 
         bridge = self._run_pump_bridge(max_iterations=1, save=False)
         if bridge and bridge.get("quality", 0) > 0.5:
@@ -1019,15 +1025,12 @@ class CognitiveLoop:
         3. query_similar(k=3), фильтруем < 1 час (тривиально-свежие).
         4. Если топ-match достаточно близкий — surface as alert.
         """
-        now = time.time()
-        if now - self._last_state_walk < self.STATE_WALK_INTERVAL:
-            return
-
         from .state_graph import get_state_graph
         sg = get_state_graph()
         if sg.count() < 10:
             return  # слишком мало истории
-        self._last_state_walk = now
+        if not self._throttled("_last_state_walk", self.STATE_WALK_INTERVAL):
+            return
 
         # Прогрев embedding-кэша для tail (<=30 последних)
         try:
@@ -1130,6 +1133,9 @@ class CognitiveLoop:
         if local_hour < wake_hour:
             return
 
+        # Throttle check отдельно — потому что есть дополнительное условие
+        # wake_hour gate выше, которое может вернуть без обновления timestamp'а.
+        # _throttled пишет now только когда interval прошёл.
         self._last_briefing = now
         # Persist сразу — даже если briefing text упадёт, интервал уже
         # зачитан и повторы не сработают.
@@ -1561,13 +1567,11 @@ class CognitiveLoop:
         устаревает, `activity_zone` / `named_state` / `sync_regime` считаются
         на старом coherence. Этот push гарантирует свежесть каждые 15с.
         """
-        now = time.time()
-        if now - self._last_hrv_push < self.HRV_PUSH_INTERVAL:
-            return
         mgr = get_hrv_manager()
         if not mgr.is_running:
             return
-        self._last_hrv_push = now
+        if not self._throttled("_last_hrv_push", self.HRV_PUSH_INTERVAL):
+            return
         try:
             state = mgr.get_baddle_state() or {}
             from .user_state import get_user_state
@@ -1589,8 +1593,7 @@ class CognitiveLoop:
         Mockup: «Heavy decision 'change tech stack?' — move to tomorrow
         morning?». Дроссель раз в 30 минут чтобы не спамить.
         """
-        now = time.time()
-        if now - self._last_low_energy_check < self.LOW_ENERGY_CHECK_INTERVAL:
+        if not self._throttled("_last_low_energy_check", self.LOW_ENERGY_CHECK_INTERVAL):
             return
         try:
             from .assistant import _get_context
@@ -1606,7 +1609,6 @@ class CognitiveLoop:
                 return
             g0 = heavy[0]
             txt = (g0.get("text") or "")[:80]
-            self._last_low_energy_check = now
             self._add_alert({
                 "type": "low_energy_heavy",
                 "severity": "warning",
@@ -1643,11 +1645,9 @@ class CognitiveLoop:
 
         Не эмитит alert — это наблюдательная запись, не сигнал.
         """
-        now = time.time()
-        if now - self._last_heartbeat < self.HEARTBEAT_INTERVAL:
+        if not self._throttled("_last_heartbeat", self.HEARTBEAT_INTERVAL):
             return
-        self._last_heartbeat = now
-
+        now = time.time()
         snapshot: dict = {"ts": now}
         # 1. Active activity
         try:
@@ -1787,10 +1787,8 @@ class CognitiveLoop:
         Dedup по (plan_id, for_date) чтобы не повторять. На новый день набор
         сбрасывается.
         """
-        now = time.time()
-        if now - self._last_plan_reminder_check < self.PLAN_REMINDER_CHECK_INTERVAL:
+        if not self._throttled("_last_plan_reminder_check", self.PLAN_REMINDER_CHECK_INTERVAL):
             return
-        self._last_plan_reminder_check = now
 
         import datetime as _dt
         today_str = _dt.date.today().strftime("%Y-%m-%d")
@@ -1950,10 +1948,8 @@ class CognitiveLoop:
         embeddings с момента последнего switch. Теперь auto-flush раз
         в 2 минуты делает persistence надёжным.
         """
-        now = time.time()
-        if now - self._last_ws_flush < self.WS_FLUSH_INTERVAL:
+        if not self._throttled("_last_ws_flush", self.WS_FLUSH_INTERVAL):
             return
-        self._last_ws_flush = now
         try:
             from .workspace import get_workspace_manager
             get_workspace_manager().save_active()

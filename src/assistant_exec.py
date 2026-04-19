@@ -579,6 +579,7 @@ def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
     # Elaborate
     ev_added = []
     try:
+        from .graph_logic import parse_lines_clean, parse_smartdc_triple
         elab_prompt = (
             f"Гипотеза: «{weak_text}».\n"
             f"Контекст цели: {message[:150]}.\n"
@@ -593,8 +594,7 @@ def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
              {"role": "user", "content": elab_prompt}],
             max_tokens=max_tokens, temp=temp, top_k=top_k,
         )
-        lines = [_clean_thought(l.strip(" -•*1234567890."), "")
-                 for l in res.split("\n") if len(l.strip()) > 8][:2]
+        lines = parse_lines_clean(res, min_len=8, max_n=2)
         directed = _graph["edges"].setdefault("directed", [])
         for et in lines:
             eidx = _add_node(et, depth=2, topic="", confidence=0.65,
@@ -605,7 +605,10 @@ def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
     except Exception as e:
         return {"error": str(e)[:100], "phase": "elaborate"}
 
-    # SmartDC → pro vs con → update confidence
+    # SmartDC → pro vs con → update confidence.
+    # Confidence update — symmetric ±0.12 (асимметрия +0.12/-0.15 давала
+    # upward drift). Length-heuristic признана хрупкой, но заменить её LLM-
+    # judge'ем = +1 lm call per round; пока держим length как rough signal.
     try:
         dc_prompt = (
             f"Гипотеза: «{weak_text}».\n"
@@ -618,22 +621,18 @@ def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
              {"role": "user", "content": dc_prompt}],
             max_tokens=max_tokens, temp=0.4, top_k=30,
         )
-        fr = ag = sy = ""
-        for line in dc.split("\n"):
-            L = line.strip()
-            if L.upper().startswith(("FOR:", "ЗА:")):
-                fr = L.split(":", 1)[1].strip()
-            elif L.upper().startswith(("AGAINST:", "ПРОТИВ:")):
-                ag = L.split(":", 1)[1].strip()
-            elif L.upper().startswith(("SYNTHESIS:", "СИНТЕЗ:")):
-                sy = L.split(":", 1)[1].strip()
-        # Update: if AGAINST significantly longer than FOR → conf down
+        fr, ag, sy = parse_smartdc_triple(dc)
         if fr and ag:
+            # Symmetric conf shift: AGAINST длиннее → понижаем, иначе повышаем
             if len(ag) > len(fr) * 1.3:
-                new_conf = max(0.1, conf_before - 0.15)
+                new_conf = max(0.1, conf_before - 0.12)
             else:
                 new_conf = min(0.95, conf_before + 0.12)
         else:
+            # Одна из сторон пустая — LLM не дал полный ответ. Не меняем conf
+            # но зафиксируем warning чтобы upstream мог диагностировать.
+            log.warning(f"[deepen] empty FOR/AGAINST на #{weak_idx}: "
+                        f"fr={bool(fr)} ag={bool(ag)}")
             new_conf = conf_before
         _graph["nodes"][weak_idx]["confidence"] = new_conf
         return {
@@ -737,8 +736,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         except Exception as e:
             log.warning(f"[execute_deep] brainstorm failed: {e}")
             return execute_via_zones(message, lang, mode_id, profile_hint)
-        lines = [l.strip(" -•*1234567890.") for l in result.split("\n") if l.strip()]
-        ideas = [_clean_thought(l, "") for l in lines if len(l) > 8][:5]
+        from .graph_logic import parse_lines_clean
+        ideas = parse_lines_clean(result, min_len=8, max_n=5)
     added_hyp = []
     for text in ideas:
         try:
@@ -841,8 +840,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                          {"role": "user", "content": p}],
                         max_tokens=1200, temp=0.6, top_k=40,
                     )
-                    ev_lines = [_clean_thought(l.strip(" -•*1234567890."), "")
-                                for l in res.split("\n") if len(l.strip()) > 8][:2]
+                    from .graph_logic import parse_lines_clean
+                    ev_lines = parse_lines_clean(res, min_len=8, max_n=2)
                     for et in ev_lines:
                         # Маркируем тип argument через node_type=evidence +
                         # поле evidence_polarity для downstream визуализации
@@ -940,8 +939,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                  {"role": "user", "content": elaborate_prompt}],
                 max_tokens=2000, temp=0.6, top_k=40,
             )
-            ev_lines = [_clean_thought(l.strip(" -•*1234567890."), "")
-                        for l in ev_result.split("\n") if len(l.strip()) > 8]
+            from .graph_logic import parse_lines_clean
+            ev_lines = parse_lines_clean(ev_result, min_len=8, max_n=2)
             ev_added = []
             for et in ev_lines[:2]:
                 idx = _add_node(et, depth=2, topic="", confidence=0.65,
@@ -984,15 +983,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                  {"role": "user", "content": dc_prompt}],
                 max_tokens=3000, temp=0.4, top_k=30,
             )
-            thesis = antithesis = synthesis_text = ""
-            for line in dc_result.split("\n"):
-                low = line.strip()
-                if low.upper().startswith("FOR:") or low.upper().startswith("ЗА:"):
-                    thesis = line.split(":", 1)[1].strip()
-                elif low.upper().startswith("AGAINST:") or low.upper().startswith("ПРОТИВ:"):
-                    antithesis = line.split(":", 1)[1].strip()
-                elif low.upper().startswith("SYNTHESIS:") or low.upper().startswith("СИНТЕЗ:"):
-                    synthesis_text = line.split(":", 1)[1].strip()
+            from .graph_logic import parse_smartdc_triple
+            thesis, antithesis, synthesis_text = parse_smartdc_triple(dc_result)
             # Rough confidence heuristic: длины аргументов (более полный = более уверенный)
             confidence_t = min(0.9, 0.5 + len(thesis) / 200)
             confidence_a = min(0.9, 0.5 + len(antithesis) / 200)
@@ -1024,7 +1016,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     #   (3) convergence: 3+ verified, avg conf > 85%, нет pending,
     #   (4) novelty exhaustion: precision > 0.85 + нет работы.
     # Stall как safety net (если should_stop никогда не срабатывает).
-    STALL_LIMIT = 2
+    STALL_LIMIT = 3              # было 2 — слишком чувствительно при скачках
+    STALL_DELTA = 0.015          # было 0.02 — 0.015 < типичный +0.12 но выше шума
     base_rounds = 3
     extra_rounds = max(0, max_steps - base_rounds)
     stall = 0
@@ -1034,13 +1027,23 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         return sum(vals) / len(vals) if vals else 0.0
     prev_avg_conf = _avg_conf()
 
-    # Готовим контекст для should_stop: horizon (global) + goal_node ссылка.
+    # Готовим контекст для should_stop: snapshot horizon params + goal_node.
+    # SNAPSHOT вместо live ссылки — чтобы background tick / DMN / другой
+    # execute_deep не модифицировал tau_in/tau_out/precision пока идёт
+    # наш iter loop (single-user реалистично редко, но multi-agent сценарий
+    # без snapshot ломался бы). Читаем один раз → shim-объект с атрибутами.
     try:
         from .horizon import get_global_state
         from .thinking import classify_nodes
         from .modes import should_stop
         from .graph_logic import _compute_edges
-        _horizon = get_global_state()
+        _live = get_global_state()
+        class _HorizonSnap:
+            __slots__ = ("tau_in", "tau_out", "precision")
+        _horizon = _HorizonSnap()
+        _horizon.tau_in = float(getattr(_live, "tau_in", 0.3))
+        _horizon.tau_out = float(getattr(_live, "tau_out", 0.7))
+        _horizon.precision = float(getattr(_live, "precision", 0.5))
         _goal_node = _graph["nodes"][goal_idx] if 0 <= goal_idx < len(_graph["nodes"]) else None
     except Exception as e:
         log.debug(f"[execute_deep] stop-check setup failed: {e}")
@@ -1099,7 +1102,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         # (мы deepen'им разные ноды раунд за раундом, лидер не меняется,
         # поэтому max бесполезен). Avg ловит agenda-wide progress.
         cur_avg_conf = _avg_conf()
-        if cur_avg_conf <= prev_avg_conf + 0.02:
+        if cur_avg_conf <= prev_avg_conf + STALL_DELTA:
             stall += 1
         else:
             stall = 0

@@ -23,11 +23,18 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_ARCHIVE_DIR = Path(__file__).parent.parent / "solved"
+from .paths import PROJECT_ROOT
 
 
-def _ensure_dir():
-    _ARCHIVE_DIR.mkdir(exist_ok=True)
+def _ws_archive_dir(workspace: str) -> Path:
+    """Per-workspace архив: `graphs/<ws>/solved/`. Создаётся при первом write."""
+    return PROJECT_ROOT / "graphs" / workspace / "solved"
+
+
+def _ensure_dir(workspace: str = "main") -> Path:
+    d = _ws_archive_dir(workspace)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def archive_solved(goal_id: str,
@@ -42,11 +49,13 @@ def archive_solved(goal_id: str,
       - graph_snapshot: {nodes, edges, meta}
       - state_trace: последние N state_graph entries
       - final_synthesis: если удалось выделить (последняя verified нода)
+
+    Пишется в `graphs/<workspace>/solved/{snapshot_ref}.json`.
     """
     from .graph_logic import _graph
     from .state_graph import get_state_graph
 
-    _ensure_dir()
+    archive_dir = _ensure_dir(workspace)
     snapshot_ref = f"{int(time.time())}_{goal_id}_{uuid.uuid4().hex[:6]}"
 
     try:
@@ -94,10 +103,10 @@ def archive_solved(goal_id: str,
             "final_synthesis": final_synthesis,
         }
 
-        path = _ARCHIVE_DIR / f"{snapshot_ref}.json"
+        path = archive_dir / f"{snapshot_ref}.json"
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info(f"[solved_archive] saved {snapshot_ref} ({len(graph_snap['nodes'])} nodes, "
-                 f"{len(entries)} state entries)")
+                 f"{len(entries)} state entries) → ws={workspace}")
         return snapshot_ref
 
     except Exception as e:
@@ -105,10 +114,24 @@ def archive_solved(goal_id: str,
         return None
 
 
+def _find_snapshot(snapshot_ref: str) -> Optional[Path]:
+    """Scan all workspaces для snapshot_ref. Первый hit wins."""
+    graphs_root = PROJECT_ROOT / "graphs"
+    if not graphs_root.exists():
+        return None
+    for ws_dir in graphs_root.iterdir():
+        if not ws_dir.is_dir():
+            continue
+        cand = ws_dir / "solved" / f"{snapshot_ref}.json"
+        if cand.exists():
+            return cand
+    return None
+
+
 def load_solved(snapshot_ref: str) -> Optional[dict]:
-    """Load archived snapshot. Returns None if missing or malformed."""
-    path = _ARCHIVE_DIR / f"{snapshot_ref}.json"
-    if not path.exists():
+    """Load archived snapshot. Returns None если нет."""
+    path = _find_snapshot(snapshot_ref)
+    if path is None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -117,11 +140,25 @@ def load_solved(snapshot_ref: str) -> Optional[dict]:
         return None
 
 
+def _iter_archive_files():
+    """Yield `.json` archive files across all workspaces."""
+    graphs_root = PROJECT_ROOT / "graphs"
+    if not graphs_root.exists():
+        return
+    for ws_dir in graphs_root.iterdir():
+        if not ws_dir.is_dir():
+            continue
+        sd = ws_dir / "solved"
+        if sd.exists():
+            yield from sd.glob("*.json")
+
+
 def list_solved(limit: int = 50) -> list[dict]:
-    """List archive index, newest first. Each entry — short summary."""
-    if not _ARCHIVE_DIR.exists():
-        return []
-    files = sorted(_ARCHIVE_DIR.glob("*.json"),
+    """List archive index, newest first. Each entry — short summary.
+
+    Сканирует per-workspace `graphs/<ws>/solved/`.
+    """
+    files = sorted(_iter_archive_files(),
                    key=lambda p: p.stat().st_mtime, reverse=True)
     out: list[dict] = []
     for f in files[:limit]:
