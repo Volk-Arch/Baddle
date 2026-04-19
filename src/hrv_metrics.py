@@ -1,7 +1,4 @@
-"""HRV metrics — adapted from working HRV Reader project.
-
-Source: C:\\Users\\Volk\\Desktop\\Projects\\hrv\\hrv_calculator.py
-This is a self-contained copy — no external dependencies beyond numpy.
+"""HRV metrics — self-contained, no dependencies beyond numpy.
 
 Provides:
   - calculate_rmssd/sdnn/pnn50
