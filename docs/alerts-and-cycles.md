@@ -1,12 +1,12 @@
 # Alerts and Cycles
 
-Справочник того что Baddle делает **сам в фоне**: 19 периодических check'ов + 21+ типов alerts/cards. Нужно чтобы понять «что должно прилететь в UI и когда» и дебажить молчаливые фоны.
+Справочник того что Baddle делает **сам в фоне**: 20 периодических check'ов + 21+ типов alerts/cards. Нужно чтобы понять «что должно прилететь в UI и когда» и дебажить молчаливые фоны.
 
 Всё живёт в одном процессе — `CognitiveLoop` (см. [src/cognitive_loop.py](../src/cognitive_loop.py)). Один поток крутится с adaptive-интервалом (15 сек когда HRV активно, до 60 сек в idle) и дёргает `_check_*` методы. Каждый check имеет свой throttle (см. «Throttle intervals» ниже).
 
 ---
 
-## 19 фоновых check'ов
+## 20 фоновых check'ов
 
 | # | Check | Throttle | Когда срабатывает | Alert type (если emit'ит) | Нагрузка |
 |---|-------|----------|-------------------|---------------------------|----------|
@@ -31,6 +31,7 @@
 | 17 | `_check_hrv_alerts` | 1 мин | Coherence упал ниже критической | `coherence_crit` | 🟢 light |
 | 18 | `_check_sync_seeking` | 2ч | `desync_pressure > 0.3` + idle > 2ч + 30мин quiet после других proactive | `sync_seeking` (LLM-генерация, soft card) | 🟡 medium (1 LLM call) |
 | 19 | `_check_agency_update` | 1ч | `schedule_for_day()` непустой | — (обновляет `UserState.agency` EMA из completed/planned) | 🟢 light |
+| 20 | `_check_action_outcomes` | 5мин | Есть open action-ноды (закрытых нет — пропускает) | — (закрывает action-ноды outcome'ами через forced reaction match или timeout) | 🟢 light |
 
 **Тяжёлые пропускаются в test harness по default** (см. ниже). Включаются `?include_heavy=1`.
 
@@ -104,6 +105,18 @@ UI poll'ит [`GET /assist/alerts`](../src/assistant.py) (обычно раз в
 | `dmn_converge` | cognitive_loop | Summary server-side autorun'а |
 | `state_walk` | cognitive_loop | «🕰 Похожий момент (дата): тогда я {verb}» (human-mapping action→глагол) |
 | `sync_seeking` | cognitive_loop | Soft card — Baddle пишет первым когда давно молчали. LLM-генерит текст, иконка по tone (🌿 caring / 💭 ambient / 👀 curious / 🔗 reference / 🤲 simple), фоновый цвет карточки по tone. Подпись «Baddle не слышит тебя Nч». Без кнопок — ожидание живого ответа |
+
+### 🧠 Action Memory node-types (не alerts, но часть единого графа)
+
+Все proactive actions + user-actions записываются в **граф** как ноды `type=action`. Через 30мин/24ч/7д (зависит от kind) закрываются нодой `type=outcome` связанной edge `caused_by`. UI Graph Lab отрисовывает их оранжевым (action) и зелёным/красным (outcome по знаку delta_sync_error). См. [action-memory-design.md](action-memory-design.md).
+
+**Baddle-side** (записываются из cognitive_loop): `sync_seeking` · `dmn_bridge` · `scout_bridge` · `suggestion_recurring`/`constraint`/`generic` · `morning_briefing` · `alert_low_energy` · `reminder_plan` · `evening_retro` · `baddle_reply` (из /assist) · `chat_event_*` (из `_push_event_to_chat`).
+
+**User-side** (записываются из endpoints): `user_chat` (с sentiment в context) · `user_accept`/`user_reject` (из /assist/feedback) · `user_goal_create_*` (из /goals/add) · `user_activity_start`/`user_activity_stop` (из /activity/*) · `user_checkin` (из /checkin).
+
+`user_chat` / `baddle_reply` соединены edge `followed_by` в хронологическую цепочку через `link_chat_continuation` (окно 1ч). Это дает **chat = view над графом по времени**.
+
+Endpoint: `GET /graph/actions-timeline?limit=N&since_ts=...&kinds=...&actor=...&include_outcomes=0|1` возвращает отсортированный список.
 | `plan_reminder` | cognitive_loop | «⏰ НАПОМИНАНИЕ: {name} · через N мин» + кнопки Начать/Пропустить/Позже |
 | `recurring_lag` | cognitive_loop | Напоминание «отстаёт X: N/M» |
 | `evening_retro` | cognitive_loop | Список unfinished + кнопка открыть check-in |

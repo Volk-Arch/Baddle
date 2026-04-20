@@ -70,24 +70,24 @@
 
 **Реализация:** `stable_iterations_count` в cognitive_loop. Pump/DMN в idle состоянии не дёргаются пока нет новых событий.
 
-### 5. Действия и последствия — самообучение через граф (2026-04-21)
+### 5. Действия и последствия — самообучение через граф ✅ 2026-04-21
 
-**Сейчас:** первые 4 механики работают на **паттернах** (timer, threshold, EMA). Они реактивные и одинаковы для всех юзеров.
+**Было:** первые 4 механики — реактивно-адаптивные, одинаковы для всех. Baddle видит и реагирует, но не **учится** какие её собственные действия действительно помогают этому конкретному человеку.
 
-**Должно быть:** Baddle учится **на этом конкретном юзере** — какие её собственные действия действительно снижали `sync_error`, а какие были шумом. Правило простое: любое действие (свое или юзера) → нода в графе → через timeout → нода-outcome с `delta_sync_error`. DMN / pump / consolidate, которые уже работают для мыслей, начинают **автоматически** работать для действий.
+**Реализовано:** два новых node_type (`action`, `outcome`) + edge `caused_by` + одна новая проверка `_check_action_outcomes`. Все existing механики (DMN / pump / consolidate / touch_node / hebbian) автоматически работают для действий — специального RL-кода нет.
 
 Цикл сознания закрывается:
 1. Замечает рассогласование ← `sync_error`
-2. Хочет уменьшить ← `−Δsync_error` в outcome становится «весом» action через hebbian crepnenie
-3. Пробует действие ← action-нода создаётся
-4. Запоминает сработало ли ← outcome-нода с `caused_by` edge
-5. Повторяет успешное ← query similar contexts через existing embedding similarity, предпочитает high score
+2. Хочет уменьшить ← `−Δsync_error` в outcome = «вес» action через existing hebbian крепнутие
+3. Пробует действие ← action-нода в графе (`record_action`)
+4. Запоминает сработало ли ← outcome-нода через `_check_action_outcomes` (timeout per kind или user-reaction)
+5. Повторяет успешное ← `score_action_candidates` query через graph scan, applied в `_check_sync_seeking` tone choice
 
-**Это не новый код — это новая семантика для графа.** Никаких RL-фреймворков, experience buffers, Q-tables. Всё через существующие pump / DMN / consolidate / touch_node / hebbian decay, применённые к новым node_type (action + outcome).
+**Sentiment** юзера вплетён как metadata user_chat-ноды + высокочастотный feeder в `UserState.valence` (light LLM classify с кэшем).
 
-**Реализация:** подробно в [action-memory-design.md](action-memory-design.md). Две новые node_type, два edge_type, один новый check (`_check_action_outcomes` — закрывает outcomes по timeout), новый `sentiment.py` (text → valence feeder), 3-4 дня работы.
+**Merge:** OQ #3 (валентность как driver) и OQ #4 (recovery routes) **растворились** в этой механике — оба реализованы как свойства action-outcome графа, отдельного кода не потребовалось.
 
-Через эту механику **автоматически растворяются** открытые вопросы #3 (валентность как driver) и #4 (recovery routes memory) — оба становятся свойствами action-outcome графа, без отдельного кода.
+**Подробности:** [action-memory-design.md](action-memory-design.md).
 
 ---
 

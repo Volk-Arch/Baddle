@@ -281,6 +281,18 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("rendered", True)    # legacy nodes считаются уже отрендеренными
         node.setdefault("created_at", None)
         node.setdefault("last_accessed", None)
+        # Action Memory fields (only populated for type=action/outcome nodes)
+        if node.get("type") == "action":
+            node.setdefault("actor", "baddle")
+            node.setdefault("action_kind", "unknown")
+            node.setdefault("context", {})
+            node.setdefault("closed", False)
+            node.setdefault("outcome_idx", None)
+        elif node.get("type") == "outcome":
+            node.setdefault("linked_action_idx", None)
+            node.setdefault("delta_sync_error", 0.0)
+            node.setdefault("user_reaction", "silence")
+            node.setdefault("latency_s", 0.0)
 
 
 # ── Hebbian: touch (обращение к ноде) ───────────────────────────────────────
@@ -327,6 +339,307 @@ def touch_nodes(indices, boost: float = TOUCH_BOOST_DEFAULT) -> int:
         if touch_node(idx, boost=boost):
             n += 1
     return n
+
+
+# ── Action Memory (самообучение через граф) ─────────────────────────────────
+#
+# Action / outcome — ноды того же графа что и мысли. DMN / pump / consolidate
+# / hebbian decay работают на них автоматически. Cм. docs/action-memory-design.md.
+
+
+def _current_snapshot() -> dict:
+    """Snapshot pre-state для контекста action-ноды.
+
+    Собирает: sync_error, user-state скаляры, system-state (neurochem +
+    freeze), sync_regime, hrv_regime, time_of_day. Все опционально —
+    если что-то не доступно, поле опускается (не падаем).
+    """
+    import datetime as _dt
+    snap: dict = {"ts": _dt.datetime.now(timezone.utc).isoformat()}
+
+    # Time of day
+    try:
+        h = _dt.datetime.now().hour
+        if 5 <= h < 11:      snap["time_of_day"] = "morning"
+        elif 11 <= h < 17:   snap["time_of_day"] = "day"
+        elif 17 <= h < 23:   snap["time_of_day"] = "evening"
+        else:                 snap["time_of_day"] = "night"
+    except Exception:
+        pass
+
+    # User state (4 скаляра + agency + valence)
+    try:
+        from .user_state import get_user_state
+        u = get_user_state()
+        snap["user_state_before"] = {
+            "dopamine":        round(u.dopamine, 3),
+            "serotonin":       round(u.serotonin, 3),
+            "norepinephrine":  round(u.norepinephrine, 3),
+            "burnout":         round(u.burnout, 3),
+            "agency":          round(u.agency, 3),
+            "valence":         round(u.valence, 3),
+        }
+    except Exception:
+        pass
+
+    # System state (Neurochem + freeze) + sync_error + regimes
+    try:
+        from .horizon import get_global_state
+        gs = get_global_state()
+        snap["system_state_before"] = {
+            "dopamine":             round(gs.neuro.dopamine, 3),
+            "serotonin":            round(gs.neuro.serotonin, 3),
+            "norepinephrine":       round(gs.neuro.norepinephrine, 3),
+            "conflict_accumulator": round(gs.freeze.conflict_accumulator, 3),
+            "desync_pressure":      round(gs.freeze.desync_pressure, 3),
+        }
+        snap["sync_error_before"] = round(float(gs.sync_error), 3)
+        snap["sync_regime"] = gs.sync_regime
+    except Exception:
+        pass
+
+    # HRV regime (activity_zone из UserState)
+    try:
+        from .user_state import get_user_state
+        snap["hrv_regime"] = get_user_state().activity_zone
+    except Exception:
+        pass
+
+    return snap
+
+
+def record_action(actor: str, action_kind: str, text: str,
+                   context: Optional[dict] = None,
+                   extras: Optional[dict] = None) -> int:
+    """Записать action-ноду в граф. Возвращает её idx.
+
+    Args:
+        actor: 'baddle' | 'user'
+        action_kind: тип действия (sync_seeking, dmn_bridge, user_chat, ...).
+                      Cм. docs/action-memory-design.md#action_kind-enum.
+        text: human-readable описание для UI/LLM-контекста.
+        context: снапшот состояния ДО action'а. Если None — берём текущее
+                  через `_current_snapshot()`. Можно передать свой чтобы
+                  включить specific поля (sentiment для user_chat).
+        extras: любые дополнительные metadata на верхнем уровне ноды
+                 (например specific-to-kind details). Сливается с node.
+
+    Нода получает: type='action', actor, action_kind, text, context,
+    closed=False, outcome_idx=None, плюс стандартные fields через _make_node.
+    """
+    from datetime import datetime, timezone as _tz
+    ctx = dict(context) if context is not None else _current_snapshot()
+    with graph_lock:
+        nodes = _graph["nodes"]
+        new_id = len(nodes)
+        node = _make_node(new_id, text, depth=0, topic="action",
+                          confidence=0.5, node_type="action",
+                          embedding=None, rendered=True)
+        node["actor"] = str(actor or "baddle")
+        node["action_kind"] = str(action_kind or "unknown")
+        node["context"] = ctx
+        node["closed"] = False
+        node["outcome_idx"] = None
+        if extras:
+            for k, v in extras.items():
+                if k not in node:  # не перезаписываем стандартные fields
+                    node[k] = v
+        nodes.append(node)
+        _graph.pop("_tick_tried", None)
+        log.debug(f"[action-memory] record_action #{new_id}: {actor}/{action_kind} — {text[:60]!r}")
+        return new_id
+
+
+def close_action(action_idx: int, delta_sync_error: float,
+                  user_reaction: str = "silence",
+                  latency_s: float = 0.0,
+                  confidence: float = 0.5,
+                  outcome_text: Optional[str] = None) -> Optional[int]:
+    """Закрыть action-ноду созданием outcome-ноды + edge caused_by.
+
+    Args:
+        action_idx: idx action-ноды которую закрываем.
+        delta_sync_error: sync_error_before - sync_error_after.
+                           Отрицательное = action улучшил resonance (good).
+        user_reaction: 'chat' | 'accept' | 'reject' | 'ignore' | 'silence' |
+                        другое. Не-enumerated значения допустимы.
+        latency_s: время от ts action'а до now.
+        confidence: уверенность в самом measurement (sync_seeking через 2 мин
+                     уверенно, через 4 часа шумно).
+        outcome_text: если None, автогенерится из параметров.
+
+    Returns: outcome_idx либо None если action_idx невалидный / уже closed.
+    """
+    with graph_lock:
+        nodes = _graph["nodes"]
+        if not (0 <= action_idx < len(nodes)):
+            return None
+        action = nodes[action_idx]
+        if action.get("type") != "action" or action.get("closed"):
+            return None
+
+        # Текст outcome (human-readable)
+        if not outcome_text:
+            delta_str = f"{delta_sync_error:+.3f}"
+            outcome_text = (f"Δsync_error={delta_str} · reaction={user_reaction} · "
+                            f"latency={latency_s:.0f}s")
+
+        new_id = len(nodes)
+        onode = _make_node(new_id, outcome_text, depth=0, topic="outcome",
+                           confidence=float(confidence), node_type="outcome",
+                           embedding=None, rendered=True)
+        onode["linked_action_idx"] = int(action_idx)
+        onode["delta_sync_error"] = round(float(delta_sync_error), 4)
+        onode["user_reaction"] = str(user_reaction)
+        onode["latency_s"] = round(float(latency_s), 1)
+        nodes.append(onode)
+
+        # Edge caused_by: outcome → action
+        caused_by = _graph["edges"].setdefault("caused_by", [])
+        caused_by.append([new_id, action_idx])
+
+        # Закрываем action
+        action["closed"] = True
+        action["outcome_idx"] = new_id
+
+        _graph.pop("_tick_tried", None)
+        log.info(f"[action-memory] close_action #{action_idx} "
+                 f"({action.get('action_kind')}) → outcome #{new_id}: "
+                 f"Δ={delta_sync_error:+.3f}, reaction={user_reaction}")
+        return new_id
+
+
+def score_action_candidates(action_kind: str, candidates: list[str],
+                             variant_field: str = "tone",
+                             time_of_day: Optional[str] = None,
+                             min_history: int = 3) -> dict[str, float]:
+    """Для action_kind вернуть {candidate: score} по past outcomes.
+
+    **score > 0** = действие в среднем снижало sync_error (good).
+    **score < 0** = в среднем повышало (избегать).
+    **score = 0** = нет данных / нейтрально.
+
+    `candidates` — варианты внутри kind (например для sync_seeking это
+    tones: ['caring', 'ambient', 'curious', 'reference', 'simple']).
+    `variant_field` — по какому полю action-ноды группировать варианты
+    (для sync_seeking это `tone` в extras).
+    `time_of_day` — опциональный фильтр: считать только actions из того
+    же времени суток (morning / day / evening / night).
+    `min_history` — минимум closed actions чтобы scoring имел вес. Иначе
+    всем возвращаем 0.0 (cold start, fall back to heuristic).
+
+    Реализация через прямой scan графа — O(N) по nodes. На малых
+    графах (<10k actions) быстро. Позже можно переделать на embedding
+    similarity для лучшей context-match.
+    """
+    nodes = _graph.get("nodes", [])
+    # Собираем per-candidate delta lists
+    buckets: dict[str, list[float]] = {c: [] for c in candidates}
+    for n in nodes:
+        if n.get("type") != "action":
+            continue
+        if n.get("action_kind") != action_kind:
+            continue
+        if not n.get("closed"):
+            continue
+        cand = n.get(variant_field)
+        if cand not in buckets:
+            continue
+        # Context filter
+        if time_of_day:
+            ctx = n.get("context") or {}
+            if ctx.get("time_of_day") != time_of_day:
+                continue
+        # Outcome delta
+        oidx = n.get("outcome_idx")
+        if oidx is None:
+            continue
+        if not (0 <= oidx < len(nodes)):
+            continue
+        outcome = nodes[oidx]
+        if outcome.get("type") != "outcome":
+            continue
+        try:
+            delta = float(outcome.get("delta_sync_error", 0.0))
+        except Exception:
+            continue
+        # Convention: delta = after - before. Negative = sync_error упал = good.
+        # Score для максимизации: -delta (positive = good).
+        buckets[cand].append(-delta)
+
+    total = sum(len(v) for v in buckets.values())
+    if total < min_history:
+        return {c: 0.0 for c in candidates}
+    # Mean per candidate; empty buckets → 0 (neutral)
+    out: dict[str, float] = {}
+    for c in candidates:
+        vals = buckets[c]
+        out[c] = round(sum(vals) / len(vals), 4) if vals else 0.0
+    return out
+
+
+def link_chat_continuation(new_idx: int, chat_kinds: tuple = ("user_chat", "baddle_reply"),
+                             window_s: float = 3600) -> Optional[int]:
+    """Связать `new_idx` с предыдущим chat-сообщением через `followed_by` edge.
+
+    Ищет последнее action с action_kind ∈ `chat_kinds` до `new_idx`.
+    Если найдено и оно в окне `window_s` — добавляет edge `[new_idx, prev]`
+    в `_graph.edges.followed_by` (temporal chain). Иначе — new_idx считается
+    корневым сообщением, edge не создаётся.
+
+    Returns: prev_idx если linked, None если корневое.
+    """
+    import datetime as _dt
+    nodes = _graph.get("nodes", [])
+    if not (0 <= new_idx < len(nodes)):
+        return None
+    new_node = nodes[new_idx]
+    try:
+        new_ts = _dt.datetime.fromisoformat(
+            str(new_node.get("created_at", "")).replace("Z", "+00:00")
+        ).timestamp()
+    except Exception:
+        return None
+
+    # Идём с конца назад, ищем последний chat-msg
+    for i in range(new_idx - 1, -1, -1):
+        n = nodes[i]
+        if n.get("type") != "action":
+            continue
+        if n.get("action_kind") not in chat_kinds:
+            continue
+        try:
+            prev_ts = _dt.datetime.fromisoformat(
+                str(n.get("created_at", "")).replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            continue
+        if new_ts - prev_ts > window_s:
+            return None  # слишком давно — это корневое сообщение
+        # Link!
+        fb = _graph["edges"].setdefault("followed_by", [])
+        fb.append([new_idx, i])
+        return i
+    return None
+
+
+def list_open_actions(action_kinds: Optional[list[str]] = None) -> list[tuple[int, dict]]:
+    """Вернуть list (idx, node) action-нод с closed=False.
+
+    Фильтр по kinds если передан. Используется `_check_action_outcomes`
+    чтобы найти какие actions пора закрыть по timeout.
+    """
+    out = []
+    nodes = _graph.get("nodes", [])
+    for idx, n in enumerate(nodes):
+        if n.get("type") != "action":
+            continue
+        if n.get("closed"):
+            continue
+        if action_kinds and n.get("action_kind") not in action_kinds:
+            continue
+        out.append((idx, n))
+    return out
 
 
 def _get_texts(nodes: list[dict] | None = None) -> list[str]:
@@ -430,6 +743,13 @@ def _fresh_graph():
             "manual_links": [],
             "manual_unlinks": [],
             "directed": [],
+            # caused_by: action-outcome причинность (outcome_idx → action_idx).
+            # Отдельно от `directed` чтобы pump/DMN по умолчанию их не смешивали
+            # с semantic-рёбрами. См. docs/action-memory-design.md.
+            "caused_by": [],
+            # followed_by: temporal chain (prev_action_idx → next_action_idx).
+            # Без causal claim — просто «за этим пришло то». Для policy-planning.
+            "followed_by": [],
         },
         "meta": {
             "topic": "",
@@ -763,6 +1083,34 @@ def _remap_edges(removed_indices: list[int]):
             continue
         new_dir.append([remap(a), remap(b)])
     edges_dict["directed"] = new_dir
+
+    # Remap Action Memory edges (caused_by, followed_by) — те же ordered pairs
+    for key in ("caused_by", "followed_by"):
+        old = edges_dict.get(key, [])
+        new = []
+        for pair in old:
+            a, b = pair
+            if a in removed or b in removed:
+                continue
+            new.append([remap(a), remap(b)])
+        edges_dict[key] = new
+
+    # Also remap action.outcome_idx and outcome.linked_action_idx in nodes
+    nodes = _graph.get("nodes", [])
+    for n in nodes:
+        if n.get("type") == "action" and n.get("outcome_idx") is not None:
+            oi = n["outcome_idx"]
+            if oi in removed:
+                n["outcome_idx"] = None
+                n["closed"] = False  # outcome исчез — action становится снова open
+            elif oi > 0:
+                n["outcome_idx"] = remap(oi)
+        elif n.get("type") == "outcome" and n.get("linked_action_idx") is not None:
+            ai = n["linked_action_idx"]
+            if ai in removed:
+                n["linked_action_idx"] = None
+            elif ai > 0:
+                n["linked_action_idx"] = remap(ai)
 
     # Remap hub nodes
     meta = _graph["meta"]

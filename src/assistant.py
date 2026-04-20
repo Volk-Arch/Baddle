@@ -947,6 +947,25 @@ def assist():
                   hrv_recovery=(hrv_state or {}).get("energy_recovery"))
     _save_state(state)
 
+    # Action Memory: baddle's reply to user — action-нода actor=baddle.
+    # user_chat + baddle_reply в хронологическом порядке = conversation
+    # timeline в графе. Card-actions (sync_seeking / bridge / suggestion)
+    # уже отдельные action-ноды — они не дублируются здесь.
+    if response_text:
+        try:
+            from .graph_logic import record_action, link_chat_continuation
+            br_idx = record_action(
+                actor="baddle",
+                action_kind="baddle_reply",
+                text=response_text[:200],
+                extras={"mode": mode_id, "intent": intent,
+                         "cards_count": len(cards) if cards else 0},
+            )
+            # Link на предыдущий user_chat (обычно последний — 1ч окно)
+            link_chat_continuation(br_idx)
+        except Exception as e:
+            log.debug(f"[action-memory] baddle_reply record failed: {e}")
+
     return jsonify({
         "text": response_text,
         "intro": response["intro"],
@@ -1010,6 +1029,16 @@ def assist_feedback():
     # Mirror signal into UserState (accept ↑ dopamine, reject ↑ burnout)
     from .user_state import get_user_state
     get_user_state().update_from_feedback(kind)
+    # Action Memory: user_accept / user_reject — закрывают открытые
+    # baddle-actions (suggestion_*) через `_check_action_outcomes`.
+    if kind in ("accepted", "rejected"):
+        try:
+            from .graph_logic import record_action
+            action_kind = "user_accept" if kind == "accepted" else "user_reject"
+            record_action(actor="user", action_kind=action_kind,
+                          text=f"User {kind}", context=None)
+        except Exception as e:
+            log.debug(f"[action-memory] feedback action record failed: {e}")
     return jsonify({"ok": True, "neurochem": cs.get_metrics().get("neurochem", {})})
 
 
@@ -1364,7 +1393,9 @@ def goals_stats():
 # должны появляться в чате — чтобы история ничего не теряла.
 
 def _push_event_to_chat(text: str, mode_name: str = "Событие"):
-    """Добавить assistant-message в chat_history. Silent on failure."""
+    """Добавить assistant-message в chat_history + записать baddle-action
+    в граф (Action Memory). Silent on failure.
+    """
     try:
         from .chat_history import append_entry
         append_entry({
@@ -1374,6 +1405,18 @@ def _push_event_to_chat(text: str, mode_name: str = "Событие"):
         })
     except Exception as e:
         log.debug(f"[chat_event] failed: {e}")
+    # Action Memory: любое baddle-сообщение в чат → action-нода.
+    # Это разные action_kind'ы в зависимости от mode_name (Activity, Check-in,
+    # Новая цель и т.д.). Позволяет искать mosts между проактивным
+    # сообщением и последующим user-behavior.
+    try:
+        from .graph_logic import record_action
+        # Слоганируем mode_name в snake_case для action_kind
+        kind_slug = (mode_name or "event").lower().replace(" ", "_")[:40]
+        record_action(actor="baddle", action_kind=f"chat_event_{kind_slug}",
+                      text=text[:200], context=None)
+    except Exception as e:
+        log.debug(f"[action-memory] chat_event record failed: {e}")
 
 
 @assistant_bp.route("/goals/add", methods=["POST"])
@@ -1407,6 +1450,14 @@ def goals_add():
     label = {"oneshot": "Новая цель", "recurring": "Новая привычка",
              "constraint": "Новое ограничение"}.get(kind, "Новая цель")
     _push_event_to_chat(f"{icon} {label}: «{text[:120]}»", mode_name=label)
+    # Action Memory: user создал цель/привычку/ограничение
+    try:
+        from .graph_logic import record_action
+        record_action(actor="user", action_kind=f"user_goal_create_{kind}",
+                      text=f"{label}: {text[:120]}",
+                      extras={"goal_id": gid, "goal_kind": kind})
+    except Exception as e:
+        log.debug(f"[action-memory] user_goal_create failed: {e}")
     return jsonify({"ok": True, "id": gid})
 
 
@@ -1730,6 +1781,14 @@ def activity_start():
     # В чат — «я засёк задачу X» чтобы история показывала activity-поток
     cat_s = f" · {category}" if category else ""
     _push_event_to_chat(f"▶ Задача: «{name[:120]}»{cat_s}", mode_name="Activity")
+    # Action Memory: user_activity_start
+    try:
+        from .graph_logic import record_action
+        record_action(actor="user", action_kind="user_activity_start",
+                      text=f"Start activity: {name[:120]}",
+                      extras={"activity_id": aid, "category": category})
+    except Exception as e:
+        log.debug(f"[action-memory] user_activity_start failed: {e}")
     return jsonify(resp)
 
 
@@ -1750,6 +1809,16 @@ def activity_stop():
             ts_end=rec.get("stopped_at"),
             duration_s=round(rec.get("duration_s") or 0),
         )
+    # Action Memory: user_activity_stop
+    try:
+        from .graph_logic import record_action
+        record_action(actor="user", action_kind="user_activity_stop",
+                      text=f"Stop activity: {rec.get('name', '')[:120]}",
+                      extras={"activity_id": rec.get("id"),
+                               "duration_s": round(rec.get("duration_s") or 0),
+                               "category": rec.get("category")})
+    except Exception as e:
+        log.debug(f"[action-memory] user_activity_stop failed: {e}")
     return jsonify({"ok": True, "stopped": rec})
 
 
@@ -1981,6 +2050,16 @@ def checkin_add():
     if note:
         summary += f" · «{note[:60]}»"
     _push_event_to_chat(f"📝 Check-in: {summary}", mode_name="Check-in")
+    # Action Memory: user_checkin — значимый event, часто после alert
+    try:
+        from .graph_logic import record_action
+        record_action(actor="user", action_kind="user_checkin",
+                      text=f"Check-in: {summary[:120]}",
+                      extras={"energy": entry.get("energy"),
+                               "focus": entry.get("focus"),
+                               "stress": entry.get("stress")})
+    except Exception as e:
+        log.debug(f"[action-memory] user_checkin failed: {e}")
     return jsonify({"ok": True, "entry": entry})
 
 
@@ -2517,15 +2596,44 @@ def assist_chat_append():
         return jsonify({"error": "entry must be object"}), 400
     try:
         append_entry(entry)
-        # Adaptive idle: любое юзерское сообщение пробуждает дремлющие
-        # DMN/pump циклы (resonance protocol механика #2). Учитываем только
-        # role=user чтобы свои же system/card-append не фиктивно reset'или.
+        # Adaptive idle + Action Memory: user-сообщение будит циклы +
+        # записывается как user_chat action со sentiment. Учитываем role=user.
         if (entry.get("role") or "").lower() == "user":
             try:
                 from .cognitive_loop import get_cognitive_loop
                 get_cognitive_loop().signal_user_input()
             except Exception:
                 pass
+            msg_text = str(entry.get("text") or entry.get("content") or "")[:500]
+            if msg_text:
+                # 1. Sentiment classify (light LLM, cached)
+                sentiment = 0.0
+                try:
+                    from .sentiment import classify_message_sentiment
+                    sentiment = classify_message_sentiment(msg_text)
+                except Exception as e:
+                    log.debug(f"[sentiment] classify failed: {e}")
+                # 2. EMA feeder в UserState.valence
+                try:
+                    from .user_state import get_user_state
+                    get_user_state().update_from_chat_sentiment(sentiment)
+                except Exception as e:
+                    log.debug(f"[sentiment] ema update failed: {e}")
+                # 3. Action Memory: user_chat action со sentiment в context
+                try:
+                    from .graph_logic import record_action, _current_snapshot, link_chat_continuation
+                    ctx = _current_snapshot()
+                    ctx["sentiment"] = round(float(sentiment), 3)
+                    uc_idx = record_action(
+                        actor="user",
+                        action_kind="user_chat",
+                        text=msg_text[:200],
+                        context=ctx,
+                    )
+                    # Link как continuation предыдущего chat-сообщения (1ч окно)
+                    link_chat_continuation(uc_idx)
+                except Exception as e:
+                    log.debug(f"[action-memory] user_chat record failed: {e}")
         return jsonify({"ok": True})
     except Exception as e:
         log.warning(f"[/assist/chat/append] failed: {e}")

@@ -181,6 +181,10 @@ class WorkspaceManager:
             _graph["edges"] = data.get("edges", {
                 "manual_links": [], "manual_unlinks": [], "directed": []
             })
+            # Migration для legacy-графов без Action Memory edge-типов:
+            # setdefault не перезаписывает если уже есть.
+            _graph["edges"].setdefault("caused_by", [])
+            _graph["edges"].setdefault("followed_by", [])
             _graph["meta"] = data.get("meta", {"topic": "", "hub_nodes": set(), "mode": "horizon"})
             if isinstance(_graph["meta"].get("hub_nodes"), list):
                 _graph["meta"]["hub_nodes"] = set(_graph["meta"]["hub_nodes"])

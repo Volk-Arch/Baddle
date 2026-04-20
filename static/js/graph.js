@@ -635,7 +635,25 @@ function graphRenderSvg() {
         strokeWidth = isSelected ? 3 : 3;
         circle.setAttribute('stroke-dasharray', '8,2');
       } else if (nodeType === 'action') {
-        if (!isSelected) strokeColor = '#8b5cf6'; // violet for action
+        // Action Memory: orange. Оттенок по actor (baddle — солид, user — dashed).
+        // Fill более насыщенный если action закрыт outcome'ом.
+        const node = graphData.nodes[i] || {};
+        const actor = node.actor || 'baddle';
+        const closed = !!node.closed;
+        if (!isSelected) strokeColor = '#f97316'; // orange
+        strokeWidth = isSelected ? 3 : (closed ? 2.5 : 2);
+        if (actor === 'user') circle.setAttribute('stroke-dasharray', '3,3');
+        if (!closed) circle.setAttribute('opacity', 0.65); // open — более блеклый
+      } else if (nodeType === 'outcome') {
+        // Action Memory outcome: зелёный/красный по знаку delta_sync_error.
+        // Negative delta = sync_error упал = good (зелёный).
+        const node = graphData.nodes[i] || {};
+        const delta = Number(node.delta_sync_error || 0);
+        if (!isSelected) {
+          if (delta < -0.02) strokeColor = '#22c55e';      // green — good
+          else if (delta > 0.02) strokeColor = '#ef4444';   // red — bad
+          else strokeColor = '#64748b';                       // gray — neutral
+        }
         strokeWidth = isSelected ? 3 : 2.5;
       } else if (nodeType === 'activity') {
         // Activity timeplayer-node: цвет по activity_category, кольцо-индикатор done
@@ -1049,7 +1067,7 @@ function graphUpdateThoughtsList() {
       + 'class="mb-2 text-sm" style="display:flex;align-items:baseline;cursor:pointer;padding:2px 4px;border-radius:4px;color:#37352f" '
       + 'onmouseover="this.style.background=\'#e8f4fd\'" onmouseout="graphHighlightListItem(this,' + i + ')">'
       + '<span style="flex:1">' + dot + '<span style="color:#64748b;font-size:10px;margin-right:4px">#' + i + '</span>'
-      + (nodeType !== 'thought' ? '<span style="color:' + ({hypothesis:'#a78bfa',evidence:'#06b6d4',fact:'#10b981',question:'#f59e0b',goal:'#f43f5e',action:'#8b5cf6'}[nodeType]||'#64748b') + ';font-size:9px;margin-right:3px">[' + nodeType[0].toUpperCase() + ']</span>' : '')
+      + (nodeType !== 'thought' ? '<span style="color:' + ({hypothesis:'#a78bfa',evidence:'#06b6d4',fact:'#10b981',question:'#f59e0b',goal:'#f43f5e',action:'#f97316',outcome:'#22c55e',synthesis:'#8b5cf6'}[nodeType]||'#64748b') + ';font-size:9px;margin-right:3px">[' + nodeType[0].toUpperCase() + ']</span>' : '')
       + t + '</span>' + del + '</div>';
 
     // Subgoals display for goal nodes

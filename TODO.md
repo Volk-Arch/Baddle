@@ -8,11 +8,20 @@
 
 ---
 
-## 🌀 Resonance protocol — поведение как у зеркала
+## 🌀 Resonance protocol — все 5 механик закрыты
 
-**Первые 4 механики закрыты.** См. [docs/alerts-and-cycles.md](docs/alerts-and-cycles.md) (adaptive idle + burnout + эмпатия + sync-seeking) и [docs/consolidation-design.md](docs/consolidation-design.md) (hebbian decay).
+1. Hebbian decay → [consolidation-design.md](docs/consolidation-design.md)
+2. Adaptive idle (плавное затухание по desync) → [alerts-and-cycles.md](docs/alerts-and-cycles.md)
+3. Active sync-seeking → [alerts-and-cycles.md](docs/alerts-and-cycles.md) (тип `sync_seeking`)
+4. System-burnout от desync (слился с #2) → `ProtectiveFreeze.desync_pressure`
+5. Action Memory — самообучение через граф → [action-memory-design.md](docs/action-memory-design.md)
 
-- [ ] **🧠 Action Memory — самообучение через граф** (5-я механика, ~3-4 дня). Расширение семантики графа: action + outcome как новые node_types, связаны edge `caused_by`. DMN / pump / consolidate / hebbian decay автоматически начинают работать для действий — Baddle учится что работает без отдельного RL-кода. Закрывает 5-шаговый цикл сознания (замечает → хочет → пробует → запоминает → повторяет). **Sentiment юзера** интегрирован как metadata `user_chat`-action + EMA feeder в `UserState.valence`. Merge: OQ #3 и OQ #4 растворяются в этой механике. 6 этапов реализации — см. [docs/action-memory-design.md](docs/action-memory-design.md).
+**Измерение эффективности:** через 2 месяца use сравнить avg weekly `sync_error`. Если падает — механики работают, прайм-директива валидирует сама себя.
+
+**Опционально по мере данных** (не приоритет):
+- [ ] Chat-timeline view в Lab UI — рендер `/graph/actions-timeline` как листающийся список actions с clik → focus в графе.
+- [ ] Расширение `score_action_candidates` на другие checks — когда через месяц станет видно где реальный разброс outcomes.
+- [ ] Counterfactual honesty — иногда намеренно не действовать (5-10% randomized skip) для baseline recovery-time.
 
 ---
 

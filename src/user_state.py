@@ -185,6 +185,25 @@ class UserState:
         self._clamp()
         self.tick_expectation()
 
+    # ── Chat sentiment feeder (Action Memory этап 4) ───────────────────────
+
+    def update_from_chat_sentiment(self, sentiment: float):
+        """EMA-вклад в valence от sentiment последнего user-сообщения.
+
+        Высокочастотный сигнал (каждое сообщение) → мягкий EMA с decay 0.92
+        (baseline живёт ~12 сообщений). Это дополнение к редкому feedback
+        (accept/reject) — теперь valence отражает и «серию положительных
+        сообщений» / «раздражённый день», а не только clicks по карточкам.
+
+        Sentiment ∈ [−1, 1] — см. `src/sentiment.py` `classify_message_sentiment`.
+        """
+        try:
+            s = max(-1.0, min(1.0, float(sentiment)))
+        except Exception:
+            return
+        self.valence = 0.92 * self.valence + 0.08 * s
+        self._clamp()
+
     # ── Agency (5-я ось, OQ #2) ────────────────────────────────────────────
 
     def update_from_plan_completion(self, completed: int, planned: int):

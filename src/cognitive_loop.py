@@ -191,6 +191,23 @@ class CognitiveLoop:
     # Agency update (OQ #2 — 5-я ось):
     AGENCY_UPDATE_INTERVAL = 60 * 60  # раз в час обновляем agency EMA
 
+    # Action Memory closing (этап 3):
+    ACTION_OUTCOMES_CHECK_INTERVAL = 5 * 60  # раз в 5 мин проходим open actions
+    # Per-kind timeout (сек): через сколько после emit считаем outcome closed.
+    # До timeout — ждём user-reaction. После — forced close с текущим state.
+    ACTION_TIMEOUTS = {
+        "sync_seeking":            30 * 60,       # 30 мин
+        "dmn_bridge":              24 * 3600,     # 24 часа (увидит утром?)
+        "scout_bridge":            24 * 3600,
+        "suggestion_recurring":    7 * 86400,     # 7 дней на accept/reject
+        "suggestion_constraint":   7 * 86400,
+        "suggestion_generic":      7 * 86400,
+        "reminder_plan":           30 * 60,
+        "alert_low_energy":        60 * 60,
+        "morning_briefing":        4 * 3600,
+    }
+    ACTION_TIMEOUT_DEFAULT = 60 * 60              # 1 час если kind не в словаре
+
     # Active sync-seeking (resonance protocol механика #3):
     # Когда `freeze.desync_pressure` высокий И юзер давно не писал — Baddle
     # пишет мягкое сообщение чтобы восстановить контакт. LLM генерирует
@@ -245,6 +262,10 @@ class CognitiveLoop:
         self._last_sync_seeking = 0.0       # таймер active sync-seeking
         self._last_proactive_alert_ts = 0.0 # любой proactive alert (не sync-seek'им если недавно)
         self._last_agency_update = 0.0      # таймер agency EMA update
+        self._last_action_outcomes_check = 0.0  # таймер closing action outcomes
+        # Action Memory — per-kind storage для open actions:
+        # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
+        self._open_actions: dict[int, float] = {}
         # Persist overnight findings отдельно от alerts_queue — UI drain'ит очередь
         # быстрее чем briefing её читает. Briefing читает recent_bridges напрямую.
         self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
@@ -280,6 +301,168 @@ class CognitiveLoop:
 
     def get_thinking(self) -> dict:
         return dict(self._thinking_state or {"kind": "idle", "started_at": 0.0})
+
+    # ── Action Memory: запись + closing ────────────────────────────────
+
+    def _check_action_outcomes(self):
+        """Раз в 5 мин проходим `_open_actions`, закрываем outcomes.
+
+        Для каждого open action ищем:
+          1. **User-reaction** в окне [action.ts, now]:
+             - `user_chat` → reaction = "chat" (для sync_seeking / reminders)
+             - `user_accept` / `user_reject` → для suggestions
+             Если найдено — closing immediate, latency = от action до reaction.
+          2. **Timeout expired** → forced close с reaction="silence"/"ignore".
+
+        Delta = `sync_error_before` из action.context минус текущий sync_error.
+        """
+        if not self._throttled("_last_action_outcomes_check",
+                                self.ACTION_OUTCOMES_CHECK_INTERVAL):
+            return
+        if not self._open_actions:
+            return
+
+        try:
+            from .graph_logic import list_open_actions, close_action, _graph
+            from .horizon import get_global_state
+        except Exception:
+            return
+
+        now = time.time()
+        try:
+            current_sync_err = float(get_global_state().sync_error)
+        except Exception:
+            current_sync_err = 0.0
+
+        # Свежий snapshot open-actions из графа (не надёжно верить буферу —
+        # ноды могли быть удалены через consolidation)
+        open_list = list_open_actions()
+        still_open_set = {idx for idx, _ in open_list}
+        # Прочищаем _open_actions от несуществующих
+        for idx in list(self._open_actions.keys()):
+            if idx not in still_open_set:
+                self._open_actions.pop(idx, None)
+
+        # Читаем нод-буфер один раз
+        nodes = _graph.get("nodes", [])
+
+        for action_idx, action_node in open_list:
+            kind = action_node.get("action_kind", "unknown")
+            recorded_ts = self._open_actions.get(action_idx)
+            if recorded_ts is None:
+                # Action из старых сессий — восстановим ts из created_at
+                from datetime import datetime as _dt
+                try:
+                    ts_iso = action_node.get("created_at")
+                    if ts_iso:
+                        recorded_ts = _dt.fromisoformat(str(ts_iso).replace("Z","+00:00")).timestamp()
+                    else:
+                        recorded_ts = now  # нет ts — считаем сейчас, игнорим в этот проход
+                except Exception:
+                    recorded_ts = now
+                self._open_actions[action_idx] = recorded_ts
+
+            age_s = now - recorded_ts
+            timeout = self.ACTION_TIMEOUTS.get(kind, self.ACTION_TIMEOUT_DEFAULT)
+
+            # 1. Ищем user-reaction в окне [recorded_ts, now]
+            reaction = None
+            reaction_ts = None
+            # Быстрый проход по свежим нодам (последние 30 — юзер-реакции редкие)
+            for later_node in reversed(nodes[-50:]):
+                if later_node.get("type") != "action":
+                    continue
+                if later_node.get("actor") != "user":
+                    continue
+                later_kind = later_node.get("action_kind", "")
+                later_ts_iso = later_node.get("created_at", "")
+                try:
+                    from datetime import datetime as _dt
+                    later_ts = _dt.fromisoformat(str(later_ts_iso).replace("Z","+00:00")).timestamp()
+                except Exception:
+                    continue
+                if later_ts < recorded_ts or later_ts > now:
+                    continue
+                # User-chat закрывает sync_seeking, reminder, briefing
+                if later_kind == "user_chat" and kind in ("sync_seeking", "reminder_plan",
+                                                            "morning_briefing", "alert_low_energy"):
+                    reaction = "chat"
+                    reaction_ts = later_ts
+                    break
+                # Accept/reject закрывает suggestions
+                if kind.startswith("suggestion_"):
+                    if later_kind == "user_accept":
+                        reaction = "accept"
+                        reaction_ts = later_ts
+                        break
+                    if later_kind == "user_reject":
+                        reaction = "reject"
+                        reaction_ts = later_ts
+                        break
+
+            # 2. Принимаем решение о закрытии
+            close_now = False
+            latency_s = 0.0
+            if reaction is not None:
+                close_now = True
+                latency_s = (reaction_ts or now) - recorded_ts
+            elif age_s >= timeout:
+                close_now = True
+                # Default reaction по kind
+                if kind.startswith("suggestion_"):
+                    reaction = "ignore"
+                else:
+                    reaction = "silence"
+                latency_s = age_s
+
+            if not close_now:
+                continue
+
+            # Считаем delta = after - before (стандартная математическая дельта)
+            # Negative = sync_error упал = resonance улучшился (good)
+            # Positive = sync_error вырос = стало хуже
+            pre_err = action_node.get("context", {}).get("sync_error_before", current_sync_err)
+            try:
+                pre_err_f = float(pre_err)
+            except Exception:
+                pre_err_f = current_sync_err
+            delta = current_sync_err - pre_err_f
+
+            # Confidence — short latency = высокая; длинное timeout = низкая
+            confidence = max(0.2, min(1.0, 1.0 - (age_s / (timeout * 2.0))))
+
+            try:
+                close_action(
+                    action_idx=action_idx,
+                    delta_sync_error=delta,
+                    user_reaction=reaction,
+                    latency_s=latency_s,
+                    confidence=confidence,
+                )
+                self._open_actions.pop(action_idx, None)
+            except Exception as e:
+                log.debug(f"[action-memory] close_action failed for {action_idx}: {e}")
+
+    def _record_baddle_action(self, action_kind: str, text: str,
+                                extras: Optional[dict] = None) -> Optional[int]:
+        """Записать baddle-side action в граф и запомнить в _open_actions.
+        Возвращает idx action-ноды или None при ошибке. Используется из
+        всех proactive check'ов после успешного emit.
+        """
+        try:
+            from .graph_logic import record_action
+            idx = record_action(
+                actor="baddle",
+                action_kind=action_kind,
+                text=text[:200] if text else action_kind,
+                context=None,    # _current_snapshot() по умолчанию
+                extras=extras,
+            )
+            self._open_actions[idx] = time.time()
+            return idx
+        except Exception as e:
+            log.debug(f"[action-memory] record baddle action failed: {e}")
+            return None
 
     # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
 
@@ -493,6 +676,7 @@ class CognitiveLoop:
                 self._check_observation_suggestions()
                 self._check_sync_seeking()
                 self._check_agency_update()
+                self._check_action_outcomes()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -534,6 +718,13 @@ class CognitiveLoop:
                 "bridge_saved": bridge is not None,
                 "bridge_text": (bridge.get("text", "") if bridge else "")[:60],
             }
+            # Action Memory: ночной scout-save = action. Outcome 24ч.
+            if bridge:
+                self._record_baddle_action(
+                    "scout_bridge",
+                    text=f"Night scout: {(bridge.get('text') or '')[:120]}",
+                    extras={"quality": round(bridge.get("quality", 0), 3)},
+                )
         else:
             summary["scout"] = {"skipped": "graph_too_small"}
 
@@ -1112,6 +1303,13 @@ class CognitiveLoop:
                 "source": "dmn",
             })
             self._recent_bridges = self._recent_bridges[-10:]
+            # Action Memory: успешный DMN мост = action. Outcome закроется по
+            # timeout (24ч) или раньше если юзер прореагирует.
+            self._record_baddle_action(
+                "dmn_bridge",
+                text=f"DMN bridge: {bridge_text[:120]}",
+                extras={"quality": round(bridge.get("quality", 0), 3)},
+            )
 
     def _run_pump_bridge(self, max_iterations: int = 2, save: bool = False) -> Optional[dict]:
         """Call pump between two most distant nodes. Optionally persist bridge.
@@ -1401,6 +1599,12 @@ class CognitiveLoop:
             "sections": sections,
         }, dedupe=True)
         log.info(f"[cognitive_loop] morning briefing pushed @ {local_hour}:00")
+        # Action Memory: morning_briefing — action, outcome через 4ч
+        self._record_baddle_action(
+            "morning_briefing",
+            text=f"Morning briefing @ {local_hour}:00",
+            extras={"hour": local_hour, "sections_count": len(sections)},
+        )
 
     def _build_morning_briefing_sections(self) -> list:
         """Структурированный briefing — список карточек {emoji, title, subtitle, kind}.
@@ -1861,6 +2065,13 @@ class CognitiveLoop:
                 ],
             }, dedupe=True)
             log.info(f"[cognitive_loop] low_energy_heavy alert: energy={daily} goal={g0.get('id')}")
+            # Action Memory: низкая энергия → совет перенести. Outcome 1ч.
+            self._record_baddle_action(
+                "alert_low_energy",
+                text=f"Suggested to postpone heavy goal #{g0.get('id')}: {txt[:80]}",
+                extras={"energy": int(daily), "goal_id": g0.get("id"),
+                         "goal_mode": g0.get("mode")},
+            )
         except Exception as e:
             log.debug(f"[cognitive_loop] low_energy check failed: {e}")
 
@@ -2063,6 +2274,12 @@ class CognitiveLoop:
                     "minutes_before": mins_left,
                 })
                 log.info(f"[cognitive_loop] plan_reminder: {it.get('name')} in {mins_left}min")
+                self._record_baddle_action(
+                    "reminder_plan",
+                    text=f"Reminder: {it.get('name', '')} in {mins_left}min",
+                    extras={"plan_id": it["id"], "minutes_before": mins_left,
+                             "plan_name": it.get("name", "")},
+                )
         except Exception as e:
             log.debug(f"[cognitive_loop] plan reminder failed: {e}")
 
@@ -2209,6 +2426,13 @@ class CognitiveLoop:
             "desync_level": round(desync, 3),
             "idle_hours": round(idle_seconds / 3600.0, 1),
         })
+        # Action Memory: запоминаем что мы сделали; outcome закроется в
+        # _check_action_outcomes через 30 мин или когда юзер ответит.
+        self._record_baddle_action(
+            "sync_seeking",
+            text=f"Baddle: «{text[:120]}»",
+            extras={"tone": tone, "desync_at_action": round(desync, 3)},
+        )
 
     def _generate_sync_seeking_message(self, desync: float, idle_hours: float) -> tuple[str, str]:
         """LLM-генерация мягкого сообщения для восстановления контакта.
@@ -2283,6 +2507,35 @@ class CognitiveLoop:
         elif recent_topics:           heuristic_tone = "reference"
         elif time_of_day == "ночь":   heuristic_tone = "ambient"
         else:                          heuristic_tone = "simple"
+
+        # Action Memory (этап 5): если у нас есть история past sync_seeking
+        # outcomes, override heuristic_tone если есть явный winner.
+        # Cold start (<3 closed actions) → scoring=all 0 → heuristic wins.
+        try:
+            from .graph_logic import score_action_candidates
+            tone_candidates = ["caring", "ambient", "curious", "reference", "simple"]
+            # Map time_of_day русский → english для context-match
+            tod_map = {"утро": "morning", "день": "day",
+                        "вечер": "evening", "ночь": "night"}
+            scores = score_action_candidates(
+                action_kind="sync_seeking",
+                candidates=tone_candidates,
+                variant_field="tone",
+                time_of_day=tod_map.get(time_of_day),
+                min_history=3,
+            )
+            # Если есть non-trivial преимущество (max ≥ 0.05 разница над 2-м) — берём winner
+            sorted_scores = sorted(scores.items(), key=lambda kv: -kv[1])
+            if sorted_scores and sorted_scores[0][1] >= 0.05:
+                top, top_score = sorted_scores[0]
+                second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
+                if (top_score - second_score) >= 0.05:
+                    log.info(f"[action-memory] sync_seeking tone override: "
+                             f"{heuristic_tone} → {top} "
+                             f"(score={top_score:+.3f}, heuristic lost)")
+                    heuristic_tone = top
+        except Exception as e:
+            log.debug(f"[action-memory] score tones failed: {e}")
 
         # --- LLM prompt ---
         system = (
@@ -2385,6 +2638,14 @@ class CognitiveLoop:
                     "source": trigger,
                 })
                 log.info(f"[cognitive_loop] suggestion: {trigger} → {draft_text[:60]}")
+                # Action Memory: suggestion — долгий outcome (7 дней, ждём accept/reject).
+                # `action_kind` = kind.subkind для легкой фильтрации позже.
+                suggestion_kind = (card.get("draft") or {}).get("kind", "generic")
+                self._record_baddle_action(
+                    f"suggestion_{suggestion_kind}",
+                    text=f"Suggested: {card.get('title', '')} — {draft_text[:100]}",
+                    extras={"trigger": trigger, "draft_kind": suggestion_kind},
+                )
             except Exception as e:
                 log.debug(f"[cognitive_loop] suggestion card build failed: {e}")
 
@@ -2437,6 +2698,11 @@ class CognitiveLoop:
             "hour": local_hour,
         })
         log.info(f"[cognitive_loop] evening retro pushed @ {local_hour}:00 ({n_un} unfinished)")
+        self._record_baddle_action(
+            "evening_retro",
+            text=f"Evening retro: {n_un} unfinished",
+            extras={"unfinished_count": n_un, "hour": local_hour},
+        )
 
     # ── Activity → energy cost (category-based) ──────────────────────────
 

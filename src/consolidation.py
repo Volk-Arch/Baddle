@@ -311,6 +311,87 @@ def consolidate_state_graph(
     }
 
 
+# ── Action Memory consolidation ─────────────────────────────────────────────
+
+# Action-ноды архивируем если:
+#   • они `closed=True` (outcome уже замерен)
+#   • прошло > ACTION_ARCHIVE_AGE_DAYS с закрытия
+#   • |delta_sync_error| < ACTION_SIGNAL_THRESHOLD (не несут сигнала)
+# Actions с чётким сигналом (|delta| >= threshold) — НЕ трогаем, это
+# долгосрочная память «что работает / что не работает».
+ACTION_ARCHIVE_AGE_DAYS = 30
+ACTION_SIGNAL_THRESHOLD = 0.05
+
+
+def consolidate_actions(
+    age_days: float = ACTION_ARCHIVE_AGE_DAYS,
+    signal_threshold: float = ACTION_SIGNAL_THRESHOLD,
+    dry_run: bool = False,
+) -> dict:
+    """Архивирует старые action+outcome ноды у которых не было чёткого сигнала.
+
+    Удаляются ПАРА `action → outcome` одновременно + их caused_by ребро.
+    Открытые actions (closed=False) не трогаются вообще. Actions с сильным
+    сигналом остаются как долгосрочная память.
+
+    Returns: {"archived_pairs": N, "kept_signal": M, "kept_open": K}
+    """
+    nodes = _graph.get("nodes", [])
+    if not nodes:
+        return {"archived_pairs": 0, "kept_signal": 0, "kept_open": 0, "dry_run": dry_run}
+
+    archive_indices: list[int] = []    # все idx которые удаляем (action + outcome вместе)
+    archived_pairs = 0
+    kept_signal = 0
+    kept_open = 0
+
+    for i, n in enumerate(nodes):
+        if n.get("type") != "action":
+            continue
+        if not n.get("closed"):
+            kept_open += 1
+            continue
+        outcome_idx = n.get("outcome_idx")
+        if outcome_idx is None or not (0 <= outcome_idx < len(nodes)):
+            continue
+        outcome = nodes[outcome_idx]
+        # Должен быть outcome type и linked обратно к нам
+        if outcome.get("type") != "outcome":
+            continue
+        # Возраст по outcome (когда замерено)
+        age = _age_days(outcome.get("created_at") or n.get("created_at"))
+        if age is None or age < age_days:
+            continue
+        delta = abs(float(outcome.get("delta_sync_error", 0.0)))
+        if delta >= signal_threshold:
+            kept_signal += 1  # значимый сигнал — оставляем
+            continue
+        archive_indices.extend([i, outcome_idx])
+        archived_pairs += 1
+
+    if dry_run or not archive_indices:
+        return {
+            "archived_pairs": 0 if dry_run else 0,
+            "kept_signal": kept_signal,
+            "kept_open": kept_open,
+            "candidates": archive_indices[:50],
+            "dry_run": dry_run,
+        }
+
+    # Удаляем от конца к началу чтобы индексы не сдвигались
+    for idx in sorted(set(archive_indices), reverse=True):
+        _remove_node(idx)
+
+    log.info(f"[consolidation] actions archived: {archived_pairs} pairs "
+             f"(kept signal: {kept_signal}, kept open: {kept_open})")
+    return {
+        "archived_pairs": archived_pairs,
+        "kept_signal": kept_signal,
+        "kept_open": kept_open,
+        "dry_run": False,
+    }
+
+
 # ── Combined entry (endpoint + nightly) ─────────────────────────────────────
 
 def consolidate_all(
@@ -320,14 +401,17 @@ def consolidate_all(
     decay_per_run: float = DECAY_PER_RUN,
     decay_min_confidence: float = DECAY_MIN_CONFIDENCE,
     decay_grace_days: float = DECAY_GRACE_DAYS,
+    action_age_days: float = ACTION_ARCHIVE_AGE_DAYS,
+    action_signal_threshold: float = ACTION_SIGNAL_THRESHOLD,
     dry_run: bool = False,
 ) -> dict:
     """Run all consolidation passes. Returns combined summary.
 
     Order matters:
-      1. **decay** — снижаем confidence у давно не тронутых (hebbian gate).
-      2. **prune**  — удаляем ноды которые опустились ниже threshold + старше age.
-      3. **archive state_graph** — tick-снапшоты старше retain → в archive file.
+      1. **decay**    — снижаем confidence у давно не тронутых (hebbian gate).
+      2. **prune**    — удаляем ноды которые опустились ниже threshold + старше age.
+      3. **actions**  — archive старых action/outcome пар без значимого сигнала.
+      4. **archive state_graph** — tick-снапшоты старше retain → в archive file.
     """
     decay = decay_unused_nodes(
         decay_per_run=decay_per_run,
@@ -340,6 +424,11 @@ def consolidate_all(
         age_days=content_age_days,
         dry_run=dry_run,
     )
+    actions = consolidate_actions(
+        age_days=action_age_days,
+        signal_threshold=action_signal_threshold,
+        dry_run=dry_run,
+    )
     state = consolidate_state_graph(
         retain_days=state_retain_days,
         dry_run=dry_run,
@@ -347,6 +436,7 @@ def consolidate_all(
     return {
         "decay": decay,
         "content": content,
+        "actions": actions,
         "state": state,
         "dry_run": dry_run,
     }

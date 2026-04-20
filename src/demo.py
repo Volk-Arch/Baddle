@@ -127,6 +127,9 @@ def _write_graph(ws_id: str, nodes: list, directed_edges: list,
             "manual_links": [list(p) for p in directed_edges],  # для undirected-проекций
             "manual_unlinks": [],
             "directed": [list(p) for p in directed_edges],
+            # Action Memory edge-типы — пустые для демо (actions накопятся на use)
+            "caused_by": [],
+            "followed_by": [],
         },
         "meta": {"topic": topic, "hub_nodes": [], "mode": mode},
         "embeddings": [],

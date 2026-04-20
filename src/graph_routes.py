@@ -115,7 +115,8 @@ def graph_think():
     _graph["meta"]["topic"] = topic
     if not existing:
         _graph["nodes"] = []
-        _graph["edges"] = {"manual_links": [], "manual_unlinks": [], "directed": []}
+        _graph["edges"] = {"manual_links": [], "manual_unlinks": [], "directed": [],
+                              "caused_by": [], "followed_by": []}
         _graph["meta"]["hub_nodes"] = set()
         _graph["embeddings"] = []
 
@@ -1839,6 +1840,98 @@ def _slugify(text: str) -> str:
     s = _re.sub(r'[^\w\s-]', '', s)
     s = _re.sub(r'[\s_]+', '_', s).strip('_')
     return s or "untitled"
+
+
+@graph_bp.route("/graph/actions-timeline", methods=["GET"])
+def graph_actions_timeline():
+    """Вернуть action + outcome ноды в хронологическом порядке.
+
+    Используется Lab UI для timeline-view: scroll через conversation
+    (user_chat / baddle_reply) + proactive actions (sync_seeking /
+    suggestions / bridges) + outcomes (delta_sync_error). Всё что
+    происходит с системой относительно юзера — в одном списке.
+
+    Query params:
+      • `limit` (default 100, max 500) — ограничить count
+      • `since_ts` — unix timestamp, возвращать только после
+      • `kinds` — comma-separated action_kind filter (напр. "user_chat,baddle_reply")
+      • `actor` — "user" | "baddle" | (omit для обоих)
+      • `include_outcomes` — "1" (default) | "0"
+    """
+    from datetime import datetime as _dt
+    try:
+        limit = min(500, max(1, int(request.args.get("limit", "100"))))
+    except Exception:
+        limit = 100
+    try:
+        since_ts = float(request.args.get("since_ts", "0"))
+    except Exception:
+        since_ts = 0.0
+    kinds_filter = set()
+    kinds_raw = (request.args.get("kinds") or "").strip()
+    if kinds_raw:
+        kinds_filter = {k.strip() for k in kinds_raw.split(",") if k.strip()}
+    actor_filter = (request.args.get("actor") or "").strip().lower()
+    include_outcomes = (request.args.get("include_outcomes", "1") != "0")
+
+    def _parse_ts(ts_iso) -> float:
+        if not ts_iso:
+            return 0.0
+        try:
+            return _dt.fromisoformat(str(ts_iso).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    items = []
+    nodes = _graph.get("nodes", [])
+    for idx, n in enumerate(nodes):
+        ntype = n.get("type")
+        if ntype == "action":
+            if actor_filter and n.get("actor") != actor_filter:
+                continue
+            if kinds_filter and n.get("action_kind") not in kinds_filter:
+                continue
+        elif ntype == "outcome":
+            if not include_outcomes:
+                continue
+        else:
+            continue
+
+        ts = _parse_ts(n.get("created_at"))
+        if since_ts and ts < since_ts:
+            continue
+
+        item = {
+            "idx": idx,
+            "type": ntype,
+            "text": n.get("text", ""),
+            "ts": ts,
+            "created_at": n.get("created_at"),
+        }
+        if ntype == "action":
+            item["actor"] = n.get("actor")
+            item["action_kind"] = n.get("action_kind")
+            item["closed"] = bool(n.get("closed"))
+            item["outcome_idx"] = n.get("outcome_idx")
+            ctx = n.get("context") or {}
+            # Безопасно: берём только скалярные поля для UI
+            item["time_of_day"] = ctx.get("time_of_day")
+            item["sync_regime"] = ctx.get("sync_regime")
+            item["sentiment"] = ctx.get("sentiment")  # для user_chat
+        else:  # outcome
+            item["linked_action_idx"] = n.get("linked_action_idx")
+            item["delta_sync_error"] = n.get("delta_sync_error")
+            item["user_reaction"] = n.get("user_reaction")
+            item["latency_s"] = n.get("latency_s")
+        items.append(item)
+
+    # Сорт по ts возрастающий (chronological — старые сверху)
+    items.sort(key=lambda x: x["ts"])
+    # Применяем limit с конца (самые свежие)
+    if len(items) > limit:
+        items = items[-limit:]
+
+    return jsonify({"items": items, "total_returned": len(items)})
 
 
 @graph_bp.route("/graph/list", methods=["GET"])

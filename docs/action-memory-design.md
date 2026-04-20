@@ -429,6 +429,53 @@ Sync-seeking шлёт случайный template. Юзер игнорирует
 
 ---
 
+## Статус реализации 2026-04-21
+
+**Все 6 этапов закрыты:**
+
+### ✅ Этап 1 — инфраструктура
+- `graph_logic.record_action/close_action/_current_snapshot/list_open_actions/score_action_candidates/link_chat_continuation`
+- `consolidation.consolidate_actions` — в ночном цикле
+- Два новых edge types: `caused_by` (outcome→action), `followed_by` (temporal chain chat-сообщений)
+- `_remap_edges` правильно ремапит при remove, ссылки `outcome_idx` / `linked_action_idx` обновляются
+
+### ✅ Этап 2 — запись actions
+Baddle-side через `_record_baddle_action`:
+- `sync_seeking` · `dmn_bridge` · `suggestion_{kind}` · `morning_briefing` · `alert_low_energy` · `reminder_plan` · `evening_retro` · `scout_bridge` · `baddle_reply` · `chat_event_{mode_name}`
+
+User-side в endpoints:
+- `user_chat` (с sentiment в context) · `user_accept` / `user_reject` · `user_goal_create_{kind}` · `user_activity_start` / `user_activity_stop` · `user_checkin`
+
+### ✅ Этап 3 — closing
+- `_check_action_outcomes` — раз в 5 мин
+- Per-kind timeouts: 30мин sync/reminder, 1ч low_energy, 4ч briefing, 24ч bridge, 7д suggestion
+- User-reaction в окне: `user_chat` → закрывает sync_seeking/reminder, `user_accept/reject` → закрывают suggestions
+- Восстановление `_open_actions` после рестарта через `created_at`
+
+### ✅ Этап 4 — sentiment
+- `sentiment.classify_message_sentiment` — light LLM (max_tokens=8, temp=0), SHA1 cache max 500
+- `UserState.update_from_chat_sentiment` — EMA feeder (0.92 baseline, 0.08 сигнала)
+- В `/assist/chat/append` при `role=user`: classify → EMA → user_chat action со sentiment в context
+
+### ✅ Этап 5 — retrieval и применение
+- `score_action_candidates(kind, candidates, variant_field, time_of_day, min_history)` — positive score = past success в похожих contexts
+- Применено в `_generate_sync_seeking_message` — override heuristic tone если winner ≥ 0.05 over 2nd place
+
+### ✅ Этап 6 — UI визуализация
+- Graph Lab: action ноды оранжевым stroke (user-actions dashed), outcome — зелёный/красный/серый по знаку delta_sync_error
+- `/graph/actions-timeline` endpoint — chronological view для Lab UI (фильтры по kind/actor, include_outcomes)
+
+---
+
+## Что будет добавлено по мере данных
+
+- **UI Chat-timeline view** в Lab (читает `/graph/actions-timeline`) — listbox переключающийся между режимами «conversation only / все actions / actions+outcomes»
+- **Применение `score_action_candidates`** в других checks (suggestion kind choice, DMN bridge timing)
+- **Counterfactual honesty** (OQ #4.C) — иногда не действовать для baseline recovery-time
+- **Валидация через прайм-директиву** — через 2 месяца сравнить avg weekly sync_error: если падает — механика работает
+
+---
+
 ## Проверка
 
 После этапа 2+3 (запись + closing):
