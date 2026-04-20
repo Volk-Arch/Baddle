@@ -41,6 +41,7 @@ Foundation пропусти (пара абзацев). Основное врем
 | «Как работать 24/7?» | [tick](tick-design.md) → [state-graph](state-graph-design.md) → DMN/Scout в [full-cycle](full-cycle.md) |
 | «Что Baddle дёргает в фоне?» | [alerts-and-cycles](alerts-and-cycles.md) — 17 check'ов, 20+ alert types, test harness |
 | «Что ещё не решено?» | [open-questions](open-questions.md) — архитектурные точки в открытой фазе (думаем перед действием) |
+| «Какое место Baddle занимает относительно меня?» | [world-model](world-model.md) — переоптика «мир = человек», Baddle как камертон, 5 слоёв протосознательного контура |
 
 ---
 

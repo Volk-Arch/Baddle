@@ -16,7 +16,7 @@ import numpy as np
 from .graph_logic import (
     _graph, _graph_generate, _clean_thought,
     _ensure_embeddings, _get_texts, _add_node,
-    cosine_similarity,
+    cosine_similarity, touch_node,
 )
 from .prompts import _p
 
@@ -44,6 +44,12 @@ def pump(node_a_idx: int, node_b_idx: int, max_iterations: int = 3,
         return {"error": "invalid node_a"}
     if node_b_idx < 0 or node_b_idx >= len(nodes):
         return {"error": "invalid node_b"}
+
+    # Hebbian: обе ноды участвуют в поиске моста — это сильное обращение
+    # независимо от того успешен ли итог. Мост найден → further uses уже
+    # пойдут через reference в scout-card / elaborate, это даст ещё boost.
+    touch_node(node_a_idx)
+    touch_node(node_b_idx)
 
     text_a = nodes[node_a_idx]["text"]
     text_b = nodes[node_b_idx]["text"]

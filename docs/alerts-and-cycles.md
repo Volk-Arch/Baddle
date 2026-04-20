@@ -10,12 +10,14 @@
 
 | # | Check | Throttle | Когда срабатывает | Alert type (если emit'ит) | Нагрузка |
 |---|-------|----------|-------------------|---------------------------|----------|
-| 1 | `_check_night_cycle` | 24ч | Раз в сутки: Scout pump+save, REM emotional, REM creative, consolidation | `night_cycle` | 🔴 heavy (LLM + pump) |
-| 2 | `_check_dmn_continuous` | 10 мин | Юзер idle + NE low + граф ≥ 4 нод | `dmn_bridge` (если bridge.text ≥ 10 и quality > 0.5) | 🔴 heavy (LLM pump) |
-| 3 | `_check_dmn_deep_research` | 30 мин | Idle + NE low + ≥ 1 open goal + граф ≤ 30 нод | `dmn_deep_research` | 🔴 heavy (execute_deep) |
-| 4 | `_check_dmn_converge` | 60 мин | Idle + NE low + граф ≥ 5 нод | `dmn_converge` | 🔴 heavy (autorun loop) |
-| 5 | `_check_dmn_cross_graph` | 60 мин | ≥ 2 workspace'а с embeddings | `dmn_cross_graph` + пишет `cross_edges` в `workspaces/index.json` | 🔴 heavy (cosine N×M) |
-| 6 | `_check_state_walk` | 20 мин | state_graph имеет ≥ 10 past samples | `state_walk` («похожий момент: тогда я X») | 🟡 medium (embedding query) |
+| 1 | `_check_night_cycle` | 24ч † | Раз в сутки: Scout pump+save, REM emotional, REM creative, consolidation | `night_cycle` | 🔴 heavy (LLM + pump) |
+| 2 | `_check_dmn_continuous` | 10 мин † | Юзер idle + NE low + граф ≥ 4 нод | `dmn_bridge` (если bridge.text ≥ 10 и quality > 0.5) | 🔴 heavy (LLM pump) |
+| 3 | `_check_dmn_deep_research` | 30 мин † | Idle + NE low + ≥ 1 open goal + граф ≤ 30 нод | `dmn_deep_research` | 🔴 heavy (execute_deep) |
+
+Интервалы с † **растягиваются рассинхроном** — см. «Adaptive idle» ниже.
+| 4 | `_check_dmn_converge` | 60 мин † | Idle + NE low + граф ≥ 5 нод | `dmn_converge` | 🔴 heavy (autorun loop) |
+| 5 | `_check_dmn_cross_graph` | 60 мин † | ≥ 2 workspace'а с embeddings | `dmn_cross_graph` + пишет `cross_edges` в `workspaces/index.json` | 🔴 heavy (cosine N×M) |
+| 6 | `_check_state_walk` | 20 мин † | state_graph имеет ≥ 10 past samples | `state_walk` («похожий момент: тогда я X») | 🟡 medium (embedding query) |
 | 7 | `_check_daily_briefing` | 20ч | Утро (≥ wake_hour из profile) + не был сегодня | `morning_briefing` с sections (sleep/recovery/energy/bridges/goals/pattern) | 🟢 light |
 | 8 | `_check_hrv_push` | 15с | HRV manager активен | — (sync HRV → UserState, не alert). **Примечание:** после HRV polymorphism читает из sensor stream `latest_hrv_aggregate` когда миграция завершится; сейчас через `hrv_manager.get_baddle_state()` | 🟢 light |
 | 9 | `_check_low_energy_heavy` | ~10 мин | Юзер пытается открыть тяжёлую цель с energy < 20 | `low_energy_heavy` | 🟢 light |
@@ -29,6 +31,59 @@
 | 17 | `_check_hrv_alerts` | 1 мин | Coherence упал ниже критической | `coherence_crit` | 🟢 light |
 
 **Тяжёлые пропускаются в test harness по default** (см. ниже). Включаются `?include_heavy=1`.
+
+### † Adaptive idle — плавное затухание циклов при рассинхроне + эмпатия
+
+Механики #2+#4 из [resonance protocol](world-model.md) плюс **эмпатия юзеру**. Все investigation-циклы замедляются плавно по объединённой метрике **combined burnout**:
+
+```
+combined = max(
+    freeze.conflict_accumulator,    # графовые конфликты Baddle
+    freeze.desync_pressure,         # хронический рассинхрон Baddle
+    user.burnout                    # усталость ЮЗЕРА — эмпатия
+)
+multiplier = 1 + combined × 9        # [1× ... 10×]
+```
+
+**Три источника замедления, одна семантика «усталости»:**
+
+| Feeder | Источник | Активирует freeze? | Семантика |
+|---|---|---|---|
+| `freeze.conflict_accumulator` | графовые конфликты (d > τ при низкой стабильности) | **ДА** (жёсткий Bayes-freeze) | Baddle запутался |
+| `freeze.desync_pressure` | рассинхрон с юзером по времени (+1/7сут, -0.05 за event) | нет | Baddle оторвался |
+| `user.burnout` | decisions_today, feedback-отказы | нет | **юзер устал** |
+
+`freeze.display_burnout = max(conflict_accumulator, desync_pressure)` — то что юзер видит как **«усталость Baddle»** в UI. `cognitive_loop._idle_multiplier()` берёт **max** этого и `user.burnout` — замедляется и когда сам устал, и когда юзер устал. Это и есть «ненавязчиво замедляться вместе». Явный вербальный «отдохни» не нужен — тишина сама по себе предложение.
+
+**Рост / снижение `desync_pressure`:**
+
+| Сигнал | Δ |
+|---|---|
+| Время без user-событий | +1/7сут (линейно) |
+| 1 user-event (сообщение / foreground tick) | −0.05 |
+| Cap | [0, 1] |
+
+**Что такое user-event:** `/assist/chat/append` с `role=user`, `tick_foreground()` (`/graph/tick`), любой явный `signal_user_input()` call. **НЕ** считаются: HRV push, автоматическое создание нод через pump/scout/converge, heartbeat — это внутренний пульс.
+
+**Multiplier = 1 + display_burnout × 9** применяется ко всем investigation-throttle через `_throttled_idle()`:
+
+| Сценарий | display_burnout | mult | DMN continuous | DMN deep | Night cycle |
+|---|---|---|---|---|---|
+| Свежий resonance | 0.0 | 1.0× | 10 мин | 30 мин | 24 ч |
+| 3 дня молчания | 0.43 | 4.9× | 49 мин | 2.4 ч | 4.9 сут |
+| 7 дней молчания | 1.0 | 10× | 100 мин | 5 ч | 10 сут |
+| Высокий графовый конфликт | 0.6 | 6.4× | 64 мин | 3.2 ч | 6.4 сут |
+| Оба (конфликт + долгое молчание) | max(conflict, desync) | min{10, 1+max×9} | — | — | — |
+
+**Почему 5% drop на событие** (не обнуление): одно сообщение после недели молчания не должно мгновенно возвращать полный рабочий ритм. «Поддерживает активность, не полностью восстанавливает». Полный возврат из max-desync в 1.0× требует **~20 событий** — реальную сессию общения.
+
+**Почему ночи тоже затухают:** структурная верность зеркала. Юзер пропал — циклы везде реже, включая ночные (Scout, REM-merge). Неделю молчит → scout раз в 10 суток, а не форсированно. Это не баг, это **замирание** вместе с юзером. Вернулся к активному общению — ночи сами возвращаются к 24ч.
+
+**Почему desync НЕ активирует freeze:** Bayes-freeze — жёсткое замирание updates графа. Уместно при хроническом графовом конфликте, **не** при молчании юзера (тогда просто нечего обновлять). Рассинхрон замедляет циклы, но граф остаётся обучаемым когда юзер вернётся.
+
+**В логе:** `[cognitive_loop] desync_pressure 0.750 -> 0.700 (event: user_input, multiplier now 7.30×)`.
+
+Реализация: `src/neurochem.py::ProtectiveFreeze` (хранит оба feeder'а + `display_burnout`), `src/cognitive_loop.py::_advance_desync / _register_user_event / _idle_multiplier / _throttled_idle`, `src/horizon.py::get_metrics` (UI передача `burnout`, `burnout_conflict`, `burnout_desync`).
 
 ---
 

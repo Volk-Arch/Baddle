@@ -96,8 +96,7 @@ STATE_LOW_THRESHOLD   = 0.35   # mean(D,S) < 0.35 → state низкий
   ↓
 /assist обработчик:
   • cs.inject_ne(0.4)                     system: NE spike
-  • user.update_from_timing()              user: dopamine по gap
-  • user.update_from_message(text)         user: serotonin по variance
+  • user.register_input()                  user: last_input_ts (для UI / sync-seeking)
   • user.update_from_energy(decisions)     user: burnout
   ↓
 classify_intent_llm использует state_hint = текущая системная химия

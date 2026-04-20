@@ -283,6 +283,52 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("last_accessed", None)
 
 
+# ── Hebbian: touch (обращение к ноде) ───────────────────────────────────────
+
+# Стандартный boost на одно обращение. Подобран под daily decay 0.005 в
+# consolidation.decay_unused_nodes — безубыточность ≈ 1 касание в 4 дня.
+# Четыре дня — это «неделя ±», мягкий ритм напоминания о ноде.
+TOUCH_BOOST_DEFAULT = 0.02
+
+def touch_node(idx: int, boost: float = TOUCH_BOOST_DEFAULT) -> bool:
+    """Hebbian: зафиксировать обращение к ноде.
+
+    Обновляет `last_accessed = now` и чуть усиливает `confidence`.
+    Каждое реальное использование (elaborate / smartdc / участие в pump /
+    reinforce / рендер по клику) должно проходить через эту функцию.
+
+    Ноды к которым не обращаются не получают boost и постепенно гаснут
+    в ночном цикле через `consolidation.decay_unused_nodes`.
+
+    Args:
+        idx: индекс ноды в `_graph["nodes"]`
+        boost: сколько прибавить к confidence (0 = только last_accessed).
+               Default 0.02 — маленький, hebbian. Передать 0 если нужно
+               только отметить факт обращения (например UI click / view).
+
+    Returns:
+        True если нода существует и была обновлена.
+    """
+    nodes = _graph.get("nodes", [])
+    if not (0 <= idx < len(nodes)):
+        return False
+    node = nodes[idx]
+    node["last_accessed"] = datetime.now(timezone.utc).isoformat()
+    if boost > 0:
+        cur = float(node.get("confidence", 0.5))
+        node["confidence"] = round(min(1.0, cur + boost), 3)
+    return True
+
+
+def touch_nodes(indices, boost: float = TOUCH_BOOST_DEFAULT) -> int:
+    """Batch-версия touch_node для списка индексов. Возвращает сколько затронуто."""
+    n = 0
+    for idx in indices:
+        if touch_node(idx, boost=boost):
+            n += 1
+    return n
+
+
 def _get_texts(nodes: list[dict] | None = None) -> list[str]:
     """Return list of texts from nodes (for similarity, prompts)."""
     if nodes is None:

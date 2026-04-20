@@ -159,11 +159,22 @@ class Neurochem:
 
 
 class ProtectiveFreeze:
-    """Защитный режим. Не медиатор — отдельный механизм.
+    """Защитный режим + накопители «усталости».
 
-    Накапливается при хроническом конфликте (d > τ_stable) в условиях низкой
-    стабильности (serotonin низкий). При пороге θ активируется — Bayes update
-    блокируется, система «замирает», выход по восстановлению стабильности.
+    Два независимых feeder'а, одно displayed-поле burnout в UI:
+
+      1. `conflict_accumulator` — хронический графовый конфликт (d > τ_stable
+         при низкой стабильности). Может активировать **Bayes-freeze**
+         (жёсткий режим, блокирует обновления confidence).
+
+      2. `desync_pressure` — хронический рассинхрон с юзером (долгое
+         молчание, большой sync_error EMA). Растёт по времени, падает
+         на user-event через `_register_user_event`. **Freeze не
+         активирует** — это «замедление», не «замирание в Bayes'е».
+
+    UI карточка «Усталость Baddle» показывает `display_burnout = max` обоих.
+    `cognitive_loop._idle_multiplier()` читает тот же display_burnout — циклы
+    замедляются при обеих формах кризиса.
     """
 
     TAU_STABLE = 0.6          # порог за которым d считается конфликтом
@@ -173,10 +184,16 @@ class ProtectiveFreeze:
 
     def __init__(self):
         self.conflict_accumulator = 0.0
+        self.desync_pressure = 0.0
         self.active = False
 
     def update(self, d: float = None, serotonin: float = 0.5):
-        """Обновить накопитель и проверить вход/выход."""
+        """Обновить накопитель конфликтов и проверить вход/выход freeze.
+
+        `desync_pressure` обновляется отдельно из cognitive_loop
+        (`advance_desync` / `register_user_event`) — он НЕ активирует
+        freeze, только влияет на displayed burnout и idle multiplier.
+        """
         if d is not None:
             conflict_signal = max(0.0, float(d) - self.TAU_STABLE)
             # Накопление тем больше, чем ниже стабильность
@@ -194,9 +211,22 @@ class ProtectiveFreeze:
             if self.conflict_accumulator > self.THETA_ACTIVE:
                 self.active = True
 
+    @property
+    def display_burnout(self) -> float:
+        """Что видит юзер в колонке «Baddle: Усталость». Max из двух feeder'ов."""
+        return max(self.conflict_accumulator, self.desync_pressure)
+
+    def add_desync_pressure(self, delta: float):
+        """Внешний вклад от cognitive_loop: рост (+) или снижение (−).
+        Clamp [0, 1]. Не трогает conflict_accumulator и freeze.active.
+        """
+        self.desync_pressure = max(0.0, min(1.0, self.desync_pressure + float(delta)))
+
     def to_dict(self) -> dict:
         return {
             "conflict_accumulator": round(self.conflict_accumulator, 3),
+            "desync_pressure": round(self.desync_pressure, 3),
+            "display_burnout": round(self.display_burnout, 3),
             "active": self.active,
         }
 
@@ -204,5 +234,6 @@ class ProtectiveFreeze:
     def from_dict(cls, d: dict) -> "ProtectiveFreeze":
         pf = cls()
         pf.conflict_accumulator = d.get("conflict_accumulator", 0.0)
+        pf.desync_pressure = d.get("desync_pressure", 0.0)
         pf.active = d.get("active", False)
         return pf

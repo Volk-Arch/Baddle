@@ -38,6 +38,19 @@ CONTENT_CONFIDENCE_THRESHOLD = 0.3   # ниже этого = слабая нод
 CONTENT_AGE_DAYS = 30                # давность last_accessed для прунинга
 STATE_RETAIN_DAYS = 14                # сколько дней держим в основном файле
 
+# Hebbian decay — сколько снимать с confidence за один прогон decay'я
+# (ночной цикл запускает раз в сутки, значит decay_per_run ≈ decay_per_day).
+# 0.005: от стартового 0.8 до порога prune 0.3 проходит ~100 дней без
+# обращений. Безубыточность с boost 0.02 — одно обращение раз в 4 дня.
+# Мягко, чтобы редкие но живые мысли не срывались в архив.
+DECAY_PER_RUN = 0.005
+# Confidence не опускается ниже этого — даже «забытые» ноды имеют шанс
+# ожить при случайном пересечении, но уже под порогом prune (0.3)
+DECAY_MIN_CONFIDENCE = 0.05
+# Grace period: свежие ноды не трогаем decay'ем первые сутки после создания /
+# последнего обращения. Даёт время на естественные обращения при работе.
+DECAY_GRACE_DAYS = 1.0
+
 
 def _age_days(ts_iso) -> Optional[float]:
     """Возраст в днях от ISO timestamp до now (UTC). None если не парсится."""
@@ -48,6 +61,82 @@ def _age_days(ts_iso) -> Optional[float]:
         return (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
     except Exception:
         return None
+
+
+# ── Hebbian decay (без access → медленное гашение) ─────────────────────────
+
+def decay_unused_nodes(
+    decay_per_run: float = DECAY_PER_RUN,
+    min_confidence: float = DECAY_MIN_CONFIDENCE,
+    grace_days: float = DECAY_GRACE_DAYS,
+    dry_run: bool = False,
+) -> dict:
+    """Снижает `confidence` у нод к которым давно не обращались.
+
+    Hebbian-правило: обращения к ноде (elaborate / smartdc / pump / render /
+    reinforce → `graph_logic.touch_node`) **усиливают** confidence. Простой
+    напротив — постепенно его **снижает**. В итоге редко нужные мысли
+    уходят под порог prune (0.3) и в следующем проходе `consolidate_content_graph`
+    архивируются. Никто ничего не решает руками — частота использования
+    сама отбирает.
+
+    Подвержены decay'ю только `hypothesis` и `thought` (как и prune — голые
+    мысли, не факты/цели/действия). Свежие ноды не трогаем до `grace_days`
+    после `last_accessed` (или `created_at`), чтобы свежая мысль успела быть
+    использована до начала decay'я.
+
+    Идемпотентность: функция предполагается вызываться раз в сутки из
+    ночного цикла. Повторный запуск в тот же день применит decay ещё раз,
+    поэтому `decay_per_run` подбирался из расчёта «1 запуск/сутки».
+
+    Returns:
+        {"decayed": N, "min_confidence_after": float, "dry_run": bool}
+    """
+    nodes = _graph.get("nodes", [])
+    if not nodes:
+        return {"decayed": 0, "min_confidence_after": 0.0, "dry_run": dry_run}
+
+    decayed_count = 0
+    decayed_indices: list[int] = []
+    min_after = 1.0
+
+    for i, n in enumerate(nodes):
+        if n.get("type") not in ("hypothesis", "thought"):
+            continue
+        if n.get("depth", 0) < 0:
+            continue  # topic roots не трогаем
+        age = _age_days(n.get("last_accessed") or n.get("created_at"))
+        if age is None or age < grace_days:
+            continue  # свежая — даём время
+
+        cur = float(n.get("confidence", 0.5))
+        if cur <= min_confidence:
+            continue  # уже на полу, дальше не снижаем
+
+        new_conf = max(min_confidence, round(cur - decay_per_run, 3))
+        if new_conf >= cur:
+            continue
+
+        if not dry_run:
+            n["confidence"] = new_conf
+
+        decayed_count += 1
+        decayed_indices.append(i)
+        if new_conf < min_after:
+            min_after = new_conf
+
+    if decayed_count and not dry_run:
+        log.info(f"[consolidation] decay applied to {decayed_count} nodes "
+                 f"(-{decay_per_run:.3f} each, min confidence now {min_after:.3f})")
+
+    return {
+        "decayed": decayed_count,
+        "indices": decayed_indices[:50],  # первые 50 для телеметрии
+        "min_confidence_after": min_after if decayed_count else 0.0,
+        "decay_per_run": decay_per_run,
+        "grace_days": grace_days,
+        "dry_run": dry_run,
+    }
 
 
 # ── Content-graph consolidation ─────────────────────────────────────────────
@@ -228,9 +317,24 @@ def consolidate_all(
     confidence_threshold: float = CONTENT_CONFIDENCE_THRESHOLD,
     content_age_days: float = CONTENT_AGE_DAYS,
     state_retain_days: float = STATE_RETAIN_DAYS,
+    decay_per_run: float = DECAY_PER_RUN,
+    decay_min_confidence: float = DECAY_MIN_CONFIDENCE,
+    decay_grace_days: float = DECAY_GRACE_DAYS,
     dry_run: bool = False,
 ) -> dict:
-    """Run both consolidation passes. Returns combined summary."""
+    """Run all consolidation passes. Returns combined summary.
+
+    Order matters:
+      1. **decay** — снижаем confidence у давно не тронутых (hebbian gate).
+      2. **prune**  — удаляем ноды которые опустились ниже threshold + старше age.
+      3. **archive state_graph** — tick-снапшоты старше retain → в archive file.
+    """
+    decay = decay_unused_nodes(
+        decay_per_run=decay_per_run,
+        min_confidence=decay_min_confidence,
+        grace_days=decay_grace_days,
+        dry_run=dry_run,
+    )
     content = consolidate_content_graph(
         confidence_threshold=confidence_threshold,
         age_days=content_age_days,
@@ -240,4 +344,9 @@ def consolidate_all(
         retain_days=state_retain_days,
         dry_run=dry_run,
     )
-    return {"content": content, "state": state, "dry_run": dry_run}
+    return {
+        "decay": decay,
+        "content": content,
+        "state": state,
+        "dry_run": dry_run,
+    }

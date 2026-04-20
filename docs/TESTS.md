@@ -579,7 +579,9 @@ GET /assist/named-states
 
 **Что.** Прайм-директива теперь вычисляется, не декларируется.
 `UserState` ([src/user_state.py](../src/user_state.py)) — зеркало Neurochem,
-питается сигналами юзера (HRV, тайминги, длина сообщений, feedback, energy).
+питается объективными сигналами юзера (HRV, feedback, energy). Тайминги
+ввода и длина сообщений — только как raw trace (last_input_ts), они не
+дают чистых signal'ов для EMA и были убраны в 2026-04-20.
 `sync_error = ‖user_vec − system_vec‖` (L2 в 4D). `sync_regime` ∈
 {FLOW, REST, PROTECT, CONFESS} — derived из (error, user_level, system_level).
 Детали → [symbiosis-design.md](symbiosis-design.md).
@@ -602,17 +604,17 @@ GET /assist/state → {
   читающие UserState
 
 **Живые тесты.**
-- Напиши сообщение → user.dopamine вырастет через timing (<30с от следующего)
-- Напиши 3+ сообщения примерно одной длины → user.serotonin медленно растёт (variance низкий)
 - Запусти HRV симулятор → coherence → user.serotonin, stress → user.norepinephrine
 - Нажми 👍 5 раз подряд → user.dopamine→0.9; 👎 5 раз → user.burnout растёт
 - Выстави user в «устал» (dopamine=0.1, burnout=0.7) при свежей системе →
   `sync_regime` станет `protect`, alert «возьму на себя» появится в `/assist/alerts`
+- При `user.burnout=0.7` → `_idle_multiplier` в cognitive_loop = 7.3× → DMN
+  continuous идёт раз в 73 мин вместо 10 (эмпатия — Baddle тише когда ты устал)
 
 **Красный флаг.**
 - `/assist/state` не имеет `sync_regime` / `user_state` → старый код
 - `sync_error` всегда 0.0 → UserState не питается (проверить что /assist
-  вызывает update_from_timing/message/energy)
+  вызывает register_input/update_from_energy, HRV push работает)
 - Sync всегда `flow` при явной разнице user/system → пороги не срабатывают
   (проверить STATE_HIGH/LOW_THRESHOLD в user_state.py)
 

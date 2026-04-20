@@ -82,8 +82,7 @@ burnout). Любая фича оценивается тем, **снижает л
 /assist endpoint
   │
   ├─ cs.inject_ne(0.4)                        [dynamic: system arousal ↑]
-  ├─ user.update_from_timing()                [dynamic: user engagement]
-  ├─ user.update_from_message(text)           [dynamic: user stability]
+  ├─ user.register_input()                    [dynamic: last input ts]
   ├─ user.update_from_energy(decisions_today) [dynamic: user burnout]
   │
   ├─ _detect_category("Хочу покушать") → "food"     [static: category]
