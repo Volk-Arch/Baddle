@@ -15,6 +15,9 @@
     <span id="token-counter" style="color:var(--text-tertiary);font-size:11px"></span>
     <span class="flex-1"></span>
     <span id="batch-tag" style="color:var(--text-tertiary);font-size:11px"></span>
+    <button onclick="openCrossSearch()"
+            title="Искать во всех workspace'ах"
+            style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">🔍</button>
   </div>
 
   <!-- Status bar (fixed bottom) -->
@@ -28,6 +31,7 @@
 
   {% include "partials/settings_modal.html" %}
   {% include "partials/workspaces_modal.html" %}
+  {% include "partials/cross_search_modal.html" %}
 
   <!-- Mode tabs (graph / chat only) + workspace selector + Load + Lang -->
   <div class="tab-bar flex items-center" style="margin:0 -12px;padding:0 12px;">

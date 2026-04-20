@@ -61,24 +61,48 @@
   с альтернативным reader. Детали → [docs/hrv-design.md](docs/hrv-design.md)
   таблица «Источники данных».
 
-## 📌 Завтра (2026-04-20)
+## 📌 Следующие заходы
 
-- [ ] **Cross-workspace semantic search (максимальный scope).** Фундамент
-  уже работает: `_check_dmn_cross_graph` в `cognitive_loop.py:871` раз в
-  60 мин сравнивает embedding'и всех workspace'ов и сохраняет `cross_edges`
-  в `workspaces/index.json`. Нужны:
-  - Endpoint `POST /search/cross` — text → embedding → cosine vs все
-    ноды всех workspace'ов, вернуть top-K с `{ws_id, node_idx, text, sim}`.
-  - UI-поле «🔍 Искать везде» в Baddle header или отдельной sub-page.
-  - Клик по результату → `workspaceSwitch(ws_id)` + scroll to node в Lab.
-  - Semantic navigation: на открытой ноде показывать «связано в других
-    workspace'ах» (читаем cross_edges index). Делает мультиграф связным
-    пространством, а не коллекцией изолированных.
-  - Scope: ~2-3ч. Infrastructure готова, нужны только endpoint + UI.
+- [ ] **Test harness для alerts (17 `_check_*`).** Endpoint
+  `/debug/alerts/trigger-all` прогоняет все `_check_*` из
+  `cognitive_loop.py` с force-сбросом throttle. Отчёт: какие выдали
+  alert, какие молчат и почему (условие / throttle / no data). Потом —
+  покрытие пустых случаев либо отключение мёртвых check'ов. ~1-1.5ч.
 
-- [ ] **Кнопка «⚡ Сбросить энергию» в Settings sub-page.** Для демо и
-  отладки: `daily_energy = max`, `decisions_today = 0`, long_reserve не
-  трогаем. Endpoint `POST /user_state/reset-energy`. ~10 мин.
+- [ ] **HRV polymorphism через state-граф.** Обобщить `hrv_manager`
+  через `SensorReading {ts, source, metrics}`. Источники:
+  - Polar H10 (high-frequency RR)
+  - Apple Watch / Oura / Garmin (sparse HR + delay)
+  - Manual check-in (replacement когда тела нет)
+  - Симулятор (dev)
+  Все пишут в state_graph append-only. `UserState` читает последние
+  valid samples + weighted average. Энергия считается из этого же потока.
+  Архитектурный refactor. ~3-4ч.
+
+- [ ] **README_EN.md** — английская версия корневого README для международной
+  GitHub-аудитории. Перевод продуктового voice'а, но без дословного —
+  в английском некоторые метафоры работают иначе. ~1ч.
+
+### ✅ Сделано 2026-04-19…20 (перед коммитом)
+
+- UI split (`/` Baddle + `/lab` Graph Lab), partials, Settings-modal разбит
+- Chat на сервер (`data/chat_history.jsonl`) + очистка + миграция
+- Cross-workspace semantic search: endpoint + UI modal + navigation +
+  node-related в Lab sidebar
+- Кнопка ⚡ сброса энергии в Settings
+- Live-cone killer-feature: apex-glow + gradient + safe scaling + dual
+  cones с overlap-ромбом + плавный transition single↔dual
+- Mini-cone в Baddle header (76px) + big cone в dashboard (140px) +
+  Lab (180px)
+- Thinking-state tracking: pump/scout/synthesize/elaborate/smartdc/think —
+  cognitive_loop (5 тиков) + все 5 graph-endpoints через декоратор
+  `_with_thinking` + `execute_deep` (основной путь /assist)
+- Silent autosave restore (убран confirm dialog при каждой перезагрузке)
+- События в чат: `/goals/add`, `/checkin`, `/activity/start` пушат
+  assistant-message в chat_history с mode_name'ами (excluded из «⋯» меню)
+- Demo seed при первом запуске (work-demo + personal-demo)
+- HRV mini-кнопка в brand рядом с «HRV off»
+- 7 багов suggestions/alerts/dashboard из user-feedback раунда
 
 ## UI / визуализация
 

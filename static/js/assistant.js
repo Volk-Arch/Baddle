@@ -42,6 +42,116 @@ async function _chatStoreLoad() {
   }
 }
 
+// ── Cross-workspace search ────────────────────────────────────────────
+
+function openCrossSearch() {
+  const m = document.getElementById('cross-search-modal');
+  if (!m) return;
+  m.style.display = 'flex';
+  const inp = document.getElementById('cross-search-input');
+  if (inp) { inp.value = inp.value || ''; setTimeout(() => inp.focus(), 30); }
+  // Подсказка
+  const stats = document.getElementById('cross-search-stats');
+  if (stats) stats.textContent = '';
+  const res = document.getElementById('cross-search-results');
+  if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:12px;text-align:center">Напиши что-то и нажми Найти. Ищу по всем workspace\'ам одновременно.</div>';
+}
+
+function closeCrossSearch() {
+  const m = document.getElementById('cross-search-modal');
+  if (m) m.style.display = 'none';
+}
+
+function crossSearchOverlayClick(ev) {
+  if (ev.target.id === 'cross-search-modal') closeCrossSearch();
+}
+
+async function runCrossSearch() {
+  const inp = document.getElementById('cross-search-input');
+  const query = (inp && inp.value || '').trim();
+  const res = document.getElementById('cross-search-results');
+  const stats = document.getElementById('cross-search-stats');
+  if (!query) { if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:12px">Введи текст для поиска.</div>'; return; }
+  if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:20px;text-align:center">Ищу… (первый поиск может быть дольше — генерятся embeddings)</div>';
+  if (stats) stats.textContent = '';
+  try {
+    const r = await fetch('/search/cross', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query, top_k: 15, min_similarity: 0.30}),
+    });
+    const d = await r.json();
+    if (d.error) { if (res) res.innerHTML = `<div style="color:#ef4444;padding:12px">Ошибка: ${_esc(d.error)}</div>`; return; }
+    const hits = d.hits || [];
+    const st = d.stats || {};
+    if (stats) stats.textContent = `${hits.length} совпадений · ${st.workspaces_scanned || 0} workspace'ов · ${st.nodes_with_embedding || 0}/${st.nodes_total || 0} нод с embeddings`;
+    if (!hits.length) {
+      if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:20px;text-align:center">Не нашлось близкого. Попробуй другую формулировку или понизь min_similarity.</div>';
+      return;
+    }
+    res.innerHTML = hits.map(h => {
+      const simPct = Math.round((h.similarity || 0) * 100);
+      const typeColor = h.type === 'goal' ? '#f43f5e'
+                      : h.type === 'hypothesis' ? '#a78bfa'
+                      : h.type === 'fact' ? '#10b981'
+                      : h.type === 'evidence' ? '#06b6d4'
+                      : '#71717a';
+      return `<div class="cross-hit" data-ws="${_esc(h.ws_id)}" data-node="${h.node_idx}"
+                   onclick="crossSearchGotoHit('${_esc(h.ws_id)}', ${h.node_idx})"
+                   style="padding:10px 12px;border:1px solid #27272a;border-radius:8px;margin-bottom:6px;cursor:pointer;background:#0a0a0f">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+          <span style="font-size:10px;color:${typeColor};font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${_esc(h.type || 'thought')}</span>
+          <span style="font-size:10px;color:#71717a">${_esc(h.ws_title || h.ws_id)} · #${h.node_idx}</span>
+          <span style="flex:1"></span>
+          <span style="font-size:11px;color:#818cf8;font-weight:600">${simPct}%</span>
+        </div>
+        <div style="font-size:13px;color:#e4e4e7;line-height:1.4">${_esc(h.text)}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    if (res) res.innerHTML = `<div style="color:#ef4444;padding:12px">Сеть: ${_esc(e.message)}</div>`;
+  }
+}
+
+async function crossSearchGotoHit(wsId, nodeIdx) {
+  // Переключить workspace + открыть Lab со скроллом на node.
+  // localStorage — чтобы Lab после загрузки знал куда прокрутить.
+  try {
+    await fetch('/workspace/switch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: wsId}),
+    });
+  } catch(e) { /* silent */ }
+  try { localStorage.setItem('lab-focus-node', String(nodeIdx)); } catch(e) {}
+  window.location.href = '/lab';
+}
+
+// Close on Esc
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const m = document.getElementById('cross-search-modal');
+    if (m && m.style.display === 'flex') closeCrossSearch();
+  }
+});
+
+async function resetEnergy() {
+  try {
+    const r = await fetch('/user_state/reset-energy', {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      _assistEnergy = d.energy;
+      if (typeof assistUpdateHeader === 'function') assistUpdateHeader();
+      if (typeof assistAddMsg === 'function') {
+        assistAddMsg('assistant',
+          `⚡ Энергия восстановлена: ${Math.round(d.energy.energy)}/${Math.round(d.energy.max)}.`,
+          { mode_name: 'Защита' });
+      }
+    }
+  } catch (e) {
+    alert('Ошибка сброса энергии: ' + e.message);
+  }
+}
+
 async function reloadDemo() {
   const typed = prompt(
     'Загрузить DEMO-контент?\n\n' +
@@ -197,6 +307,7 @@ function assistAddMsg(role, content, meta, persist) {
     'DMN', 'Scout',              // «🔗 DMN-инсайт», «💡 Пока ты не смотрел»
     'Защита', 'Guard',           // lowEnergyPostpone подтверждения
     'Activity',                  // start/stop/switch трекера
+    'Новая цель', 'Новая привычка', 'Новое ограничение',  // ручное создание целей
   ]);
   if (role === 'assistant' && meta && (meta.mode || meta.mode_name)
       && !_noStepModes.has(meta.mode_name)
@@ -1228,16 +1339,18 @@ function assistUpdateHeader() {
     }
   }
 
-  // HRV button state — кнопка это ACTION (Stop/Start), текст статуса
-  // живёт отдельно в assist-brand-status.
-  const hrvBtn = document.querySelector('.assist-hrv-btn');
+  // HRV mini-кнопка (в brand-строке рядом с «HRV off»): ▶ / ⏹, class .running.
+  // Старый .assist-hrv-btn удалён — освободил место справа под конус.
+  const hrvBtn = document.getElementById('assist-hrv-mini-btn');
   if (hrvBtn) {
     const running = !!(_assistHRV && _assistHRV.coherence !== null && _assistHRV.coherence !== undefined);
     if (running) {
-      hrvBtn.textContent = 'Stop HRV';
+      hrvBtn.textContent = '⏹';
+      hrvBtn.title = 'Остановить HRV симулятор';
       hrvBtn.classList.add('running');
     } else {
-      hrvBtn.textContent = 'Start HRV';
+      hrvBtn.textContent = '▶';
+      hrvBtn.title = 'Старт HRV симулятора';
       hrvBtn.classList.remove('running');
     }
   }
@@ -3154,7 +3267,7 @@ async function assistHRVToggle(mode) {
     running = !!st.running;
   } catch(e) { /* silent — assume stopped */ }
 
-  const btn = document.querySelector('.assist-hrv-btn');
+  const btn = document.getElementById('assist-hrv-mini-btn');
   if (running) {
     try {
       await fetch('/hrv/stop', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
@@ -3162,7 +3275,7 @@ async function assistHRVToggle(mode) {
     _assistHRV = null;
     _assistHRVHistory = [];
     // Мгновенно переключаем текст кнопки — не ждём следующего poll'а
-    if (btn) { btn.textContent = 'Start HRV'; btn.classList.remove('running'); }
+    if (btn) { btn.textContent = '▶'; btn.classList.remove('running'); }
     assistUpdateHeader();
     _hrvToast('HRV off', 'info');
     return;
@@ -3176,7 +3289,7 @@ async function assistHRVToggle(mode) {
     const d = await r.json();
     if (d.ok) {
       _hrvToast('HRV on (' + mode + ')', 'ok');
-      if (btn) { btn.textContent = 'Stop HRV'; btn.classList.add('running'); }
+      if (btn) { btn.textContent = '⏹'; btn.classList.add('running'); }
       setTimeout(assistHRVPoll, 500);
     } else {
       _hrvToast('HRV start failed', 'err');

@@ -219,6 +219,30 @@ class CognitiveLoop:
         self._alerts_queue: list = []
         self._lock = threading.Lock()
 
+        # Thinking-state: что система сейчас делает в фоне. UI читает через
+        # /assist/state → рисует живой конус (dual cones для pump, pulse для
+        # elaborate, freeze-overlay для protective_freeze). Формат:
+        #   {"kind": "pump"|"elaborate"|"smartdc"|"scout"|"synthesize"|"idle",
+        #    "started_at": ts, "detail": ...}
+        self._thinking_state: dict = {"kind": "idle", "started_at": 0.0}
+
+    def set_thinking(self, kind: str, detail: Optional[dict] = None):
+        """Отметить текущее тяжёлое действие (pump / elaborate / ...).
+        UI polls /assist/state и рисует соответствующий cone-режим. Вызывать
+        перед долгой операцией и clear_thinking() после.
+        """
+        self._thinking_state = {
+            "kind": kind,
+            "started_at": time.time(),
+            "detail": detail or {},
+        }
+
+    def clear_thinking(self):
+        self._thinking_state = {"kind": "idle", "started_at": time.time()}
+
+    def get_thinking(self) -> dict:
+        return dict(self._thinking_state or {"kind": "idle", "started_at": 0.0})
+
     # ── Throttle helper ────────────────────────────────────────────────
 
     def _throttled(self, attr: str, interval_s: float) -> bool:
@@ -366,6 +390,7 @@ class CognitiveLoop:
         if not self._throttled("_last_night_cycle", self.NIGHT_CYCLE_INTERVAL):
             return
         log.info("[cognitive_loop] night cycle starting")
+        self.set_thinking("scout", {"phase": "night"})
 
         summary: dict = {}
 
@@ -437,6 +462,7 @@ class CognitiveLoop:
             })
             self._recent_bridges = self._recent_bridges[-10:]
         log.info(f"[cognitive_loop] night cycle done: {text}")
+        self.clear_thinking()
 
     # ── REM emotional: прогон эпизодов с высоким |rpe| через Pump ──
 
@@ -627,13 +653,18 @@ class CognitiveLoop:
             return
 
         log.info(f"[cognitive_loop] DMN deep-research starting on goal: {goal_text[:60]}")
+        self.set_thinking("synthesize", {"goal": goal_text[:60]})
         try:
             from .assistant_exec import execute_deep
             result = execute_deep(goal_text, lang="ru", mode_id="horizon",
                                    profile_hint="")
         except Exception as e:
             log.warning(f"[cognitive_loop] DMN deep failed: {e}")
+            self.clear_thinking()
             return
+        finally:
+            # clear в конце функции ниже, но guard здесь для раннего exit
+            pass
 
         card = (result.get("cards") or [{}])[0]
         synthesis = (card.get("synthesis") or "")[:150]
@@ -667,6 +698,7 @@ class CognitiveLoop:
             })
             self._recent_bridges = self._recent_bridges[-10:]
         log.info(f"[cognitive_loop] DMN deep done: {nodes_created} nodes, synthesis={synthesis[:60]}")
+        self.clear_thinking()
 
     def _check_dmn_converge(self):
         """DMN server-side autorun loop до STABLE — аналог graph-tab Run button.
@@ -916,7 +948,11 @@ class CognitiveLoop:
         if not self._throttled("_last_dmn", self.DMN_INTERVAL):
             return
 
-        bridge = self._run_pump_bridge(max_iterations=1, save=False)
+        self.set_thinking("pump", {"source": "dmn"})
+        try:
+            bridge = self._run_pump_bridge(max_iterations=1, save=False)
+        finally:
+            self.clear_thinking()
         # Guard: пустой/слишком короткий текст моста = LLM-generation failed,
         # alert без тела выглядит как пустой «🔗 DMN-инсайт:» в чате. Лучше
         # не пушить и попробовать на следующей итерации.

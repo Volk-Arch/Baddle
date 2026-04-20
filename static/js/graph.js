@@ -1492,7 +1492,88 @@ function graphShowDetail(idx) {
   }
   // Append timestamp + edges to detail view
   document.getElementById('graph-detail-view').insertAdjacentHTML('beforeend', timeHtml + edgesHtml);
+  // Cross-workspace related — fetch async, prepend в detail-view
+  graphFetchCrossRelated(idx);
 }
+
+// Cross-workspace related для открытой ноды. Запрашиваем /search/node-related,
+// показываем «эта идея встречается в других workspace'ах» — это то что
+// превращает мультиграф из изолированных баночек в единое пространство.
+function graphFetchCrossRelated(idx) {
+  const wsSel = document.getElementById('workspace-select');
+  const ws = (wsSel && wsSel.value) || '';
+  if (!ws) return;
+  fetch(`/search/node-related?ws=${encodeURIComponent(ws)}&node=${idx}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) return;
+      const explicit = d.explicit || [];
+      const semantic = d.semantic || [];
+      if (!explicit.length && !semantic.length) return;
+      const esc = (s) => String(s || '').replace(/[&<>"']/g, c =>
+        ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const renderItem = (it, label, color) => `
+        <div onclick="crossSearchGotoHit('${esc(it.ws_id)}', ${it.node_idx})"
+             style="padding:4px 6px;border:1px solid #27272a;border-radius:4px;margin:2px 0;cursor:pointer;font-size:11px;color:#a1a1aa">
+          <span style="color:${color};font-weight:600">${esc(label)}</span>
+          <span style="color:#71717a">· ${esc(it.ws_id)} #${it.node_idx}</span>
+          <div style="color:#d4d4d8;margin-top:2px">${esc((it.text || '').slice(0, 80))}</div>
+        </div>`;
+      let html = '<details style="margin-top:8px;border-top:1px solid #e0ddd8;padding-top:6px" open>'
+        + `<summary style="color:#818cf8;font-size:11px;cursor:pointer;user-select:none">🔗 Связано в других workspace'ах (${explicit.length + semantic.length})</summary>`;
+      explicit.forEach(e => html += renderItem(e, 'DMN-мост', '#f59e0b'));
+      semantic.forEach(s => html += renderItem(s, `${Math.round((s.similarity||0)*100)}% похожа`, '#818cf8'));
+      html += '</details>';
+      const view = document.getElementById('graph-detail-view');
+      if (view) view.insertAdjacentHTML('beforeend', html);
+    })
+    .catch(() => {});
+}
+
+// При загрузке Lab — если в localStorage стоит lab-focus-node
+// (поставлен из Baddle cross-search), фокусируемся на этой ноде.
+// Lab не грузит граф автоматически при открытии, поэтому сами дёргаем
+// /graph/recalc чтобы graphData заполнился перед focus.
+(function labFocusFromStorage() {
+  if (window.location.pathname !== '/lab') return;
+  let idx = null;
+  try { idx = localStorage.getItem('lab-focus-node'); } catch(e) { return; }
+  if (idx === null || idx === undefined) return;
+  idx = parseInt(idx, 10);
+  if (!isFinite(idx) || idx < 0) { localStorage.removeItem('lab-focus-node'); return; }
+
+  const doFocus = () => {
+    try {
+      localStorage.removeItem('lab-focus-node');
+      graphSelectFromList(idx);
+    } catch(e) { /* silent */ }
+  };
+
+  const ensureLoadedAndFocus = async () => {
+    // Если graphData уже есть и содержит ноду — focus сразу
+    if (window.graphData && graphData.nodes && graphData.nodes[idx]) {
+      return doFocus();
+    }
+    // Иначе дёргаем /graph/recalc чтобы Lab подтянул активный workspace
+    try {
+      const r = await fetch('/graph/recalc', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(typeof graphGetParams === 'function' ? graphGetParams() : {})
+      });
+      const d = await r.json();
+      if (d && !d.error && typeof graphUpdateView === 'function') {
+        graphUpdateView(d);
+        setTimeout(doFocus, 200);
+      }
+    } catch(e) { /* silent */ }
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(ensureLoadedAndFocus, 400));
+  } else {
+    setTimeout(ensureLoadedAndFocus, 400);
+  }
+})();
 
 function graphDetailToChat() {
   const idx = graphSelectedNode;
@@ -3584,17 +3665,20 @@ function graphAutoSave() {
   }, 2000);
 }
 
-// Check for autosave on startup
+// Check for autosave on startup.
+// Раньше спрашивал confirm — раздражало при каждой перезагрузке. Теперь
+// silent restore: если _autosave есть и workspace-граф **пустой**, грузим
+// его. Если workspace уже имеет ноды (нормальный случай с тех пор как
+// появились workspace'ы) — не трогаем, _autosave это legacy-дубль.
 function graphCheckAutosave() {
   fetch('/graph/list').then(r => r.json()).then(d => {
     const graphs = d.graphs || [];
     const autosave = graphs.find(g => g.name === '_autosave');
-    if (autosave && autosave.nodes_count > 0) {
-      const modified = new Date(autosave.modified * 1000).toLocaleString();
-      if (confirm('Restore previous session?\n(' + autosave.topic + ', ' + autosave.nodes_count + ' nodes, ' + modified + ')')) {
-        graphLoadByName('_autosave');
-      }
-    }
+    if (!autosave || !autosave.nodes_count) return;
+    // Workspace уже загружен (в Lab сам render) — пропускаем если есть ноды.
+    const currentNodes = (window.graphData && graphData.nodes && graphData.nodes.length) || 0;
+    if (currentNodes > 0) return;
+    graphLoadByName('_autosave');
   }).catch(() => {});
 }
 

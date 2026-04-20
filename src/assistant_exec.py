@@ -678,6 +678,16 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     from .graph_routes import _add_node as _add_node_route  # same module
     from .graph_logic import _compute_edges
     from .api_backend import get_neural_defaults, get_mode_depth
+
+    # Thinking → cone в UI будет дышать пока идёт deep-research. Один trigger
+    # покрывает и user-triggered /assist, и cognitive_loop._check_dmn_deep_research.
+    try:
+        from .cognitive_loop import get_cognitive_loop
+        get_cognitive_loop().set_thinking("synthesize",
+                                            {"mode_id": mode_id, "message": message[:80]})
+    except Exception:
+        pass
+
     _nd = get_neural_defaults()
     # Per-mode depth — если caller не передал явно max_steps
     if max_steps is None:
@@ -1205,6 +1215,13 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             "evidence": ev_for_h,
             "score": option_scores.get(h_idx, 0),
         })
+
+    # Clear thinking — deep-research завершён
+    try:
+        from .cognitive_loop import get_cognitive_loop
+        get_cognitive_loop().clear_thinking()
+    except Exception:
+        pass
 
     return {
         "text": summary,

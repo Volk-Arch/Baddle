@@ -483,6 +483,11 @@ select {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
+}
+.assist-brand > div {
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .assist-logo {
@@ -513,6 +518,41 @@ select {
 
 .assist-brand-status.on {
   color: #10b981;
+}
+
+/* HRV off/on + mini-кнопка старта в одной строке */
+.assist-brand-hrv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 1px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.assist-brand-hrv-row .assist-brand-status {
+  white-space: nowrap;
+}
+.assist-hrv-mini-btn {
+  background: transparent;
+  border: 1px solid #3f3f46;
+  color: #a1a1aa;
+  border-radius: 4px;
+  padding: 0 6px;
+  height: 16px;
+  line-height: 14px;
+  font-size: 9px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.assist-hrv-mini-btn:hover {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #52525b;
+}
+.assist-hrv-mini-btn.running {
+  background: #052e16;
+  border-color: #166534;
+  color: #86efac;
 }
 
 .assist-hrv-chart {
@@ -1919,6 +1959,96 @@ select {
 .assist-fb-btn:hover { background: #3f3f46; color: #e4e4e7; }
 .assist-fb-accept:hover { background: #052e16; color: #10b981; border-color: #166534; }
 .assist-fb-reject:hover { background: #450a0a; color: #ef4444; border-color: #991b1b; }
+
+/* Baddle live cognitive cone. Mini-viz в assist-header, pulses при thinking. */
+.baddle-cone-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 66px;
+}
+.baddle-cone-wrap svg {
+  display: block;
+  filter: drop-shadow(0 0 8px rgba(129, 140, 248, 0.15));
+  transition: filter 0.6s ease;
+}
+.baddle-cone-wrap.thinking svg {
+  animation: baddle-cone-pulse 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px rgba(129, 140, 248, 0.55));
+}
+.baddle-cone-wrap.pump svg {
+  filter: drop-shadow(0 0 18px rgba(16, 185, 129, 0.6));
+}
+.baddle-cone-wrap.freeze svg {
+  filter: drop-shadow(0 0 14px rgba(239, 68, 68, 0.5));
+}
+@keyframes baddle-cone-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.92; }
+  50%      { transform: scale(1.06); opacity: 1; }
+}
+.baddle-cone-label {
+  font-size: 9px;
+  color: #71717a;
+  text-align: center;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 66px;
+}
+
+/* Large live cone в dashboard sub-page (та же логика, больше размер). */
+.dash-cone-block {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.dash-cone-block svg {
+  display: block;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 16px rgba(129, 140, 248, 0.25));
+  transition: filter 0.6s ease;
+}
+.dash-cone-block.thinking svg {
+  animation: baddle-cone-pulse 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 22px rgba(129, 140, 248, 0.65));
+}
+.dash-cone-block.pump svg {
+  filter: drop-shadow(0 0 26px rgba(16, 185, 129, 0.65));
+}
+.dash-cone-block.freeze svg {
+  filter: drop-shadow(0 0 22px rgba(239, 68, 68, 0.6));
+}
+.dash-cone-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dash-cone-title {
+  font-size: 11px;
+  color: #52525b;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+}
+.dash-cone-state {
+  font-size: 18px;
+  color: #e4e4e7;
+  font-weight: 600;
+}
+.dash-cone-sub {
+  font-size: 11px;
+  color: #71717a;
+}
 
 /* Settings sub-page: workspace / lang блоки. Стиль общий с HRV sim. */
 .assist-settings-block {

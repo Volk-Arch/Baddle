@@ -13,10 +13,14 @@
     <span id="token-counter" style="color:var(--text-tertiary);font-size:11px"></span>
     <span class="flex-1"></span>
     <span id="batch-tag" style="color:var(--text-tertiary);font-size:11px"></span>
+    <button onclick="openCrossSearch()"
+            title="Искать во всех workspace'ах"
+            style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">🔍</button>
   </div>
 
   {% include "partials/settings_modal.html" %}
   {% include "partials/workspaces_modal.html" %}
+  {% include "partials/cross_search_modal.html" %}
 
   <!-- ══ ASSISTANT mode ══ (default, mockup-styled) -->
   <div id="cfg-assist" class="assist-root">
@@ -26,7 +30,12 @@
         <div class="assist-logo">B</div>
         <div>
           <div class="assist-brand-name">Baddle</div>
-          <div id="assist-hrv-status" class="assist-brand-status">HRV off</div>
+          <div class="assist-brand-hrv-row">
+            <span id="assist-hrv-status" class="assist-brand-status">HRV off</span>
+            <button onclick="assistHRVToggle('simulator')" id="assist-hrv-mini-btn"
+                    class="assist-hrv-mini-btn"
+                    title="Старт/стоп HRV симулятора">▶</button>
+          </div>
           <div id="assist-lm-status" class="assist-lm-status" style="display:none"></div>
         </div>
       </div>
@@ -59,11 +68,26 @@
         </div>
       </div>
 
-      <button onclick="assistHRVToggle('simulator')" class="assist-hrv-btn" title="Старт/стоп HRV симулятора">Start HRV</button>
+      <!-- Live cognitive cone: precision → форма, state → цвет,
+           thinking → pulse + dual cones для pump. Polls /assist/state. -->
+      <div class="baddle-cone-wrap" title="Когнитивный конус: precision → раствор и длина, state → цвет. Пульсирует когда Baddle думает. Раздваивается на pump (ищет мост).">
+        <svg id="baddle-cone-svg" viewBox="0 0 80 80" width="76" height="76"></svg>
+        <div class="baddle-cone-label" id="baddle-cone-label">—</div>
+      </div>
     </div>
 
     <!-- ═══ Sub-page: Dashboard (состояние системы + нейрохимия) ═══ -->
     <div class="baddle-sub-page" data-sub-page="dashboard" style="display:none">
+
+    <!-- Live cognitive cone: главный визуал как Baddle думает прямо сейчас -->
+    <div id="dash-cone-block" class="dash-cone-block" title="Когнитивный конус Baddle в реальном времени. Precision → раствор конуса. State → цвет. Pulse когда думает. Dual cones когда ищет мост (pump).">
+      <svg id="dash-cone-svg" viewBox="0 0 200 200" width="140" height="140"></svg>
+      <div class="dash-cone-meta">
+        <div class="dash-cone-title">Когнитивный конус</div>
+        <div class="dash-cone-state" id="dash-cone-state">—</div>
+        <div class="dash-cone-sub" id="dash-cone-sub">precision · γ · δt</div>
+      </div>
+    </div>
 
     <!-- Live status strip: главное одной лентой -->
     <div class="dash-status-strip">
@@ -549,6 +573,8 @@
       <button class="activity-btn" onclick="profileOpen()" title="Preferences и constraints по категориям">👤 Профиль</button>
       <button class="activity-btn" onclick="openSettings()" title="API url / модель / neural defaults">⚙ API / модель</button>
       <button class="activity-btn" onclick="openCheckin()" title="Daily check-in">📝 Check-in</button>
+      <button class="activity-btn" onclick="resetEnergy()"
+              title="Сбросить дневной бюджет энергии на полный. long_reserve не трогается.">⚡ Сбросить энергию</button>
       <button class="activity-btn" onclick="assistClearChat()"
               title="Удалить всю историю чата с сервера. Граф и цели остаются.">🧹 Очистить чат</button>
       <button class="activity-btn" onclick="reloadDemo()"
