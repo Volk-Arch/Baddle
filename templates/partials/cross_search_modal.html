@@ -1,0 +1,23 @@
+<!-- Cross-workspace search modal. Используется и в Baddle, и в Lab.
+     Вызывается через openCrossSearch() (в assistant.js). -->
+<div id="cross-search-modal" class="modal-overlay dark-modal" style="display:none;" onclick="crossSearchOverlayClick(event)">
+  <div class="modal-content" style="width:640px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span style="font-size:14px;font-weight:600">🔍 Искать во всех workspace'ах</span>
+      <button onclick="closeCrossSearch()" style="background:none;border:none;color:#a1a1aa;font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <input id="cross-search-input" type="text" class="modal-input"
+             placeholder="что ищем? (идея, тема, имя ноды)"
+             style="flex:1"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();runCrossSearch();}">
+      <button onclick="runCrossSearch()" class="btn-primary" style="padding:8px 14px">Найти</button>
+    </div>
+    <div id="cross-search-stats" style="font-size:11px;color:#71717a;margin-bottom:8px;min-height:14px"></div>
+    <div id="cross-search-results" style="overflow-y:auto;flex:1;border-top:1px solid #27272a;padding-top:8px">
+      <div style="color:#71717a;font-size:12px;padding:12px;text-align:center">
+        Ноды из всех workspace'ов, близкие по смыслу к запросу. Клик → открыть в Lab.
+      </div>
+    </div>
+  </div>
+</div>

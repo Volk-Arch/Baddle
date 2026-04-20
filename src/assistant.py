@@ -1037,11 +1037,20 @@ def assist_state():
     UserState через `user_state` ключ уже включает: dopamine/serotonin/
     norepinephrine/burnout, expectation/reality/surprise/imbalance (signed
     prediction error), named_state (Voronoi region), long_reserve (dual-pool).
+
+    `thinking` — что cognitive_loop делает в фоне прямо сейчас (pump /
+    elaborate / scout / idle). UI polls этот endpoint и рисует cone-viz
+    в соответствии: dual cones для pump, pulse для идей, freeze-overlay и т.д.
     """
     from .horizon import get_global_state
     from .api_backend import get_api_health
+    from .cognitive_loop import get_cognitive_loop
     data = get_global_state().get_metrics()
     data["api_health"] = get_api_health()
+    try:
+        data["thinking"] = get_cognitive_loop().get_thinking()
+    except Exception:
+        data["thinking"] = {"kind": "idle", "started_at": 0}
     return jsonify(data)
 
 
@@ -1350,6 +1359,23 @@ def goals_stats():
     return jsonify(goal_stats())
 
 
+# ── Helper: событие в chat_history ─────────────────────────────────────
+# Ручные действия через UI (добавил цель, check-in, старт активности)
+# должны появляться в чате — чтобы история ничего не теряла.
+
+def _push_event_to_chat(text: str, mode_name: str = "Событие"):
+    """Добавить assistant-message в chat_history. Silent on failure."""
+    try:
+        from .chat_history import append_entry
+        append_entry({
+            "kind": "msg", "role": "assistant",
+            "content": text,
+            "meta": {"mode_name": mode_name},
+        })
+    except Exception as e:
+        log.debug(f"[chat_event] failed: {e}")
+
+
 @assistant_bp.route("/goals/add", methods=["POST"])
 def goals_add():
     """Manual add (обычно создаётся автоматом из /graph/add node_type=goal).
@@ -1363,17 +1389,24 @@ def goals_add():
     """
     from .goals_store import add_goal
     d = request.get_json(force=True) or {}
+    kind = d.get("kind", "oneshot")
+    text = d.get("text", "")
     gid = add_goal(
-        text=d.get("text", ""),
+        text=text,
         mode=d.get("mode", "horizon"),
         workspace=d.get("workspace", "main"),
         priority=d.get("priority"),
         deadline=d.get("deadline"),
         category=d.get("category"),
-        kind=d.get("kind", "oneshot"),
+        kind=kind,
         schedule=d.get("schedule"),
         polarity=d.get("polarity"),
     )
+    # В чат — «я создал цель / привычку / ограничение»
+    icon = {"oneshot": "🎯", "recurring": "♻", "constraint": "⛔"}.get(kind, "🎯")
+    label = {"oneshot": "Новая цель", "recurring": "Новая привычка",
+             "constraint": "Новое ограничение"}.get(kind, "Новая цель")
+    _push_event_to_chat(f"{icon} {label}: «{text[:120]}»", mode_name=label)
     return jsonify({"ok": True, "id": gid})
 
 
@@ -1694,6 +1727,9 @@ def activity_start():
         resp["matched_recurring"] = matched_recurring
     if violations:
         resp["violations"] = violations
+    # В чат — «я засёк задачу X» чтобы история показывала activity-поток
+    cat_s = f" · {category}" if category else ""
+    _push_event_to_chat(f"▶ Задача: «{name[:120]}»{cat_s}", mode_name="Activity")
     return jsonify(resp)
 
 
@@ -1928,6 +1964,23 @@ def checkin_add():
         note=d.get("note", ""),
     )
     apply_to_user_state(entry)
+    # В чат — summary check-in'а чтобы он оставался в истории
+    parts = []
+    for k, lbl in (("energy", "E"), ("focus", "F"), ("stress", "S")):
+        v = entry.get(k)
+        if v is not None:
+            parts.append(f"{lbl}{int(v)}")
+    surp = None
+    if entry.get("expected") is not None and entry.get("reality") is not None:
+        s = entry["reality"] - entry["expected"]
+        surp = f"Δ{'+' if s >= 0 else ''}{int(s)}"
+    summary = " · ".join(parts) if parts else "—"
+    if surp:
+        summary += f" · сюрприз {surp}"
+    note = (entry.get("note") or "").strip()
+    if note:
+        summary += f" · «{note[:60]}»"
+    _push_event_to_chat(f"📝 Check-in: {summary}", mode_name="Check-in")
     return jsonify({"ok": True, "entry": entry})
 
 
@@ -2237,6 +2290,246 @@ def assist_decompose():
 
 # ── Morning briefing ──────────────────────────────────────────────────
 
+# ── Energy reset (для демо/отладки) ────────────────────────────────────
+# Сбрасывает дневной счётчик + потраченную энергию обратно до 0. Как если
+# бы наступила новая дата. long_reserve НЕ трогаем (это недельный пул).
+# Единственный use-case — демонстрация UX или отладка: юзер хочет начать
+# день заново не ждя полуночи.
+
+# ── Sensor stream (polymorphic body sensors) ──────────────────────────
+# Unified поток от любого источника: simulator, Polar, Apple Watch, Oura,
+# manual check-in. UserState читает агрегат отсюда (не из конкретного
+# HRVManager). См. docs/alerts-and-cycles.md + src/sensor_stream.py
+
+@assistant_bp.route("/sensor/readings", methods=["GET"])
+def sensor_readings():
+    """Последние readings по kind/source за окно (секунды).
+
+    Query: ?kind=hrv_snapshot&since=300&source=simulator
+    """
+    from .sensor_stream import get_stream
+    kind = request.args.get("kind")
+    source = request.args.get("source")
+    try:
+        since = float(request.args.get("since", 300))
+    except ValueError:
+        since = 300.0
+    readings = get_stream().recent(
+        kinds=[kind] if kind else None,
+        sources=[source] if source else None,
+        since_seconds=since,
+    )
+    return jsonify({
+        "count": len(readings),
+        "active_sources": get_stream().active_sources(),
+        "readings": [
+            {"ts": r.ts, "source": r.source, "kind": r.kind,
+             "metrics": r.metrics, "confidence": r.confidence}
+            for r in readings
+        ],
+    })
+
+
+@assistant_bp.route("/sensor/aggregate", methods=["GET"])
+def sensor_aggregate():
+    """Weighted HRV aggregate за окно (время-decay × confidence).
+
+    Query: ?window=180
+    """
+    from .sensor_stream import get_stream
+    try:
+        window = float(request.args.get("window", 180))
+    except ValueError:
+        window = 180.0
+    agg = get_stream().latest_hrv_aggregate(window_s=window)
+    activity = get_stream().recent_activity(window_s=60)
+    return jsonify({
+        "aggregate": agg,
+        "activity_magnitude": activity,
+        "active_sources": get_stream().active_sources(),
+    })
+
+
+# ── Debug: test harness для всех _check_* в cognitive_loop ────────────
+# Прогоняет каждую `_check_*` функцию с force-сбросом throttle. Полезно
+# чтобы видеть: какой alert реально emit'ится когда условия выполнены,
+# какой молчит (условие/данные не дают), какой падает с ошибкой.
+
+# Тяжёлые check'и (LLM-цикл, pump, REM) пропускаются по default чтобы
+# один вызов не занимал минуту. ?include_heavy=1 — прогнать всё.
+_HEAVY_CHECKS = {
+    "_check_night_cycle",           # REM + Scout + Consolidation
+    "_check_dmn_deep_research",     # full execute_deep pipeline
+    "_check_dmn_converge",          # autorun loop
+    "_check_dmn_continuous",        # pump-bridge LLM
+    "_check_dmn_cross_graph",       # cross-ws scan
+}
+
+
+@assistant_bp.route("/debug/alerts/trigger-all", methods=["POST", "GET"])
+def debug_alerts_trigger_all():
+    """Прогоняет все `_check_*` методы cognitive_loop с force-сбросом
+    throttle, возвращает отчёт: что emitted alert / silent / error.
+
+    Query: ?include_heavy=1 — включить pump/night/dmn_converge (долго!).
+    """
+    from .cognitive_loop import get_cognitive_loop
+    include_heavy = request.args.get("include_heavy") in ("1", "true", "yes")
+
+    cl = get_cognitive_loop()
+
+    # Monkey-patch _throttled чтобы всегда пропускал (и обнулял timer'ы)
+    original_throttled = cl._throttled
+    def force_throttled(attr, interval_s):
+        try:
+            setattr(cl, attr, 0.0)
+        except Exception:
+            pass
+        return original_throttled(attr, interval_s)
+    cl._throttled = force_throttled
+
+    # Находим все _check_* методы
+    check_names = sorted(
+        m for m in dir(cl)
+        if m.startswith("_check_") and callable(getattr(cl, m, None))
+    )
+
+    results = []
+    try:
+        for name in check_names:
+            entry = {"name": name, "heavy": name in _HEAVY_CHECKS}
+            if name in _HEAVY_CHECKS and not include_heavy:
+                entry["status"] = "skipped_heavy"
+                results.append(entry)
+                continue
+            before = list(cl._alerts_queue)
+            before_ids = {id(a) for a in before}
+            try:
+                fn = getattr(cl, name)
+                t0 = time.time()
+                fn()
+                entry["elapsed_s"] = round(time.time() - t0, 3)
+                new_alerts = [a for a in cl._alerts_queue if id(a) not in before_ids]
+                if new_alerts:
+                    entry["status"] = "alert_emitted"
+                    entry["alerts"] = [
+                        {"type": a.get("type"),
+                         "severity": a.get("severity"),
+                         "text": (a.get("text") or "")[:140]}
+                        for a in new_alerts
+                    ]
+                else:
+                    entry["status"] = "silent_ok"
+            except Exception as e:
+                entry["status"] = "error"
+                entry["error"] = str(e)[:200]
+            results.append(entry)
+    finally:
+        cl._throttled = original_throttled
+
+    summary = {
+        "total": len(results),
+        "alert_emitted": sum(1 for r in results if r["status"] == "alert_emitted"),
+        "silent_ok":     sum(1 for r in results if r["status"] == "silent_ok"),
+        "error":         sum(1 for r in results if r["status"] == "error"),
+        "skipped_heavy": sum(1 for r in results if r["status"] == "skipped_heavy"),
+        "include_heavy": include_heavy,
+    }
+    return jsonify({"summary": summary, "results": results})
+
+
+# ── Cross-workspace semantic search ────────────────────────────────────
+# Сразу синхронный поиск по всем графам. DMN async-путь (`_check_dmn_cross_graph`
+# каждые 60 мин) пишет cross_edges в `workspaces/index.json` — здесь мы
+# используем их плюс live-cosine как fallback.
+
+@assistant_bp.route("/search/cross", methods=["POST"])
+def search_cross():
+    """Вход: {query, top_k?, min_similarity?} → список hit'ов по всем ws."""
+    from .search import search_across_workspaces
+    d = request.get_json(force=True, silent=True) or {}
+    query = (d.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "empty query"}), 400
+    try:
+        result = search_across_workspaces(
+            query,
+            top_k=int(d.get("top_k") or 12),
+            min_similarity=float(d.get("min_similarity") or 0.35),
+            ensure_embeddings=bool(d.get("ensure_embeddings", True)),
+        )
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"[/search/cross] failed: {e}")
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+@assistant_bp.route("/search/node-related", methods=["GET"])
+def search_node_related():
+    """Для открытой ноды в Lab — связи в других workspace'ах.
+
+    Query: ?ws=work-demo&node=22
+    """
+    from .search import node_related_across_workspaces
+    ws = request.args.get("ws") or ""
+    try:
+        node = int(request.args.get("node") or "-1")
+    except ValueError:
+        return jsonify({"error": "bad node index"}), 400
+    if not ws or node < 0:
+        return jsonify({"error": "need ws and node"}), 400
+    try:
+        result = node_related_across_workspaces(ws, node)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+@assistant_bp.route("/user_state/reset-energy", methods=["POST"])
+def user_state_reset_energy():
+    state = _load_state()
+    state["decisions_today"] = 0
+    state["daily_spent"] = 0.0
+    _save_state(state)
+    # HRV recovery для max bar (если есть)
+    hrv = (_get_context() or {}).get("hrv") or {}
+    energy = _compute_energy(state, hrv_recovery=hrv.get("energy_recovery"))
+    log.info(f"[user_state] energy reset: daily back to {energy['energy']}/{energy['max']}")
+    return jsonify({"ok": True, "energy": energy})
+
+
+# ── Chat history (ранее жил в browser localStorage) ───────────────────
+# GET /assist/chat/history — возвращает весь сохранённый список entries.
+# POST /assist/chat/append — добавить одну entry (fire-and-forget из JS).
+# POST /assist/chat/clear — очистить историю (кнопка «Очистить чат»).
+
+@assistant_bp.route("/assist/chat/history", methods=["GET"])
+def assist_chat_history():
+    from .chat_history import load_history
+    return jsonify({"entries": load_history()})
+
+
+@assistant_bp.route("/assist/chat/append", methods=["POST"])
+def assist_chat_append():
+    from .chat_history import append_entry
+    entry = request.get_json(force=True, silent=True)
+    if not isinstance(entry, dict):
+        return jsonify({"error": "entry must be object"}), 400
+    try:
+        append_entry(entry)
+        return jsonify({"ok": True})
+    except Exception as e:
+        log.warning(f"[/assist/chat/append] failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@assistant_bp.route("/assist/chat/clear", methods=["POST"])
+def assist_chat_clear():
+    from .chat_history import clear_history
+    removed = clear_history()
+    return jsonify({"ok": True, "removed": removed})
+
+
 @assistant_bp.route("/assist/morning", methods=["POST"])
 def assist_morning():
     """Generate a morning briefing based on HRV recovery + pending tasks."""
@@ -2270,11 +2563,26 @@ def assist_morning():
     _log_decision(state, kind="morning_briefing")
     _save_state(state)
 
+    # Rich sections: тот же builder что использует cognitive_loop для push-alert'ов
+    # (sleep / recovery / energy / overnight bridges / activity / goals / pattern).
+    # UI рендерит их как мокап-карточку; text остаётся fallback'ом.
+    sections: list = []
+    try:
+        from .cognitive_loop import get_cognitive_loop
+        cl = get_cognitive_loop()
+        if hasattr(cl, "_build_morning_briefing_sections"):
+            sections = cl._build_morning_briefing_sections() or []
+    except Exception as e:
+        log.debug(f"[/assist/morning] sections builder failed: {e}")
+
+    import datetime as _dt
     return jsonify({
         "text": greeting,
+        "sections": sections,
         "energy": energy,
         "hrv": hrv_state,
         "recovery_pct": recovery_pct,
+        "hour": _dt.datetime.now().hour,
     })
 
 

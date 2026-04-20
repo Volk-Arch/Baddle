@@ -25,6 +25,33 @@ from .hrv_manager import get_manager as get_hrv_manager
 graph_bp = Blueprint("graph", __name__)
 
 
+# ── Thinking-state декоратор: помечает cognitive_loop что идёт тяжёлая
+# операция, чтобы UI конус показал соответствующую стадию (pump →
+# dual cones, elaborate → pulse, и т.д.). Any error inside endpoint не
+# оставляет thinking stuck — try/finally гарантирует clear.
+import functools as _functools
+
+def _with_thinking(kind: str):
+    def deco(fn):
+        @_functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                from .cognitive_loop import get_cognitive_loop
+                get_cognitive_loop().set_thinking(kind)
+            except Exception:
+                get_cognitive_loop = None
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                try:
+                    from .cognitive_loop import get_cognitive_loop as _gcl
+                    _gcl().clear_thinking()
+                except Exception:
+                    pass
+        return wrapper
+    return deco
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _p_data():
@@ -72,6 +99,7 @@ def graph_reset():
 
 
 @graph_bp.route("/graph/think", methods=["POST"])
+@_with_thinking("think")
 def graph_think():
     """Generate N thoughts about a topic."""
     d = _p_data()
@@ -555,6 +583,7 @@ def graph_sync():
 
 
 @graph_bp.route("/graph/expand", methods=["POST"])
+@_with_thinking("elaborate")
 def graph_expand():
     """Generate child ideas branching from a specific thought (same topic, new angles)."""
     d = _p_data()
@@ -628,6 +657,7 @@ def graph_expand():
 
 
 @graph_bp.route("/graph/elaborate", methods=["POST"])
+@_with_thinking("elaborate")
 def graph_elaborate():
     """Generate deeper ideas that elaborate on a specific thought (the source becomes a hub)."""
     d = _p_data()
@@ -842,6 +872,7 @@ def graph_studio_apply_child():
 # --------------- Smart DC (Dialectical Convergence) ---------------
 
 @graph_bp.route("/graph/smartdc", methods=["POST"])
+@_with_thinking("smartdc")
 def graph_smartdc():
     """Smart DC: generate thesis, antithesis, neutral → centroid → synthesis."""
     d = _p_data()
@@ -982,6 +1013,7 @@ def graph_smartdc():
 # --------------- Pump (Накачка) ---------------
 
 @graph_bp.route("/graph/pump", methods=["POST"])
+@_with_thinking("pump")
 def graph_pump():
     """Find the hidden axis between two ideas via bilateral expansion."""
     from .pump_logic import pump

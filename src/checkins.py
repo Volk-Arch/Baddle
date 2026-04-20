@@ -90,6 +90,24 @@ def add_checkin(energy: Optional[int] = None,
     # Derived fields
     if entry["expected"] is not None and entry["reality"] is not None:
         entry["surprise"] = entry["reality"] - entry["expected"]
+
+    # Дублируем в sensor_stream — UserState читает и HRV и manual как единый
+    # полиморфный поток. Источник = 'manual', confidence = 0.7 (субъективно).
+    try:
+        from .sensor_stream import push_subjective
+        # Приводим к [0,1] нормализованные копии для HRV-совместимости
+        energy_norm = (entry["energy"] / 100.0) if entry.get("energy") is not None else None
+        focus_norm = (entry["focus"] / 100.0) if entry.get("focus") is not None else None
+        stress_norm = (entry["stress"] / 100.0) if entry.get("stress") is not None else None
+        push_subjective(
+            energy=energy_norm, focus=focus_norm, stress=stress_norm,
+            surprise=entry.get("surprise"),
+            note=entry.get("note"),
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"[checkin] sensor_stream push failed: {e}")
+
     return entry
 
 

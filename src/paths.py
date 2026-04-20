@@ -21,6 +21,8 @@ ACTIVITY_FILE         = DATA_DIR / "activity.jsonl"
 CHECKINS_FILE         = DATA_DIR / "checkins.jsonl"
 PATTERNS_FILE         = DATA_DIR / "patterns.jsonl"
 PLANS_FILE            = DATA_DIR / "plans.jsonl"
+CHAT_HISTORY_FILE     = DATA_DIR / "chat_history.jsonl"
+SENSOR_READINGS_FILE  = DATA_DIR / "sensor_readings.jsonl"
 
 # ── UI defaults (персистентные, но перезаписываемые; см. ui.py fallback) ──
 ROLES_FILE            = DATA_DIR / "roles.json"
@@ -54,6 +56,8 @@ def get_resettable_files() -> list[Path]:
         CHECKINS_FILE,
         PATTERNS_FILE,
         PLANS_FILE,
+        CHAT_HISTORY_FILE,
+        SENSOR_READINGS_FILE,
         STATE_GRAPH_FILE,
         STATE_EMBEDDINGS_FILE,
         STATE_GRAPH_ARCHIVE,

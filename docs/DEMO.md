@@ -3,7 +3,7 @@
 Пошаговый сценарий на 7 дней. Каждый шаг — действие, ожидаемый результат,
 и что **должно быть видно** в системе. Предполагается что `python ui.py`
 запущен, LM-сервер доступен, и ты прошёл первый старт (см.
-[SETUP.md](SETUP.md)).
+[SETUP.md](../SETUP.md)).
 
 Каждый день = 5-15 минут активного взаимодействия. Остальное — система
 работает в фоне, собирает данные.
@@ -129,7 +129,7 @@ curl -X POST http://localhost:7860/assist \
 ### Красный флаг
 
 - LLM-скан пишет violation на каждый запрос → система слишком чувствительна,
-  проверь `scan_message_for_violations` в [src/recurring.py](src/recurring.py).
+  проверь `scan_message_for_violations` в [src/recurring.py](../src/recurring.py).
 - При явной фразе про сахар не срабатывает → LLM может быть слишком
   консервативный. Логи `[scan_violations]` покажут промпт и ответ.
 
@@ -182,7 +182,7 @@ curl http://localhost:7860/goals/solved/<snapshot_ref>
 4. Переключись обратно на `main`. Напиши: **«хочу меньше стресса на работе»**
 5. Дождись.
 6. Теперь подожди ~1 час (или ускорь через `DMN_CROSS_GRAPH_INTERVAL`
-   в [src/cognitive_loop.py](src/cognitive_loop.py)) — DMN просканит
+   в [src/cognitive_loop.py](../src/cognitive_loop.py)) — DMN просканит
    пары воркспейсов.
 7. → **Ожидаешь:** алерт `🔗 Cross-graph мост найден: main ↔ personal`
    (если тема «стресс на работе» семантически близка к «засыпать
@@ -427,4 +427,4 @@ curl http://localhost:7860/assist/state | python -c \
 
 ---
 
-**Навигация:** [← README](README.md) · [SETUP](SETUP.md) · [TESTS](TESTS.md) · [TODO](TODO.md)
+**Навигация:** [← README](../README.md) · [SETUP](../SETUP.md) · [TESTS](TESTS.md) · [TODO](../TODO.md)

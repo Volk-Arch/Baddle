@@ -11,9 +11,10 @@ fetch('/roles').then(r => r.json()).then(data => {
 }).catch(e => console.error('roles fetch error:', e));
 
 function populateRoles() {
-  const lang = document.getElementById('lang-select').value;
-  roles = allRoles.filter(r => !r.lang || r.lang === lang);
   const sel = document.getElementById('role-select');
+  if (!sel) return;
+  const lang = (document.getElementById('lang-select') || {}).value || 'ru';
+  roles = allRoles.filter(r => !r.lang || r.lang === lang);
   sel.innerHTML = '';
   roles.forEach((p, i) => {
     const opt = document.createElement('option');
@@ -25,7 +26,8 @@ function populateRoles() {
   custom.value = 'custom';
   custom.textContent = '(custom)';
   sel.appendChild(custom);
-  document.getElementById('role-text').value = roles.length ? roles[0].text : '';
+  const roleText = document.getElementById('role-text');
+  if (roleText) roleText.value = roles.length ? roles[0].text : '';
 }
 
 function onLangChange() {
@@ -133,7 +135,12 @@ function renderHeatmap(elOrId, toks, ents, promptText) {
 function heatmapRescale() {}
 
 // ── Tab switching ──────────────────────────────────────────────────────────
+// В Baddle UI (index.html) cfg-graph/cfg-chat отсутствуют — setMode('graph')
+// не должен прятать видимый cfg-assist. Guard: если target-секции нет на
+// странице, считаем что эта страница не управляется этим setMode.
 function setMode(m) {
+  const target = document.getElementById('cfg-' + m);
+  if (!target) return;
   mode = m;
   ['assist', 'chat', 'graph'].forEach(t => {
     const el = document.getElementById('cfg-' + t);

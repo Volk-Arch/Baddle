@@ -1,0 +1,133 @@
+<!-- Settings modal — shared between Baddle and Lab.
+     Structure: Подключение (основное) + Advanced (свёрнуто) + Danger zone. -->
+<div id="settings-modal" class="modal-overlay dark-modal" style="display:none;">
+  <div class="modal-content">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <span style="font-size:14px;font-weight:600">Настройки</span>
+      <button onclick="closeSettings()" style="background:none;border:none;color:var(--text-secondary);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+
+    <!-- ═══ Подключение: основное, всегда видно ═══ -->
+    <div style="color:var(--text-tertiary);font-size:11px;margin-bottom:12px">
+      Baddle работает с любым OpenAI-совместимым API — LM Studio, llama-server, Ollama, OpenAI.
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label class="modal-label">API URL</label>
+      <input id="settings-api-url" type="text" placeholder="http://localhost:1234" class="modal-input">
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label class="modal-label">API Key <span style="color:var(--text-tertiary);font-weight:normal">(для OpenAI / облака)</span></label>
+      <input id="settings-api-key" type="password" placeholder="sk-..." class="modal-input">
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label class="modal-label">Модель чата</label>
+      <div style="display:flex;gap:6px">
+        <select id="settings-api-model-select" onchange="onApiModelSelectChange()" class="modal-select" style="flex:1">
+          <option value="">-- выбрать --</option>
+        </select>
+        <button onclick="fetchApiModels()" class="btn-secondary" style="padding:8px 12px;white-space:nowrap;font-size:12px" title="Fetch models from API">&#8635; Загрузить</button>
+      </div>
+      <!-- Ручной ввод — fallback когда API не отдаёт list или нужно именно
+           вписать ID вручную. По умолчанию скрыт чтобы не путать с select. -->
+      <details style="margin-top:4px">
+        <summary style="font-size:11px;cursor:pointer;user-select:none;padding:2px 0">
+          Ввести вручную
+        </summary>
+        <input id="settings-api-model" type="text" placeholder="model-id" class="modal-input" style="margin-top:4px">
+      </details>
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label class="modal-label">Embedding-модель <span style="font-weight:normal;opacity:0.7">(для similarity и Smart DC)</span></label>
+      <select id="settings-embedding-model-select" onchange="onEmbeddingSelectChange()" class="modal-select">
+        <option value="">-- выбрать --</option>
+      </select>
+      <details style="margin-top:4px">
+        <summary style="font-size:11px;cursor:pointer;user-select:none;padding:2px 0">
+          Ввести вручную
+        </summary>
+        <input id="settings-embedding-model" type="text" placeholder="model-id" class="modal-input" style="margin-top:4px">
+      </details>
+    </div>
+
+    <!-- ═══ Advanced: сложные параметры, свёрнуто по умолчанию ═══ -->
+    <details style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+      <summary style="color:var(--text-secondary);font-size:12px;cursor:pointer;user-select:none;padding:2px 0">
+        ⚙ Advanced · neural defaults, context, Bayesian
+      </summary>
+
+      <div style="margin-top:12px">
+        <label class="modal-label">Context window (подсказка)</label>
+        <input id="settings-ctx" type="number" value="32768" class="modal-input" style="width:120px;padding:4px 8px;font-size:12px">
+      </div>
+
+      <div style="margin-top:12px">
+        <label class="modal-label" title="Общие neural-параметры для baddle chat, DMN, graph tab.">
+          Neural defaults
+        </label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Temperature (0.1-1.5)</label>
+            <input id="settings-neural-temp" type="number" step="0.05" min="0.1" max="1.5" value="0.7" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Top-K</label>
+            <input id="settings-neural-topk" type="number" step="1" min="1" max="200" value="40" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Distinct threshold (0.5-1.0)</label>
+            <input id="settings-neural-threshold" type="number" step="0.01" min="0.5" max="1.0" value="0.91" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Novelty gate (0-1)</label>
+            <input id="settings-neural-novelty" type="number" step="0.01" min="0" max="1" value="0.85" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px" title="Max tokens per LLM call. 3000+ = неограниченный ответ.">Max tokens (3000+)</label>
+            <input id="settings-neural-maxtok" type="number" step="500" min="500" max="16000" value="3000" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+          <div>
+            <label style="color:var(--text-secondary);font-size:11px">Seed (-1 = random)</label>
+            <input id="settings-neural-seed" type="number" step="1" value="-1" class="modal-input" style="padding:4px 8px;font-size:12px">
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
+          title="Update hypothesis confidence via Bayesian formula when auto-evidence is created during Elaborate/Expand.">
+          <input id="settings-live-bayes" type="checkbox"> Live Bayesian update on auto-evidence
+        </label>
+      </div>
+    </details>
+
+    <!-- ═══ Danger zone ═══ -->
+    <details style="border-top:1px solid #7a1818;margin-top:12px;padding-top:12px">
+      <summary style="color:#d88;font-size:12px;cursor:pointer;user-select:none;padding:2px 0">
+        ⚠ Danger zone
+      </summary>
+      <p style="color:var(--text-tertiary);font-size:11px;margin:8px 0;line-height:1.4">
+        Удалит все графы, state_graph, user_state, goals, profile, solved
+        archive. Settings, roles и templates сохранятся.
+      </p>
+      <button onclick="resetAllData()"
+        style="background:#5a0f0f;color:#fff;border:1px solid #7a1818;padding:6px 12px;
+               font-size:12px;border-radius:4px;cursor:pointer">
+        🗑 Reset all user data
+      </button>
+      <span id="settings-reset-status" style="margin-left:10px;color:var(--text-tertiary);font-size:11px"></span>
+    </details>
+
+    <div style="margin-top:12px">
+      <span id="settings-current-model" style="color:var(--text-tertiary);font-size:11px"></span>
+    </div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button onclick="closeSettings()" class="btn-secondary">Отмена</button>
+      <button onclick="saveSettings()" class="btn-primary">Сохранить</button>
+    </div>
+  </div>
+</div>

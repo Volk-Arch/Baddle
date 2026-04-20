@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  {% include "partials/head.html" %}
+</head>
+<body class="min-h-screen" style="padding:0 12px 30px 12px">
+<div class="mx-auto" style="max-width:1500px">
+
+  <!-- Title bar: brand + model + token counter + ← Baddle -->
+  <div class="title-bar flex items-center gap-3" style="margin:0 -12px 0 -12px;padding:6px 14px;">
+    <a href="/" style="color:var(--text-secondary);font-size:11px;text-decoration:none;padding:2px 8px;border:1px solid var(--border);border-radius:4px"
+       title="Вернуться в Baddle">← Baddle</a>
+    <span style="color:var(--accent);font-weight:600;font-size:15px;letter-spacing:-0.02em">lab</span>
+    <span style="color:var(--text-secondary);font-size:12px">{{ model }}</span>
+    <span id="token-counter" style="color:var(--text-tertiary);font-size:11px"></span>
+    <span class="flex-1"></span>
+    <span id="batch-tag" style="color:var(--text-tertiary);font-size:11px"></span>
+    <button onclick="openCrossSearch()"
+            title="Искать во всех workspace'ах"
+            style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">🔍</button>
+  </div>
+
+  <!-- Status bar (fixed bottom) -->
+  <div id="statusbar">
+    <span class="sb-item" id="sb-model">{{ model }}</span>
+    <span class="sb-item" id="sb-mode">graph</span>
+    <span class="sb-item sb-accent" id="sb-api-mode"></span>
+    <span class="sb-item" id="sb-tokens"></span>
+    <button onclick="openSettings()" class="sb-settings-btn" title="Settings">&#9881; Settings</button>
+  </div>
+
+  {% include "partials/settings_modal.html" %}
+  {% include "partials/workspaces_modal.html" %}
+  {% include "partials/cross_search_modal.html" %}
+
+  <!-- Mode tabs (graph / chat only) + workspace selector + Load + Lang -->
+  <div class="tab-bar flex items-center" style="margin:0 -12px;padding:0 12px;">
+    <button id="tab-graph" onclick="setMode('graph')"
+      class="tab-active px-4 py-2 text-sm">graph</button>
+    <button id="tab-chat" onclick="setMode('chat')"
+      class="tab-inactive px-4 py-2 text-sm">chat</button>
+    <span style="flex:1"></span>
+    <!-- Workspace selector + management -->
+    <div style="position:relative;display:inline-flex;align-items:center;gap:3px;margin-right:6px">
+      <span style="font-size:10px;color:var(--text-tertiary)" title="Активный контекст">🗂</span>
+      <select id="workspace-select" onchange="workspaceSwitch(this.value)"
+        style="font-size:11px;padding:2px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);max-width:140px;cursor:pointer"
+        title="Активный workspace. Переключение перезагружает страницу.">
+        <option value="main">main</option>
+      </select>
+      <button onclick="workspaceNewPrompt()" class="btn-secondary"
+        style="padding:3px 8px;font-size:11px;font-weight:500"
+        title="Создать новый workspace">＋ Новый</button>
+      <button onclick="workspacesOpen()" class="btn-secondary"
+        style="padding:3px 8px;font-size:11px"
+        title="Список всех workspaces">Все</button>
+    </div>
+    <div style="position:relative;display:inline-block">
+      <button onclick="graphLoadList()" class="btn-secondary" style="padding:3px 10px;font-size:11px" title="Load saved graph">Load</button>
+      <div id="graph-load-panel-top" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px;z-index:50;min-width:320px;max-width:450px;max-height:350px;overflow-y:auto;box-shadow:var(--shadow-lg)"></div>
+    </div>
+    <input type="file" id="graph-import-file-top" accept=".json" style="display:none" onchange="graphImport(event)">
+    <select id="lang-select" onchange="onLangChange()" class="modal-select" style="width:50px;padding:2px 4px;font-size:11px;margin-left:6px">
+      <option value="ru">RU</option>
+      <option value="en">EN</option>
+    </select>
+  </div>
+
+  <!-- ══ GRAPH mode ══ -->
+  <div id="cfg-graph">
+    <!-- Mode + Topic + Add (BEFORE actions bar) -->
+    <div class="card p-2 mb-1">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <select id="graph-mode-select" onchange="onGraphModeChange()" class="modal-select"
+          style="font-size:13px;padding:5px 10px;font-weight:600;min-width:130px;color:var(--accent)"></select>
+      </div>
+      <div id="graph-mode-description" style="color:var(--text-tertiary);font-size:11px;margin-top:4px;padding:0 2px"></div>
+      <div id="graph-mode-input" style="margin-top:6px"></div>
+      <select id="graph-add-type-top" style="display:none">
+        <option value="auto">auto</option><option value="goal">goal</option>
+        <option value="hypothesis">hypothesis</option><option value="fact">fact</option>
+      </select>
+    </div>
+
+    <!-- Actions bar -->
+    <div id="graph-actions-bar" class="flex gap-2 mb-1 items-center flex-wrap" style="display:none;flex-shrink:0;">
+      <span class="flex gap-1 items-center" style="border-right:1px solid var(--border);padding-right:8px;margin-right:4px">
+        <button onclick="graphToggleManualSelect()" id="graph-btn-manual-select"
+          class="btn-action text-xs" title="Click nodes to select for collapse/chat">Select</button>
+        <button onclick="graphSelectAll()" id="graph-btn-select-all"
+          class="btn-action text-xs" title="Select all nodes">All</button>
+        <div style="position:relative;display:inline-block">
+          <button onclick="graphToggleCollapsePanel()" id="graph-btn-collapse-main"
+            class="btn-action text-xs" style="background:#059669;color:#fff;border-color:#059669" title="Collapse: auto-clusters or selected nodes">
+            Collapse <span id="graph-collapse-badge" style="display:none;background:#ef4444;border-radius:50%;padding:0 4px;font-size:9px;margin-left:2px"></span>
+          </button>
+          <div id="graph-collapse-panel" style="display:none;position:absolute;top:100%;left:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:10px;z-index:50;min-width:250px;max-width:350px;box-shadow:var(--shadow-lg)">
+            <div style="color:var(--text-primary);font-size:11px;font-weight:bold;margin-bottom:6px">Collapse</div>
+            <div id="graph-collapse-list" style="max-height:200px;overflow-y:auto;margin-bottom:6px"></div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button onclick="graphDoManualCollapse()" id="graph-btn-do-collapse"
+                class="btn-action text-xs" style="background:#059669;color:#fff;border-color:#059669">
+                Collapse (<span id="graph-collapse-count">0</span>)
+              </button>
+              <button onclick="graphSendToChat()" id="graph-btn-to-chat"
+                class="btn-action text-xs" style="background:var(--accent);color:#fff;border-color:var(--accent)">
+                &rarr; Chat
+              </button>
+            </div>
+          </div>
+        </div>
+        <span id="graph-collapse-btns" class="flex gap-1 flex-wrap" style="display:none"></span>
+        <span id="graph-selection-actions" style="display:none"></span>
+        <input type="checkbox" id="graph-no-merge" style="display:none">
+      </span>
+      <span class="flex gap-1 items-center" style="border-right:1px solid var(--border);padding-right:8px;margin-right:4px">
+        <button onclick="graphToggleLinkMode()" id="graph-btn-link"
+          class="btn-action text-xs" title="Link mode: click two nodes to connect/disconnect">Link</button>
+        <button onclick="graphToggleFlow()" id="graph-btn-flow"
+          class="btn-action text-xs" title="Toggle directed flow layout">Flow</button>
+        <button onclick="graphRecalcLayout()"
+          class="btn-action text-xs" title="Recalculate layout">Layout</button>
+      </span>
+      <span class="flex gap-1 items-center" style="border-right:1px solid var(--border);padding-right:8px;margin-right:4px">
+        <div style="position:relative;display:inline-block" id="graph-run-wrapper">
+          <button onclick="graphAutoRun()" id="graph-btn-autorun"
+            class="btn-action text-xs" style="background:#6d28d9;color:#fff;border-color:#6d28d9;border-radius:var(--radius-sm) 0 0 var(--radius-sm)"
+            title="Full auto: run tick->action loop until stable (click again to stop)">
+            Run
+          </button><button onclick="document.getElementById('graph-run-panel').style.display=document.getElementById('graph-run-panel').style.display==='none'?'':'none'"
+            class="btn-action text-xs" style="background:#6d28d9;color:#fff;border-color:#6d28d9;border-radius:0 var(--radius-sm) var(--radius-sm) 0;border-left:1px solid #8b5cf6;padding:5px 6px" title="Run settings">&#9662;</button>
+          <div id="graph-run-panel" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:10px;z-index:50;white-space:nowrap;min-width:200px;box-shadow:var(--shadow-lg)">
+            <div style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--text-primary)">
+              <label style="display:flex;align-items:center;gap:6px" title="Run until stable"><input id="graph-autorun-infinite" type="checkbox"> Infinite</label>
+              <label style="display:flex;align-items:center;gap:6px" title="After N steps -> force-collapse">Collapse at <input id="graph-autorun-steps" type="number" value="50" min="5" max="500" style="width:65px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px">Stable <input id="graph-stable-threshold" type="number" value="0.8" min="0.5" max="0.99" step="0.05" style="width:65px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px" title="'what did I miss?' rounds">Depth <input id="graph-meta-rounds" type="number" value="2" min="1" max="10" style="width:50px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Initial hypotheses">Start ideas <input id="graph-min-hyp" type="number" value="5" min="3" max="20" style="width:50px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px">Output
+                <select id="graph-output-format" class="modal-select" style="font-size:11px;flex:1;padding:2px 4px">
+                  <option value="essay">essay</option><option value="brief">brief</option><option value="list">list</option><option value="none">none</option>
+                </select></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Max tokens for final essay">Essay tokens <input id="graph-essay-tokens" type="number" value="6000" min="500" max="30000" step="500" style="width:70px" class="modal-input"></label>
+              <label style="display:flex;align-items:center;gap:6px" title="Split final essay into sections, combine."><input id="graph-autorun-batched" type="checkbox"> Batched essay</label>
+            </div>
+          </div>
+        </div>
+      </span>
+      <span class="flex gap-1 items-center">
+        <button onclick="graphUndo()" id="graph-btn-undo" style="display:none"
+          class="btn-action text-xs" title="Undo last action">Undo</button>
+        <button onclick="graphSave()" class="btn-action text-xs" title="Save graph">Save</button>
+        <button onclick="graphReset()" class="btn-action text-xs" style="background:#dc2626;color:#fff;border-color:#dc2626" title="Reset graph">Reset</button>
+      </span>
+    </div>
+
+    <!-- Parameters -->
+    <div class="card px-2 pb-1">
+      <details id="graph-params-details">
+        <summary style="color:var(--text-secondary);font-size:11px;cursor:pointer;user-select:none;letter-spacing:0.03em;padding:4px 0">
+          Parameters
+        </summary>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:var(--text-tertiary);font-size:12px">thoughts</span>
+          <input id="graph-n" type="number" value="6" min="2" max="20" style="width:60px">
+          <span style="color:var(--text-tertiary);font-size:12px">similarity</span>
+          <select id="graph-sim-mode" onchange="graphSimModeChanged()" class="modal-select" style="width:100px;padding:4px 8px;font-size:12px;">
+            <option value="embedding">Embedding</option>
+            <option value="jaccard">Jaccard</option>
+            <option value="off">Off</option>
+          </select>
+          <span style="color:var(--text-tertiary);font-size:12px">threshold</span>
+          <input id="graph-threshold" type="number" value="0.91" step="0.01" min="0" max="1" style="width:90px"
+            onchange="graphRecalcEdges()" onblur="graphRecalcEdges()">
+          <span style="color:var(--text-tertiary);font-size:12px" title="Reject new ideas above this">novelty</span>
+          <input id="graph-novelty-threshold" type="number" value="0.92" step="0.01" min="0.7" max="0.99" style="width:70px">
+          <span style="color:var(--text-tertiary);font-size:12px">temp</span>
+          <input id="graph-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:70px">
+          <span style="color:var(--text-tertiary);font-size:12px">top_k</span>
+          <input id="graph-topk" type="number" value="40" min="1" max="100" style="width:70px">
+          <span style="color:var(--text-tertiary);font-size:12px">seed</span>
+          <input id="graph-seed" type="number" value="-1" min="-1" style="width:70px" title="-1 = random">
+        </div>
+        <div class="flex flex-wrap gap-2 items-center mt-2">
+          <span style="color:var(--text-tertiary);font-size:12px">max tokens:</span>
+          <span style="color:var(--text-tertiary);font-size:11px">think</span>
+          <input id="graph-maxtok-think" type="number" value="60" min="10" max="500" style="width:60px">
+          <span style="color:var(--text-tertiary);font-size:11px">expand</span>
+          <input id="graph-maxtok-expand" type="number" value="120" min="10" max="500" style="width:60px">
+          <span style="color:var(--text-tertiary);font-size:11px">elaborate</span>
+          <input id="graph-maxtok-elaborate" type="number" value="120" min="10" max="1000" style="width:60px">
+        </div>
+      </details>
+    </div>
+
+    <!-- Graph main area -->
+    <div id="graph-main" style="display:flex;gap:8px;transition:all 0.3s ease;">
+      <div style="flex:1;min-width:0;">
+        <div id="graph-svg-wrap" style="position:relative;">
+          <svg id="graph-svg" width="100%" height="520" style="user-select:none;"></svg>
+          <div id="graph-legend" class="graph-legend" title="Легенда типов нод">
+            <div class="gl-title" onclick="this.parentElement.classList.toggle('collapsed')">Легенда ▾</div>
+            <div class="gl-items">
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24"></span>мысль / thought</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px dashed #a78bfa"></span>гипотеза</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #06b6d4"></span>evidence</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #10b981"></span>факт</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#fbbf24;border:2px solid #f43f5e"></span>цель (goal)</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#6366f1;border:2px solid #166534"></span>activity · done</div>
+              <div class="gl-item"><span class="gl-dot" style="background:#6366f1;border:2px dashed #ef4444"></span>activity · active</div>
+              <div class="gl-item gl-tip">Размер ~ degree · цвет ≈ тип · обводка = статус</div>
+            </div>
+          </div>
+          <svg id="meta-graph-svg" width="260" height="180"
+               style="position:absolute;top:8px;right:8px;display:none;
+                      background:rgba(24,24,27,0.92);border:1px solid #3f3f46;
+                      border-radius:8px;pointer-events:auto;">
+          </svg>
+          <button id="meta-graph-toggle" onclick="metaGraphToggle()"
+                  style="position:absolute;top:196px;right:8px;font-size:10px;
+                         background:#18181b;color:#a1a1aa;border:1px solid #3f3f46;
+                         border-radius:4px;padding:2px 6px;cursor:pointer;"
+                  title="Meta-graph overlay (workspace connections)">🗺</button>
+          <svg id="graph-cone-viz" width="180" height="180" style="position:absolute;top:8px;left:8px;pointer-events:none;opacity:0.9;">
+          </svg>
+          <div id="graph-run-overlay" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.92);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:11px;color:var(--text-secondary);pointer-events:none;min-width:160px;box-shadow:var(--shadow);">
+            <div style="font-weight:bold;color:var(--text-primary);margin-bottom:4px" id="graph-run-status">—</div>
+            <div style="display:flex;gap:12px;margin-bottom:4px">
+              <span>Step <b id="graph-run-step">0</b></span>
+              <span>Phase <b id="graph-run-phase">—</b></span>
+            </div>
+            <div style="display:flex;gap:12px;margin-bottom:6px">
+              <span>Hyp <b id="graph-run-hyps">0</b></span>
+              <span>Verified <b id="graph-run-verified" style="color:#10b981">0</b></span>
+              <span>Avg <b id="graph-run-avg">0%</b></span>
+            </div>
+            <canvas id="graph-run-sparkline" width="150" height="32" style="display:block;border-radius:3px;background:#f8fafc"></canvas>
+          </div>
+          <div class="flex items-center mt-1">
+            <span style="color:var(--text-tertiary);font-size:11px;">Drag nodes &middot; Click to select &middot; Link mode to connect</span>
+          </div>
+        </div>
+        <!-- Detail panel -->
+        <div id="graph-detail" class="card mt-2 p-3" style="display:none;">
+          <div class="flex items-center gap-2 mb-2">
+            <span id="graph-detail-dot" style="font-size:16px;">&#9679;</span>
+            <span style="color:var(--text-primary);font-size:13px;font-weight:500;flex:1">Selected thought</span>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#f59e0b;border-color:#f59e0b" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#128161; Generate &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphBrainstorm(graphSelectedNode);this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Brainstorm</div>
+                <div onclick="openStudio('expand_preview');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Expand</div>
+                <div onclick="openStudio('elaborate_preview');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Elaborate</div>
+              </div>
+            </div>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#d97706;border-color:#d97706" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#9889; Verify &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphSmartDC();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Smart DC</div>
+                <div onclick="openStudio('ask');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Ask</div>
+              </div>
+            </div>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#7c3aed;border-color:#7c3aed" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#x270E; Edit &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphDetailEdit();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Edit text</div>
+                <div onclick="openStudio('rephrase');this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Rephrase</div>
+              </div>
+            </div>
+
+            <div class="detail-dropdown" style="position:relative;display:inline-block">
+              <button class="btn-action text-xs" style="color:#059669;border-color:#059669" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">&#x1F50D; Navigate &#9662;</button>
+              <div style="display:none;position:absolute;bottom:100%;left:0;background:#f7f6f3;border:1px solid #e0ddd8;border-radius:4px;min-width:140px;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:2px 0">
+                <div onclick="graphWalk();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Walk</div>
+                <div onclick="graphPumpStart(graphSelectedNode);this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">Pump to...</div>
+                <div onclick="graphDetailToChat();this.parentElement.style.display='none'" style="padding:4px 12px;cursor:pointer;font-size:12px;color:#37352f" onmouseover="this.style.background='#e8f4fd'" onmouseout="this.style.background=''">&rarr; Chat</div>
+              </div>
+            </div>
+
+            <button onclick="graphDetailClose()" class="btn-action text-xs" style="color:var(--text-secondary)">&times;</button>
+          </div>
+          <div id="graph-detail-confidence" class="flex items-center gap-2 mb-2">
+            <span style="color:var(--text-secondary);font-size:12px">Confidence:</span>
+            <input id="graph-detail-conf-slider" type="range" min="0" max="100" value="50" step="1"
+              class="w-24 h-1" style="accent-color:var(--accent)" oninput="graphConfidencePreview(this.value)">
+            <span id="graph-detail-conf-value" style="font-size:12px;color:var(--text-primary);min-width:28px">50%</span>
+            <select id="graph-detail-type" onchange="graphSetNodeType(this.value)"
+              class="modal-select" style="font-size:12px;padding:2px 8px;width:auto;margin-left:4px">
+              <option value="thought">thought</option>
+              <option value="hypothesis">hypothesis</option>
+              <option value="fact">fact</option>
+              <option value="evidence">evidence</option>
+              <option value="question">question</option>
+              <option value="goal">goal</option>
+              <option value="action">action</option>
+            </select>
+          </div>
+          <div id="graph-detail-source" style="font-size:12px;margin-bottom:6px;display:none;">
+            <span style="color:#7c3aed">&#8627; from:</span> <span id="graph-detail-source-text" style="color:#a78bfa"></span>
+          </div>
+          <div id="graph-detail-view" style="color:var(--text-primary);font-size:13px;white-space:pre-wrap"></div>
+          <div id="graph-detail-edit-wrap" style="display:none;" class="flex gap-2">
+            <textarea id="graph-detail-textarea" class="flex-1" rows="5"
+              style="min-height:120px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--text-primary);padding:8px;border-radius:var(--radius-sm);font-family:Consolas,monospace;font-size:13px;"></textarea>
+            <button onclick="graphDetailSave()" class="btn-secondary self-end">Save</button>
+          </div>
+          <div id="graph-detail-elaborate-wrap" style="display:none;" class="flex gap-2 mt-2">
+            <input id="graph-detail-elaborate-input" type="text" placeholder="Direction to elaborate (optional)..."
+              class="flex-1" onkeydown="if(event.key==='Enter'){graphDetailElaborateSend();}">
+            <button onclick="graphDetailElaborateSend()" class="btn-secondary">Go</button>
+            <button onclick="document.getElementById('graph-detail-elaborate-wrap').style.display='none'" style="color:var(--text-secondary);cursor:pointer;background:none;border:none">&times;</button>
+          </div>
+        </div>
+      </div>
+      <div id="graph-thoughts-wrap" style="width:320px;flex-shrink:0;">
+        <div class="panel-header">Thoughts</div>
+        <div id="graph-thoughts" style="max-height:560px;overflow-y:auto;background:var(--bg-secondary);border:1px solid var(--border);border-top:none;padding:8px;">
+          <span style="color:var(--text-tertiary);font-size:12px;">Thoughts will appear here...</span>
+        </div>
+      </div>
+    </div>
+    <div id="graph-result" style="display:none;"></div>
+    <textarea id="graph-topic" style="display:none"></textarea>
+    <select id="graph-add-type" style="display:none">
+      <option value="auto">auto</option><option value="thought">thought</option><option value="hypothesis">hypothesis</option>
+      <option value="fact">fact</option><option value="evidence">evidence</option><option value="question">question</option>
+      <option value="goal">goal</option><option value="action">action</option>
+    </select>
+  </div>
+
+  <!-- ══ CHAT mode ══ -->
+  <div id="cfg-chat" class="hidden" style="display:none">
+    <div class="card p-2 mb-1" style="font-size:12px">
+      <div class="flex flex-wrap gap-3 items-center mb-2">
+        <select id="role-select" onchange="onRoleSelect()" class="modal-select" style="flex:1;min-width:120px;padding:4px 8px;font-size:12px;"></select>
+        <select id="tpl-select" onchange="onTplSelect()" class="modal-select" style="display:none;flex:1;min-width:120px;padding:4px 8px;font-size:12px"></select>
+        <label style="color:var(--text-tertiary);display:flex;align-items:center;gap:4px">temp <input id="chat-temp" type="number" value="0.7" step="0.1" min="0" max="2" style="width:65px;padding:4px 6px" class="modal-input"></label>
+        <label style="color:var(--text-tertiary);display:flex;align-items:center;gap:4px">top_k <input id="chat-topk" type="number" value="40" min="1" max="100" style="width:65px;padding:4px 6px" class="modal-input"></label>
+      </div>
+      <textarea id="role-text" class="auto-grow" placeholder="System prompt..."
+        style="width:100%;font-size:12px;padding:4px 6px;color:var(--text-primary)" rows="1"></textarea>
+      <div id="tpl-vars" class="flex flex-wrap gap-2 items-center mt-2" style="display:none;font-size:12px"></div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <div style="flex:1;min-width:0;">
+        <div id="chat-messages" class="card p-4 mb-2"
+             style="min-height:300px;max-height:500px;overflow-y:auto;display:flex;flex-direction:column;"></div>
+        <div class="flex gap-2">
+          <textarea id="chat-input" class="auto-grow" placeholder="Type a message..."
+            style="flex:1" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); chatSend();}"></textarea>
+          <button id="chat-btn-send" onclick="chatSend()" class="btn-primary" style="padding:8px 20px;font-size:13px">Send</button>
+          <button onclick="chatReset()" class="btn-action" style="background:#dc2626;color:#fff;border-color:#dc2626;padding:8px 14px;font-size:12px">Reset</button>
+        </div>
+      </div>
+      <div id="chat-context-sidebar" style="width:300px;flex-shrink:0;">
+        <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Context</span>
+          <span class="flex gap-2 items-center">
+            <label style="color:var(--accent);font-size:10px;display:flex;align-items:center;gap:3px" title="Include graph structure">
+              <input type="checkbox" id="chat-graph-structure"> structure
+            </label>
+            <button onclick="chatContextClear()" style="color:var(--text-tertiary);font-size:10px;background:none;border:none;cursor:pointer" title="Clear all context">&#10005; clear</button>
+          </span>
+        </div>
+        <div id="chat-context-items" style="max-height:400px;overflow-y:auto;background:var(--bg-secondary);border:1px solid var(--border);border-top:none;padding:6px;font-size:12px;">
+          <span style="color:var(--text-tertiary);font-size:11px;">Add context: graph nodes, text, or chat responses</span>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:end;">
+          <textarea id="chat-context-input" placeholder="Add text to context..." rows="1"
+            style="flex:1;font-size:11px;padding:4px 6px;resize:vertical;min-height:26px;max-height:120px;" class="auto-grow"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatContextAddManual();}"></textarea>
+          <button onclick="chatContextAddManual()" class="btn-action" style="flex-shrink:0;font-size:11px">+ ctx</button>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:end;">
+          <textarea id="chat-to-graph-input" placeholder="Send text to graph..." rows="1"
+            style="flex:1;font-size:11px;padding:4px 6px;resize:vertical;min-height:26px;max-height:120px;" class="auto-grow"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatToGraphFromInput();}"></textarea>
+          <button onclick="chatToGraphFromInput()" class="btn-action" style="flex-shrink:0;font-size:11px;color:#059669;border-color:#059669">&rarr; graph</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{% include "partials/scripts.html" %}
+
+<!-- Generation Studio Modal (Lab-only) -->
+<div id="studio-modal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.3);align-items:center;justify-content:center">
+  <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:20px;width:720px;max-width:90vw;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span style="font-weight:bold;color:var(--text-primary)">Generation Studio</span>
+      <button onclick="closeStudio()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-tertiary)">&times;</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <select id="studio-mode-select" onchange="_studioUpdatePlaceholder(this.value)" class="modal-select" style="font-size:12px">
+        <option value="rephrase">Rephrase</option>
+        <option value="elaborate_preview">Elaborate</option>
+        <option value="expand_preview">Expand</option>
+        <option value="collapse_preview">Collapse</option>
+        <option value="ask">Ask</option>
+        <option value="freeform">Freeform</option>
+      </select>
+      <label style="font-size:11px;color:var(--text-secondary)">temp <input id="studio-temp" type="number" value="0.9" step="0.1" min="0" max="2" style="width:65px" class="modal-input"></label>
+      <label style="font-size:11px;color:var(--text-secondary)">top_k <input id="studio-topk" type="number" value="40" min="1" max="100" style="width:65px" class="modal-input"></label>
+      <label style="font-size:11px;color:var(--text-secondary)">tokens <input id="studio-maxtok" type="number" value="1000" min="50" max="8000" style="width:75px" class="modal-input"></label>
+      <label style="font-size:11px;color:var(--text-secondary)">count <input id="studio-count" type="number" value="3" min="1" max="10" style="width:55px" class="modal-input"></label>
+    </div>
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:2px">Source</div>
+      <pre id="studio-source" style="background:var(--bg-secondary);padding:8px;border-radius:4px;font-size:12px;max-height:100px;overflow-y:auto;white-space:pre-wrap;margin:0"></pre>
+    </div>
+    <div style="margin-bottom:8px">
+      <input id="studio-instruction" type="text" placeholder="Instruction..." style="width:100%" class="modal-input">
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button id="studio-gen-btn" onclick="studioGenerate()" class="px-4 py-1 bg-violet-700 hover:bg-violet-600 text-white text-sm rounded">Generate</button>
+      <button id="studio-apply-btn" onclick="studioApply()" disabled style="opacity:0.5" class="px-4 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-sm rounded">Apply selected</button>
+    </div>
+    <div id="studio-variants" style="min-height:60px">
+      <span class="text-neutral-500 text-sm">Click Generate to create variants...</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
