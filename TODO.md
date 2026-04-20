@@ -93,8 +93,6 @@ Baddle сейчас умеет только думать и трекать. Сл
 
 ## 🏗 Архитектурно открытые (edge cases)
 
-Не блокеры. Всплывут при scale'е или multi-user.
-
 - [ ] **UserState global per-person.** Один UserState на все workspaces. Если захочется разных `profile.food` для work vs personal — потребуется UserState per-workspace + context-switcher.
 - [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts.
 - [ ] **«Попробовать 1 неделю» кнопка в suggestion** — временная рекурсивная цель → через неделю auto-abandon если не помогает. Мягче чем «Да, создать».
