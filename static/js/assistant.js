@@ -134,6 +134,64 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// Debug: прогон всех _check_* в cognitive_loop с force-throttle reset.
+// Ответ приходит в чат — останется в истории, можно прокрутить.
+async function debugAlertsCheck() {
+  const includeHeavy = confirm(
+    'Прогнать все 17 background check\'ов?\n\n' +
+    'OK — полный прогон (5 тяжёлых через LLM, может занять минуту)\n' +
+    'Отмена — быстро, без heavy (pump/scout/deep-research/converge/cross)'
+  );
+  const url = '/debug/alerts/trigger-all' + (includeHeavy === true ? '?include_heavy=1' : '');
+  if (typeof assistAddMsg === 'function') {
+    assistAddMsg('assistant', '🧪 Запускаю проверку alerts…' +
+                 (includeHeavy ? ' (с heavy)' : ''),
+                 { mode_name: 'Debug' });
+  }
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    const d = await r.json();
+    const s = d.summary || {};
+    const lines = [];
+    lines.push(`🧪 Alerts harness · ${s.total} check'ов`);
+    lines.push(`✓ emitted: ${s.alert_emitted} · silent: ${s.silent_ok} · skipped heavy: ${s.skipped_heavy} · errors: ${s.error}`);
+    const emitted = (d.results || []).filter(x => x.status === 'alert_emitted');
+    if (emitted.length) {
+      lines.push('');
+      lines.push('🔔 Сработавшие:');
+      emitted.forEach(x => {
+        const types = (x.alerts || []).map(a => a.type).join(', ');
+        lines.push(`• ${x.name} → ${types}`);
+      });
+    }
+    const errs = (d.results || []).filter(x => x.status === 'error');
+    if (errs.length) {
+      lines.push('');
+      lines.push('⚠ Ошибки:');
+      errs.forEach(x => lines.push(`• ${x.name}: ${x.error}`));
+    }
+    const silent = (d.results || []).filter(x => x.status === 'silent_ok').map(x => x.name);
+    if (silent.length) {
+      lines.push('');
+      lines.push('🤫 Молчали (условия не сошлись): ' + silent.length);
+      lines.push('   ' + silent.join(', '));
+    }
+    const skipped = (d.results || []).filter(x => x.status === 'skipped_heavy').map(x => x.name);
+    if (skipped.length) {
+      lines.push('');
+      lines.push('⏭ Heavy пропущены: ' + skipped.join(', '));
+    }
+    if (typeof assistAddMsg === 'function') {
+      assistAddMsg('assistant', lines.join('\n'), { mode_name: 'Debug' });
+    }
+  } catch(e) {
+    if (typeof assistAddMsg === 'function') {
+      assistAddMsg('assistant', `⚠ Harness ошибся: ${e.message}`,
+                   { mode_name: 'Ошибка' });
+    }
+  }
+}
+
 async function resetEnergy() {
   try {
     const r = await fetch('/user_state/reset-energy', {method: 'POST'});
@@ -308,6 +366,7 @@ function assistAddMsg(role, content, meta, persist) {
     'Защита', 'Guard',           // lowEnergyPostpone подтверждения
     'Activity',                  // start/stop/switch трекера
     'Новая цель', 'Новая привычка', 'Новое ограничение',  // ручное создание целей
+    'Debug',                                              // /debug/alerts/trigger-all
   ]);
   if (role === 'assistant' && meta && (meta.mode || meta.mode_name)
       && !_noStepModes.has(meta.mode_name)

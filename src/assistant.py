@@ -2296,6 +2296,148 @@ def assist_decompose():
 # Единственный use-case — демонстрация UX или отладка: юзер хочет начать
 # день заново не ждя полуночи.
 
+# ── Sensor stream (polymorphic body sensors) ──────────────────────────
+# Unified поток от любого источника: simulator, Polar, Apple Watch, Oura,
+# manual check-in. UserState читает агрегат отсюда (не из конкретного
+# HRVManager). См. docs/alerts-and-cycles.md + src/sensor_stream.py
+
+@assistant_bp.route("/sensor/readings", methods=["GET"])
+def sensor_readings():
+    """Последние readings по kind/source за окно (секунды).
+
+    Query: ?kind=hrv_snapshot&since=300&source=simulator
+    """
+    from .sensor_stream import get_stream
+    kind = request.args.get("kind")
+    source = request.args.get("source")
+    try:
+        since = float(request.args.get("since", 300))
+    except ValueError:
+        since = 300.0
+    readings = get_stream().recent(
+        kinds=[kind] if kind else None,
+        sources=[source] if source else None,
+        since_seconds=since,
+    )
+    return jsonify({
+        "count": len(readings),
+        "active_sources": get_stream().active_sources(),
+        "readings": [
+            {"ts": r.ts, "source": r.source, "kind": r.kind,
+             "metrics": r.metrics, "confidence": r.confidence}
+            for r in readings
+        ],
+    })
+
+
+@assistant_bp.route("/sensor/aggregate", methods=["GET"])
+def sensor_aggregate():
+    """Weighted HRV aggregate за окно (время-decay × confidence).
+
+    Query: ?window=180
+    """
+    from .sensor_stream import get_stream
+    try:
+        window = float(request.args.get("window", 180))
+    except ValueError:
+        window = 180.0
+    agg = get_stream().latest_hrv_aggregate(window_s=window)
+    activity = get_stream().recent_activity(window_s=60)
+    return jsonify({
+        "aggregate": agg,
+        "activity_magnitude": activity,
+        "active_sources": get_stream().active_sources(),
+    })
+
+
+# ── Debug: test harness для всех _check_* в cognitive_loop ────────────
+# Прогоняет каждую `_check_*` функцию с force-сбросом throttle. Полезно
+# чтобы видеть: какой alert реально emit'ится когда условия выполнены,
+# какой молчит (условие/данные не дают), какой падает с ошибкой.
+
+# Тяжёлые check'и (LLM-цикл, pump, REM) пропускаются по default чтобы
+# один вызов не занимал минуту. ?include_heavy=1 — прогнать всё.
+_HEAVY_CHECKS = {
+    "_check_night_cycle",           # REM + Scout + Consolidation
+    "_check_dmn_deep_research",     # full execute_deep pipeline
+    "_check_dmn_converge",          # autorun loop
+    "_check_dmn_continuous",        # pump-bridge LLM
+    "_check_dmn_cross_graph",       # cross-ws scan
+}
+
+
+@assistant_bp.route("/debug/alerts/trigger-all", methods=["POST", "GET"])
+def debug_alerts_trigger_all():
+    """Прогоняет все `_check_*` методы cognitive_loop с force-сбросом
+    throttle, возвращает отчёт: что emitted alert / silent / error.
+
+    Query: ?include_heavy=1 — включить pump/night/dmn_converge (долго!).
+    """
+    from .cognitive_loop import get_cognitive_loop
+    include_heavy = request.args.get("include_heavy") in ("1", "true", "yes")
+
+    cl = get_cognitive_loop()
+
+    # Monkey-patch _throttled чтобы всегда пропускал (и обнулял timer'ы)
+    original_throttled = cl._throttled
+    def force_throttled(attr, interval_s):
+        try:
+            setattr(cl, attr, 0.0)
+        except Exception:
+            pass
+        return original_throttled(attr, interval_s)
+    cl._throttled = force_throttled
+
+    # Находим все _check_* методы
+    check_names = sorted(
+        m for m in dir(cl)
+        if m.startswith("_check_") and callable(getattr(cl, m, None))
+    )
+
+    results = []
+    try:
+        for name in check_names:
+            entry = {"name": name, "heavy": name in _HEAVY_CHECKS}
+            if name in _HEAVY_CHECKS and not include_heavy:
+                entry["status"] = "skipped_heavy"
+                results.append(entry)
+                continue
+            before = list(cl._alerts_queue)
+            before_ids = {id(a) for a in before}
+            try:
+                fn = getattr(cl, name)
+                t0 = time.time()
+                fn()
+                entry["elapsed_s"] = round(time.time() - t0, 3)
+                new_alerts = [a for a in cl._alerts_queue if id(a) not in before_ids]
+                if new_alerts:
+                    entry["status"] = "alert_emitted"
+                    entry["alerts"] = [
+                        {"type": a.get("type"),
+                         "severity": a.get("severity"),
+                         "text": (a.get("text") or "")[:140]}
+                        for a in new_alerts
+                    ]
+                else:
+                    entry["status"] = "silent_ok"
+            except Exception as e:
+                entry["status"] = "error"
+                entry["error"] = str(e)[:200]
+            results.append(entry)
+    finally:
+        cl._throttled = original_throttled
+
+    summary = {
+        "total": len(results),
+        "alert_emitted": sum(1 for r in results if r["status"] == "alert_emitted"),
+        "silent_ok":     sum(1 for r in results if r["status"] == "silent_ok"),
+        "error":         sum(1 for r in results if r["status"] == "error"),
+        "skipped_heavy": sum(1 for r in results if r["status"] == "skipped_heavy"),
+        "include_heavy": include_heavy,
+    }
+    return jsonify({"summary": summary, "results": results})
+
+
 # ── Cross-workspace semantic search ────────────────────────────────────
 # Сразу синхронный поиск по всем графам. DMN async-путь (`_check_dmn_cross_graph`
 # каждые 60 мин) пишет cross_edges в `workspaces/index.json` — здесь мы

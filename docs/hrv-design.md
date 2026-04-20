@@ -296,4 +296,167 @@ mode:
 
 ---
 
+## Sensor stream (multi-source polymorphism)
+
+Изначально `HRVManager` поддерживал один источник одновременно (simulator
+или polar). Другие устройства (Apple Watch, Oura, manual check-in) не было
+куда подключить, данные не персистились. В 2026-04-20 добавлен
+**полиморфный sensor stream** — единый поток замеров от любого источника.
+
+### Архитектура
+
+```
+                 ┌────────────────────────────────────────────────┐
+                 │  SensorStream (singleton, thread-safe)         │
+                 │  rolling window + append-only jsonl            │
+                 └───────────────▲──────────────────▲─────────────┘
+                                 │                  │
+  ┌──────────────────────────────┘                  └────────────────┐
+  │                                                                  │
+  ▼                                                                  ▼
+push_rr(source, rr)                          push_subjective(energy, focus, …)
+push_hrv_snapshot(source, rmssd, coherence)   push_activity(source, magnitude)
+  │                                                                  ▲
+  │                                                                  │
+  ▼                                                                  │
+┌─────────────────┐ ┌──────────────┐ ┌──────────────┐  ┌──────────────┐
+│ HRVManager      │ │ PolarH10     │ │ AppleWatch   │  │ Checkin form │
+│ (simulator)     │ │ (stub)       │ │ (stub)       │  │ (working)    │
+└─────────────────┘ └──────────────┘ └──────────────┘  └──────────────┘
+```
+
+### `SensorReading`
+
+Один замер одного датчика в один момент ([src/sensor_stream.py](../src/sensor_stream.py)):
+
+```python
+@dataclass
+class SensorReading:
+    ts: float                    # unix timestamp
+    source: str                  # polar_h10 | apple_watch | oura | garmin | manual | simulator
+    kind: str                    # rr | hrv_snapshot | activity | subjective
+    metrics: dict[str, float]    # зависит от kind (см. ниже)
+    confidence: float = 1.0      # 0..1, насколько надёжна выборка
+```
+
+**Kinds и ожидаемые metrics:**
+
+| kind | Поля в `metrics` | Пример источника |
+|------|------------------|-----------------|
+| `rr` | `rr_ms` | Polar H10 (каждый beat), simulator |
+| `hrv_snapshot` | `rmssd`, `coherence`, `heart_rate`, `lf_hf_ratio`, `stress` | Polar (каждые 15с), Apple Watch, Oura утром |
+| `activity` | `magnitude` (0…5: 0=покой, 1=ходьба, 2+=бег) | Акселерометр Polar, слайдер симулятора |
+| `subjective` | `energy`, `focus`, `stress`, `surprise`, `valence` (всё в [0,1] или [-1,1]) | Manual checkin |
+
+**Confidence guidelines:**
+- `polar_h10`, `simulator` hrv_snapshot → 1.0 (sensor high-freq)
+- `apple_watch` sparse HR → 0.8 (агрегат из редких samples)
+- `oura` morning snapshot → 0.9 (снимок свежий, но один на сутки)
+- `manual` checkin → 0.7 (самоотчёт)
+
+### `SensorStream`
+
+**Persist:** `data/sensor_readings.jsonl` append-only. RR с high-freq
+источников downsample'ятся (каждый 10-й пишется на диск — иначе файл
+раздуется до гигабайтов за день).
+
+**In-memory:** rolling window последних 2000 readings для быстрого query
+без чтения файла.
+
+**Query API:**
+
+```python
+stream.recent(kinds=['hrv_snapshot'], sources=['polar_h10'], since_seconds=300)
+# → list[SensorReading]
+
+stream.latest_hrv_aggregate(window_s=180)
+# → {rmssd, coherence, heart_rate, stress, _sources, _sample_count, _window_s}
+# weighted avg: weight = confidence × exp(-age/τ), τ = window_s/2
+
+stream.recent_activity(window_s=60)  # latest magnitude
+stream.active_sources(stale_after_s=60)  # кто пушил недавно
+```
+
+Weighted-average **ключевое для multi-source**: когда одновременно есть
+Polar (high-freq, high-confidence) и Apple Watch (sparse, low-confidence)
++ последний manual check-in 10 минут назад — агрегат отдаёт взвешенную
+смесь, приоритет у свежего и надёжного.
+
+### Адаптеры
+
+[src/sensor_adapters.py](../src/sensor_adapters.py) — skeleton-классы:
+
+| Адаптер | Статус | Что сделать |
+|---------|--------|-------------|
+| `simulator` (в `hrv_manager.py`) | ✅ работает | — |
+| `manual` (через `/checkin`) | ✅ работает | — |
+| `PolarH10Adapter` | ⏳ stub | `pip install bleak bleakheart`, async BLE loop, MAC address UUID |
+| `AppleWatchAdapter` | ⏳ stub | HealthKit XML export parser, или iOS shortcut → локальный HTTP |
+| `OuraAdapter` | ⏳ stub | Oura REST v2 API, personal access token, polling daily-readiness |
+| `GarminAdapter` | ⏳ stub | `garminconnect` pip, HR-stream poll |
+
+Все адаптеры push'ат в тот же `SensorStream` — consumer (UserState)
+не знает про источник, читает агрегат.
+
+### Endpoints
+
+- `GET /sensor/readings?kind=&source=&since=` — последние readings в окне
+- `GET /sensor/aggregate?window=180` — weighted HRV-aggregate + latest activity
+
+См. [src/assistant.py](../src/assistant.py) раздел «Sensor stream».
+
+### Что осталось
+
+Мигация сделана минимально — **новая инфраструктура работает параллельно
+со старой**, чтобы ничего не сломать. Полный переход требует ещё:
+
+1. **`UserState.update_from_hrv` → читает из stream.** Сейчас его
+   всё ещё дёргает `CognitiveLoop._check_hrv_push` через `hrv_manager.
+   get_baddle_state()`. Надо переписать на `stream.latest_hrv_aggregate()`
+   и `stream.recent_activity()`. ~15 call-sites в cognitive_loop/assistant.
+   Без этого stream отдаёт данные, но `UserState.serotonin/ne` всё равно
+   питается через manager. Не срочно пока есть один real источник.
+
+2. **Реальный `PolarH10Adapter`.** Нужен физический девайс + bleak-зависимости.
+   Логика: `bleak.BleakClient` → `bleakheart.HeartRate.listen()` →
+   `push_rr(SOURCE_POLAR, ms)` на каждый beat.
+   В параллель — `bleakheart.Accelerometer.listen()` → `push_activity`.
+   Каждые 15с — агрегат RMSSD/coherence через `calculate_hrv_metrics` →
+   `push_hrv_snapshot`. Это 100-150 строк, но требует тестового устройства.
+
+3. **Apple Watch import.** HealthKit export XML → пробегаемся по
+   `<Record type="HKQuantityTypeIdentifierHeartRate">` → batch push
+   `hrv_snapshot`. Это one-shot импорт истории, не continuous stream.
+   Для continuous — нужен iOS shortcut или HKObserver на своём Mac.
+
+4. **Oura / Garmin adapter'ы.** REST polling раз в N минут (energy budget
+   запрос должен учитывать rate limit'ы). У Oura есть webhook V2 — можно
+   подписаться на события.
+
+5. **Calibration store в stream.** Сейчас `HRVManager._baseline` хранится
+   в manager'е. Правильнее — `data/sensor_baselines.json` per-source:
+   `{polar_h10: {rmssd_mean, rmssd_std, coherence_mean, ...}}`. Normalization
+   HRV-метрик должна делаться относительно baseline каждого источника,
+   потому что абсолютные значения различаются (chest-strap vs optical).
+
+6. **Conflict resolution.** Когда Polar и Oura одновременно активны и
+   дают разные stress — weighted aggregate разрулит, но **при расхождении
+   > threshold** стоит log'ировать. Это диагностика датчиков (Polar мог
+   отвалиться, Oura устарел).
+
+### Как добавить свой источник
+
+1. Если он push'ит в real-time (Polar-like) — используй паттерн
+   `PolarH10Adapter`: async thread + `push_rr` / `push_hrv_snapshot`.
+2. Если source sparse (Apple, Oura) — просто push'и `hrv_snapshot` когда
+   доступен новый sample, с правильным `confidence`.
+3. Если source manual (форма, voice, другое приложение) — push через
+   `push_subjective` с `source='manual_XXX'`.
+4. Не забудь добавить source-константу в `sensor_stream.py`.
+5. Если нужны специфические метрики (Garmin body battery, Oura readiness)
+   — добавь новый `kind` и расширь `latest_hrv_aggregate` если хочешь
+   включить в weighted avg.
+
+---
+
 **Навигация:** [← User Model](user-model-design.md)  ·  [Индекс](README.md)  ·  [Следующее: State graph →](state-graph-design.md)

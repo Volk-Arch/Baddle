@@ -39,6 +39,7 @@ Foundation пропусти (пара абзацев). Основное врем
 | «Как находит инсайты?» | [pump](pump-design.md) → [smartdc](smartdc-design.md) → [embedding-first](embedding-first-design.md) |
 | «Как думать без языка?» | [embedding-first](embedding-first-design.md) → [novelty](novelty-design.md) |
 | «Как работать 24/7?» | [tick](tick-design.md) → [state-graph](state-graph-design.md) → DMN/Scout в [full-cycle](full-cycle.md) |
+| «Что Baddle дёргает в фоне?» | [alerts-and-cycles](alerts-and-cycles.md) — 17 check'ов, 20+ alert types, test harness |
 
 ---
 

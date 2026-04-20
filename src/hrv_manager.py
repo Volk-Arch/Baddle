@@ -18,6 +18,10 @@ from typing import Dict, Optional, Callable
 from collections import deque
 
 from .hrv_metrics import calculate_hrv_metrics, hrv_to_baddle_state, HRVSimulator
+from .sensor_stream import (
+    get_stream, push_rr, push_hrv_snapshot, push_activity,
+    SOURCE_SIMULATOR, SOURCE_POLAR, KIND_HRV_SNAPSHOT,
+)
 
 log = logging.getLogger(__name__)
 
@@ -77,10 +81,35 @@ class HRVManager:
         self._simulator = HRVSimulator(base_hr=target_hr, target_coherence=target_coherence)
 
         def run():
+            snapshot_every = 20  # каждые ~20 beats (≈15с при 70bpm) — пушим snapshot
+            counter = 0
             while self.is_running:
                 rr = self._simulator.tick()
                 with self._lock:
                     self.rr_buffer.append(rr)
+                # Каждый RR идёт в SensorStream (stream сам downsample'ит на диск).
+                # Благодаря этому любой consumer (UserState, UI) читает единый поток,
+                # не зная про simulator vs Polar vs etc.
+                push_rr(SOURCE_SIMULATOR, rr)
+                counter += 1
+                if counter >= snapshot_every and len(self.rr_buffer) >= 2:
+                    # Агрегат HRV-метрик → snapshot в stream
+                    try:
+                        metrics = calculate_hrv_metrics(list(self.rr_buffer))
+                        push_hrv_snapshot(
+                            SOURCE_SIMULATOR,
+                            rmssd=metrics.get("rmssd"),
+                            coherence=metrics.get("coherence"),
+                            heart_rate=metrics.get("heart_rate"),
+                            lf_hf_ratio=metrics.get("lf_hf_ratio"),
+                            stress=hrv_to_baddle_state(metrics).get("stress_level"),
+                            confidence=1.0,
+                        )
+                    except Exception as e:
+                        log.debug(f"[hrv] snapshot push failed: {e}")
+                    counter = 0
+                # Activity magnitude — постоянный канал (слайдер в UI или accelerometer)
+                push_activity(SOURCE_SIMULATOR, self._activity_magnitude)
                 # Wait approximately one beat
                 time.sleep(rr / 1000.0)
 
