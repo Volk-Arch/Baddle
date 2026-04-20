@@ -99,6 +99,14 @@ Baddle сейчас умеет только думать и трекать. Сл
 - [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts.
 - [ ] **«Попробовать 1 неделю» кнопка в suggestion** — временная рекурсивная цель → через неделю auto-abandon если не помогает. Мягче чем «Да, создать».
 
+## 🤔 Нерешённые размышления
+
+Архитектурные вопросы без очевидного ответа — в отдельном документе: **[docs/open-questions.md](docs/open-questions.md)**. Когда направление выбрано — задача приезжает сюда в TODO.
+
+Сейчас открыты:
+- **Personal capacity estimation** — hardcoded `DAILY_ENERGY_MAX=100, LONG_RESERVE_MAX=2000` → online Bayesian update под реального юзера + rhythm-aware ceiling[weekday][time]. См. [open-questions #1](docs/open-questions.md#1-личные-лимиты-энергии-prior-не-constant).
+- **4 оси DA/S/NE/burnout как user-facing** — это implementation-имена, а не что человек чувствует. Agency / meaning / relatedness / flow-vs-DMN могут быть ближе к опыту. Эксперимент: начать с одной `agency` как derived `completed/planned`, измерить contribution в sync_error. См. [open-questions #2](docs/open-questions.md#2-четыре-оси-нейрохимии-imiplementation-а-не-user-facing).
+
 ---
 
 ## 📚 Что уже сделано
@@ -109,5 +117,6 @@ TODO держит только **будущее**. История проекта
 - [docs/alerts-and-cycles.md](docs/alerts-and-cycles.md) — 17 фоновых check'ов, типы alerts, test harness, thinking-state
 - [docs/hrv-design.md](docs/hrv-design.md) — HRV как вход, sensor stream polymorphism
 - [docs/ui-split-plan.md](docs/ui-split-plan.md) — разделение `/` Baddle и `/lab` Graph Lab
+- [docs/open-questions.md](docs/open-questions.md) — архитектурные вопросы без ответа, думаем перед действием
 - [docs/README.md](docs/README.md) — полный index дизайн-docs (32 файла, порядок чтения)
 - [README.md](README.md) — продуктовое описание: что Baddle умеет, наука под капотом, быстрый старт
