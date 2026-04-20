@@ -65,6 +65,13 @@ Remember signals:
 
 ## 2. Четыре оси нейрохимии: imiplementation, а не user-facing
 
+**Статус 2026-04-21: 5-я ось `agency` включена в сбор данных.**
+`UserState.agency` (default 0.5) обновляется раз в час из `schedule_for_day()`
+через EMA (decay 0.95). Показывается в UI пятой карточкой «Агентность».
+Пока **НЕ** входит в 4D sync_error vector — через 2-3 недели измерений
+решаем включать или отменить. Остальное (meaning / relatedness / flow-vs-DMN)
+остаётся открытым пока эту одну не validating.
+
 ### Контекст
 
 Сейчас `UserState` и `SystemState` оба питают 4 скаляра:
@@ -102,6 +109,10 @@ dopamine / serotonin / norepinephrine / burnout
 
 **C. Status quo.** 4 оси — компромисс покрытия и простоты. Меньше (2 valence × arousal) теряем «почему», больше — шумно и измерения ненадёжны.
 
+### Независимое подтверждение (2026-04-21)
+
+Внешний диалог предложил VAD-модель (Valence / Arousal / **Dominance**). Dominance в psychological literature = «feeling of control / agency». Это косвенно подтверждает выбор **agency** как первой 5-й оси: две независимые traditions (self-determination theory из #2 и dimensional emotion из VAD) сходятся на одном term. Приоритет задачи — повышен.
+
 ### Критерий выбора
 
 Middle-ground: **сначала добавить одну ось — `agency`** — как derived metric без изменения core. Она почти бесплатна:
@@ -126,6 +137,16 @@ agency_today = completed_today / max(1, planned_today)
 ---
 
 ## 3. Валентность без антропоморфизма
+
+> **Статус 2026-04-21: merged в [Action Memory](action-memory-design.md).**
+> Предложенный в #3 путь (valence = −Δsync_error на event-level) —
+> **именно** то что делает Action Memory для action-outcome пар.
+> Мгновенный UserState.valence остаётся как sentiment-feeder из текста,
+> policy-level valence встроена в action scoring через existing hebbian
+> в графе. Отдельной реализации не требуется. Секция ниже оставлена как
+> историческая запись размышлений.
+
+---
 
 ### Контекст
 
@@ -171,6 +192,16 @@ loss = base_loss - α * (coherence - baseline_coherence) \
 ---
 
 ## 4. Recovery routes memory — путь возвращения в resonance
+
+> **Статус 2026-04-21: merged в [Action Memory](action-memory-design.md).**
+> Recovery routes = частный случай action-outcome памяти для
+> `action_kind ∈ {sync_seeking, suggestion_*}`. Ровно то же поведение —
+> «какое действие возвращало этого юзера в resonance» — получается
+> бесплатно из общей инфраструктуры через query similar contexts.
+> Открытые параметры (per-user baseline noise в OQ #4.C counterfactual
+> honesty) остаются релевантны, но в контексте Action Memory.
+
+---
 
 ### Контекст
 
@@ -226,6 +257,161 @@ loss = base_loss - α * (coherence - baseline_coherence) \
 - Нет данных — нельзя имплементировать честно, получится домысел.
 - Зависит от #3 (структурно может раствориться в ней).
 - Contra-паттерн «антропоморфизм» есть риск: «собака помнит как ты возвращаешься» звучит красиво, но без статистики на реальной выборке это будет hardcoded if-else под нескольких юзеров.
+
+---
+
+## 5. Workspace-аттракторы — контексты как точки притяжения в neurochem
+
+### Контекст
+
+Сейчас workspaces (`work`, `personal`, `research`, ...) — контейнеры для графа и целей. Переключение между ними — дискретная операция через workspace-select. Juger либо в `work`, либо в `personal`, третьего не дано.
+
+Но **физиологически** переключение контекста имеет **цену** (decision fatigue, context switching tax). Юзер, 15 раз за день переключившийся между work и personal, устаёт сильнее чем тот кто провёл day в одном контексте.
+
+### Проблема
+
+Мы **не видим** cost переключения. Energy у нас расходуется на решения (`decisions_today × 6`), но скачок между контекстами не отличается от скачка внутри одного.
+
+### Направления
+
+**A. Workspace как target в neurochem-пространстве.** Каждый workspace имеет profile-вектор ожидаемого состояния:
+
+```python
+WORKSPACE_ATTRACTORS = {
+    "work":     {"dopamine": 0.6, "norepinephrine": 0.5, "serotonin": 0.4, "burnout": 0.3},
+    "personal": {"dopamine": 0.4, "norepinephrine": 0.3, "serotonin": 0.6, "burnout": 0.2},
+    "rest":     {"dopamine": 0.3, "norepinephrine": 0.2, "serotonin": 0.7, "burnout": 0.1},
+}
+```
+
+Дистанция в 4D между текущим `UserState` и attractor текущего workspace → **дополнительный context_cost**, добавляется к burnout на каждый tick или switch.
+
+**B. Soft blending вместо hard switch.** Юзер работает в `work`, но в фоне периодически открывает `personal`. Вместо жёсткого current=one — вероятностный mix `{work: 0.7, personal: 0.3}` на основе последних N actions. CognitiveState «находится» между аттракторами, и cost переключения = distance × frequency.
+
+**C. Per-user attractor learning.** Не hardcode profile-векторов, а learn из истории: когда юзер **реально** в `work` — какое среднее DA/S/NE/burnout наблюдалось? Через 2-3 недели use у каждого свой набор аттракторов, соответствующий его реальному опыту контекста.
+
+### Критерий выбора
+
+Начать с **A** (hardcoded attractors, 3-4 основных workspace-тип). Добавить в morning briefing секцию «вчера ты переключался между work/rest 12 раз, cost = X». Если метрика коррелирует с вечерним burnout — validated, переходим к C (learned profiles). Если шумит — возвращаемся к status quo (workspaces без attractor-metric).
+
+### План действий (когда решимся)
+
+1. Добавить `WORKSPACE_ATTRACTORS` константу в `src/workspace.py` или profile-based.
+2. В `CognitiveLoop._check_activity_cost` добавить `switch_cost` на event переключения workspace.
+3. Morning briefing — секция «context switching» если switch_count > 5.
+4. 2-3 недели наблюдения → решение о learned profile (C).
+
+### Источники идеи
+
+Внешний AI-диалог 2026-04-21 (градиентное поле [V,A,D] + context_attractors как Вороной → soft weights). Ложится поверх существующего без рефакторинга: аттракторы в нашей 4-осной нейрохимии, не в VAD.
+
+---
+
+## 6. Prediction error как вектор — attribution по осям
+
+### Контекст
+
+Сейчас `UserState.surprise = reality − expectation` и `Neurochem.recent_rpe` — **скаляры**. «Насколько реальность отклонилась от ожидания», один number.
+
+### Проблема
+
+Скаляр теряет информацию о **том, в чём именно ошиблись**. Одинаковое `surprise = 0.5` может быть:
+- неожиданно высокий DA (юзер в потоке, мы не ожидали)
+- неожиданно низкий serotonin (юзер нестабилен, мы думали спокоен)
+- неожиданно высокий burnout (юзер устал быстрее)
+
+Все три требуют разной реакции системы. Текущий скаляр сливает их в один шум.
+
+### Направления
+
+**A. Per-axis surprise.** `surprise` → `surprise_vec = [Δdopamine, Δserotonin, Δnorepinephrine, Δburnout]`. `|surprise_vec|` остаётся как старый скаляр (обратная совместимость), но появляется атрибуция: «в какой оси модель ошибалась больше всего».
+
+```python
+surprise_vec = user_observed_vec - system_expectation_vec
+attribution = argmax(abs(surprise_vec))  # ось с максимальной ошибкой
+```
+
+**B. Drive-force interpretation.** Использовать `surprise_vec` как «силу сдвига» expectation EMA: `expectation += α · surprise_vec`. Это уже делается скалярно через `tick_expectation()`, но per-axis даст более точную калибровку — baseline подстраивается там где правда ошибались, не шумит остальное.
+
+**C. UI-feedback.** В карточке dashboard показать «в чём система ошибалась сегодня»: «недооценил твой interest на 30%» vs «не понял твой стресс». Debug-канал для понимания почему sync_error высокий.
+
+### Критерий выбора
+
+**A + B** идут вместе: per-axis surprise почти бесплатно (4 числа вместо 1 в EMA), attribution в UI — отдельно по готовности.
+
+Критерий: через 2 недели посмотреть — есть ли системный bias? Если юзер постоянно больше surprise в одной оси → model калибруется лучше → `sync_error` общий падает. Если bias случайный → вернуться к скаляру.
+
+### План действий (когда решимся)
+
+1. `UserState.surprise_vec: np.ndarray` добавить поле (4D).
+2. `tick_expectation` — разбить на per-axis EMA.
+3. Dashboard тестово — цифра «max attribution» для debug.
+4. 2 недели → accept/reject based on sync_error trajectory.
+
+### Источники идеи
+
+Тот же AI-диалог 2026-04-21 (PE как векторная сила `∇U`, а не скаляр-множитель). Ложится на существующий `surprise` механизм — расширение, не переписывание.
+
+---
+
+## 7. Surprise detection у **юзера** — триггер «он только что что-то не ожидал»
+
+### Контекст
+
+Сейчас `UserState.surprise = reality − expectation` — это **системный** surprise: насколько наша модель юзера ошиблась. Это **наш** сюрприз относительно него.
+
+Но у юзера есть **свой** сюрприз относительно мира: он прочитал что-то неожиданное, увидел неожиданный результат, услышал факт который меняет картину. Это **другое** событие, и оно было бы очень полезно знать:
+
+- Если юзер только что что-то узнал → `expectation` должно обновиться быстрее (его модель мира изменилась, мы не должны продолжать опираться на старый baseline)
+- Если юзер удивлён конкретной информацией → Baddle может спросить «что это значит?» и зафиксировать момент инсайта
+- Паттерн «часто удивляется темой X» → добавить в профиль как область активного обучения
+- HRV spike на surprise → корректная реакция системы, не paniс
+
+Исследование из [ixbt 2026-04](https://www.ixbt.com/live/science/...) (зрачки показывают начало вычислений ДО условий) — мозг делает pre-activation по ожидаемому паттерну. Surprise = момент когда pre-activation не совпала с input, это чёткий физиологический сигнал.
+
+### Проблема
+
+Откуда брать surprise-trigger? Прямые методы дорогие / privacy-sensitive / требуют hardware. Косвенные — шумят.
+
+### Направления (по реализуемости)
+
+**A. HRV-based (самое чистое, инфра готова).** RMSSD drop на 15-30% в окне 10-20с или LF/HF jump от baseline — физиологическая реакция на surprise. Симулятор уже есть, реальные адаптеры (Polar / Apple / Oura) подключатся. `sensor_stream.py` уже накапливает данные, нужен detector поверх.
+
+Критерий: `|ΔRMSSD| > threshold × baseline_std` в окне N секунд → `surprise_event` в state_graph.
+
+**B. Text markers.** В самом сообщении юзера: маркеры «воу», «не ожидал», «??», «wait», «really?», «huh», многоточия, капс. Плюс behavioral: пауза между быстрым набором и отправкой (набирал быстро, остановился, подумал, отправил). Regex + LLM-classify на сомнительных.
+
+**C. Dialog pivot detection.** Резкое изменение темы после ответа Baddle — возможно юзер увидел что-то неожиданное и переключился. Измеряется через embedding-distance между последовательными user-сообщениями.
+
+**D. Pupil tracking через webcam.** Самый точный научно, но: требует CV pipeline (MediaPipe face landmarks + iris tracking), privacy-sensitive, работает только когда юзер смотрит в камеру. Почти наверняка не для MVP.
+
+**E. GSR / EDA через wearable.** Будущее (Oura / Apple Watch раздают limited EDA). Очень чистый surprise signal, ждём когда sensors будут доступны.
+
+### Критерий выбора
+
+MVP — **A + B** (HRV + text markers). Оба требуют существующей инфраструктуры без новой.
+
+1. Detector в `cognitive_loop._check_user_surprise`: читает последние N секунд HRV из sensor stream + последнее user-сообщение из chat_history. Если HRV spike ИЛИ text marker match → event.
+2. `user_state.py::tick_expectation` — при surprise_event временно ускорить EMA decay (0.98 → 0.85) на 2-3 ticks: наш baseline быстро адаптируется к тому что юзер узнал новое.
+3. Опционально: Baddle спрашивает «что ты сейчас увидел?» (max раз в час, мягко).
+
+### Что за этим остаётся неясным
+
+- **Baseline noise у разных людей разный.** Чей RMSSD дрожит на ±15% в покое, чей стабильный. Нужен per-user adaptive threshold (рядом с OQ #1 personal capacity).
+- **Text markers русско-английская смесь.** Регексы вырастают. Можно делегировать LLM classify «surprised / not».
+- **False positives от стресса / кофеина / физнагрузки.** HRV spike не всегда surprise. Нужна disambiguation через context: если `activity_magnitude > threshold` — игнорировать.
+
+### План действий (когда решимся)
+
+1. `HRVSurpriseDetector` в sensor_stream — rolling std × threshold.
+2. `text_surprise_score(msg)` — regex + LLM fallback.
+3. `_check_user_surprise` в cognitive_loop — раз в 30с, читает оба сигнала.
+4. Event в state_graph: `{kind: "user_surprise", source: "hrv|text|combined", confidence}`.
+5. 2 недели наблюдения → validate false-positive rate на реальных записях.
+
+### Источники идеи
+
+ixbt-статья 2026-04-21 про зрачки как pre-activation signal + просьба юзера «как бы этот триггер достать, он полезен». Связан с OQ #1 (personal baseline adaptive) и с текущими feedback-каналами UserState (accept/reject — уже существующие user-surprise proxies, но низкочастотные).
 
 ---
 

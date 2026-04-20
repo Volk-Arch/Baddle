@@ -10,25 +10,27 @@
 
 ## 🌀 Resonance protocol — поведение как у зеркала
 
-Цепочка реальность → человек → Baddle (см. [docs/world-model.md](docs/world-model.md)). Baddle ведёт себя как зеркало — ищет сигнал когда юзер пропал, затухает когда контакт долго нарушен, крепит частые мысли, отключает холостые циклы.
+**Первые 4 механики закрыты.** См. [docs/alerts-and-cycles.md](docs/alerts-and-cycles.md) (adaptive idle + burnout + эмпатия + sync-seeking) и [docs/consolidation-design.md](docs/consolidation-design.md) (hebbian decay).
 
-Закрытые механики описаны в [docs/consolidation-design.md](docs/consolidation-design.md) (hebbian decay) и [docs/alerts-and-cycles.md](docs/alerts-and-cycles.md) (adaptive idle + burnout + эмпатия к user.burnout).
-
-Осталась одна:
-
-- [ ] **Active sync-seeking — «Baddle ищет тебя»** (среднее). Новый check `_check_sync_seeking` в cognitive_loop: если `freeze.desync_pressure > T` И времени с последнего user input ≥ порога → мягкий запрос в чат («Как ты?», «Что сегодня?», «Я не слышу — всё ок?»). Throttle (не чаще раза в 1.5-2 часа), отключается автоматически когда юзер возвращается. **Не** nудж — целенаправленная попытка восстановить контакт. Триггер готов (`desync_pressure` уже существует, feed'ит multiplier). **Реализация:** новая функция в cognitive_loop + шаблон-рандомизатор вопросов по HRV/времени дня. ~2ч.
-
-Побочное: концептуальные вопросы «что такое валентность без антропоморфизма» и «как измерять agency/meaning» — в [open-questions](docs/open-questions.md), не первичны для resonance protocol.
+- [ ] **🧠 Action Memory — самообучение через граф** (5-я механика, ~3-4 дня). Расширение семантики графа: action + outcome как новые node_types, связаны edge `caused_by`. DMN / pump / consolidate / hebbian decay автоматически начинают работать для действий — Baddle учится что работает без отдельного RL-кода. Закрывает 5-шаговый цикл сознания (замечает → хочет → пробует → запоминает → повторяет). **Sentiment юзера** интегрирован как metadata `user_chat`-action + EMA feeder в `UserState.valence`. Merge: OQ #3 и OQ #4 растворяются в этой механике. 6 этапов реализации — см. [docs/action-memory-design.md](docs/action-memory-design.md).
 
 ---
 
 ## 📌 Ближайшее
 
 - [ ] **README_EN.md** — английская версия корневого README для международной GitHub-аудитории. Без дословного перевода. ~1ч.
-
 - [ ] **Desktop / system-tray notifications.** Alerts работают только пока вкладка браузера открыта. Закрыл — morning briefing, DMN-мосты, night_cycle summary уходят в пустоту. Варианты: (а) `pystray` + `plyer` — иконка в трее + OS toast; (б) PyWebView single window с фоном; (в) Service Worker + WebSocket push + Notification API. **Минимум для daily — (а)**. Альтернативно: Telegram Mini App (см. Экосистема) закрывает ту же проблему бесплатно.
-
 - [ ] **Alerts coverage** — test harness `/debug/alerts/trigger-all` показал что 10 check'ов из 17 silent_ok на demo-данных. Пройтись по каждому, покрыть пустые условия или пометить как "not applicable on empty state". Некоторые могут нуждаться в fallback-сообщении когда данных нет.
+- [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts.
+- [ ] **«Попробовать 1 неделю» кнопка в suggestion** — временная рекурсивная цель → через неделю auto-abandon если не помогает. Мягче чем «Да, создать».
+- [ ] **`plan.create_from_text`** — «встречу в среду 11:00» → plan-object через LLM. Естественный ввод vs форма.
+
+- [ ] **Предложение еды без tool-use** (из [mockup.html](docs/mockup.html)). Два места:
+  - **Реактивное.** Юзер пишет «что поесть?» → Baddle предлагает 3 варианта из `profile.food.preferences + constraints` через LLM, формат: `{название, kcal, время приготовления, почему}`. Bottom-line: «decision cost: 2 energy · или я выберу за тебя». Не требует inventory / холодильника — работает на self-report.
+  - **Проактивное в morning briefing.** Если pattern-detector видит «пропускаешь завтрак по четвергам → energy crash к 14:00» — в briefing секция «Завтрак» с конкретным предложением + обоснованием паттерна. Интент-confirm card с кнопкой «съесть это» = отметить в activity.
+  - **Реализация:** mode в `suggestions.py` (reactive) + pattern в `patterns.py` (proactive). ~3ч.
+
+- [ ] **META-вопросы — ночная генерация «что ты не заметил»** (из [mockup.html](docs/mockup.html) строка 172). Scout ночью уже ищет мосты между далёкими нодами. Новый слой: когда два моста обнаруживают **общий абстрактный паттерн** («single point of failure» в auth-модуле И «single point of failure» в energy-понедельниках) — сгенерить **вопрос** уровня абстракции: «какие ещё single points of failure есть в твоей жизни которые ты не заметил?». Это не связь между нодами, а **вопрос** к юзеру. В briefing утром отдельной секцией «META question · waiting for morning». **Реализация:** новый шаг в `_check_night_cycle` после Scout — поиск общих predicates между bridges через LLM, если найден — генерация вопроса. ~2-3ч. Зависит от того что scout реально находит мосты (т.е. граф должен быть нетривиальный).
 
 ---
 
@@ -67,38 +69,21 @@ Baddle сейчас умеет только думать и трекать. Сл
 ### Инфраструктура
 
 - [ ] **`/tool/run` endpoint + registry** — whitelist tools с явными schema (`{name, description, input_schema, output_schema, permission_level}`). LLM возвращает `tool_call` → бэкенд проверяет permission, выполняет, инжектит результат в следующий turn. Паттерн как OpenAI function-calling или Anthropic tool-use.
-
-- [ ] **Sandbox backends**:
-  - `subprocess` (дефолт) — stripped env с timeout + file-system allowlist.
-  - `docker` — требует docker-daemon.
-  - `pyodide` (WASM) — безопасный Python в браузере.
-
 - [ ] **Permission model** — 3 уровня: `read` (auto), `write_self` (свой workspace — auto), `external` (сеть / вне workspace — confirm в UI на каждый вызов).
-
 - [ ] **UI: tool-call visualization** — в card «🛠 `weather.now(Moscow)` …» → результат inline → продолжение текста. Прозрачно что происходит.
-
 - [ ] **Pattern × tool-invocation loop** — pattern detector видит anomaly → соответствующий tool предлагает действие (`calendar.block_time("завтрак", time)`).
 
 ### Built-in tools
 
-Упорядочены по ценности для прайм-директивы:
-
 - [ ] **`rag.search`** — vector search по state_graph + content graph + solved archive. «Помнишь я решал X?». Закрывает «память о прошлых решениях» без интернета.
 - [ ] **`calendar.fetch_today`** — iCal/Google → plans. Морфит календарь в plan-object. Утренний брифинг получает реальный день.
 - [ ] **`weather.now`** — feeds morning briefing + outdoor-активности + одежда.
-- [ ] **`plan.create_from_text`** — «встречу в среду 11:00» → plan-object через LLM. Естественный ввод vs форма.
 - [ ] **`file.read` + `file.write` scoped** — в `workspaces/{ws}/` или явно выбранной папке.
-- [ ] **`code.run_snippet`** — Python/JS в sandbox, stdout+result.
 - [ ] **`hrv.calibrate`** — 60с baseline session.
-
-### Internet / RAG (как tool'ы, не отдельный слой)
-
 - [ ] **Интернет поиск** — для фактчекинга в Research/Debate режимах. Реализуется как tool `web.search`.
 - [ ] **LLM + поиск гибрид** — LLM генерит гипотезу → tool проверяет факты → синтез. Паттерн, не отдельный модуль.
 - [ ] **Per-этап выбор модели** — local 8B для generate, cloud для doubt/essay. Инфраструктура роутинга, не tool-use.
-
-### Специализированные интеграции (каждая — tool + data source)
-
+- [ ] **Reasoning-backend для heavy modes** (вдохновлено [OpenMythos](https://github.com/kyegomez/OpenMythos) + o1/qwen3-thinking/R1). Режимы `dispute` / `tournament` / `smartdc` сейчас делают 5-15 раздельных LLM calls (thesis → antithesis → synthesis → verification → ...). Reasoning-модели делают thinking внутри **одного** вызова с hidden CoT. **Гибрид:** если в settings доступна reasoning-модель — тяжёлые режимы роутятся туда как single-shot, trace = thinking stream (когда модель отдаёт). Лёгкие режимы (morning briefing, quick answers) остаются на local 8B. Плюс: быстрее, дешевле, увереннее. Минус: в графе меньше промежуточных нод (thinking hidden). Конфигурируется per-mode в settings. ~1 день.
 - [ ] **Продукты / рецепты inventory** — опционально. Сейчас еда решается через profile.food constraints + LLM (без холодильника). Нужно только для expiry-tracking.
 - [ ] **Гардероб** — что есть + погода + календарь → outfit через связку tool'ов.
 - [ ] **Браузер-расширение** — impulse guard (покупки), emotion guard (письма). Это **input** канал (читает контекст страницы), не tool-use как таковой.
@@ -112,18 +97,14 @@ Baddle сейчас умеет только думать и трекать. Сл
 - [ ] **EXE-установщик** — PyInstaller.
 - [ ] **Graph Store** — маркетплейс графов, review, рейтинги.
 - [ ] **Извлечение графа из текста** — статья → граф.
-- [ ] **Demo mode** — ускоренная симуляция «недели Baddle».
 - [ ] **SSE/WebSocket** — push вместо polling для HRV/alerts (instant feel).
-- [ ] **Telegram Mini App wrapper** (Activity + Briefing + Alerts). Обёртка над текущими `/activity/*` endpoints + `WebApp.sendData` для auth. Закрывает три проблемы сразу: OS-уведомления на phone+desktop бесплатно (Telegram сам push'ит), мобильный ввод activity на ходу, morning briefing как push. ~1-2 дня фронтенд.
+- [ ] **Telegram Mini App**
 
 ---
 
 ## 🏗 Архитектурно открытые (edge cases)
 
 - [ ] **UserState global per-person.** Один UserState на все workspaces. Если захочется разных `profile.food` для work vs personal — потребуется UserState per-workspace + context-switcher.
-- [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts.
-- [ ] **«Попробовать 1 неделю» кнопка в suggestion** — временная рекурсивная цель → через неделю auto-abandon если не помогает. Мягче чем «Да, создать».
-
 ---
 
 ## 🤔 Нерешённые размышления
@@ -131,9 +112,11 @@ Baddle сейчас умеет только думать и трекать. Сл
 Архитектурные вопросы без очевидного ответа — в отдельном документе: **[docs/open-questions.md](docs/open-questions.md)**. Когда направление выбрано — задача приезжает сюда в TODO.
 
 Сейчас открыты:
-- **Personal capacity estimation** — hardcoded `DAILY_ENERGY_MAX=100, LONG_RESERVE_MAX=2000` → online Bayesian update под реального юзера + rhythm-aware ceiling[weekday][time]. См. [open-questions #1](docs/open-questions.md#1-личные-лимиты-энергии-prior-не-constant).
-- **4 оси DA/S/NE/burnout как user-facing** — это implementation-имена, а не что человек чувствует. Agency / meaning / relatedness / flow-vs-DMN могут быть ближе к опыту. Начать с одной `agency`. См. [open-questions #2](docs/open-questions.md#2-четыре-оси-нейрохимии-imiplementation-а-не-user-facing).
-- **Валентность без антропоморфизма** — как дать метрикам «вес» (приятно/неприятно) без ложной субъективности. Путь: `valence = -Δsync_error` через наблюдение, не через subjective ratings. См. [open-questions #3](docs/open-questions.md#3-валентность-без-антропоморфизма).
-- **Recovery routes memory** — как именно юзер возвращается в resonance (тишина? вопрос? предложение?). Hebbian на уровне действий sync-seeking. Зависит от #3, требует месяц данных. См. [open-questions #4](docs/open-questions.md#4-recovery-routes-memory).
+- **#1 Personal capacity** — отложено ≥ 1 мес use (без реальных данных подбор гадание). [Подробности](docs/open-questions.md#1-личные-лимиты-энергии-prior-не-constant).
+- **#2 Agency как 5-я ось** — 🔬 **в процессе измерений 2-3 недели** (2026-04-21): `UserState.agency` собирается, показывается в UI, пока НЕ в sync_error. [Подробности](docs/open-questions.md#2).
+- ~~**#3 Валентность через −Δsync_error**~~ — **merged в [Action Memory](docs/action-memory-design.md)** 2026-04-21.
+- ~~**#4 Recovery routes**~~ — **merged в [Action Memory](docs/action-memory-design.md)** 2026-04-21.
+- **#5 Workspace attractors** — ✨ следующее после Action Memory. [Подробности](docs/open-questions.md#5).
+- **#6 PE как вектор** + **#7 Surprise detection у юзера** — делать вместе, зеркальные механизмы. Требует реального HRV (Polar), не симулятора. [#6](docs/open-questions.md#6) · [#7](docs/open-questions.md#7).
 
 ---

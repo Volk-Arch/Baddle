@@ -751,6 +751,30 @@ function assistRenderCard(card) {
         </div>
       </div>`;
   }
+  else if (card.type === 'sync_seeking_msg') {
+    // Active sync-seeking: Baddle пишет первым. Мягкая карточка без кнопок,
+    // без push-ощущения. Разные tone дают разные оттенки фона/иконки.
+    const tone = card.tone || 'simple';
+    const toneStyles = {
+      caring:    { bg: '#052e2b', border: '#065f46', accent: '#34d399' },  // зелёный — забота
+      ambient:   { bg: '#1e1b4b', border: '#312e81', accent: '#a5b4fc' },  // фиолетовый — тихо рядом
+      curious:   { bg: '#1e3a5f', border: '#1d4ed8', accent: '#60a5fa' },  // синий — любопытство
+      reference: { bg: '#422006', border: '#78350f', accent: '#fbbf24' },  // янтарный — отсылка
+      simple:    { bg: '#1f2937', border: '#374151', accent: '#9ca3af' },  // серый — нейтрал
+    };
+    const s = toneStyles[tone] || toneStyles.simple;
+    const icon = card.icon || '🤲';
+    const hint = card.hint ? `<div style="font-size:10px;color:${s.accent};opacity:0.65;margin-top:8px;letter-spacing:0.3px">${_esc(card.hint)}</div>` : '';
+    wrapper.innerHTML = `
+      <div style="padding:14px 16px;background:${s.bg};border:1px solid ${s.border};border-radius:12px;display:flex;gap:12px;align-items:flex-start">
+        <div style="font-size:22px;line-height:1;flex:0 0 auto;margin-top:2px">${icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;color:#e4e4e7;line-height:1.5">${_esc(card.text || '')}</div>
+          ${hint}
+        </div>
+      </div>
+    `;
+  }
   else if (card.type === 'bridge') {
     // Scout/DMN bridge card. Используется и при live alert, и при restore
     // chat history. bridge_type: 'scout_bridge'|'dmn_bridge'. Intro встроен
@@ -1688,6 +1712,9 @@ function _updateNeurochemPanel(metrics) {
   setBar('user-s-fill',    'user-s-val',    user.serotonin || 0);
   setBar('user-ne-fill',   'user-ne-val',   user.norepinephrine || 0);
   setBar('user-burn-fill', 'user-burn-val', user.burnout || 0);
+  // Agency — 5-я ось (OQ #2), собираем данные пока НЕ в sync_error vector.
+  // Default 0.5 = нет данных (planned=0 → не обновлялось).
+  setBar('user-agency-fill', 'user-agency-val', typeof user.agency === 'number' ? user.agency : 0.5);
 
   // Sync indicator (prime-directive в одном бейдже)
   const regime = metrics.sync_regime || 'flow';
@@ -2907,6 +2934,47 @@ async function assistPollAlerts() {
             container.appendChild(assistRenderCard(cardWithIntro));
             _chatStorePush({ kind: 'card', card: cardWithIntro });
             container.scrollTop = container.scrollHeight;
+          }
+          if (typeof _incrChatUnread === 'function') _incrChatUnread();
+          return;
+        }
+        // Active sync-seeking: Baddle пишет первым когда долго молчит +
+        // рассинхрон высокий. LLM генерит разный текст каждый раз.
+        // Рендерим как карточку с мягким intro (не push-alert).
+        if (a.type === 'sync_seeking' && a.text) {
+          const key = 'sync_seeking:' + (a.text || '').substring(0, 40);
+          if (_assistLastAlertTypes.has(key)) return;
+          _assistLastAlertTypes.add(key);
+          const tone = a.tone || 'simple';
+          // Иконка зависит от tone
+          const icons = {
+            caring: '🌿', ambient: '💭', curious: '👀',
+            reference: '🔗', simple: '🤲',
+          };
+          const icon = icons[tone] || '🤲';
+          const idleH = Number(a.idle_hours || 0);
+          const idleStr = idleH < 1 ? '' :
+            (idleH < 24 ? `${Math.round(idleH)}ч` : `${Math.round(idleH/24)}д`);
+          const hint = idleStr
+            ? (lang === 'ru' ? `Baddle не слышит тебя ${idleStr}` : `Baddle hasn't heard from you in ${idleStr}`)
+            : (lang === 'ru' ? 'Baddle ищет контакт' : 'Baddle reaches out');
+          // Простая card с soft-tone
+          const card = {
+            type: 'sync_seeking_msg',
+            icon: icon,
+            text: a.text,
+            hint: hint,
+            tone: tone,
+          };
+          const container = document.getElementById('assist-messages');
+          if (container && typeof assistRenderCard === 'function') {
+            container.appendChild(assistRenderCard(card));
+            _chatStorePush({ kind: 'card', card: card });
+            container.scrollTop = container.scrollHeight;
+          } else {
+            // Fallback — обычное сообщение с mode_name
+            assistAddMsg('assistant', `${icon} ${a.text}`,
+                         { mode_name: lang === 'ru' ? 'Baddle ищет' : 'Baddle reaches out' });
           }
           if (typeof _incrChatUnread === 'function') _incrChatUnread();
           return;

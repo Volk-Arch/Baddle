@@ -69,11 +69,18 @@ class UserState:
                  dopamine: float = 0.5,
                  serotonin: float = 0.5,
                  norepinephrine: float = 0.5,
-                 burnout: float = 0.0):
+                 burnout: float = 0.0,
+                 agency: float = 0.5):
         self.dopamine = dopamine
         self.serotonin = serotonin
         self.norepinephrine = norepinephrine
         self.burnout = burnout
+        # Agency — 5-я ось (OQ #2). «Могу / не могу влиять на день».
+        # Derived из completed/planned ratio через `update_from_plan_completion`.
+        # Пока НЕ входит в `vector()` / `sync_error` — собираем данные, через
+        # 2-3 недели решаем включать или нет (см. docs/open-questions.md#2).
+        # Default 0.5 = нейтральный baseline пока ничего не измерили.
+        self.agency = agency
 
         # HRV passthrough — UI читает отсюда
         self.hrv_coherence: Optional[float] = None
@@ -178,6 +185,36 @@ class UserState:
         self._clamp()
         self.tick_expectation()
 
+    # ── Agency (5-я ось, OQ #2) ────────────────────────────────────────────
+
+    def update_from_plan_completion(self, completed: int, planned: int):
+        """Обновить `agency` EMA на основе сегодняшней completion ratio.
+
+        `agency = completed / max(1, planned)` с мягким EMA (decay 0.95 —
+        baseline живёт ~20 обновлений, день-два реальной динамики).
+
+        Agency как метрика = «чувство контроля над днём». Low agency при
+        high energy = learned helplessness (нет сил идти вперёд даже когда
+        ресурс есть). Разукрупнение задач помогает больше чем «отдохни».
+
+        Не меняет dopamine/serotonin — агенство это отдельное измерение,
+        не derivative от существующих. Пока не в `vector()`, через 2 недели
+        решим включать.
+
+        Args:
+            completed: сколько запланированных задач сделано сегодня.
+            planned: сколько было запланировано (recurring + oneshot).
+                     Если 0 — метрика не обновляется (нет данных).
+        """
+        if planned <= 0:
+            # Нет плана → нет сигнала. Не перезаписываем baseline шумом.
+            return
+        raw = max(0.0, min(1.0, completed / float(planned)))
+        # EMA: 95% baseline + 5% свежий сигнал
+        self.agency = 0.95 * self.agency + 0.05 * raw
+        self._clamp()
+        # tick_expectation() не вызываем — agency пока не в state_level
+
     # ── Energy → burnout ───────────────────────────────────────────────────
 
     def update_from_energy(self, decisions_today: int, max_budget: float = 100.0):
@@ -199,6 +236,7 @@ class UserState:
         self.serotonin = max(0.0, min(1.0, self.serotonin))
         self.norepinephrine = max(0.0, min(1.0, self.norepinephrine))
         self.burnout = max(0.0, min(1.0, self.burnout))
+        self.agency = max(0.0, min(1.0, self.agency))
         self.expectation = max(0.0, min(1.0, self.expectation))
         self.long_reserve = max(0.0, min(float(LONG_RESERVE_MAX), self.long_reserve))
         self.valence = max(-1.0, min(1.0, self.valence))
@@ -372,6 +410,7 @@ class UserState:
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
             "burnout": round(self.burnout, 3),
+            "agency": round(self.agency, 3),
             "valence": round(self.valence, 3),
             "expectation": round(self.expectation, 3),
             "reality": round(self.reality, 3),
@@ -396,6 +435,7 @@ class UserState:
             serotonin=d.get("serotonin", 0.5),
             norepinephrine=d.get("norepinephrine", 0.5),
             burnout=d.get("burnout", 0.0),
+            agency=d.get("agency", 0.5),
         )
         u.expectation = float(d.get("expectation", 0.5))
         u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
