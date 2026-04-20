@@ -19,6 +19,7 @@ from .graph_logic import (
     _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
     _detect_traps, _compute_alpha_beta,
     sample_in_embedding_space,
+    touch_node, touch_nodes, TOUCH_BOOST_DEFAULT,
 )
 from .hrv_manager import get_manager as get_hrv_manager
 
@@ -595,6 +596,9 @@ def graph_expand():
     if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
 
+    # Hebbian: expand-source получает обращение (нода реально работает)
+    touch_node(idx)
+
     source = nodes[idx]["text"]
     topic = _graph["meta"].get("topic", "")
     new_thoughts = []
@@ -669,6 +673,9 @@ def graph_elaborate():
 
     if idx < 0 or idx >= len(nodes):
         return jsonify({"error": "invalid index"})
+
+    # Hebbian: источник elaborate-а получает сильное обращение (реальная работа)
+    touch_node(idx)
 
     source = nodes[idx]["text"]
     topic = _graph["meta"].get("topic", "")
@@ -881,6 +888,9 @@ def graph_smartdc():
     nodes = _graph["nodes"]
     if node_idx < 0 or node_idx >= len(nodes):
         return jsonify({"error": "invalid node index"})
+
+    # Hebbian: нода проходит через диалектическую проверку — сильное обращение
+    touch_node(node_idx)
 
     statement = nodes[node_idx]["text"]
     evidence_context = d.get("evidence_context", [])
@@ -1547,7 +1557,8 @@ def graph_render_node():
     rendered_text = _clean_thought(text or "", topic) or "[unable to render]"
     node["text"] = rendered_text
     node["rendered"] = True
-    node["last_accessed"] = datetime.now(timezone.utc).isoformat()
+    # Hebbian: рендер по клику — юзер реально посмотрел ноду, это обращение.
+    touch_node(idx)
     # Embedding cache может стать stale: новый текст ≠ seed perturbation.
     # Оставляем старый embedding — он всё ещё описывает позицию ноды в
     # пространстве мыслей (rendered text подстроен под эту позицию).
@@ -1654,6 +1665,10 @@ def graph_add_evidence():
         return jsonify({"error": "empty evidence text"})
 
     hyp = nodes[hyp_idx]
+    # Hebbian: к гипотезе прицепляют доказательство — сильное обращение.
+    # Boost 0 чтобы не мешать следующему _bayesian_update_distinct —
+    # последний сам выставит новое значение confidence.
+    touch_node(hyp_idx, boost=0.0)
     # Auto-convert to hypothesis if adding evidence to a thought
     if hyp.get("type", "thought") == "thought":
         hyp["type"] = "hypothesis"
@@ -1719,8 +1734,10 @@ def graph_navigate():
     new_val = current + lr * (1.0 - current)
     tp_overrides[key] = round(new_val, 4)
 
-    # Update last_accessed on the target node
-    nodes[to_idx]["last_accessed"] = datetime.now(timezone.utc).isoformat()
+    # Hebbian: и источник, и цель навигации получают обращение. Цель — полный
+    # boost (именно туда перешли), источник — слабее (мы уже были там).
+    touch_node(to_idx)
+    touch_node(from_idx, boost=TOUCH_BOOST_DEFAULT * 0.5)
 
     return jsonify({"ok": True, "tp": tp_overrides[key]})
 

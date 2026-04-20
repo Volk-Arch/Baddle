@@ -473,8 +473,7 @@ def assist():
         if cmd_res is not None:
             # Минимальный engagement-ping чтобы UserState видел что юзер активен
             from .user_state import get_user_state
-            get_user_state().update_from_timing()
-            get_user_state().update_from_message(message)
+            get_user_state().register_input()
             # Привязываем energy+hrv к ответу (UI ожидает эти поля)
             ctx = _get_context()
             cmd_res.setdefault("energy", ctx.get("energy"))
@@ -687,10 +686,11 @@ def assist():
     cs = get_global_state()
     cs.inject_ne(0.4)
 
-    # User signals: timing + message length (before state logging so EMA updated)
+    # User signal: timestamp последнего input (raw engagement trace для UI /
+    # будущего sync-seeking). Шумные metrics (length variance, timing→dopamine)
+    # убраны 2026-04-20 как неинформативные.
     user = get_user_state()
-    user.update_from_timing()
-    user.update_from_message(message)
+    user.register_input()
 
     ctx = _get_context()
     state, hrv_state, energy = ctx["state"], ctx["hrv"], ctx["energy"]
@@ -2517,6 +2517,15 @@ def assist_chat_append():
         return jsonify({"error": "entry must be object"}), 400
     try:
         append_entry(entry)
+        # Adaptive idle: любое юзерское сообщение пробуждает дремлющие
+        # DMN/pump циклы (resonance protocol механика #2). Учитываем только
+        # role=user чтобы свои же system/card-append не фиктивно reset'или.
+        if (entry.get("role") or "").lower() == "user":
+            try:
+                from .cognitive_loop import get_cognitive_loop
+                get_cognitive_loop().signal_user_input()
+            except Exception:
+                pass
         return jsonify({"ok": True})
     except Exception as e:
         log.warning(f"[/assist/chat/append] failed: {e}")

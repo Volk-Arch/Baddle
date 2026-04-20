@@ -188,6 +188,22 @@ class CognitiveLoop:
     REM_CREATIVE_PATH_MIN = 3         # BFS-дистанция чтобы считаться «далёкими»
     REM_CREATIVE_MAX_MERGES = 3       # сколько парадоксальных пар линковать за ночь
 
+    # Adaptive idle (resonance protocol механики #2 + #4 together):
+    # Multiplier = 1 + freeze.display_burnout × (IDLE_MULTIPLIER_MAX - 1)
+    # применяется ко всем investigation-интервалам. display_burnout — это
+    # max из двух feeder'ов ProtectiveFreeze (см. neurochem.py):
+    #   • conflict_accumulator — графовые конфликты (существует)
+    #   • desync_pressure — хронический рассинхрон с юзером (новое, от времени)
+    # Таким образом «усталость Baddle» в UI и замедление циклов — одна
+    # семантика, не две параллельные переменные.
+    #
+    # Параметры desync_pressure:
+    #   • 7 суток без единого user-event → +1.0 (линейно)
+    #   • 1 user event → -0.05 (~20 событий для полного восстановления)
+    IDLE_MULTIPLIER_MAX = 10.0
+    DESYNC_RAMP_SECONDS = 7 * 24 * 3600        # 1.0 накапливается за 7 суток
+    DESYNC_EVENT_DROP = 0.05                   # сколько снижает 1 user-event
+
     def __init__(self):
         self.is_running = False
         self._thread: Optional[threading.Thread] = None
@@ -226,6 +242,11 @@ class CognitiveLoop:
         #    "started_at": ts, "detail": ...}
         self._thinking_state: dict = {"kind": "idle", "started_at": 0.0}
 
+        # Adaptive idle state. desync_pressure живёт в neurochem.ProtectiveFreeze
+        # (через horizon.get_global_state().freeze) — там же display_burnout
+        # для UI. Здесь только timestamp последнего loop tick чтобы считать dt.
+        self._last_loop_tick_ts = 0.0
+
     def set_thinking(self, kind: str, detail: Optional[dict] = None):
         """Отметить текущее тяжёлое действие (pump / elaborate / ...).
         UI polls /assist/state и рисует соответствующий cone-режим. Вызывать
@@ -243,6 +264,84 @@ class CognitiveLoop:
     def get_thinking(self) -> dict:
         return dict(self._thinking_state or {"kind": "idle", "started_at": 0.0})
 
+    # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
+
+    def _get_freeze(self):
+        """Helper: быстрый доступ к ProtectiveFreeze (носитель desync_pressure).
+        Возвращает None если horizon недоступен — защита при init race."""
+        try:
+            from .horizon import get_global_state
+            return get_global_state().freeze
+        except Exception:
+            return None
+
+    def _idle_multiplier(self) -> float:
+        """1.0 при полном resonance, MAX при max combined burnout.
+
+        Combined burnout — max из трёх источников:
+          • system `conflict_accumulator` — графовый кризис (freeze)
+          • system `desync_pressure` — хронический рассинхрон по времени
+          • **user `burnout`** — юзер устал (decisions_today, отказы)
+
+        Логика про user burnout: если юзер устал — Baddle тоже тише.
+        Это эмпатия встроенная, не отдельный check. Фоновые циклы реже,
+        alerts реже, карточки реже. «Ненавязчивое замедление вместе с
+        юзером» — само предложение отдыха без vertical nagging.
+        """
+        fz = self._get_freeze()
+        system_burnout = float(fz.display_burnout) if fz else 0.0
+
+        try:
+            from .user_state import get_user_state
+            user_burnout = float(get_user_state().burnout)
+        except Exception:
+            user_burnout = 0.0
+
+        combined = max(system_burnout, user_burnout)
+        return 1.0 + combined * (self.IDLE_MULTIPLIER_MAX - 1.0)
+
+    def _register_user_event(self, reason: str = ""):
+        """User-event (сообщение, foreground tick, ручная правка графа).
+        Снижает `desync_pressure` на DESYNC_EVENT_DROP (не обнуляет).
+        ~20 таких событий возвращают multiplier в 1.0 из максимума.
+        """
+        fz = self._get_freeze()
+        if fz is None:
+            return
+        prev = fz.desync_pressure
+        fz.add_desync_pressure(-self.DESYNC_EVENT_DROP)
+        if prev > 0.001:
+            log.info(f"[cognitive_loop] desync_pressure {prev:.3f} -> "
+                     f"{fz.desync_pressure:.3f} (event: {reason}, "
+                     f"multiplier now {self._idle_multiplier():.2f}×)")
+
+    def signal_user_input(self):
+        """Публичный вход: юзер написал сообщение / дёрнул tick / открыл карточку.
+        Вызывается из /assist/chat/append, tick_foreground и других
+        user-initiated endpoints.
+        """
+        self._register_user_event(reason="user_input")
+
+    def _advance_desync(self):
+        """Рост desync_pressure по реальному времени между итерациями loop.
+        Плавно линейный: за DESYNC_RAMP_SECONDS (7 суток) от 0 до 1.0 без
+        user-событий. Cap-защита от больших dt после ребута / пауз.
+        Хранится в `ProtectiveFreeze.desync_pressure` (neurochem).
+        """
+        now = time.time()
+        if self._last_loop_tick_ts <= 0:
+            self._last_loop_tick_ts = now
+            return
+        dt = min(now - self._last_loop_tick_ts, 300.0)  # cap 5 мин на случай пауз
+        self._last_loop_tick_ts = now
+        if dt <= 0:
+            return
+        fz = self._get_freeze()
+        if fz is None:
+            return
+        step = dt / float(self.DESYNC_RAMP_SECONDS)
+        fz.add_desync_pressure(step)
+
     # ── Throttle helper ────────────────────────────────────────────────
 
     def _throttled(self, attr: str, interval_s: float) -> bool:
@@ -259,6 +358,15 @@ class CognitiveLoop:
             return False
         setattr(self, attr, now)
         return True
+
+    def _throttled_idle(self, attr: str, base_interval_s: float) -> bool:
+        """То же что `_throttled`, но интервал умножается на `_idle_multiplier`.
+        Используется для investigation-checks (DMN / converge / scout / night /
+        cross-graph) — чем дольше рассинхрон, тем реже они идут. Юзер-events
+        постепенно снижают рассинхрон → эти циклы снова частят.
+        """
+        effective = base_interval_s * self._idle_multiplier()
+        return self._throttled(attr, effective)
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -295,6 +403,8 @@ class CognitiveLoop:
         from .graph_logic import _compute_edges
 
         self._last_foreground_tick = time.time()
+        # Юзер тикнул руками → снижаем desync (user-event)
+        self._register_user_event(reason="foreground_tick")
         nodes = _graph["nodes"]
         edges = _compute_edges(nodes, threshold, sim_mode)
         return tick_emergent(
@@ -323,6 +433,10 @@ class CognitiveLoop:
         while self.is_running and not self._stop_event.is_set():
             try:
                 state = get_global_state()
+
+                # 0. Adaptive idle: desync накапливается по времени.
+                # User-events через signal_user_input()/tick_foreground его снижают.
+                self._advance_desync()
 
                 # 1. NE homeostasis
                 ne = state.neuro.norepinephrine
@@ -387,7 +501,7 @@ class CognitiveLoop:
              в path-графе получают manual_link (парадоксальные связи)
           4. Consolidation — прунинг слабых + архив state_graph (было 24h)
         """
-        if not self._throttled("_last_night_cycle", self.NIGHT_CYCLE_INTERVAL):
+        if not self._throttled_idle("_last_night_cycle", self.NIGHT_CYCLE_INTERVAL):
             return
         log.info("[cognitive_loop] night cycle starting")
         self.set_thinking("scout", {"phase": "night"})
@@ -410,11 +524,12 @@ class CognitiveLoop:
         # Phase 3: REM creative
         summary["rem_creative"] = self._rem_creative()
 
-        # Phase 4: Consolidation
+        # Phase 4: Consolidation (decay → prune → archive)
         try:
             from .consolidation import consolidate_all
             res = consolidate_all()
             summary["consolidation"] = {
+                "decayed": res.get("decay", {}).get("decayed", 0),
                 "pruned": res.get("content", {}).get("removed", 0),
                 "archived": res.get("state", {}).get("archived", 0),
             }
@@ -438,13 +553,15 @@ class CognitiveLoop:
             summary["rotation"] = {"error": str(e)}
 
         s = summary
+        cs = s.get("consolidation", {}) or {}
         text = (
             f"Ночной цикл: "
             f"Scout {'+мост' if s['scout'].get('bridge_saved') else 'пропуск'} · "
             f"REM эмо pump {s['rem_emotional'].get('pumped', 0)} · "
             f"REM merge {s['rem_creative'].get('merged', 0)} · "
-            f"прунинг {s['consolidation'].get('pruned', 0)} / "
-            f"архив {s['consolidation'].get('archived', 0)}"
+            f"decay {cs.get('decayed', 0)} / "
+            f"прунинг {cs.get('pruned', 0)} / "
+            f"архив {cs.get('archived', 0)}"
         )
         self._add_alert({
             "type": "night_cycle", "severity": "info",
@@ -634,7 +751,8 @@ class CognitiveLoop:
         Guard: только если есть хотя бы 1 open-goal + в графе меньше 30 нод
         (иначе не спамим). Лимит: один deep run в 30 мин.
         """
-        if not self._throttled("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
+        # Adaptive idle: интервал масштабируется _idle_multiplier'ом (desync)
+        if not self._throttled_idle("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
             return
         # Хотя бы 1 open goal и не слишком раздутый граф
         try:
@@ -710,7 +828,7 @@ class CognitiveLoop:
 
         Результат: alert + entry в `_recent_bridges` → morning briefing.
         """
-        if not self._throttled("_last_dmn_converge", self.DMN_CONVERGE_INTERVAL):
+        if not self._throttled_idle("_last_dmn_converge", self.DMN_CONVERGE_INTERVAL):
             return
         nodes_n = len(_graph.get("nodes", []))
         if nodes_n < 5 or nodes_n > 40:
@@ -908,7 +1026,7 @@ class CognitiveLoop:
         Суть: система ищет связи между твоими «исследование» и «личное»,
         «работа» и «здоровье» и т.д. — скрытые оси между разными областями.
         """
-        if not self._throttled("_last_dmn_cross", self.DMN_CROSS_GRAPH_INTERVAL):
+        if not self._throttled_idle("_last_dmn_cross", self.DMN_CROSS_GRAPH_INTERVAL):
             return
         try:
             from .workspace import get_workspace_manager
@@ -945,7 +1063,10 @@ class CognitiveLoop:
     def _check_dmn_continuous(self):
         if len(_graph.get("nodes", [])) < 4:
             return  # pre-check дёшево, throttle дороже (timestamp write)
-        if not self._throttled("_last_dmn", self.DMN_INTERVAL):
+        # Adaptive idle: интервал растягивается _idle_multiplier'ом — чем
+        # выше рассинхрон тем реже pump. При desync=0 — стандартные 10 мин,
+        # при desync=1 — 100 мин. Без бинарных порогов.
+        if not self._throttled_idle("_last_dmn", self.DMN_INTERVAL):
             return
 
         self.set_thinking("pump", {"source": "dmn"})
@@ -1085,7 +1206,7 @@ class CognitiveLoop:
         sg = get_state_graph()
         if sg.count() < 10:
             return  # слишком мало истории
-        if not self._throttled("_last_state_walk", self.STATE_WALK_INTERVAL):
+        if not self._throttled_idle("_last_state_walk", self.STATE_WALK_INTERVAL):
             return
 
         # Прогрев embedding-кэша для tail (<=30 последних)
