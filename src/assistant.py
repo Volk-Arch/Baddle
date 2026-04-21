@@ -584,62 +584,40 @@ def _fastpath_draft(router_intent: dict, message: str, lang: str):
     )
 
 
-# Predicate вместе с handler'ом — четыре роута. Каждый predicate полностью
-# выражает условие матчинга (kind + subtype + confidence + extra guards),
-# чтобы не раскидывать логику между dispatcher'ом и таблицей.
-
-def _fp_match_activity(ri: dict) -> bool:
-    return (ri.get("kind") == "fact"
-            and ri.get("subtype") == "activity"
-            and ri.get("confidence_sub", 0) >= 0.7)
-
-
-def _fp_match_instance(ri: dict) -> bool:
-    return (ri.get("kind") == "fact"
-            and ri.get("subtype") == "instance"
-            and ri.get("target_goal_id")
-            and ri.get("confidence_sub", 0) >= 0.7)
-
-
-def _fp_match_chat(ri: dict) -> bool:
-    return (ri.get("kind") == "chat"
-            and ri.get("confidence_top", 0) >= 0.7)
-
-
-def _fp_match_draft(ri: dict) -> bool:
-    return (ri.get("kind") == "task"
-            and ri.get("subtype") in ("new_recurring", "new_constraint", "new_goal")
-            and ri.get("confidence_sub", 0) >= 0.7)
-
-
-_FASTPATH_ROUTES = (
-    (_fp_match_activity, _fastpath_activity, "activity"),
-    (_fp_match_instance, _fastpath_instance, "instance"),
-    (_fp_match_chat,     _fastpath_chat,     "chat"),
-    (_fp_match_draft,    _fastpath_draft,    "draft"),
-)
-
-
 def _try_fastpath(router_intent, message: str, lang: str):
-    """Проверить 4 router-intent fastpath'а. Возвращает response-dict,
-    если какой-то сработал, или None (пропускаем к execute_mode).
+    """Проверить router-intent fastpath'ы. Возвращает response-dict если
+    сработал, или None (пропускаем к execute_mode).
 
-    Ошибки в конкретном fastpath логируются как warning и не мешают
-    попробовать остальные (исходный код тоже молча «проваливался» после
-    log.warning к следующему if-блоку).
+    Ошибки handler'а логируются и не блокируют остальные (прежнее поведение
+    чётырёх if-блоков — молча идти к следующему после warning).
     """
     if not router_intent:
         return None
-    for predicate, handler, tag in _FASTPATH_ROUTES:
-        if not predicate(router_intent):
-            continue
-        try:
-            resp = handler(router_intent, message, lang)
-            if resp is not None:
-                return resp
-        except Exception as e:
-            log.warning(f"[/assist] fastpath {tag} failed: {e}")
-    return None
+    ri = router_intent
+    kind = ri.get("kind")
+    sub = ri.get("subtype")
+    c_sub = ri.get("confidence_sub", 0)
+    c_top = ri.get("confidence_top", 0)
+    DRAFTS = ("new_recurring", "new_constraint", "new_goal")
+
+    route = None
+    if kind == "fact" and sub == "activity" and c_sub >= 0.7:
+        route = (_fastpath_activity, "activity")
+    elif kind == "fact" and sub == "instance" and ri.get("target_goal_id") and c_sub >= 0.7:
+        route = (_fastpath_instance, "instance")
+    elif kind == "chat" and c_top >= 0.7:
+        route = (_fastpath_chat, "chat")
+    elif kind == "task" and sub in DRAFTS and c_sub >= 0.7:
+        route = (_fastpath_draft, "draft")
+
+    if route is None:
+        return None
+    handler, tag = route
+    try:
+        return handler(ri, message, lang)
+    except Exception as e:
+        log.warning(f"[/assist] fastpath {tag} failed: {e}")
+        return None
 
 
 # ── Main /assist endpoint ──────────────────────────────────────────────
@@ -757,8 +735,14 @@ def assist():
     from .user_profile import profile_summary_for_prompt, is_category_empty, load_profile
     detected_category = _detect_category(message)
     _user_profile = load_profile()
+    # Relevance-фильтр: `query=message` отбрасывает preferences далёкие
+    # от текущего вопроса (`distinct(query_emb, pref_emb) > 0.7`). Чинит
+    # кейс «спросил про рыбный суп → инжектнулось preference 'сладкое'».
+    # Constraints (аллергии) не фильтруются — они нужны всегда когда
+    # категория активна. Safe-degrade: при ошибке API ведёт себя без гейта.
     profile_hint = (profile_summary_for_prompt([detected_category], lang=lang,
-                                                profile=_user_profile)
+                                                profile=_user_profile,
+                                                query=message)
                     if detected_category else "")
 
     # Recurring/constraint context: активные вечные цели и ограничения

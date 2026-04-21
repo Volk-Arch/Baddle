@@ -122,10 +122,47 @@ def is_category_empty(cat: str, profile: Optional[dict] = None) -> bool:
 
 # ── Prompt injection summary ──────────────────────────────────────────────
 
+def _relevance_filter(items: list[str], query_emb, threshold: float) -> list[str]:
+    """Оставляет только items семантически близкие к query.
+
+    Для каждого `item` считаем `d = distinct(query_emb, item_emb)`. Если
+    `d ≤ threshold` — оставляем (item релевантен query). Если `d > threshold`
+    — отбрасываем (item далеко от темы, не инжектим в prompt).
+
+    Safe-degrade: если embedding для item не получен, item **оставляется**
+    (err-on-the-side-of-keep — лучше ложно не-отфильтровать чем потерять
+    важный constraint).
+    """
+    if query_emb is None or not items:
+        return list(items)
+    try:
+        from .api_backend import api_get_embedding
+        from .main import distinct
+        import numpy as np
+    except Exception:
+        return list(items)
+    kept = []
+    for it in items:
+        try:
+            it_emb_raw = api_get_embedding(it)
+            if not it_emb_raw:
+                kept.append(it)
+                continue
+            it_emb = np.asarray(it_emb_raw, dtype=np.float32)
+            d = float(distinct(query_emb, it_emb))
+            if d <= threshold:
+                kept.append(it)
+        except Exception:
+            kept.append(it)
+    return kept
+
+
 def profile_summary_for_prompt(
     cats: Optional[list[str]] = None,
     lang: str = "ru",
     profile: Optional[dict] = None,
+    query: Optional[str] = None,
+    relevance_threshold: float = 0.7,
 ) -> str:
     """Короткий текстовый summary для LLM-промпта.
 
@@ -136,9 +173,32 @@ def profile_summary_for_prompt(
     Пример (lang="ru", cats=["food"]):
         "Профиль юзера: ест=[здоровое питание, завтрак обязательно],
          не ест=[орехи, молочное]"
+
+    Relevance-фильтр (2026-04-24): если `query` задан, **preferences**
+    фильтруются через `distinct(query_emb, pref_emb) > relevance_threshold`
+    → drop. **Constraints не фильтруются** — аллергии/несовместимости
+    ('орехи', 'без молочного') должны инжектиться всегда когда категория
+    активна, даже если semantically далеко от query. Threshold 0.7 по
+    `tau_out` из [cone-design.md](../docs/cone-design.md) — зона где
+    pref явно не относится к теме. Чинит кейс «спросил про рыбный суп →
+    инжектнули preference 'сладкое' → LLM сгенерил рыбный суп с мёдом».
+    Safe-degrade: при ошибке embedding ведёт себя как без гейта.
     """
     p = profile or load_profile()
     cats = cats or list(CATEGORIES)
+
+    # Compute query embedding один раз если query задан (общий для всех
+    # items во всех категориях).
+    q_emb = None
+    if query:
+        try:
+            from .api_backend import api_get_embedding
+            import numpy as np
+            q_emb_raw = api_get_embedding(query)
+            if q_emb_raw:
+                q_emb = np.asarray(q_emb_raw, dtype=np.float32)
+        except Exception:
+            q_emb = None
 
     parts: list[str] = []
     for cat in cats:
@@ -147,6 +207,11 @@ def profile_summary_for_prompt(
         entry = p.get("categories", {}).get(cat) or {}
         prefs = entry.get("preferences") or []
         cons = entry.get("constraints") or []
+        # Только preferences фильтруются — constraints (аллергии/запреты)
+        # нужны всегда когда категория активна, чтобы LLM не предложил
+        # «орехи» если у юзера на них аллергия, даже если вопрос «про суп».
+        if q_emb is not None:
+            prefs = _relevance_filter(prefs, q_emb, relevance_threshold)
         if not prefs and not cons:
             continue
         label = CATEGORY_LABELS_RU.get(cat, cat) if lang == "ru" else cat

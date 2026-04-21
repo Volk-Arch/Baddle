@@ -43,8 +43,7 @@ Adaptive-интервал (15 сек при активном HRV, до 60с в i
 
 ## Adaptive idle — затухание циклов по combined burnout
 
-Все investigation-циклы замедляются плавно по
-`ProtectiveFreeze.combined_burnout(user_burnout)`:
+Все investigation-циклы замедляются плавно:
 
 ```
 display_burnout = max(conflict_accumulator, silence_pressure, imbalance_pressure)
@@ -52,49 +51,22 @@ combined        = max(display_burnout, user.burnout)
 multiplier      = 1 + combined × 9   # [1× ... 10×]
 ```
 
-**Четыре источника замедления:**
-
-| Feeder | Источник | Активирует freeze? |
+| Feeder | Источник | Freeze? |
 |---|---|---|
-| `conflict_accumulator` | Графовые конфликты (d > τ при низкой стабильности) | **ДА** (жёсткий Bayes-freeze) |
+| `conflict_accumulator` | Графовые конфликты (d > τ при низкой стабильности) | **ДА** (Bayes-freeze) |
 | `silence_pressure` | Таймер молчания (+1/7сут, −0.05 за event) | Нет |
-| `imbalance_pressure` | EMA predictive error (4 PE-канала) | Нет |
+| `imbalance_pressure` | EMA predictive error (4 PE-канала, [friston-loop](friston-loop.md)) | Нет |
 | `user.burnout` | decisions_today + feedback-отказы | Нет |
 
-`display_burnout` = три Baddle-side feeder'а, показывается как
-«Усталость Baddle» в UI. `combined_burnout(user.burnout)` добавляет
-юзер-усталость снаружи — не показывается как «Усталость Baddle», но
-замедляет циклы. Ненавязчивое замедление вместе с юзером — тишина
-сама по себе предложение.
+Пример multiplier: свежий resonance → 1.0×, 3 дня молчания → 4.9×,
+7 дней → 10×. Ночные циклы тоже умножаются — структурная верность
+зеркала: юзер пропал → реже всё, включая ночь. Silence снижается
+−5% за event (полный возврат ~20 событий). Freeze активируется
+только конфликтом: молчание и расхождение ожиданий оставляют граф
+обучаемым под будущий сигнал.
 
-**Как ведёт себя multiplier:**
-
-| Сценарий | display_burnout | mult | DMN continuous | Night cycle |
-|---|---|---|---|---|
-| Свежий resonance | 0.0 | 1.0× | 10 мин | 24 ч |
-| 3 дня молчания | 0.43 | 4.9× | 49 мин | 4.9 сут |
-| 7 дней молчания | 1.0 | 10× | 100 мин | 10 сут |
-| Высокий графовый конфликт | 0.6 | 6.4× | 64 мин | 6.4 сут |
-| Высокий imbalance | 0.5 | 5.5× | 55 мин | 5.5 сут |
-
-**Почему silence снижается только на 5%, не до нуля:** одно сообщение
-после недели молчания не должно мгновенно вернуть полный ритм. Полный
-возврат из max в 1.0× требует ~20 событий.
-
-**Почему ночи тоже затухают:** структурная верность зеркала. Юзер
-пропал — циклы реже, включая ночные. Вернулся → ночи возвращаются к 24ч.
-
-**Почему silence и imbalance НЕ активируют freeze:** Bayes-freeze —
-жёсткое замирание updates графа. Уместно при хроническом графовом
-конфликте, не при молчании или расхождении ожиданий (там граф остаётся
-обучаемым когда появится сигнал).
-
-**В логе:** `[cognitive_loop] silence_pressure 0.750 -> 0.700 (event:
+Log: `[cognitive_loop] silence_pressure 0.750 -> 0.700 (event:
 user_input, multiplier now 7.30×)`.
-
-Полный разбор `imbalance_pressure` и 4 PE-каналов —
-[friston-loop.md](friston-loop.md). Детали resonance protocol —
-[world-model.md](world-model.md).
 
 ---
 

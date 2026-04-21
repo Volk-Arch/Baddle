@@ -19,7 +19,7 @@ OR всех сигналов. Caller (cognitive_loop._check_user_surprise) throt
 + записывает event + вызывает `user_state.apply_surprise_boost()`.
 
 Для подхода см. [docs/friston-loop.md](../docs/friston-loop.md) и
-[OQ #7](../planning/open-questions.md#7).
+[OQ #7](../planning/TODO.md).
 """
 from __future__ import annotations
 

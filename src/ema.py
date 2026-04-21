@@ -3,7 +3,7 @@
 Единое место для всех EMA-обновлений в Baddle. До 2026-04-23 паттерн
 `x = decay * x + (1-decay) * signal` был разбросан по 20+ сайтам с
 8 разными decay константами. Кристаллизовано в рамках
-[planning/crystallization-plan.md](../planning/crystallization-plan.md) Stage 2.
+[planning/TODO.md](../planning/TODO.md) Stage 2.
 
 ## Два режима
 
@@ -105,7 +105,7 @@ class Decays:
     CHECKIN_FOCUS = 0.7            # focus 0-100 → serotonin
     CHECKIN_VALENCE = 0.6          # reality rating → valence
     # checkins.py:193 was assigning to user.surprise (now @property) —
-    # see planning/crystallization-plan.md § 5.1 side-discovery. Removed.
+    # see planning/TODO.md 5.1 side-discovery. Removed.
 
 
 class TimeConsts:

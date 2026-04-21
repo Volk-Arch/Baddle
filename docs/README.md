@@ -33,7 +33,7 @@ order + 6 вспомогательных (reference / context).
 | «Prediction error?» | [friston-loop](friston-loop.md) — 2 предиктора, 5 PE-каналов, прайм-директива |
 | «Как измерить что работает?» | [friston-loop § Прайм-директива](friston-loop.md#связь-с-прайм-директивой) → `/assist/prime-directive` |
 | «Место Baddle относительно меня?» | [world-model](world-model.md) — каскад зеркал |
-| «Что не решено?» | [planning/open-questions](../planning/open-questions.md) |
+| «Что не решено?» | [planning/TODO § Открытые вопросы](../planning/TODO.md) |
 
 ---
 
@@ -130,10 +130,8 @@ order + 6 вспомогательных (reference / context).
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
 | [mockup.html](mockup.html) | Интерактивный мокап UI |
 
-**Планирование** — в отдельной папке [../planning/](../planning/):
-[TODO.md](../planning/TODO.md) (что впереди),
-[open-questions.md](../planning/open-questions.md) (архитектурные вопросы в открытой фазе),
-[crystallization-plan.md](../planning/crystallization-plan.md) (лог consolidation работы),
+**Планирование** — [../planning/](../planning/):
+[TODO.md](../planning/TODO.md) (все задачи + открытые архитектурные вопросы + кристаллизация),
 [ui-split-plan.md](../planning/ui-split-plan.md) (UI split Baddle vs Graph Lab).
 
 ---

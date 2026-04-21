@@ -212,36 +212,20 @@ action-outcome связей, DMN использует раз в N тиков.
 
 ## Валидация
 
-Через 2-3 месяца: `avg sync_error` за неделю **ниже** чем в первом
-месяце при прочих равных → механика работает. Это финальная проверка —
-прайм-директива мерит своё же расширение. Детали прайм-директивы в
-[friston-loop.md § Связь с прайм-директивой](friston-loop.md#связь-с-прайм-директивой).
+Через 2-3 месяца `avg sync_error` за неделю должен быть ниже чем в
+первом месяце при прочих равных — прайм-директива валидирует
+расширение сама себя (детали — [friston-loop.md § Связь с прайм-директивой](friston-loop.md#связь-с-прайм-директивой)).
 
 ---
 
 ## Где в коде
 
-- `src/graph_logic.py` — `record_action`, `close_action`,
-  `_current_snapshot`, `list_open_actions`, `score_action_candidates`,
-  `link_chat_continuation`
-- `src/sentiment.py` — `classify_message_sentiment` (light LLM + SHA1 cache)
-- `src/user_state.py` — `update_from_chat_sentiment`
-- `src/cognitive_loop.py` — `_check_action_outcomes` (раз в 5 мин),
-  `_record_baddle_action` wrapper
-- `src/consolidation.py` — расширяет для per-type archive старых actions
-- `src/pump_logic.py` — exclude action / outcome по умолчанию
-- Все `_check_*` в cognitive_loop + feedback / goals / activity
-  endpoints в `assistant.py` — вызовы `record_action`
-
-**Связь:** [world-model.md](world-model.md) (5-я механика),
-[episodic-memory.md § Consolidation](episodic-memory.md#consolidation),
-[alerts-and-cycles.md](alerts-and-cycles.md) (_check_action_outcomes в
-табличке 21 check).
-
-**Merged сюда:** [OQ #3 (Valence без антропоморфизма)](../planning/open-questions.md#3) —
-`delta_sync_error` и есть event-level valence per action. [OQ #4 (Recovery routes memory)](../planning/open-questions.md#4) —
-частный случай для `action_kind ∈ {sync_seeking, suggestion}`.
+Ключевые точки: `graph_logic.record_action` / `score_action_candidates`,
+`sentiment.classify_message_sentiment`, `cognitive_loop._check_action_outcomes`,
+`consolidation` per-type archive. Связь: [world-model.md](world-model.md)
+(5-я механика), [alerts-and-cycles.md](alerts-and-cycles.md) (в 21-check
+таблице), [episodic-memory.md § Consolidation](episodic-memory.md#consolidation).
 
 ---
 
-**Навигация:** [← Resonance protocol](world-model.md) · [Индекс](README.md) · [Планирование](../planning/open-questions.md)
+**Навигация:** [← Resonance protocol](world-model.md) · [Индекс](README.md) · [Планирование](../planning/TODO.md)

@@ -203,7 +203,7 @@ timing → dopamine, decision cost → burnout / long_reserve. Итог —
   остальное полагается на GIL.
 
 Реестр workstreams — [planning/TODO.md](../planning/TODO.md) и
-[planning/open-questions.md](../planning/open-questions.md).
+[planning/TODO.md](../planning/TODO.md).
 
 ---
 

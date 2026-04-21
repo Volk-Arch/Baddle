@@ -132,7 +132,7 @@ class UserState:
         # Agency — 5-я ось (OQ #2). «Могу / не могу влиять на день».
         # Derived из completed/planned ratio через `update_from_plan_completion`.
         # Пока НЕ входит в `vector()` / `sync_error` — собираем данные, через
-        # 2-3 недели решаем включать или нет (см. planning/open-questions.md#2).
+        # 2-3 недели решаем включать или нет (см. planning/TODO.md).
         # Default 0.5 = нейтральный baseline пока ничего не измерили.
         self.agency = agency
 
