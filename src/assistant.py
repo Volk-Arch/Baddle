@@ -686,11 +686,12 @@ def assist():
     cs = get_global_state()
     cs.inject_ne(0.4)
 
-    # User signal: timestamp последнего input (raw engagement trace для UI /
-    # будущего sync-seeking). Шумные metrics (length variance, timing→dopamine)
-    # убраны 2026-04-20 как неинформативные.
+    # User signal: timestamp + мягкий engagement-feeder в dopamine (0.65 EMA).
+    # Без него dopamine юзера не менялся бы вообще между click-feedback'ами,
+    # что делает sync_error статичным (было видно в «метрики не меняются»).
     user = get_user_state()
     user.register_input()
+    user.update_from_engagement()
 
     ctx = _get_context()
     state, hrv_state, energy = ctx["state"], ctx["hrv"], ctx["energy"]
@@ -878,8 +879,16 @@ def assist():
     # user-friendly fallback-карточку вместо 500. state_graph всё равно
     # пишет assist-event с пометкой api_offline.
     api_offline = False
+    # Manual continue: UI передаёт prev_session_indices когда юзер нажал
+    # «↳ Продолжить» — это расширяет session whitelist synthesis на ноды
+    # предыдущего ответа, давая continuity между сообщениями.
+    _prev_session_indices = d.get("prev_session_indices")
+    if not isinstance(_prev_session_indices, list):
+        _prev_session_indices = None
     try:
-        exec_result = execute_mode(mode_id, message, lang, profile_hint=profile_hint)
+        exec_result = execute_mode(mode_id, message, lang,
+                                    profile_hint=profile_hint,
+                                    prev_session_indices=_prev_session_indices)
     except RuntimeError as e:
         api_offline = True
         log.error(f"[/assist] LM offline: {e}")
@@ -985,6 +994,9 @@ def assist():
         "classify_source": classification.get("source"),
         "error": exec_result.get("error"),
         "api_offline": api_offline,
+        # Manual continuity: UI сохраняет эти indices и при нажатии
+        # «↳ Продолжить» передаёт обратно как prev_session_indices.
+        "session_indices": exec_result.get("session_indices") or [],
     })
 
 
@@ -2613,10 +2625,14 @@ def assist_chat_append():
                     sentiment = classify_message_sentiment(msg_text)
                 except Exception as e:
                     log.debug(f"[sentiment] classify failed: {e}")
-                # 2. EMA feeder в UserState.valence
+                # 2. EMA feeders в UserState: valence от sentiment, dopamine
+                # от самого факта вовлечённости. Вместе дают движение метрик
+                # при каждом сообщении, чтобы sync_error был живой.
                 try:
                     from .user_state import get_user_state
-                    get_user_state().update_from_chat_sentiment(sentiment)
+                    us = get_user_state()
+                    us.update_from_chat_sentiment(sentiment)
+                    us.update_from_engagement()
                 except Exception as e:
                     log.debug(f"[sentiment] ema update failed: {e}")
                 # 3. Action Memory: user_chat action со sentiment в context

@@ -2600,7 +2600,20 @@ class CognitiveLoop:
         """Раз в сутки: собрать draft-карточки из patterns / checkins /
         stress-зон → положить в alerts. Юзер видит их в chat как
         `intent_confirm` карточки с кнопками Да/Изменить/Нет.
+
+        Guard: если юзер **активен** (последний input < 10 мин) — skip
+        БЕЗ обновления throttle, чтобы при следующей паузе попробовать снова.
         """
+        # Сначала проверка user-active — не долбим юзера предложениями
+        # во время работы над задачей. Throttle НЕ трогаем — чтобы при
+        # следующем тихом моменте попробовать снова в тот же день.
+        try:
+            from .user_state import get_user_state
+            last_ts = get_user_state()._last_input_ts
+            if last_ts and (time.time() - last_ts) < 600:  # 10 мин
+                return  # silent skip, throttle остаётся на прежнем ts
+        except Exception:
+            pass
         if not self._throttled("_last_suggestions_check",
                                 self.SUGGESTIONS_CHECK_INTERVAL):
             return

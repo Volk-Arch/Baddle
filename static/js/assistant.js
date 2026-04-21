@@ -426,25 +426,28 @@ function assistRenderCard(card) {
     }).join('');
     const pairsHtml = pairs.map(p => `
       <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:11px;margin-bottom:3px">
-        <span style="color:#71717a">${_esc(p.a_text.slice(0,30))}</span>
+        <span style="color:#71717a">${_esc(p.a_text)}</span>
         <span style="color:#52525b;margin:0 6px">vs</span>
-        <span style="color:#71717a">${_esc(p.b_text.slice(0,30))}</span>
+        <span style="color:#71717a">${_esc(p.b_text)}</span>
         <span style="color:#10b981;margin-left:8px">→ ${_esc(p.winner_letter || '?')}</span>
         ${p.reason ? `<div style="color:#a1a1aa;font-size:10px;margin-top:2px">${_esc(p.reason)}</div>` : ''}
       </div>`).join('');
+    wrapper.className = 'assist-msg assist-assistant brief-card';
+    wrapper.style.cssText = '';
     wrapper.innerHTML = `
-      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:10px">
-          <div style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.4px">⚔ DEEP COMPARISON · ${_esc(card.mode_id || 'tournament')}</div>
-          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод · ${detail.length} опций · ${pairs.length} пар</div>
+      <div class="brief-header">
+        <div class="brief-greeting">⚔ Deep comparison · ${_esc(card.mode_id || 'tournament')}</div>
+        <div class="brief-date">${card.nodes_created || 0} нод · ${detail.length} опций · ${pairs.length} пар</div>
+      </div>
+      <div>${hypHtml}</div>
+      ${pairs.length ? `<div style="margin-top:10px"><div style="font-size:10px;color:#71717a;font-weight:600;margin-bottom:4px">PAIRWISE SMARTDC (${pairs.length} пар)</div>${pairsHtml}</div>` : ''}
+      ${winner ? `<div class="brief-section brief-highlight" style="margin-top:10px">
+        <span class="brief-emoji">🏆</span>
+        <div class="brief-body">
+          <div class="brief-title">Winner: ${_esc(winner.text)}</div>
+          <div class="brief-subtitle">${winner.score}/${winner.max_score} побед · conf ${Math.round((winner.confidence||0)*100)}%</div>
         </div>
-        <div>${hypHtml}</div>
-        ${pairs.length ? `<div style="margin-top:10px"><div style="font-size:10px;color:#71717a;font-weight:600;margin-bottom:4px">PAIRWISE SMARTDC (${pairs.length} пар)</div>${pairsHtml}</div>` : ''}
-        ${winner ? `<div style="margin-top:10px;padding:10px 12px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px">
-          <div style="font-size:10px;color:#818cf8;font-weight:600">🏆 WINNER</div>
-          <div style="font-size:13px;color:#e4e4e7;margin-top:4px"><b>${_esc(winner.text)}</b> · ${winner.score}/${winner.max_score} побед · conf ${Math.round((winner.confidence||0)*100)}%</div>
-        </div>` : ''}
-      </div>`;
+      </div>` : ''}`;
     return wrapper;
   }
 
@@ -457,91 +460,147 @@ function assistRenderCard(card) {
         <span style="color:#818cf8;font-weight:600;margin-right:6px">${i+1}</span>
         <span style="color:#e4e4e7;font-size:12px">${_esc(h)}</span>
       </div>`).join('');
+    wrapper.className = 'assist-msg assist-assistant brief-card';
+    wrapper.style.cssText = '';
     wrapper.innerHTML = `
-      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-          <div style="font-size:11px;color:#818cf8;font-weight:600">🧩 DEEP CLUSTER · ${_esc(card.mode_id || '?')}</div>
-          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод · ${traceLen} шагов</div>
+      <div class="brief-header">
+        <div class="brief-greeting">🧩 Deep cluster · ${_esc(card.mode_id || '?')}</div>
+        <div class="brief-date">${card.nodes_created || 0} нод · ${traceLen} шагов</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0">${items}</div>
+      ${card.synthesis ? `<div class="brief-section brief-highlight" style="margin-top:10px">
+        <span class="brief-emoji">🔮</span>
+        <div class="brief-body">
+          <div class="brief-title">Synthesis</div>
+          <div class="brief-subtitle">${_esc(card.synthesis)}</div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:0">${items}</div>
-        ${card.synthesis ? `<div style="margin-top:8px;padding:8px 10px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px;font-size:12px;color:#e4e4e7">
-          <div style="font-size:10px;color:#818cf8;font-weight:600">SYNTHESIS</div>
-          ${_esc(card.synthesis)}</div>` : ''}
-      </div>`;
+      </div>` : ''}`;
     return wrapper;
   }
 
   if (card.type === 'deep_dialectic') {
     // Dialectical deep: dispute/fan — thesis/antithesis c evidence
+    wrapper.className = 'assist-msg assist-assistant brief-card';
+    wrapper.style.cssText = '';
     wrapper.innerHTML = `
-      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-          <div style="font-size:11px;color:#818cf8;font-weight:600">⚖ DEEP DIALECTIC · ${_esc(card.mode_id || '?')}</div>
-          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод</div>
+      <div class="brief-header">
+        <div class="brief-greeting">⚖ Deep dialectic · ${_esc(card.mode_id || '?')}</div>
+        <div class="brief-date">${card.nodes_created || 0} нод</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px;padding:10px 12px;background:#052e16;border-radius:10px;border-left:3px solid #10b981">
+          <div style="font-size:10px;color:#10b981;font-weight:600">FOR · conf ${Math.round((card.confidence_thesis || 0)*100)}%</div>
+          <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.thesis || '—')}</div>
         </div>
-        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-          <div style="flex:1;min-width:200px;padding:8px;background:#052e16;border:1px solid #166534;border-radius:8px">
-            <div style="font-size:10px;color:#10b981;font-weight:600">FOR · conf ${Math.round((card.confidence_thesis || 0)*100)}%</div>
-            <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.thesis || '—')}</div>
-          </div>
-          <div style="flex:1;min-width:200px;padding:8px;background:#1c1917;border:1px solid #78350f;border-radius:8px">
-            <div style="font-size:10px;color:#f59e0b;font-weight:600">AGAINST · conf ${Math.round((card.confidence_anti || 0)*100)}%</div>
-            <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.antithesis || '—')}</div>
-          </div>
+        <div style="flex:1;min-width:200px;padding:10px 12px;background:#1c1917;border-radius:10px;border-left:3px solid #f59e0b">
+          <div style="font-size:10px;color:#f59e0b;font-weight:600">AGAINST · conf ${Math.round((card.confidence_anti || 0)*100)}%</div>
+          <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.antithesis || '—')}</div>
         </div>
-        ${card.synthesis ? `<div style="padding:8px 10px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px">
-          <div style="font-size:10px;color:#818cf8;font-weight:600">SYNTHESIS</div>
-          <div style="font-size:12px;color:#e4e4e7;margin-top:4px">${_esc(card.synthesis)}</div>
-        </div>` : ''}
-      </div>`;
+      </div>
+      ${card.synthesis ? `<div class="brief-section brief-highlight">
+        <span class="brief-emoji">🧩</span>
+        <div class="brief-body">
+          <div class="brief-title">Synthesis</div>
+          <div class="brief-subtitle">${_esc(card.synthesis)}</div>
+        </div>
+      </div>` : ''}`;
     return wrapper;
   }
 
   if (card.type === 'deep_research') {
-    // Deep-research card: trace шагов + evidence + synthesis
+    // Deep-research card: финальный synthesis крупно на виду, trace-шаги
+    // свёрнуты в <details> чтобы можно было развернуть для аудита хода мысли.
     const trace = card.trace || [];
-    const traceHtml = trace.map(t => {
+    const actionMeta = {
+      seed_goal:         { emoji: '🎯', kind: 'highlight' },
+      hypotheses:        { emoji: '💭', kind: 'neutral' },
+      elaborate:         { emoji: '📖', kind: 'neutral' },
+      smartdc:           { emoji: '⚖️', kind: 'highlight' },
+      deepen:            { emoji: '🔎', kind: 'neutral' },
+      diversity_pump:    { emoji: '🌿', kind: 'neutral' },
+      iterate_exit:      { emoji: '✓',  kind: 'info' },
+      converged:         { emoji: '🧭', kind: 'info' },       // natural STABLE в infinite
+      final_synthesis:   { emoji: '🧩', kind: 'info' },       // finished by max_steps
+      final_collapse:    { emoji: '🧩', kind: 'info' },       // backward compat
+    };
+    // Выделяем финальный шаг (converged / final_synthesis / final_collapse)
+    // и показываем его текст на верхнем уровне — это главный ответ юзеру.
+    const finalStep = trace.slice().reverse().find(t =>
+      t.action === 'converged' || t.action === 'final_synthesis' || t.action === 'final_collapse');
+    const finalSynthesis = (finalStep && finalStep.synthesis) || card.synthesis || '';
+    const finalDetail = (finalStep && finalStep.detail) || '';
+    const innerSteps = finalStep ? trace.filter(t => t !== finalStep) : trace;
+    const stepsHtml = innerSteps.map(t => {
       const act = t.action || '?';
+      const meta = actionMeta[act] || { emoji: '•', kind: 'neutral' };
       const detail = t.detail || '';
       const err = t.error;
-      const color = err ? '#ef4444' : (act === 'smartdc' ? '#818cf8' : (act === 'elaborate' ? '#06b6d4' : '#10b981'));
-      let body = `<div style="font-size:11px;color:${color};font-weight:600;">${_esc(act.toUpperCase())}</div>
-                  <div style="font-size:12px;color:#e4e4e7;margin-top:2px">${_esc(detail)}</div>`;
+      const kind = err ? 'warn' : meta.kind;
+      let subtitle = _esc(detail);
       if (t.texts && t.texts.length) {
-        body += '<ul style="margin:4px 0 0 12px;padding:0;font-size:11px;color:#a1a1aa;">'
+        subtitle += '<ul style="margin:4px 0 0 12px;padding:0">'
           + t.texts.map(tx => `<li>${_esc(tx)}</li>`).join('') + '</ul>';
       }
       if (act === 'smartdc' && (t.thesis || t.antithesis || t.synthesis)) {
-        body += `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-          <div style="flex:1;min-width:160px;padding:6px;background:#052e16;border:1px solid #166534;border-radius:6px">
+        subtitle += `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <div style="flex:1;min-width:140px;padding:6px 8px;background:#052e16;border-radius:6px">
             <div style="font-size:9px;color:#10b981;font-weight:600">FOR</div>
-            <div style="font-size:11px;color:#e4e4e7">${_esc(t.thesis)}</div>
+            <div style="font-size:11px;color:#e4e4e7">${_esc(t.thesis || '')}</div>
           </div>
-          <div style="flex:1;min-width:160px;padding:6px;background:#1c1917;border:1px solid #78350f;border-radius:6px">
+          <div style="flex:1;min-width:140px;padding:6px 8px;background:#1c1917;border-radius:6px">
             <div style="font-size:9px;color:#f59e0b;font-weight:600">AGAINST</div>
-            <div style="font-size:11px;color:#e4e4e7">${_esc(t.antithesis)}</div>
+            <div style="font-size:11px;color:#e4e4e7">${_esc(t.antithesis || '')}</div>
           </div>
         </div>`;
         if (t.synthesis) {
-          body += `<div style="margin-top:6px;padding:6px;background:#1e1b4b;border:1px solid #4338ca;border-radius:6px">
+          subtitle += `<div style="margin-top:6px;padding:6px 8px;background:#1e1b4b;border-radius:6px">
             <div style="font-size:9px;color:#818cf8;font-weight:600">SYNTHESIS</div>
             <div style="font-size:11px;color:#e4e4e7">${_esc(t.synthesis)}</div>
           </div>`;
         }
       }
-      if (err) body += `<div style="color:#ef4444;font-size:10px;margin-top:4px">⚠ ${_esc(err)}</div>`;
-      return `<div style="padding:8px 10px;background:#1f1f23;border-left:3px solid ${color};border-radius:6px;margin-bottom:4px">${body}</div>`;
+      if (err) subtitle += `<div style="color:#ef4444;font-size:10px;margin-top:4px">⚠ ${_esc(err)}</div>`;
+      return `<div class="brief-section brief-${kind}">
+        <span class="brief-emoji">${meta.emoji}</span>
+        <div class="brief-body">
+          <div class="brief-title" style="font-size:11px;text-transform:uppercase;letter-spacing:0.3px;color:#a1a1aa">${_esc(act)}</div>
+          <div class="brief-subtitle" style="margin-top:4px;font-size:12px;color:#e4e4e7">${subtitle}</div>
+        </div>
+      </div>`;
     }).join('');
+
+    // Финальный synthesis крупно сверху — главный ответ юзеру.
+    // Trace шагов свёрнут в <details>, раскрывается по клику для аудита.
+    const finalMeta = finalStep
+      ? (actionMeta[finalStep.action] || { emoji: '🧩', kind: 'info' })
+      : { emoji: '🔬', kind: 'info' };
+    const finalBlock = finalSynthesis
+      ? `<div class="brief-section brief-${finalMeta.kind}" style="flex-direction:column;align-items:stretch">
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+            <span class="brief-emoji" style="font-size:18px">${finalMeta.emoji}</span>
+            <div class="brief-title" style="flex:1">Финальный синтез</div>
+            ${finalDetail ? `<div style="font-size:10px;color:#71717a">${_esc(finalDetail)}</div>` : ''}
+          </div>
+          <div style="font-size:13px;color:#e4e4e7;line-height:1.6;white-space:pre-wrap">${_esc(finalSynthesis)}</div>
+        </div>`
+      : '';
+
+    wrapper.className = 'assist-msg assist-assistant brief-card';
+    wrapper.style.cssText = '';
     wrapper.innerHTML = `
-      <div style="padding:12px 14px;background:#18181b;border:1px solid #27272a;border-radius:12px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-          <div style="font-size:11px;color:#818cf8;font-weight:600;letter-spacing:0.4px">🔬 DEEP RESEARCH</div>
-          <div style="font-size:10px;color:#71717a">${card.nodes_created || 0} нод в графе · ${trace.length} шагов</div>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:2px">${traceHtml}</div>
-        <div style="margin-top:8px;font-size:10px;color:#52525b;text-align:right">
-          Открой 🕸 Graph чтобы увидеть созданные ноды
-        </div>
+      <div class="brief-header">
+        <div class="brief-greeting">🔬 Deep research</div>
+        <div class="brief-date">${card.nodes_created || 0} нод · ${trace.length} шагов</div>
+      </div>
+      ${finalBlock}
+      ${innerSteps.length ? `<details style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:11px;color:#71717a;padding:6px 0;user-select:none">
+          ▸ Показать ход мысли (${innerSteps.length} ${innerSteps.length === 1 ? 'шаг' : 'шагов'})
+        </summary>
+        <div class="brief-sections" style="margin-top:8px">${stepsHtml}</div>
+      </details>` : ''}
+      <div style="margin-top:10px;font-size:10px;color:#52525b;text-align:right">
+        Открой 🕸 Graph Lab чтобы увидеть созданные ноды
       </div>`;
     return wrapper;
   }
@@ -692,7 +751,7 @@ function assistRenderCard(card) {
     let verifiedHtml = '';
     if (card.verified_first && card.verified_first.synthesis) {
       verifiedHtml = `<div style="margin-top:10px;padding:10px;background:#1e1b4b;border:1px solid #4338ca;border-radius:10px;">
-        <div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:4px;">SMART DC: "${_esc(card.verified_first.text.substring(0,50))}..."</div>
+        <div style="font-size:10px;color:#818cf8;font-weight:600;margin-bottom:4px;">SMART DC: «${_esc(card.verified_first.text)}»</div>
         <div style="font-size:12px;color:#cbd5e1;">${_esc(card.verified_first.synthesis)}</div>
       </div>`;
     }
@@ -786,10 +845,10 @@ function assistRenderCard(card) {
     let ab_html = '';
     if (b.text_a && b.text_b) {
       ab_html = `
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_a)}</div>
-          <span style="color:#4338ca;font-size:14px">⟶</span>
-          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:0 1 auto;max-width:45%">${_esc(b.text_b)}</div>
+        <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap">
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:1 1 40%;min-width:120px">${_esc(b.text_a)}</div>
+          <span style="color:#4338ca;font-size:14px;padding-top:6px">⟶</span>
+          <div style="padding:6px 10px;background:#27272a;border-radius:6px;font-size:12px;flex:1 1 40%;min-width:120px">${_esc(b.text_b)}</div>
         </div>`;
     }
     const axisLabel = lang === 'ru' ? 'Скрытая ось' : 'Hidden axis';
@@ -804,7 +863,7 @@ function assistRenderCard(card) {
         </div>
         ${ab_html}
         <div style="font-size:13px;color:#e4e4e7;line-height:1.5">${axisLabel}: <span style="color:#818cf8;font-weight:500">«${_esc(b.text || '')}»</span></div>
-        ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis.substring(0, 200))}${b.synthesis.length > 200 ? '…' : ''}</div>` : ''}
+        ${b.synthesis ? `<div style="font-size:12px;color:#cbd5e1;margin-top:8px;font-style:italic;line-height:1.5">${_esc(b.synthesis)}</div>` : ''}
       </div>
     `;
   }
@@ -967,7 +1026,35 @@ function assistAddWarning(text, persist) {
 
 // ── Send message ──────────────────────────────────────────────────────
 
-async function assistSend() {
+// Last session indices — для manual «↳ Продолжить» button.
+// Сохраняется в localStorage чтобы пережить reload. Обнуляется
+// когда юзер шлёт без continue (новая тема).
+const _LAST_SESSION_KEY = 'baddle.lastSessionIndices';
+function _getLastSession() {
+  try {
+    const raw = localStorage.getItem(_LAST_SESSION_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    return Array.isArray(v) && v.length ? v : null;
+  } catch(e) { return null; }
+}
+function _setLastSession(indices) {
+  try {
+    if (indices && indices.length) {
+      localStorage.setItem(_LAST_SESSION_KEY, JSON.stringify(indices));
+    } else {
+      localStorage.removeItem(_LAST_SESSION_KEY);
+    }
+    _updateContinueBtn();
+  } catch(e) {}
+}
+function _updateContinueBtn() {
+  const btn = document.getElementById('assist-continue-btn');
+  if (!btn) return;
+  btn.style.display = _getLastSession() ? '' : 'none';
+}
+
+async function assistSend(continueSession) {
   const input = document.getElementById('assist-input');
   if (!input) return;
   const text = input.value.trim();
@@ -1010,16 +1097,33 @@ async function assistSend() {
     if (_forcedMode && _forcedMode !== 'auto') {
       body.mode = _forcedMode;
     }
+    // Manual continuity: юзер нажал «↳ Продолжить» — передаём prev indices
+    if (continueSession) {
+      const prev = _getLastSession();
+      if (prev && prev.length) body.prev_session_indices = prev;
+    }
     const r = await fetch('/assist', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
     });
     const d = await r.json();
+    // Сохраняем session_indices для возможного следующего «↳ Продолжить»
+    if (d && Array.isArray(d.session_indices)) {
+      _setLastSession(d.session_indices);
+    }
     // Reset forced mode после отправки — каждый message explicit
     if (_forcedMode && _forcedMode !== 'auto') {
       _setForcedMode('auto', /*silent=*/true);
     }
+
+    // Force-refresh metrics в UI сразу: dopamine/NE/sync_error могли
+    // сдвинуться на inject_ne(0.4) + update_from_engagement + deepen
+    // update_neurochem. Иначе ждём до 3с на следующий poll → юзер не
+    // видит immediate реакции на своё сообщение.
+    try {
+      fetch('/assist/state').then(r => r.json()).then(_updateNeurochemPanel).catch(()=>{});
+    } catch(e) {}
 
     clearInterval(dotInterval);
     pending.remove();
@@ -3508,16 +3612,19 @@ function assistToggleAdvanced() {
 // ── Init on page load ──────────────────────────────────────────────────
 
 async function assistInit() {
-  // Bind input enter
+  // Bind input enter — Ctrl+Enter = continue, Enter = new
   const input = document.getElementById('assist-input');
   if (input) {
     input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        assistSend();
+        assistSend(e.ctrlKey || e.metaKey);  // Ctrl/Cmd+Enter = continue
       }
     });
   }
+
+  // Continue button visibility — зависит от localStorage
+  _updateContinueBtn();
 
   // Restore chat history from server (async fetch)
   await _restoreChatHistory();

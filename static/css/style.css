@@ -321,6 +321,11 @@ select {
   width: 440px;
   max-width: 90%;
   box-shadow: var(--shadow-lg);
+  /* Длинный модал (Settings с Advanced + Danger zone) не должен
+     выезжать за экран. Скролл внутри, иначе на мелких экранах
+     нижние details-секции невидимы. */
+  max-height: 85vh;
+  overflow-y: auto;
 }
 
 .modal-label {

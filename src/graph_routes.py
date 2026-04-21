@@ -390,7 +390,12 @@ def graph_link():
 
 @graph_bp.route("/graph/collapse", methods=["POST"])
 def graph_collapse():
-    """Collapse a cluster: generate summary, remove source nodes, add result."""
+    """Collapse a cluster: generate summary, optionally remove sources.
+
+    Использует общий helper `_collapse_cluster_to_node` — тот же code path
+    что и для chat execute_deep (batched) и DMN converge. Smart truncation,
+    lineage, auto-link — всё в helper'е.
+    """
     d = _p_data()
     indices = d.get("cluster", [])
     collapse_mode = d.get("collapse_mode", "short")
@@ -399,120 +404,65 @@ def graph_collapse():
     no_merge = d.get("no_merge", False)
     collapse_override = d.get("collapse_override", "").strip()
     nodes = _graph["nodes"]
-    topic = _graph["meta"]["topic"]
 
     if not indices or not nodes:
         return jsonify({"error": "no cluster to collapse"})
 
+    # Generation Studio path — текст уже готов, создаём ноду напрямую
+    # без LLM вызова. Это специальный случай, helper его не покрывает.
     if collapse_override:
-        # Text already generated via Generation Studio — skip generation
-        text = collapse_override
-        ent = {"avg": 0, "unc": 0, "tokens": []}
-    else:
-        cluster_texts = [nodes[i]["text"] for i in indices if i < len(nodes)]
-        if collapse_mode == "long":
-            system = _p(d["lang"], "collapse_long")
-            instruction = _p(d["lang"], "write_long")
-            max_tokens = 2000
-        else:
-            system = _p(d["lang"], "collapse")
-            instruction = _p(d["lang"], "write_para")
-            max_tokens = 800
-        if custom_max_tokens:
-            max_tokens = int(custom_max_tokens)
-        # Smart truncation: fit texts into context window
-        from .api_backend import _settings
-        ctx_size = _settings.get("local_ctx", 8192)
-        token_budget = ctx_size - 200 - max_tokens  # leave room for system + generation
-
-        user = f"{_p(d['lang'], 'topic')}: {topic}\n\n{_p(d['lang'], 'ideas')}:\n"
-
-        # Sort by confidence (highest first) so we keep the best if truncating
-        indexed_texts = sorted(enumerate(cluster_texts), key=lambda x: -(nodes[indices[x[0]]].get("confidence", 0.5) if x[0] < len(indices) and indices[x[0]] < len(nodes) else 0))
-
-        # Rough token count: len(text) / 3 for multilingual
-        used_tokens = len(user) // 3
-        selected_texts = []
-        for orig_idx, t in indexed_texts:
-            t_tokens = len(t) // 3 + 2  # +2 for "- " prefix
-            if used_tokens + t_tokens > token_budget:
-                continue  # skip, doesn't fit
-            selected_texts.append(t)
-            used_tokens += t_tokens
-
-        if len(selected_texts) < len(cluster_texts):
-            print(f"[collapse] context fit: {len(selected_texts)}/{len(cluster_texts)} texts ({used_tokens}/{token_budget} est. tokens)")
-
-        user += "\n".join(f"- {t}" for t in selected_texts)
-        if user_prompt:
-            user += f"\n\n{user_prompt}"
-        else:
-            user += f"\n\n{instruction}"
-
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-
-    valid_indices = [i for i in indices if i < len(nodes)]
-
-    if no_merge:
-        # Keep originals, add collapsed as new node linked FROM source nodes
-        collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
-        max_depth = max((nodes[i]["depth"] for i in valid_indices), default=0)
-        collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
-        new_idx = _add_node(text, depth=max_depth + 1, topic=collapsed_topic, entropy=ent, confidence=round(collapsed_conf, 2))
-        # Store lineage — all sources this node was collapsed from (for ancestry checks)
-        lineage = set(valid_indices)
-        for i in valid_indices:
-            lineage |= set(nodes[i].get("collapsed_from", []))
+        valid = [i for i in indices if 0 <= i < len(nodes)]
+        if not valid:
+            return jsonify({"error": "invalid cluster"})
+        topic = _graph["meta"].get("topic", "")
+        collapsed_topic = next((nodes[i].get("topic", "") for i in valid if nodes[i].get("topic")), topic)
+        max_depth = max((nodes[i].get("depth", 0) for i in valid), default=0)
+        avg_conf = round(sum(nodes[i].get("confidence", 0.5) for i in valid) / len(valid), 2)
+        new_idx = _add_node(collapse_override[:1000], depth=max_depth + 1,
+                             topic=collapsed_topic, confidence=avg_conf,
+                             node_type="synthesis")
+        nodes[new_idx]["full_text"] = collapse_override
+        lineage = set(valid)
+        for i in valid:
+            lineage |= set(nodes[i].get("collapsed_from", []) or [])
         nodes[new_idx]["collapsed_from"] = sorted(lineage)
-        directed = _graph["edges"]["directed"]
-        manual_links = _graph["edges"]["manual_links"]
-        # Link each source → collapsed (traceable chain)
-        for src_idx in valid_indices:
-            directed.append([src_idx, new_idx])
-            pair = [min(src_idx, new_idx), max(src_idx, new_idx)]
+        directed = _graph["edges"].setdefault("directed", [])
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        for src in valid:
+            directed.append([src, new_idx])
+            pair = [min(src, new_idx), max(src, new_idx)]
             if pair not in manual_links:
                 manual_links.append(pair)
-    else:
-        # Normal mode: remove source nodes, add collapsed result
-        min_depth = min((nodes[i]["depth"] for i in valid_indices), default=0)
-        collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
-        # Average confidence of collapsed nodes
-        collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
-        # Collect lineage before removing nodes
-        lineage = set(valid_indices)
-        for i in valid_indices:
-            lineage |= set(nodes[i].get("collapsed_from", []))
-        for i in sorted(valid_indices, reverse=True):
-            nodes.pop(i)
-        # Reassign ids after removal
-        for k, nd in enumerate(nodes):
-            nd["id"] = k
-        _remap_edges(valid_indices)
-        new_idx = _add_node(text, depth=min_depth, topic=collapsed_topic,
-                            entropy=ent, confidence=collapsed_conf)
-        # Note: lineage indices are pre-removal, but that's OK for ancestry tracking
-        nodes[new_idx]["collapsed_from"] = sorted(lineage)
-        # Link collapsed node to topic root and goal
-        directed = _graph["edges"]["directed"]
-        manual_links = _graph["edges"]["manual_links"]
-        for i, nd in enumerate(nodes):
-            if nd["depth"] == -1 and nd["topic"] == collapsed_topic:
-                directed.append([i, new_idx])
-                pair = [min(i, new_idx), max(i, new_idx)]
-                if pair not in manual_links:
-                    manual_links.append(pair)
-                break
-        # Also link goal → collapsed (maintain goal connectivity)
-        for i, nd in enumerate(nodes):
-            if nd.get("type") == "goal":
-                directed.append([i, new_idx])
-                pair = [min(i, new_idx), max(i, new_idx)]
-                if pair not in manual_links:
-                    manual_links.append(pair)
-                break
+        return _finalize(nodes, d["threshold"], d["sim_mode"], text=collapse_override)
 
-    return _finalize(nodes, d["threshold"], d["sim_mode"], text=text)
+    # LLM path через helper
+    if collapse_mode == "long":
+        system = _p(d["lang"], "collapse_long")
+        instruction = _p(d["lang"], "write_long")
+        max_tokens = 2000
+    else:
+        system = _p(d["lang"], "collapse")
+        instruction = _p(d["lang"], "write_para")
+        max_tokens = 800
+    if custom_max_tokens:
+        max_tokens = int(custom_max_tokens)
+
+    # Если юзер передал кастомный prompt — он перекрывает стандартный instruction
+    final_instruction = user_prompt or instruction
+
+    from .graph_logic import _collapse_cluster_to_node
+    res = _collapse_cluster_to_node(
+        indices=indices, lang=d["lang"],
+        custom_system=system,
+        instruction=final_instruction,   # helper сам соберёт prompt с truncation
+        max_tokens=max_tokens,
+        temp=d["temp"], top_k=d["top_k"],
+        no_merge=no_merge,
+    )
+    if not res:
+        return jsonify({"error": "collapse LLM failed"})
+
+    return _finalize(nodes, d["threshold"], d["sim_mode"], text=res.get("text", ""))
 
 
 @graph_bp.route("/graph/sync", methods=["POST"])

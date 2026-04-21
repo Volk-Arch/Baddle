@@ -41,6 +41,8 @@
 
 - [ ] **META-вопросы — ночная генерация «что ты не заметил»** (из [mockup.html](docs/mockup.html) строка 172). Scout ночью уже ищет мосты между далёкими нодами. Новый слой: когда два моста обнаруживают **общий абстрактный паттерн** («single point of failure» в auth-модуле И «single point of failure» в energy-понедельниках) — сгенерить **вопрос** уровня абстракции: «какие ещё single points of failure есть в твоей жизни которые ты не заметил?». Это не связь между нодами, а **вопрос** к юзеру. В briefing утром отдельной секцией «META question · waiting for morning». **Реализация:** новый шаг в `_check_night_cycle` после Scout — поиск общих predicates между bridges через LLM, если найден — генерация вопроса. ~2-3ч. Зависит от того что scout реально находит мосты (т.е. граф должен быть нетривиальный).
 
+- [ ] **Специализированные card-рендеры для `fan` / `rhythm`**. Сейчас оба режима падают в `deep_research` card (trace + synthesis). По смыслу им бы свои: `fan` (Мозговой штурм) = deep-generate list с ranging по новизне; `rhythm` (Привычка) = habit-tracker view с streak-счётчиком и next-occurrence. Не блокер, но UX для этих двух режимов странный — рендерится pipeline исследования вместо натурального для них формата. ~3ч (2 новых card types в assistant.js + адаптация execute_deep под эти renderer_style'ы).
+
 ---
 
 ## 🧬 Сенсоры и устройства

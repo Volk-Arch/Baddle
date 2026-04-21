@@ -17,6 +17,13 @@ function openSettings() {
     setVal('settings-neural-seed',      s.neural_seed !== undefined ? s.neural_seed : -1);
     const liveBayes = document.getElementById('settings-live-bayes');
     if (liveBayes) liveBayes.checked = !!s.live_bayes;
+    // Deep-mode infinite: default true если поле отсутствует в ответе
+    const deepInf = document.getElementById('settings-deep-infinite');
+    if (deepInf) deepInf.checked = s.deep_chat_infinite !== false;
+    const deepFmt = document.getElementById('settings-deep-format');
+    if (deepFmt) deepFmt.value = s.deep_response_format || 'essay';
+    const deepBatched = document.getElementById('settings-deep-batched');
+    if (deepBatched) deepBatched.checked = s.deep_batched_synthesis !== false;
     document.getElementById('settings-current-model').textContent = `Current: ${s.current_model || '(not configured)'}`;
 
     // Try to fetch available models if URL is set
@@ -54,6 +61,12 @@ function saveSettings() {
   body.neural_seed       = parseInt(numFrom('settings-neural-seed', -1));
   const liveBayes = document.getElementById('settings-live-bayes');
   if (liveBayes) body.live_bayes = liveBayes.checked;
+  const deepInf = document.getElementById('settings-deep-infinite');
+  if (deepInf) body.deep_chat_infinite = deepInf.checked;
+  const deepFmt = document.getElementById('settings-deep-format');
+  if (deepFmt && deepFmt.value) body.deep_response_format = deepFmt.value;
+  const deepBatched = document.getElementById('settings-deep-batched');
+  if (deepBatched) body.deep_batched_synthesis = deepBatched.checked;
 
   fetch('/settings', {
     method: 'POST',

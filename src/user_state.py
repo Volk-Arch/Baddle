@@ -158,6 +158,26 @@ class UserState:
         """
         self._last_input_ts = now or time.time()
 
+    def update_from_engagement(self, signal: float = 0.65):
+        """Мягкий EMA-вклад в dopamine от факта вовлечённости юзера
+        (он написал / нажал кнопку / создал цель).
+
+        Не путать со старым `update_from_timing`: там signal зависел от
+        timing gap (быстро = 0.8, долго = 0.2), что шумно. Здесь signal
+        константный и небольшой — просто маркёр «юзер активен, не apathy».
+        EMA decay 0.95 → одно сообщение даёт +0.007 к dopamine (если был 0.5).
+        За серию из 20 сообщений dopamine поднимается к ~0.60.
+
+        Вызывается рядом с `register_input()` в /assist и других user-initiated
+        endpoint'ах. Парный feeder для `update_from_chat_sentiment` (valence).
+        """
+        try:
+            s = max(0.0, min(1.0, float(signal)))
+        except Exception:
+            return
+        self.dopamine = 0.95 * self.dopamine + 0.05 * s
+        self._clamp()
+
     # ── Feedback → dopamine + burnout ──────────────────────────────────────
 
     def update_from_feedback(self, kind: str):

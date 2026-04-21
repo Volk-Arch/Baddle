@@ -649,21 +649,333 @@ def _get_texts(nodes: list[dict] | None = None) -> list[str]:
     return [n["text"] for n in nodes]
 
 
+# ── Collapse cluster helper (единый путь для всех collapse-путей) ─────────
+#
+# Используется:
+#   • `/graph/collapse` endpoint (Lab manual collapse)
+#   • `force_synthesize_top` batched path (chat execute_deep final)
+#   • `_check_dmn_converge` force collapse (ночной cycle)
+#
+# DRY: smart truncation, lineage tracking, auto-link к topic root/goal —
+# всё в одной функции, чтобы не было двух реализаций.
+
+
+def _collapse_cluster_to_node(
+    indices: list[int],
+    lang: str = "ru",
+    custom_prompt: Optional[str] = None,
+    custom_system: Optional[str] = None,
+    instruction: Optional[str] = None,
+    max_tokens: int = 1500,
+    temp: float = 0.5,
+    top_k: int = 30,
+    no_merge: bool = True,
+    link_to_topic: bool = True,
+    link_to_goal: bool = True,
+) -> Optional[dict]:
+    """Свернуть cluster нод в synthesis-ноду через LLM.
+
+    Единый code-path — smart context truncation, lineage, auto-link.
+
+    Args:
+        indices: индексы нод в `_graph["nodes"]` для collapse
+        lang: ru/en
+        custom_prompt: если задан — используется AS-IS (caller сам обеспечил truncation).
+                        Если None — prompt собирается внутри с smart truncation
+                        контекста.
+        custom_system: если задан — system message. Иначе дефолтный.
+        instruction: финальная инструкция (что написать — "одним абзацем",
+                      "статьёй в 5 параграфов" и т.п.). Добавляется в конец
+                      внутренне-сформированного prompt'а. Игнорируется если
+                      `custom_prompt` задан.
+        max_tokens: cap на LLM-генерацию
+        no_merge: True — keep originals, add collapsed as new linked node (default для
+                   session synthesis — не хотим удалять мысли); False — remove sources
+        link_to_topic: добавить edge от topic-root ноды к collapsed
+        link_to_goal: добавить edge от goal-ноды к collapsed
+
+    Returns: {text, new_idx, confidence, collapsed_from} или None при провале.
+    """
+    nodes = _graph.get("nodes", [])
+    valid_indices = [i for i in indices if 0 <= i < len(nodes)]
+    if not valid_indices:
+        return None
+    cluster_nodes = [nodes[i] for i in valid_indices]
+    cluster_texts = [n.get("text", "") for n in cluster_nodes]
+    topic = _graph["meta"].get("topic", "")
+
+    # Сортируем по confidence (highest first) — если придётся truncate, сохраним лучшее
+    indexed = sorted(
+        enumerate(cluster_texts),
+        key=lambda x: -(cluster_nodes[x[0]].get("confidence", 0.5))
+    )
+
+    # Smart context truncation — то же что было в /graph/collapse endpoint
+    try:
+        from .api_backend import _settings
+        ctx_size = int(_settings.get("local_ctx", 8192))
+    except Exception:
+        ctx_size = 8192
+    # Оценка токенов: len(text)/3 для multilingual, резервируем место system + output
+    token_budget = ctx_size - 200 - max_tokens
+
+    selected_texts = []
+    used_tokens = 100  # грубый оверхед prompt
+    for _orig, t in indexed:
+        t_tokens = len(t) // 3 + 2  # +2 за "- "
+        if used_tokens + t_tokens > token_budget:
+            continue
+        selected_texts.append(t)
+        used_tokens += t_tokens
+
+    # Prompt assembly
+    if custom_prompt:
+        # Caller полностью сам собрал prompt (chat batched mode, /graph/collapse
+        # с collapse_override). Используем AS-IS без truncation — caller уже
+        # ограничил размер.
+        user = custom_prompt
+    else:
+        # Стандартный путь — собираем prompt внутри с smart truncation.
+        default_instruction = (instruction or
+            ("Сверни это в один связный абзац, сохраняя все идеи."
+             if lang == "ru" else
+             "Collapse into one coherent paragraph, preserving all ideas."))
+        if lang == "ru":
+            user = (f"Тема: {topic}\n\nМысли:\n"
+                    + "\n".join(f"- {t}" for t in selected_texts)
+                    + f"\n\n{default_instruction}")
+        else:
+            user = (f"Topic: {topic}\n\nIdeas:\n"
+                    + "\n".join(f"- {t}" for t in selected_texts)
+                    + f"\n\n{default_instruction}")
+    system = custom_system or (
+        "/no_think\nТы сворачиваешь группу мыслей в один связный текст."
+        if lang == "ru" else
+        "/no_think\nYou collapse a group of ideas into one coherent text.")
+
+    try:
+        text, ent = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user}],
+            max_tokens=max_tokens, temp=temp, top_k=top_k,
+        )
+    except Exception as e:
+        log.debug(f"[collapse_cluster] LLM failed: {e}")
+        return None
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    # Lineage: все источники + их предки
+    lineage = set(valid_indices)
+    for i in valid_indices:
+        lineage |= set(nodes[i].get("collapsed_from", []) or [])
+
+    # Confidence avg
+    avg_conf = round(sum(n.get("confidence", 0.5) for n in cluster_nodes) / len(cluster_nodes), 3)
+
+    if no_merge:
+        # Keep originals, add collapsed as new linked node
+        max_depth = max((n.get("depth", 0) for n in cluster_nodes), default=0)
+        collapsed_topic = next((n.get("topic", "") for n in cluster_nodes if n.get("topic")), topic)
+        new_idx = _add_node(text[:1000], depth=max_depth + 1, topic=collapsed_topic,
+                             entropy=ent, confidence=avg_conf, node_type="synthesis")
+        nodes[new_idx]["collapsed_from"] = sorted(lineage)
+        # Полный текст synthesis сохраняем отдельно в node (для UI display через card)
+        nodes[new_idx]["full_text"] = text
+        directed = _graph["edges"].setdefault("directed", [])
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        for src in valid_indices:
+            directed.append([src, new_idx])
+            pair = [min(src, new_idx), max(src, new_idx)]
+            if pair not in manual_links:
+                manual_links.append(pair)
+    else:
+        # Remove sources, add collapsed at lowest depth. Используется Lab'ом
+        # для классического merge (удалить дубликаты, оставить свёрнутое).
+        min_depth = min((n.get("depth", 0) for n in cluster_nodes), default=0)
+        collapsed_topic = next((n.get("topic", "") for n in cluster_nodes if n.get("topic")), topic)
+        for i in sorted(valid_indices, reverse=True):
+            nodes.pop(i)
+        for k, nd in enumerate(nodes):
+            nd["id"] = k
+        _remap_edges(valid_indices)
+        new_idx = _add_node(text[:1000], depth=min_depth, topic=collapsed_topic,
+                             entropy=ent, confidence=avg_conf, node_type="synthesis")
+        nodes[new_idx]["collapsed_from"] = sorted(lineage)
+        nodes[new_idx]["full_text"] = text
+        directed = _graph["edges"].setdefault("directed", [])
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        if link_to_topic:
+            for i, nd in enumerate(nodes):
+                if nd.get("depth") == -1 and nd.get("topic") == collapsed_topic:
+                    directed.append([i, new_idx])
+                    break
+        if link_to_goal:
+            for i, nd in enumerate(nodes):
+                if nd.get("type") == "goal":
+                    directed.append([i, new_idx])
+                    break
+
+    return {"text": text, "new_idx": new_idx, "confidence": avg_conf,
+            "collapsed_from": sorted(lineage), "used_count": len(selected_texts)}
+
+
+# ── Smart grouping для batched collapse ───────────────────────────────────
+#
+# Когда source много (15+ нод), надо разбить на осмысленные группы: похожие
+# по embedding + с priority-сортировкой по confidence + без lineage-overlap.
+# Используется `force_synthesize_top` batched mode.
+
+
+def _group_for_collapse(
+    source_indices: list[int],
+    threshold: float = 0.91,
+    min_group_size: int = 2,
+    max_group_size: int = 5,
+) -> list[list[int]]:
+    """Разбить source_indices на группы для batched collapse.
+
+    Логика (по убыванию приоритета):
+      1. Semantic clusters (через `_find_clusters` по embedding similarity).
+         Если группа в cluster'е содержит нужные indices — берём её.
+      2. Fallback: группировка по topic (same `nodes[i].topic`).
+      3. Финальный fallback: sequential chunks по `max_group_size` из
+         остатков, отсортированных по confidence.
+
+    Lineage filter (`_filter_lineage`) применяется — не группируем ноды
+    одной collapse-родословной (избегаем избыточности).
+
+    Returns: list of group-indices lists. Может быть пустым если source
+    меньше min_group_size.
+    """
+    from collections import defaultdict
+    nodes = _graph.get("nodes", [])
+    src_set = set(source_indices)
+    if len(source_indices) < min_group_size:
+        return []
+
+    # Сортируем по confidence для приоритета в fallback
+    sorted_sources = sorted(
+        source_indices,
+        key=lambda i: -(nodes[i].get("confidence", 0.5) if 0 <= i < len(nodes) else 0)
+    )
+    remaining = set(sorted_sources)
+    groups: list[list[int]] = []
+
+    # 1. Semantic clusters через embedding similarity
+    try:
+        edges = _compute_edges(nodes, threshold, "embedding")
+        clusters = _find_clusters(len(nodes), edges, threshold)
+        for c in clusters:
+            # Фильтруем только source-indices + skip evidence/goal
+            group = [i for i in c
+                     if i in remaining
+                     and nodes[i].get("type") not in ("evidence", "goal")]
+            # Lineage filter
+            try:
+                from .thinking import _filter_lineage
+                group = _filter_lineage(group, nodes)
+            except Exception:
+                pass
+            if len(group) >= min_group_size:
+                groups.append(group[:max_group_size])
+                remaining -= set(group[:max_group_size])
+    except Exception as e:
+        log.debug(f"[group_for_collapse] semantic clustering failed: {e}")
+
+    # 2. Topic groups
+    by_topic = defaultdict(list)
+    for i in sorted_sources:
+        if i in remaining and 0 <= i < len(nodes):
+            by_topic[nodes[i].get("topic", "") or ""].append(i)
+    for topic_group in sorted(by_topic.values(), key=len, reverse=True):
+        try:
+            from .thinking import _filter_lineage
+            topic_group = _filter_lineage(topic_group, nodes)
+        except Exception:
+            pass
+        if len(topic_group) >= min_group_size:
+            groups.append(topic_group[:max_group_size])
+            remaining -= set(topic_group[:max_group_size])
+
+    # 3. Sequential chunks из остатков (sorted by confidence)
+    leftovers = [i for i in sorted_sources if i in remaining]
+    for b in range(0, len(leftovers), max_group_size):
+        chunk = leftovers[b:b + max_group_size]
+        if len(chunk) >= min_group_size:
+            groups.append(chunk)
+        elif chunk and groups:
+            # Хвост меньше min_group_size — приклеиваем к последней группе
+            # если итог не превысит max_group_size*1.5 (щадящий cap)
+            if len(groups[-1]) + len(chunk) <= int(max_group_size * 1.5):
+                groups[-1].extend(chunk)
+
+    return groups
+
+
+FORMAT_PROMPTS_RU = {
+    "brief":   ("Напиши краткий синтез одним абзацем (3-5 предложений). "
+                 "Если уверенность низкая — честно признайся об этом."),
+    "essay":   ("Напиши развёрнутое эссе 3-5 параграфов: введение, "
+                 "основная часть с аргументами и примерами, заключение. "
+                 "Сохрани все важные мысли и детали. Если уверенность "
+                 "низкая — честно признайся."),
+    "article": ("Напиши подробную статью 6-10 параграфов: введение, "
+                 "детальное раскрытие по разделам, разбор противоречий, "
+                 "заключение с выводами и следующими шагами. Сохрани все "
+                 "мысли и аргументы с примерами."),
+    "list":    ("Структурированный список: главные выводы маркированным "
+                 "списком, под каждым 1-2 предложения развёртки. В конце "
+                 "итоговое резюме одним абзацем."),
+}
+FORMAT_PROMPTS_EN = {
+    "brief":   ("Write a brief synthesis, one paragraph (3-5 sentences). "
+                 "Be honest about low confidence."),
+    "essay":   ("Write an essay in 3-5 paragraphs: intro, body with "
+                 "arguments and examples, conclusion. Preserve all "
+                 "important ideas."),
+    "article": ("Write a detailed article in 6-10 paragraphs: intro, "
+                 "section-by-section breakdown, tensions, conclusion with "
+                 "next steps. Preserve all arguments with examples."),
+    "list":    ("Structured list: main findings as bullets, each expanded "
+                 "in 1-2 sentences. Summary paragraph at the end."),
+}
+
+
 def force_synthesize_top(n: int = 5, lang: str = "ru",
-                          max_tokens: int = 3000) -> Optional[dict]:
-    """Forced collapse: top-N hypothesis/evidence/thought по confidence
-    + LLM-синтез одним абзацем + добавление synthesis-ноды в граф.
+                          max_tokens: int = 3000,
+                          source_indices: Optional[list[int]] = None,
+                          fmt: str = "essay",
+                          batched: bool = True,
+                          batch_size: int = 5) -> Optional[dict]:
+    """Forced collapse: top-N нод → синтез через LLM + добавление synthesis-ноды.
 
-    Общий helper используется `_check_dmn_converge` (фон) и `/graph/synthesize`
-    endpoint'ом для graph tab autorun. Source of truth — один.
+    Args:
+        n: сколько топ-нод взять
+        lang: ru/en
+        max_tokens: cap для LLM генерации (для article/list — можно 6000+)
+        source_indices: whitelist сессии; None = весь граф
+        fmt: 'brief' | 'essay' | 'article' | 'list' — определяет prompt
+        batched: если True и source_indices > batch_size*1.5 —
+                  двухфазный pyramidal: сначала section из каждого batch,
+                  потом final из sections. Надёжнее для локальных LLM
+                  (меньше токенов на один call, не упирается в context).
+        batch_size: размер пачки для batched режима
 
-    Возвращает {text, confidence, node_idx} или None если граф пустой.
+    Возвращает {text, confidence, node_idx, source_indices, fmt, batched}.
     """
     nodes = _graph.get("nodes", [])
     if not nodes:
         return None
-    cand = [(i, n) for i, n in enumerate(nodes)
-            if n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
+    if source_indices is not None:
+        allowed = set(source_indices)
+        cand = [(i, n) for i, n in enumerate(nodes)
+                if i in allowed
+                and n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
+    else:
+        cand = [(i, n) for i, n in enumerate(nodes)
+                if n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
     if not cand:
         return None
     cand.sort(key=lambda p: p[1].get("confidence", 0.5), reverse=True)
@@ -671,37 +983,129 @@ def force_synthesize_top(n: int = 5, lang: str = "ru",
     avg_conf = round(sum(p[1].get("confidence", 0.5) for p in top) / len(top), 2)
     texts = "\n".join(f"- {p[1].get('text','')[:200]} (conf {p[1].get('confidence',0.5):.2f})"
                        for p in top)
-    goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
-    if lang == "ru":
-        prompt = (f"Цель: {goal_text}\n"
-                  f"Найденные мысли (от сильной к слабой):\n{texts}\n\n"
-                  f"Напиши финальный синтез одним абзацем (3-5 предложений). "
-                  f"Если уверенность низкая — честно признайся об этом.")
-        system = "/no_think\nТы ассистент-синтезатор."
+    # Goal text: если source_indices задан — ищем goal в whitelist'е
+    # (session-specific), иначе первый goal в графе.
+    if source_indices is not None:
+        _whitelist = set(source_indices)
+        goal_text = next(
+            (nodes[i].get("text", "") for i in source_indices
+             if 0 <= i < len(nodes) and nodes[i].get("type") == "goal"),
+            "")
+        if not goal_text:
+            goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
     else:
-        prompt = (f"Goal: {goal_text}\nThoughts (strong to weak):\n{texts}\n\n"
-                  f"Final synthesis, one paragraph (3-5 sentences). Be honest "
-                  f"about low confidence.")
-        system = "/no_think\nYou are a synthesizer."
-    try:
-        res, _ = _graph_generate(
-            [{"role": "system", "content": system},
-             {"role": "user", "content": prompt}],
-            max_tokens=max_tokens, temp=0.5, top_k=30,
+        goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
+    fmt_prompts = FORMAT_PROMPTS_RU if lang == "ru" else FORMAT_PROMPTS_EN
+    format_instruction = fmt_prompts.get(fmt, fmt_prompts["essay"])
+
+    # ── BATCHED MODE: pyramidal collapse через умную группировку ──
+    # Группируем source по similarity + confidence + topic (_group_for_collapse),
+    # каждая группа → section через _collapse_cluster_to_node, потом финал
+    # из sections. Это переиспользует существующую инфраструктуру collapse
+    # (smart truncation, lineage, link-back) — не дублируем код.
+    use_batching = batched and len(cand) > int(batch_size * 1.5)
+    candidate_indices = [p[0] for p in cand]  # для group_for_collapse
+
+    if use_batching:
+        groups = _group_for_collapse(
+            candidate_indices,
+            min_group_size=2,
+            max_group_size=batch_size,
         )
-    except Exception as e:
-        log.debug(f"[force_synthesize_top] LLM failed: {e}")
-        return None
-    text = (res or "").strip()[:2000]
+        sections = []
+        section_node_indices: list[int] = []
+        sec_system = ("/no_think\nТы пишешь раздел для финального эссе."
+                      if lang == "ru" else
+                      "/no_think\nYou are writing a section for a final essay.")
+        for i, group in enumerate(groups):
+            sec_prompt = (
+                (f"Цель: {goal_text}\n\nГруппа мыслей №{i+1}:\n"
+                 + "\n".join(f"- {nodes[j].get('text','')}" for j in group if 0 <= j < len(nodes))
+                 + "\n\nНапиши связный раздел (2-3 параграфа) покрывающий эти мысли "
+                   "с аргументами и примерами. Сохрани все идеи.")
+                if lang == "ru" else
+                (f"Goal: {goal_text}\n\nIdea group {i+1}:\n"
+                 + "\n".join(f"- {nodes[j].get('text','')}" for j in group if 0 <= j < len(nodes))
+                 + "\n\nWrite a coherent section (2-3 paragraphs) covering these "
+                   "ideas with arguments and examples. Preserve all ideas.")
+            )
+            sec_res = _collapse_cluster_to_node(
+                group, lang=lang,
+                custom_prompt=sec_prompt, custom_system=sec_system,
+                max_tokens=max(1500, max_tokens // 2),
+                no_merge=True,        # не удаляем источники в sessions
+                link_to_topic=False,  # промежуточные sections — не линкуем
+                link_to_goal=False,
+            )
+            if sec_res and sec_res.get("text"):
+                sections.append(sec_res["text"])
+                if sec_res.get("new_idx") is not None:
+                    section_node_indices.append(sec_res["new_idx"])
+
+        if sections:
+            # Финальный pass — sections собираются в единый текст
+            combined = "\n\n".join(
+                (f"РАЗДЕЛ {i+1}:\n{s}" if lang == "ru" else f"SECTION {i+1}:\n{s}")
+                for i, s in enumerate(sections))
+            final_prompt = (
+                (f"Цель: {goal_text}\n\nНаписанные разделы:\n{combined}\n\n"
+                 f"{format_instruction} Объедини разделы в цельный текст "
+                 f"с введением и заключением. Сохрани все аргументы.")
+                if lang == "ru" else
+                (f"Goal: {goal_text}\n\nWritten sections:\n{combined}\n\n"
+                 f"{format_instruction} Combine into a coherent text with "
+                 f"intro and conclusion. Preserve all arguments.")
+            )
+            final_system = ("/no_think\nТы финализируешь эссе из готовых разделов."
+                            if lang == "ru" else
+                            "/no_think\nYou finalize an essay from sections.")
+            try:
+                final_res, _ = _graph_generate(
+                    [{"role": "system", "content": final_system},
+                     {"role": "user", "content": final_prompt}],
+                    max_tokens=max_tokens, temp=0.5, top_k=30,
+                )
+                text = (final_res or "").strip()
+            except Exception as e:
+                log.debug(f"[force_synth batched] final failed: {e}")
+                text = "\n\n".join(sections)  # fallback
+        else:
+            text = ""
+    else:
+        # ── SINGLE-CALL MODE (small n, или batched off) ──
+        if lang == "ru":
+            prompt = (f"Цель: {goal_text}\n"
+                      f"Найденные мысли (от сильной к слабой):\n{texts}\n\n"
+                      f"{format_instruction}")
+            system = "/no_think\nТы ассистент-синтезатор."
+        else:
+            prompt = (f"Goal: {goal_text}\nThoughts (strong to weak):\n{texts}\n\n"
+                      f"{format_instruction}")
+            system = "/no_think\nYou are a synthesizer."
+        try:
+            res, _ = _graph_generate(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": prompt}],
+                max_tokens=max_tokens, temp=0.5, top_k=30,
+            )
+        except Exception as e:
+            log.debug(f"[force_synthesize_top] LLM failed: {e}")
+            return None
+        text = (res or "").strip()
+
+    # Cap финального текста — 20000 чар хватит даже на article format.
+    text = text[:20000]
     if not text:
         return None
     try:
-        idx = _add_node(text[:500], depth=0, topic="",
+        # Node-текст укорочен для списка в Lab; полный в card.synthesis отдельно.
+        idx = _add_node(text[:1000], depth=0, topic="",
                         confidence=avg_conf, node_type="synthesis")
     except Exception:
         idx = None
     return {"text": text, "confidence": avg_conf, "node_idx": idx,
-            "source_indices": [p[0] for p in top]}
+            "source_indices": [p[0] for p in top],
+            "fmt": fmt, "batched": use_batching if batched else False}
 
 
 def _add_node(text: str, depth: int = 0, topic: str = "",

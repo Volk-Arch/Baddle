@@ -53,10 +53,10 @@
       </details>
     </div>
 
-    <!-- ═══ Advanced: сложные параметры, свёрнуто по умолчанию ═══ -->
-    <details style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+    <!-- ═══ Advanced: сложные параметры (раскрыты, чтобы юзер видел deep-infinite) ═══ -->
+    <details open style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
       <summary style="color:var(--text-secondary);font-size:12px;cursor:pointer;user-select:none;padding:2px 0">
-        ⚙ Advanced · neural defaults, context, Bayesian
+        ⚙ Advanced · neural defaults, context, Bayesian, deep-mode
       </summary>
 
       <div style="margin-top:12px">
@@ -100,6 +100,30 @@
         <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
           title="Update hypothesis confidence via Bayesian formula when auto-evidence is created during Elaborate/Expand.">
           <input id="settings-live-bayes" type="checkbox"> Live Bayesian update on auto-evidence
+        </label>
+      </div>
+
+      <div style="margin-top:12px">
+        <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
+          title="Chat-режимы исследования/дебатов/выбора крутятся до natural STABLE (как Graph Lab autorun). Выключено — ограничено per-mode collapse_at из settings.">
+          <input id="settings-deep-infinite" type="checkbox" checked> Бесконечный deep-mode (до сходимости)
+        </label>
+      </div>
+
+      <div style="margin-top:12px">
+        <label class="modal-label" title="Формат финального синтеза в чате">Формат ответа deep-mode</label>
+        <select id="settings-deep-format" class="modal-select" style="padding:4px 8px;font-size:12px">
+          <option value="brief">brief — краткий (3-5 предложений)</option>
+          <option value="essay" selected>essay — эссе (3-5 параграфов)</option>
+          <option value="article">article — статья (6-10 параграфов)</option>
+          <option value="list">list — структурированный список + резюме</option>
+        </select>
+      </div>
+
+      <div style="margin-top:10px">
+        <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
+          title="Pyramidal collapse: сначала section из каждой пачки по 5 нод, потом финал из sections. Надёжнее для локальных LLM — не упирается в context window.">
+          <input id="settings-deep-batched" type="checkbox" checked> Пошаговый (batched) синтез
         </label>
       </div>
     </details>
