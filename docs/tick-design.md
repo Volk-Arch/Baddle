@@ -1,10 +1,11 @@
 # Tick Cycle — автономный цикл мышления
 
-## Идея
+Tick — один атомарный шаг мышления: сгенерируй / объедини / углуби /
+проверь. Какой именно — решает CognitiveState на основе текущего
+состояния графа. Аналогия: один вдох-выдох мышления. Autorun = серия
+вдохов.
 
-Tick — один шаг автономного мышления. Не "запусти всё и жди результат", а **один атомарный шаг**: сгенерируй / объедини / углуби / проверь. Какой именно шаг — решает CognitiveState на основе текущего состояния графа.
-
-Аналогия: один вдох-выдох мышления. Autorun = серия вдохов.
+---
 
 ## Фазы
 
@@ -17,171 +18,169 @@ GENERATE+  — всё проверено? искать пробелы (META)
 SYNTHESIZE — ничего нового → стабильно → финальный итог
 ```
 
-Порядок не жёсткий — Horizon выбирает фазу по весам (policy weights).
+Порядок не жёсткий. Horizon выбирает фазу по policy weights — успех
+растит вес, провал снижает. Не round-robin, система адаптируется.
 
-## Классификация нод
+---
 
-Перед каждым tick граф классифицируется (`classify_nodes`):
+## Классификация нод перед tick'ом
 
 | Категория | Критерий | Зачем |
-|-----------|----------|-------|
+|---|---|---|
 | **bare** | Нет evidence, не verified, не collapsed_from | Нужен elaborate |
 | **unverified** | confidence < stable_threshold | Кандидаты для doubt |
 | **verified** | confidence ≥ stable_threshold | Готовы |
 | **doubt_candidates** | unverified минус bare | Doubt только после elaborate |
 
-Ключевое решение: **bare ноды не идут в doubt**. Сначала elaborate (добавить аргументы), потом doubt (проверить). SmartDC на голой гипотезе без контекста — слабая проверка.
-
-## Выбор фазы
-
-```python
-available = {
-    "generate": len(hypotheses) < min_hyp and not generated,
-    "merge":    есть группа похожих,
-    "elaborate": есть bare ноды,
-    "doubt":    есть doubt_candidates,
-}
-phase = horizon.select_phase(available)
-```
-
-Horizon выбирает из доступных фаз по policy weights. Вес фазы растёт если она дала результат, падает если нет. Это не round-robin — система адаптируется.
-
-Если ни одна фаза не доступна:
-1. **META** (если verified ≥ 3 и meta_count < max_meta): "что упустил?" с контекстом уже проверенного
-2. **SYNTHESIZE**: граф стабилен, цикл завершён
-
-## Merge: lineage tracking
-
-Merge не просто объединяет — отслеживает происхождение:
-- `collapsed_from: [3, 5, 7]` — из каких нод синтезирован
-- `_filter_lineage()` не даёт объединять ноды с общим происхождением
-- Предотвращает "перемалывание" одного и того же материала
-
-Группировка: сначала по embedding clusters (семантика), fallback по topic.
-
-## Выбор цели
-
-`_pick_target()` — какую ноду обрабатывать:
-- BFS-расстояние до goal через взвешенные рёбра (ближе к цели = приоритетнее)
-- Каждый 3-й вызов — случайный выбор (разнообразие, не застревать)
-- Без goal: наименее уверенная нода
-
-## Horizon integration
-
-Каждый результат tick содержит:
-- `horizon_params`: temperature, top_k, novelty_threshold для LLM
-- `horizon_metrics`: precision, state, policy_weights для UI overlay
-
-Autorun после SmartDC отправляет feedback:
-```
-surprise = 1 - confidence
-→ horizon.update(surprise) 
-→ precision корректируется
-→ следующий tick использует новые параметры
-```
-
-## NAND-emergent — единственный путь
-
-Classic tick с `if primitive == "xor"` удалён. Все 14 режимов проходят через
-**один tick** (`tick_emergent` в `src/tick_nand.py`). Логика возникает из зон
-distinct:
-
-```
-Compute distinct matrix on hypothesis pairs (за O(n²) с embeddings):
-  d < τ_in    → CONFIRM-zone  → collapse (merge)
-  τ_in ≤ d ≤ τ_out → EXPLORE-zone → pump / elaborate
-  d > τ_out   → CONFLICT-zone → smartdc (doubt)
-
-Emergent compare:
-  Несколько verified + conflict_pairs между ними → action = "compare"
-  (LLM-judge выбирает лучший)
-
-Scout / DMN (mode_id == "scout"):
-  Pump между furthest-pair, записать bridge
-```
-
-### Stop conditions (`should_stop()` в modes.py)
-
-Единая функция, не зависит от primitive. См. `docs/nand-architecture.md`:
-
-| Case | Условие остановки |
-|------|------------------|
-| 1 | Goal с subgoals: distinct-зона решает AND vs OR (детали ниже) |
-| 2 | `d(goal, best_verified) < τ_in` → цель достигнута |
-| 3 | Convergence: 3+ verified, avg confidence > 85%, нет pending |
-| 4 | Novelty exhaustion: precision > 0.85 и нет работы |
-
-**Case 1 подробно (emergent AND/OR через avg_d между subgoals):**
-
-| avg_d | Семантика | Правило |
-|-------|-----------|---------|
-| `avg_d ≤ τ_in` | Subgoals СЕМАНТИЧЕСКИ БЛИЗКИ (альтернативы одного, React/Vue/Svelte) | **OR**: первый verified хватит |
-| `avg_d ≥ τ_out` | Subgoals РАЗНЕСЕНЫ (части целого, frontend/backend/db) | **AND**: все должны быть verified |
-| `τ_in < avg_d < τ_out` | Промежуточная зона | НЕ резолвим, продолжаем |
-
-Это эмерджентная семантика — режим (tournament/builder/pipeline) не
-задаёт её явно, distinct между subgoals сам показывает характер задачи.
-
-### Mode как preset
-
-Поля `primitive`/`strategy`/`goal_type` удалены из `modes.py`. Mode —
-компактный кортеж `(name, name_en, goals_count, fields, placeholder*,
-intro*, renderer_style, preset)`. `preset` читается из одного источника
-истины через `get_mode(mode_id)`; `create_horizon(mode_id)` забирает
-`(precision, policy, target_surprise)` оттуда. Runtime не свитчится на
-mode — логика эмерджентна из distinct-зон.
-
-### Pause-on-question
-
-Tick может эмитить `action: "ask"` когда:
-- `sync_error > 0.6` (система не понимает юзера), ИЛИ
-- `NE < 0.35` + много unverified (система блуждает в неопределённости)
-
-Autorun в `graph.js` ловит это, делает `fetch /graph/assist` (запрос вопроса),
-показывает через alert и останавливается. Юзер отвечает → NE spike + answer
-становится нодой.
-
-### Camera mode — сенсорная депривация
-
-Если `cs.llm_disabled == True`, tick пропускает generate/elaborate/smartdc
-(они требуют LLM-вызов) и работает только на distinct между существующими
-нодами: collapse / compare / pump. Режим «сенсорной депривации» — найти
-паттерны в том что уже есть.
-
-### Multi-goal (subgoals)
-
-Для режимов с `goals_count: "2+"` (AND/OR/XOR-like): при создании goal ноды
-multiline текст разбивается на строки. Первая строка = goal text, остальные =
-hypothesis-ноды (subgoals). Goal хранит `subgoals: [idx1, idx2, ...]`.
-
-tick_emergent фильтрует classify только по subgoal нодам.
-
-### Hook в State-граф
-
-После каждого emit результата, в state_graph.jsonl добавляется запись:
-`{action, phase, content_touched, state_snapshot (CognitiveState), state_origin}`.
-Это Git-аудит + эпизодическая память в одной структуре (см.
-[state-graph-design.md](state-graph-design.md)).
-
-## Защита от циклов
-
-- `_generated` flag: не генерировать заново если уже набрали min_hyp
-- merge всегда `no_merge: false` в autorun (originals удаляются)
-- SmartDC всегда `replace` mode (не создаёт дочерние ноды)
-- `meta_count < max_meta`: максимум 2 мета-запроса за цикл
-
-## Файлы
-
-- `src/tick_nand.py` — `tick_emergent()` (единственный tick engine)
-- `src/cognitive_loop.py` — `CognitiveLoop` с `tick_foreground()` для `/graph/tick`
-  + фоновый thread (Scout/DMN/NE decay/HRV alerts). Общий NE-бюджет с
-  foreground через `last_foreground_tick` timestamp
-- `src/thinking.py` — helpers: `classify_nodes`, `_find_similar_group`, `_pick_target`, `_pick_distant_pair`, `_tick_force_collapse`
-- `src/horizon.py` — `CognitiveState` (`select_phase`, `update`, `to_llm_params`, `apply_to_bayes`, и все neurochem методы)
-- `src/state_graph.py` — `StateGraph` с hook'ом на каждый tick emit
-- `src/graph_routes.py` — `/graph/tick` эндпоинт → делегирует в `loop.tick_foreground()`
-- `static/js/graph.js` — autorun с обработкой `action: "ask"` (pause-on-question) и cone viz
+**Bare ноды не идут в doubt.** Сначала elaborate (добавить аргументы),
+потом doubt. SmartDC на голой гипотезе без контекста — слабая проверка.
 
 ---
 
-**Навигация:** [← Divergence/Convergence](convergence-divergence.md)  ·  [Индекс](README.md)  ·  [Следующее: Horizon →](horizon-design.md)
+## Выбор фазы
+
+`select_phase(available)` смотрит доступные фазы и выбирает по
+наибольшему policy weight. Фаза доступна если есть работа: generate —
+если гипотез < min и ещё не генерили; merge — если есть группа похожих;
+elaborate — если есть bare ноды; doubt — если есть doubt_candidates.
+
+Если ничего не доступно: META («что упустил?», с контекстом verified)
+или SYNTHESIZE (граф стабилен, цикл завершён).
+
+---
+
+## Выбор цели
+
+Какую ноду обрабатывать (`_pick_target`):
+- BFS-расстояние до goal через взвешенные рёбра — ближе к цели =
+  приоритетнее
+- Каждый 3-й вызов — случайный выбор (разнообразие, не застревать)
+- Без goal — наименее уверенная нода
+
+---
+
+## Horizon integration
+
+Каждый tick возвращает `horizon_params` (temp, top_k, novelty_threshold
+для LLM) и `horizon_metrics` (precision, state, policy weights для
+UI overlay). Autorun после SmartDC отправляет feedback:
+`surprise = 1 − confidence` → `horizon.update(surprise)` → precision
+корректируется → следующий tick с новыми параметрами.
+
+---
+
+## NAND-emergent — единственный путь
+
+Classic tick с `if primitive == "xor"` удалён. Все 14 режимов проходят
+через **один tick** (`tick_emergent` в `src/tick_nand.py`). Логика
+возникает из зон distinct:
+
+- `d < τ_in` → CONFIRM-зона → collapse (merge)
+- `τ_in ≤ d ≤ τ_out` → EXPLORE-зона → pump / elaborate
+- `d > τ_out` → CONFLICT-зона → smartdc (doubt)
+
+**Emergent compare:** несколько verified + conflict_pairs между ними
+→ `action = "compare"` (LLM-judge выбирает лучший).
+
+**Scout / DMN:** pump между furthest-pair, запись bridge.
+
+### Stop conditions
+
+Единая функция `should_stop()`, не зависит от primitive:
+
+- `d(goal, best_verified) < τ_in` → цель достигнута
+- Convergence: 3+ verified, avg confidence > 85%, нет pending
+- Novelty exhaustion: precision > 0.85 и нет работы
+
+**Для goals с subgoals — AND vs OR эмерджентно по `avg_d`:**
+
+| avg_d | Семантика | Правило |
+|---|---|---|
+| ≤ τ_in | Subgoals близки (альтернативы: React/Vue/Svelte) | **OR**: первый verified хватит |
+| ≥ τ_out | Subgoals разнесены (части целого: frontend/backend/db) | **AND**: все должны быть verified |
+| promежуточное | Не резолвим, продолжаем | — |
+
+Режим (tournament / builder / pipeline) не задаёт это явно — distinct
+между subgoals сам показывает характер задачи.
+
+### Mode как preset
+
+Поля `primitive` / `strategy` / `goal_type` удалены из `modes.py`. Mode
+— компактный кортеж `(name, name_en, goals_count, fields, ..., preset)`.
+`preset` (precision, policy, target_surprise) читается через
+`get_mode(mode_id)`, `create_horizon(mode_id)` забирает оттуда. Runtime
+не свитчится на mode — логика эмерджентна из distinct-зон.
+
+---
+
+## Pause-on-question
+
+Tick эмитит `action: "ask"` когда:
+- `sync_error > 0.6` (система не понимает юзера), ИЛИ
+- `NE < 0.35` + много unverified (блуждание в неопределённости)
+
+Autorun в `graph.js` ловит это, показывает alert и останавливается.
+Юзер отвечает → NE spike + answer становится нодой.
+
+---
+
+## Camera mode — сенсорная депривация
+
+Если `cs.llm_disabled == True`, tick пропускает generate / elaborate /
+smartdc (требуют LLM) и работает только на distinct между существующими
+нодами: collapse / compare / pump. Найти паттерны в том что уже есть.
+
+---
+
+## Merge lineage
+
+Merge отслеживает происхождение: `collapsed_from: [3, 5, 7]`.
+`_filter_lineage` не даёт объединять ноды с общим происхождением —
+предотвращает «перемалывание» одного материала. Группировка сначала
+по embedding clusters, fallback по topic.
+
+---
+
+## Multi-goal
+
+Для режимов с `goals_count: "2+"` (AND/OR/XOR-like) при создании goal
+multiline текст разбивается: первая строка = goal text, остальные =
+hypothesis-ноды (subgoals). Goal хранит `subgoals: [idx1, idx2, ...]`.
+`tick_emergent` фильтрует classify только по subgoal нодам.
+
+---
+
+## Защита от циклов
+
+- `_generated` flag — не генерировать заново если набрали min_hyp
+- Merge всегда `no_merge=false` в autorun (originals удаляются)
+- SmartDC всегда `replace` mode (не создаёт дочерние ноды)
+- `meta_count < max_meta` — максимум 2 META-запроса за цикл
+
+---
+
+## Hook в state-граф
+
+После каждого emit в state_graph.jsonl добавляется запись с action /
+phase / content_touched / полным snapshot'ом CognitiveState. Git-аудит
++ эпизодическая память в одной структуре —
+[episodic-memory.md](episodic-memory.md).
+
+---
+
+## Где в коде
+
+- `src/tick_nand.py` — `tick_emergent()` (единственный tick engine)
+- `src/cognitive_loop.py` — `CognitiveLoop.tick_foreground()` для
+  `/graph/tick` + фоновый thread
+- `src/thinking.py` — helpers (`classify_nodes`, `_find_similar_group`,
+  `_pick_target`, `_pick_distant_pair`)
+- `src/horizon.py` — `select_phase`, `update`, `to_llm_params`,
+  `apply_to_bayes`
+- `src/state_graph.py` — hook на каждый tick emit
+- `/graph/tick` endpoint → `loop.tick_foreground()`
+- `static/js/graph.js` — autorun с обработкой `action: "ask"`
+
+---
+
+**Навигация:** [← Конус (метафора + ритм)](cone-design.md) · [Индекс](README.md) · [Следующее: Horizon →](horizon-design.md)

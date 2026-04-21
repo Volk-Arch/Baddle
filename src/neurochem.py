@@ -1,5 +1,9 @@
 """Нейрохимия второго мозга — три скаляра, γ derived, burnout отдельно.
 
+Decay константы и EMA-механика — в [src/ema.py](ema.py) (с 2026-04-23).
+ProtectiveFreeze использует EMA/VectorEMA classes для feed'ов, open-coded
+formulas в этом файле убраны.
+
 Максимально простой контракт. Каждая формула — одна строка EMA.
 
 Пример в духе пользовательского эскиза:
@@ -30,9 +34,22 @@ HRV сюда не приходит. Тело пользователя влияе
 import math
 import numpy as np
 
+from .ema import EMA, VectorEMA, Decays, TimeConsts
+
 
 class Neurochem:
-    """Три скаляра. Реагируют на динамику графа, не на юзера напрямую."""
+    """Три скаляра. Реагируют на динамику графа, не на юзера напрямую.
+
+    Self-prediction: `expectation_vec` — медленный EMA собственных
+    [DA, S, NE]. `self_surprise_vec = vector − expectation_vec` даёт
+    Baddle PE на самой себе — замыкает Фристон loop симметрично с
+    UserState.expectation_vec. Питается через `tick_expectation()`,
+    вызывается из cognitive_loop._advance_tick параллельно с user EMA.
+
+    **Implementation note (2026-04-23):** три скаляра и vector хранятся
+    как `EMA` / `VectorEMA` objects. Publicly exposed как float/array
+    properties. Decay константы — в `src.ema.Decays`.
+    """
 
     RPE_WINDOW = 20    # скользящее окно для baseline Δconfidence
     RPE_GAIN = 0.15    # как сильно dopamine сдвигается на единицу RPE
@@ -41,11 +58,60 @@ class Neurochem:
                  dopamine: float = 0.5,
                  serotonin: float = 0.5,
                  norepinephrine: float = 0.5):
-        self.dopamine = dopamine
-        self.serotonin = serotonin
-        self.norepinephrine = norepinephrine
+        self._dopamine_ema = EMA(
+            dopamine, decay=Decays.NEURO_DOPAMINE, bounds=(0.0, 1.0)
+        )
+        self._serotonin_ema = EMA(
+            serotonin, decay=Decays.NEURO_SEROTONIN, bounds=(0.0, 1.0)
+        )
+        self._norepinephrine_ema = EMA(
+            norepinephrine, decay=Decays.NEURO_NOREPINEPHRINE, bounds=(0.0, 1.0)
+        )
         self._delta_history: list = []
         self.recent_rpe: float = 0.0
+        # Self-expectation: что Baddle сама от себя ожидает.
+        self._expectation_vec_ema = VectorEMA(
+            [0.5, 0.5, 0.5],
+            decay=Decays.SELF_EXPECTATION,
+            bounds=(0.0, 1.0),
+        )
+
+    # ── Backward-compat read/write accessors ───────────────────────────────
+
+    @property
+    def dopamine(self) -> float:
+        return self._dopamine_ema.value
+
+    @dopamine.setter
+    def dopamine(self, v: float):
+        self._dopamine_ema.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def serotonin(self) -> float:
+        return self._serotonin_ema.value
+
+    @serotonin.setter
+    def serotonin(self, v: float):
+        self._serotonin_ema.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def norepinephrine(self) -> float:
+        return self._norepinephrine_ema.value
+
+    @norepinephrine.setter
+    def norepinephrine(self, v: float):
+        self._norepinephrine_ema.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def expectation_vec(self) -> np.ndarray:
+        return self._expectation_vec_ema.value
+
+    @expectation_vec.setter
+    def expectation_vec(self, v):
+        """Direct assign — для legacy from_dict."""
+        arr = np.asarray(v, dtype=np.float32)
+        if arr.shape == self._expectation_vec_ema.value.shape:
+            self._expectation_vec_ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
 
     # ── Updates ─────────────────────────────────────────────────────────
 
@@ -62,32 +128,50 @@ class Neurochem:
         Любой аргумент может быть None — соответствующий скаляр не обновится.
         """
         if d is not None:
-            self.dopamine = 0.9 * self.dopamine + 0.1 * float(d)
+            self._dopamine_ema.feed(float(d))
 
         if w_change is not None:
             arr = np.asarray(list(w_change), dtype=np.float32)
             if arr.size:
                 stability = max(0.0, 1.0 - float(np.std(arr)))
-                self.serotonin = 0.95 * self.serotonin + 0.05 * stability
+                self._serotonin_ema.feed(stability)
 
         if weights is not None:
             arr = np.asarray(list(weights), dtype=np.float32)
             if arr.size:
                 arr = np.clip(arr, 1e-9, 1.0)
-                # Normalize to probability distribution
                 total = float(np.sum(arr))
                 if total > 0:
                     p = arr / total
                     ent = -float(np.sum(p * np.log(p + 1e-9)))
-                    # Normalize by max entropy log(n)
                     max_ent = float(np.log(max(2, arr.size)))
                     ent_norm = min(1.0, ent / max_ent) if max_ent > 0 else 0.0
-                    self.norepinephrine = 0.9 * self.norepinephrine + 0.1 * ent_norm
+                    self._norepinephrine_ema.feed(ent_norm)
 
-        # Clamp [0, 1]
-        self.dopamine = max(0.0, min(1.0, self.dopamine))
-        self.serotonin = max(0.0, min(1.0, self.serotonin))
-        self.norepinephrine = max(0.0, min(1.0, self.norepinephrine))
+    # ── Self-prediction (Friston-loop симметрия) ─────────────────────────
+
+    def vector(self) -> np.ndarray:
+        """3D текущее состояние. Зеркально UserState.vector()."""
+        return np.array(
+            [self.dopamine, self.serotonin, self.norepinephrine],
+            dtype=np.float32,
+        )
+
+    def tick_expectation(self):
+        """Обновить self-baseline. Вызывается из cognitive_loop._advance_tick."""
+        self._expectation_vec_ema.feed(self.vector())
+
+    @property
+    def self_surprise_vec(self) -> np.ndarray:
+        """3D PE Baddle против её же baseline: DA/S/NE − expectation_vec."""
+        return self.vector() - self.expectation_vec
+
+    @property
+    def self_imbalance(self) -> float:
+        """‖self_surprise_vec‖. Magnitude of self-prediction-error.
+        Высокая = собственная нейрохимия уехала от привычного baseline.
+        """
+        return float(np.linalg.norm(self.self_surprise_vec))
 
     # ── Derived ─────────────────────────────────────────────────────────
 
@@ -117,7 +201,9 @@ class Neurochem:
         else:
             predicted = actual   # первый раз — RPE=0, просто записываем
         rpe = actual - predicted
-        self.dopamine = max(0.0, min(1.0, self.dopamine + self.RPE_GAIN * rpe))
+        # RPE — additive bump not EMA, direct value mutation + clamp
+        self._dopamine_ema.value = max(0.0, min(1.0,
+            self._dopamine_ema.value + self.RPE_GAIN * rpe))
         self.recent_rpe = rpe
         self._delta_history.append(actual)
         if len(self._delta_history) > self.RPE_WINDOW:
@@ -143,6 +229,8 @@ class Neurochem:
             "norepinephrine": round(self.norepinephrine, 3),
             "gamma": round(self.gamma, 3),
             "recent_rpe": round(self.recent_rpe, 3),
+            "expectation_vec": [round(float(x), 3) for x in self.expectation_vec.tolist()],
+            "self_imbalance": round(self.self_imbalance, 3),
             "_delta_history": [round(x, 3) for x in self._delta_history],
         }
 
@@ -155,77 +243,174 @@ class Neurochem:
         )
         n.recent_rpe = d.get("recent_rpe", 0.0)
         n._delta_history = list(d.get("_delta_history", []))
+        vec = d.get("expectation_vec")
+        if isinstance(vec, (list, tuple)) and len(vec) == 3:
+            try:
+                n.expectation_vec = np.array([float(x) for x in vec], dtype=np.float32)
+            except Exception:
+                pass
         return n
 
 
 class ProtectiveFreeze:
-    """Защитный режим + накопители «усталости».
+    """Защитный режим + накопители «усталости» Baddle.
 
-    Два независимых feeder'а, одно displayed-поле burnout в UI:
+    Три независимых feeder'а — одно displayed-поле burnout в UI, плюс два
+    агрегата sync_error (fast/slow) для валидации прайм-директивы.
 
       1. `conflict_accumulator` — хронический графовый конфликт (d > τ_stable
-         при низкой стабильности). Может активировать **Bayes-freeze**
-         (жёсткий режим, блокирует обновления confidence).
+         при низкой стабильности). Единственный feeder который **активирует
+         Bayes-freeze** (жёсткий режим, блокирует обновления confidence).
 
-      2. `desync_pressure` — хронический рассинхрон с юзером (долгое
-         молчание, большой sync_error EMA). Растёт по времени, падает
-         на user-event через `_register_user_event`. **Freeze не
-         активирует** — это «замедление», не «замирание в Bayes'е».
+      2. `silence_pressure` — хроническое молчание юзера. Растёт линейно
+         по времени без user-events (1.0 за SILENCE_RAMP_SECONDS), падает
+         на user-event через `add_silence_pressure(-drop)`. Раньше
+         назывался `desync_pressure`, но по факту это не рассинхрон, а
+         таймер тишины — переименован для честности.
 
-    UI карточка «Усталость Baddle» показывает `display_burnout = max` обоих.
-    `cognitive_loop._idle_multiplier()` читает тот же display_burnout — циклы
-    замедляются при обеих формах кризиса.
+      3. `imbalance_pressure` — EMA |UserState.surprise| (predictive error
+         в Фристоновском смысле). Растёт когда юзер ведёт себя не так, как
+         ожидали. Медленный time-constant (1 день) — отражает сдвиг baseline.
+
+    `display_burnout = max` всех трёх. UI показывает одну «Усталость Baddle»,
+    `cognitive_loop._idle_multiplier()` замедляет циклы при любом из кризисов.
+
+    `sync_error_ema_fast/slow` — чистый агрегат прайм-директивы. Не входят
+    в display_burnout (это не усталость, а качество резонанса), пишутся раз
+    в час в `data/prime_directive.jsonl` через `src/prime_directive.py`.
+    Через 2 мес use сравниваем mean(slow) за первый/последний месяц →
+    падает = механики резонансного протокола работают.
+
+    **Implementation note (2026-04-23):** все EMA-поля — `EMA` objects
+    из `src/ema.py`. Publicly exposed как float-properties для
+    backward-compat (весь внешний код читает `.conflict_accumulator`
+    как number). `silence_pressure` остаётся как float — это линейный
+    ramp timer, не EMA.
     """
 
     TAU_STABLE = 0.6          # порог за которым d считается конфликтом
     THETA_ACTIVE = 0.15        # вход во freeze (учитывая EMA steady-state)
     THETA_RECOVERY = 0.08      # выход из freeze (гистерезис)
-    DECAY = 0.95               # EMA: 0.95 значит ~20 тиков до steady state
+    # Feeder time-constants — см. `src.ema.TimeConsts`.
+    SILENCE_RAMP_SECONDS = TimeConsts.SILENCE_RAMP
 
     def __init__(self):
-        self.conflict_accumulator = 0.0
-        self.desync_pressure = 0.0
-        self.active = False
+        # EMA feeders (see src/ema.py для classes и constants)
+        self._conflict_ema = EMA(
+            0.0, decay=Decays.NEURO_CONFLICT_ACCUMULATOR, bounds=(0.0, 1.0)
+        )
+        self._imbalance_ema = EMA(
+            0.0, time_const=TimeConsts.IMBALANCE, bounds=(0.0, 1.0)
+        )
+        self._sync_ema_fast = EMA(
+            0.0, time_const=TimeConsts.SYNC_EMA_FAST, bounds=(0.0, 1.0)
+        )
+        self._sync_ema_slow = EMA(
+            0.0, time_const=TimeConsts.SYNC_EMA_SLOW, bounds=(0.0, 1.0)
+        )
+        # Linear ramp timer, not EMA
+        self.silence_pressure: float = 0.0
+        self.active: bool = False
+
+    # ── Public read accessors (backward-compat) ────────────────────────────
+
+    @property
+    def conflict_accumulator(self) -> float:
+        return self._conflict_ema.value
+
+    @property
+    def imbalance_pressure(self) -> float:
+        return self._imbalance_ema.value
+
+    @property
+    def sync_error_ema_fast(self) -> float:
+        return self._sync_ema_fast.value
+
+    @property
+    def sync_error_ema_slow(self) -> float:
+        return self._sync_ema_slow.value
+
+    # ── Feeders ─────────────────────────────────────────────────────────────
 
     def update(self, d: float = None, serotonin: float = 0.5):
-        """Обновить накопитель конфликтов и проверить вход/выход freeze.
+        """Обновить conflict accumulator и проверить вход/выход freeze.
 
-        `desync_pressure` обновляется отдельно из cognitive_loop
-        (`advance_desync` / `register_user_event`) — он НЕ активирует
-        freeze, только влияет на displayed burnout и idle multiplier.
+        Остальные feeders (silence/imbalance/sync_error) обновляются через
+        `feed_tick(dt, ...)` из cognitive_loop на каждом background tick'е.
+        Они **не** активируют Bayes-freeze — только display_burnout и
+        idle multiplier.
         """
         if d is not None:
             conflict_signal = max(0.0, float(d) - self.TAU_STABLE)
-            # Накопление тем больше, чем ниже стабильность
             instability = max(0.0, 1.0 - serotonin)
-            self.conflict_accumulator = (
-                self.DECAY * self.conflict_accumulator
-                + (1.0 - self.DECAY) * conflict_signal * instability
-            )
-            self.conflict_accumulator = max(0.0, min(1.0, self.conflict_accumulator))
+            self._conflict_ema.feed(conflict_signal * instability)
 
         if self.active:
-            if self.conflict_accumulator < self.THETA_RECOVERY:
+            if self._conflict_ema.value < self.THETA_RECOVERY:
                 self.active = False
         else:
-            if self.conflict_accumulator > self.THETA_ACTIVE:
+            if self._conflict_ema.value > self.THETA_ACTIVE:
                 self.active = True
+
+    def feed_tick(self, dt: float, sync_err: float = 0.0,
+                   imbalance: float = 0.0):
+        """Единый time-based update всех feeders кроме conflict_accumulator.
+
+        Вызывается из `cognitive_loop._advance_tick` на каждой итерации.
+        `dt` — секунды с прошлого вызова (capped во внешнем коде).
+
+        Args:
+            dt: секунды с прошлого тика. <= 0 → no-op.
+            sync_err: current L2-distance user↔system (0..≈√3 в 3D).
+            imbalance: aggregated PE ∈ [0, 1] (см. cognitive_loop._advance_tick).
+        """
+        if dt <= 0:
+            return
+        # Silence — linear ramp. Не EMA.
+        self.silence_pressure = max(0.0, min(1.0,
+            self.silence_pressure + dt / float(self.SILENCE_RAMP_SECONDS)
+        ))
+
+        # Imbalance EMA (TC 1 день)
+        self._imbalance_ema.feed(abs(float(imbalance)), dt=dt)
+
+        # Sync_error EMAs — нормализация ~[0, √3] → [0, 1] через /1.73.
+        # В 3D max возможный L2 между unit vectors = √3 ≈ 1.732.
+        s = max(0.0, min(1.0, float(sync_err) / 1.732))
+        self._sync_ema_fast.feed(s, dt=dt)
+        self._sync_ema_slow.feed(s, dt=dt)
 
     @property
     def display_burnout(self) -> float:
-        """Что видит юзер в колонке «Baddle: Усталость». Max из двух feeder'ов."""
-        return max(self.conflict_accumulator, self.desync_pressure)
-
-    def add_desync_pressure(self, delta: float):
-        """Внешний вклад от cognitive_loop: рост (+) или снижение (−).
-        Clamp [0, 1]. Не трогает conflict_accumulator и freeze.active.
+        """«Baddle: Усталость» — max всех трёх feeder'ов Baddle-side.
+        sync_error EMA намеренно НЕ входит: это качество резонанса,
+        отдельная семантика от усталости.
         """
-        self.desync_pressure = max(0.0, min(1.0, self.desync_pressure + float(delta)))
+        return max(self.conflict_accumulator, self.silence_pressure,
+                   self.imbalance_pressure)
+
+    def combined_burnout(self, user_burnout: float = 0.0) -> float:
+        """Для `_idle_multiplier`: эмпатия к юзеру встроена.
+
+        max(display_burnout, user_burnout) — если юзер устал, Baddle тоже
+        тише. Это один канал, не отдельный check — само замедление есть
+        мягкое предложение.
+        """
+        ub = max(0.0, min(1.0, float(user_burnout or 0.0)))
+        return max(self.display_burnout, ub)
+
+    def add_silence_pressure(self, delta: float):
+        """User-event input: снижение (−) при активности, рост (+) — редко."""
+        self.silence_pressure = max(0.0, min(1.0,
+            self.silence_pressure + float(delta)))
 
     def to_dict(self) -> dict:
         return {
             "conflict_accumulator": round(self.conflict_accumulator, 3),
-            "desync_pressure": round(self.desync_pressure, 3),
+            "silence_pressure": round(self.silence_pressure, 3),
+            "imbalance_pressure": round(self.imbalance_pressure, 3),
+            "sync_error_ema_fast": round(self.sync_error_ema_fast, 4),
+            "sync_error_ema_slow": round(self.sync_error_ema_slow, 4),
             "display_burnout": round(self.display_burnout, 3),
             "active": self.active,
         }
@@ -233,7 +418,14 @@ class ProtectiveFreeze:
     @classmethod
     def from_dict(cls, d: dict) -> "ProtectiveFreeze":
         pf = cls()
-        pf.conflict_accumulator = d.get("conflict_accumulator", 0.0)
-        pf.desync_pressure = d.get("desync_pressure", 0.0)
-        pf.active = d.get("active", False)
+        pf._conflict_ema.value = float(d.get("conflict_accumulator", 0.0))
+        # Legacy fallback: до 2026-04-23 поле называлось `desync_pressure`.
+        pf.silence_pressure = float(
+            d.get("silence_pressure",
+                  d.get("desync_pressure", 0.0))
+        )
+        pf._imbalance_ema.value = float(d.get("imbalance_pressure", 0.0))
+        pf._sync_ema_fast.value = float(d.get("sync_error_ema_fast", 0.0))
+        pf._sync_ema_slow.value = float(d.get("sync_error_ema_slow", 0.0))
+        pf.active = bool(d.get("active", False))
         return pf

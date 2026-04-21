@@ -22,6 +22,7 @@ from .graph_logic import (
     touch_node, touch_nodes, TOUCH_BOOST_DEFAULT,
 )
 from .hrv_manager import get_manager as get_hrv_manager
+from .http_utils import APIError, json_endpoint
 
 graph_bp = Blueprint("graph", __name__)
 
@@ -115,7 +116,8 @@ def graph_think():
     _graph["meta"]["topic"] = topic
     if not existing:
         _graph["nodes"] = []
-        _graph["edges"] = {"manual_links": [], "manual_unlinks": [], "directed": []}
+        _graph["edges"] = {"manual_links": [], "manual_unlinks": [], "directed": [],
+                              "caused_by": [], "followed_by": []}
         _graph["meta"]["hub_nodes"] = set()
         _graph["embeddings"] = []
 
@@ -389,7 +391,12 @@ def graph_link():
 
 @graph_bp.route("/graph/collapse", methods=["POST"])
 def graph_collapse():
-    """Collapse a cluster: generate summary, remove source nodes, add result."""
+    """Collapse a cluster: generate summary, optionally remove sources.
+
+    Использует общий helper `_collapse_cluster_to_node` — тот же code path
+    что и для chat execute_deep (batched) и DMN converge. Smart truncation,
+    lineage, auto-link — всё в helper'е.
+    """
     d = _p_data()
     indices = d.get("cluster", [])
     collapse_mode = d.get("collapse_mode", "short")
@@ -398,120 +405,65 @@ def graph_collapse():
     no_merge = d.get("no_merge", False)
     collapse_override = d.get("collapse_override", "").strip()
     nodes = _graph["nodes"]
-    topic = _graph["meta"]["topic"]
 
     if not indices or not nodes:
         return jsonify({"error": "no cluster to collapse"})
 
+    # Generation Studio path — текст уже готов, создаём ноду напрямую
+    # без LLM вызова. Это специальный случай, helper его не покрывает.
     if collapse_override:
-        # Text already generated via Generation Studio — skip generation
-        text = collapse_override
-        ent = {"avg": 0, "unc": 0, "tokens": []}
-    else:
-        cluster_texts = [nodes[i]["text"] for i in indices if i < len(nodes)]
-        if collapse_mode == "long":
-            system = _p(d["lang"], "collapse_long")
-            instruction = _p(d["lang"], "write_long")
-            max_tokens = 2000
-        else:
-            system = _p(d["lang"], "collapse")
-            instruction = _p(d["lang"], "write_para")
-            max_tokens = 800
-        if custom_max_tokens:
-            max_tokens = int(custom_max_tokens)
-        # Smart truncation: fit texts into context window
-        from .api_backend import _settings
-        ctx_size = _settings.get("local_ctx", 8192)
-        token_budget = ctx_size - 200 - max_tokens  # leave room for system + generation
-
-        user = f"{_p(d['lang'], 'topic')}: {topic}\n\n{_p(d['lang'], 'ideas')}:\n"
-
-        # Sort by confidence (highest first) so we keep the best if truncating
-        indexed_texts = sorted(enumerate(cluster_texts), key=lambda x: -(nodes[indices[x[0]]].get("confidence", 0.5) if x[0] < len(indices) and indices[x[0]] < len(nodes) else 0))
-
-        # Rough token count: len(text) / 3 for multilingual
-        used_tokens = len(user) // 3
-        selected_texts = []
-        for orig_idx, t in indexed_texts:
-            t_tokens = len(t) // 3 + 2  # +2 for "- " prefix
-            if used_tokens + t_tokens > token_budget:
-                continue  # skip, doesn't fit
-            selected_texts.append(t)
-            used_tokens += t_tokens
-
-        if len(selected_texts) < len(cluster_texts):
-            print(f"[collapse] context fit: {len(selected_texts)}/{len(cluster_texts)} texts ({used_tokens}/{token_budget} est. tokens)")
-
-        user += "\n".join(f"- {t}" for t in selected_texts)
-        if user_prompt:
-            user += f"\n\n{user_prompt}"
-        else:
-            user += f"\n\n{instruction}"
-
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        text, ent = _graph_generate(messages, max_tokens=max_tokens, temp=d["temp"], top_k=d["top_k"], seed=d["seed"])
-
-    valid_indices = [i for i in indices if i < len(nodes)]
-
-    if no_merge:
-        # Keep originals, add collapsed as new node linked FROM source nodes
-        collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
-        max_depth = max((nodes[i]["depth"] for i in valid_indices), default=0)
-        collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
-        new_idx = _add_node(text, depth=max_depth + 1, topic=collapsed_topic, entropy=ent, confidence=round(collapsed_conf, 2))
-        # Store lineage — all sources this node was collapsed from (for ancestry checks)
-        lineage = set(valid_indices)
-        for i in valid_indices:
-            lineage |= set(nodes[i].get("collapsed_from", []))
+        valid = [i for i in indices if 0 <= i < len(nodes)]
+        if not valid:
+            return jsonify({"error": "invalid cluster"})
+        topic = _graph["meta"].get("topic", "")
+        collapsed_topic = next((nodes[i].get("topic", "") for i in valid if nodes[i].get("topic")), topic)
+        max_depth = max((nodes[i].get("depth", 0) for i in valid), default=0)
+        avg_conf = round(sum(nodes[i].get("confidence", 0.5) for i in valid) / len(valid), 2)
+        new_idx = _add_node(collapse_override[:1000], depth=max_depth + 1,
+                             topic=collapsed_topic, confidence=avg_conf,
+                             node_type="synthesis")
+        nodes[new_idx]["full_text"] = collapse_override
+        lineage = set(valid)
+        for i in valid:
+            lineage |= set(nodes[i].get("collapsed_from", []) or [])
         nodes[new_idx]["collapsed_from"] = sorted(lineage)
-        directed = _graph["edges"]["directed"]
-        manual_links = _graph["edges"]["manual_links"]
-        # Link each source → collapsed (traceable chain)
-        for src_idx in valid_indices:
-            directed.append([src_idx, new_idx])
-            pair = [min(src_idx, new_idx), max(src_idx, new_idx)]
+        directed = _graph["edges"].setdefault("directed", [])
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        for src in valid:
+            directed.append([src, new_idx])
+            pair = [min(src, new_idx), max(src, new_idx)]
             if pair not in manual_links:
                 manual_links.append(pair)
-    else:
-        # Normal mode: remove source nodes, add collapsed result
-        min_depth = min((nodes[i]["depth"] for i in valid_indices), default=0)
-        collapsed_topic = next((nodes[i]["topic"] for i in valid_indices if nodes[i]["topic"]), topic)
-        # Average confidence of collapsed nodes
-        collapsed_conf = sum(nodes[i]["confidence"] for i in valid_indices) / max(len(valid_indices), 1)
-        # Collect lineage before removing nodes
-        lineage = set(valid_indices)
-        for i in valid_indices:
-            lineage |= set(nodes[i].get("collapsed_from", []))
-        for i in sorted(valid_indices, reverse=True):
-            nodes.pop(i)
-        # Reassign ids after removal
-        for k, nd in enumerate(nodes):
-            nd["id"] = k
-        _remap_edges(valid_indices)
-        new_idx = _add_node(text, depth=min_depth, topic=collapsed_topic,
-                            entropy=ent, confidence=collapsed_conf)
-        # Note: lineage indices are pre-removal, but that's OK for ancestry tracking
-        nodes[new_idx]["collapsed_from"] = sorted(lineage)
-        # Link collapsed node to topic root and goal
-        directed = _graph["edges"]["directed"]
-        manual_links = _graph["edges"]["manual_links"]
-        for i, nd in enumerate(nodes):
-            if nd["depth"] == -1 and nd["topic"] == collapsed_topic:
-                directed.append([i, new_idx])
-                pair = [min(i, new_idx), max(i, new_idx)]
-                if pair not in manual_links:
-                    manual_links.append(pair)
-                break
-        # Also link goal → collapsed (maintain goal connectivity)
-        for i, nd in enumerate(nodes):
-            if nd.get("type") == "goal":
-                directed.append([i, new_idx])
-                pair = [min(i, new_idx), max(i, new_idx)]
-                if pair not in manual_links:
-                    manual_links.append(pair)
-                break
+        return _finalize(nodes, d["threshold"], d["sim_mode"], text=collapse_override)
 
-    return _finalize(nodes, d["threshold"], d["sim_mode"], text=text)
+    # LLM path через helper
+    if collapse_mode == "long":
+        system = _p(d["lang"], "collapse_long")
+        instruction = _p(d["lang"], "write_long")
+        max_tokens = 2000
+    else:
+        system = _p(d["lang"], "collapse")
+        instruction = _p(d["lang"], "write_para")
+        max_tokens = 800
+    if custom_max_tokens:
+        max_tokens = int(custom_max_tokens)
+
+    # Если юзер передал кастомный prompt — он перекрывает стандартный instruction
+    final_instruction = user_prompt or instruction
+
+    from .graph_logic import _collapse_cluster_to_node
+    res = _collapse_cluster_to_node(
+        indices=indices, lang=d["lang"],
+        custom_system=system,
+        instruction=final_instruction,   # helper сам соберёт prompt с truncation
+        max_tokens=max_tokens,
+        temp=d["temp"], top_k=d["top_k"],
+        no_merge=no_merge,
+    )
+    if not res:
+        return jsonify({"error": "collapse LLM failed"})
+
+    return _finalize(nodes, d["threshold"], d["sim_mode"], text=res.get("text", ""))
 
 
 @graph_bp.route("/graph/sync", methods=["POST"])
@@ -1256,23 +1208,21 @@ def workspace_list():
 
 
 @graph_bp.route("/workspace/create", methods=["POST"])
+@json_endpoint
 def workspace_create():
     """Create a new workspace (directory + meta entry)."""
     from .workspace import get_workspace_manager
     d = request.get_json(force=True) or {}
     ws_id = (d.get("id") or "").strip().lower().replace(" ", "_")
-    title = d.get("title", ws_id)
-    tags = d.get("tags", [])
     if not ws_id:
-        return jsonify({"error": "id required"})
-    try:
-        info = get_workspace_manager().create(ws_id, title, tags)
-        return jsonify({"ok": True, "workspace": info})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+        raise APIError("id required")
+    info = get_workspace_manager().create(ws_id, d.get("title", ws_id),
+                                          d.get("tags", []))
+    return {"ok": True, "workspace": info}
 
 
 @graph_bp.route("/workspace/switch", methods=["POST"])
+@json_endpoint
 def workspace_switch():
     """Switch active workspace. Flushes current, loads target graph into _graph.
 
@@ -1284,11 +1234,8 @@ def workspace_switch():
     ws_id = d.get("id", "").strip().lower()
     auto_seed = bool(d.get("auto_seed", True))
     if not ws_id:
-        return jsonify({"error": "id required"})
-    try:
-        get_workspace_manager().switch(ws_id)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+        raise APIError("id required")
+    get_workspace_manager().switch(ws_id)
 
     seeded = None
     if auto_seed and not _graph.get("nodes"):
@@ -1298,7 +1245,7 @@ def workspace_switch():
         except Exception as e:
             print(f"[workspace/switch] auto-seed failed: {e}")
 
-    return jsonify({"ok": True, "active": ws_id, "seeded": seeded})
+    return {"ok": True, "active": ws_id, "seeded": seeded}
 
 
 @graph_bp.route("/workspace/save", methods=["POST"])
@@ -1310,15 +1257,13 @@ def workspace_save():
 
 
 @graph_bp.route("/workspace/delete", methods=["POST"])
+@json_endpoint
 def workspace_delete():
     from .workspace import get_workspace_manager
     d = request.get_json(force=True) or {}
     ws_id = d.get("id", "").strip().lower()
-    try:
-        get_workspace_manager().delete(ws_id)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    get_workspace_manager().delete(ws_id)
+    return {"ok": True}
 
 
 @graph_bp.route("/workspace/cross-edges", methods=["GET"])
@@ -1839,6 +1784,98 @@ def _slugify(text: str) -> str:
     s = _re.sub(r'[^\w\s-]', '', s)
     s = _re.sub(r'[\s_]+', '_', s).strip('_')
     return s or "untitled"
+
+
+@graph_bp.route("/graph/actions-timeline", methods=["GET"])
+def graph_actions_timeline():
+    """Вернуть action + outcome ноды в хронологическом порядке.
+
+    Используется Lab UI для timeline-view: scroll через conversation
+    (user_chat / baddle_reply) + proactive actions (sync_seeking /
+    suggestions / bridges) + outcomes (delta_sync_error). Всё что
+    происходит с системой относительно юзера — в одном списке.
+
+    Query params:
+      • `limit` (default 100, max 500) — ограничить count
+      • `since_ts` — unix timestamp, возвращать только после
+      • `kinds` — comma-separated action_kind filter (напр. "user_chat,baddle_reply")
+      • `actor` — "user" | "baddle" | (omit для обоих)
+      • `include_outcomes` — "1" (default) | "0"
+    """
+    from datetime import datetime as _dt
+    try:
+        limit = min(500, max(1, int(request.args.get("limit", "100"))))
+    except Exception:
+        limit = 100
+    try:
+        since_ts = float(request.args.get("since_ts", "0"))
+    except Exception:
+        since_ts = 0.0
+    kinds_filter = set()
+    kinds_raw = (request.args.get("kinds") or "").strip()
+    if kinds_raw:
+        kinds_filter = {k.strip() for k in kinds_raw.split(",") if k.strip()}
+    actor_filter = (request.args.get("actor") or "").strip().lower()
+    include_outcomes = (request.args.get("include_outcomes", "1") != "0")
+
+    def _parse_ts(ts_iso) -> float:
+        if not ts_iso:
+            return 0.0
+        try:
+            return _dt.fromisoformat(str(ts_iso).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    items = []
+    nodes = _graph.get("nodes", [])
+    for idx, n in enumerate(nodes):
+        ntype = n.get("type")
+        if ntype == "action":
+            if actor_filter and n.get("actor") != actor_filter:
+                continue
+            if kinds_filter and n.get("action_kind") not in kinds_filter:
+                continue
+        elif ntype == "outcome":
+            if not include_outcomes:
+                continue
+        else:
+            continue
+
+        ts = _parse_ts(n.get("created_at"))
+        if since_ts and ts < since_ts:
+            continue
+
+        item = {
+            "idx": idx,
+            "type": ntype,
+            "text": n.get("text", ""),
+            "ts": ts,
+            "created_at": n.get("created_at"),
+        }
+        if ntype == "action":
+            item["actor"] = n.get("actor")
+            item["action_kind"] = n.get("action_kind")
+            item["closed"] = bool(n.get("closed"))
+            item["outcome_idx"] = n.get("outcome_idx")
+            ctx = n.get("context") or {}
+            # Безопасно: берём только скалярные поля для UI
+            item["time_of_day"] = ctx.get("time_of_day")
+            item["sync_regime"] = ctx.get("sync_regime")
+            item["sentiment"] = ctx.get("sentiment")  # для user_chat
+        else:  # outcome
+            item["linked_action_idx"] = n.get("linked_action_idx")
+            item["delta_sync_error"] = n.get("delta_sync_error")
+            item["user_reaction"] = n.get("user_reaction")
+            item["latency_s"] = n.get("latency_s")
+        items.append(item)
+
+    # Сорт по ts возрастающий (chronological — старые сверху)
+    items.sort(key=lambda x: x["ts"])
+    # Применяем limit с конца (самые свежие)
+    if len(items) > limit:
+        items = items[-limit:]
+
+    return jsonify({"items": items, "total_returned": len(items)})
 
 
 @graph_bp.route("/graph/list", methods=["GET"])

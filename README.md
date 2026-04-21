@@ -3,7 +3,7 @@
 > **AHI** — Artificial Human Interface.
 > Не искусственный интеллект. Камертон к конкретному тебе.
 
-**[⚡ Установить за 5 минут](SETUP.md)** · **[📖 Неделя с Baddle](docs/DEMO.md)** · **[🖼 Посмотреть мокап](docs/mockup.html)**
+**[⚡ Установить за 5 минут](SETUP.md)** · **[🖼 Посмотреть мокап](docs/mockup.html)** · **[📚 Docs](docs/README.md)**
 
 ---
 
@@ -214,7 +214,7 @@ python ui.py
 
 При первом запуске — автоматический DEMO. Настрой API URL в ⚙ Настройки → *API / модель* (обычно LM Studio на `http://localhost:1234`).
 
-Полная инструкция: **[SETUP.md](SETUP.md)** · Неделя использования: **[docs/DEMO.md](docs/DEMO.md)**
+Полная инструкция: **[SETUP.md](SETUP.md)**
 
 ---
 
@@ -247,7 +247,7 @@ python ui.py
 - **Web-поиск / RAG** — в планах (для фактчекинга)
 - **Интеграции**: календарь, погода, гардероб, инвентарь еды — в TODO
 
-Полный список: **[TODO.md](TODO.md)**
+Полный список: **[planning/TODO.md](planning/TODO.md)**
 
 ---
 
@@ -263,12 +263,12 @@ python ui.py
 | | |
 |---|---|
 | **[SETUP.md](SETUP.md)** | Установка, LLM, первый запуск |
-| **[docs/DEMO.md](docs/DEMO.md)** | Пошаговая неделя использования |
+| **[docs/README.md](docs/README.md)** | Путеводитель по docs — 24 главы в порядке чтения как книга |
 | **[docs/TECH_README.md](docs/TECH_README.md)** | Архитектурный overview: три контура, ядро, NAND |
-| **[docs/PITCH.md](docs/PITCH.md)** | Продуктовое видение: день за днём |
 | **[docs/origin-story.md](docs/origin-story.md)** | Откуда это выросло — пять предыдущих программ |
-| **[docs/epilogue.md](docs/epilogue.md)** | Последняя страница: почему это не совсем продукт |
-| **[docs/](docs/)** | 32 design-doc'а: nand, state-graph, symbiosis, hrv, neurochem, pump, meta-tick, workspace, … |
+| **[docs/friston-loop.md](docs/friston-loop.md)** | Как работает prediction error — canonical PE layer |
+| **[docs/world-model.md](docs/world-model.md)** | Оптика проекта: каскад зеркал, resonance protocol |
+| **[planning/TODO.md](planning/TODO.md)** | Что в работе, что впереди |
 
 ---
 

@@ -121,19 +121,51 @@ def get_depth_defaults() -> dict:
 
 
 def get_mode_depth(mode_id: str) -> int:
-    """Число thinking iterations для конкретного mode. Fallback → deep_chat_steps.
+    """Число thinking iterations (collapse_at) для конкретного mode.
 
-    Читается execute_deep'ом чтобы варьировать глубину per-mode (tournament
-    дешевле, horizon/bayes глубже). Без правки кода — через settings.json.
+    Семантика совпадает с графовым autorun'ом в Lab:
+      • `deep_chat_infinite = True`  → collapse_at = safety cap, loop идёт до
+        should_stop=STABLE (hardStop = collapse_at × 2)
+      • `deep_chat_infinite = False` → loop доходит до collapse_at, потом
+        принудительный финальный collapse
+
+    Per-mode через `deep_mode_steps` dict в settings.json. Cap [1, 200].
     """
     mode_steps = _settings.get("deep_mode_steps") or {}
     if isinstance(mode_steps, dict) and mode_id in mode_steps:
         try:
             val = int(mode_steps[mode_id])
-            return max(1, min(10, val))
+            return max(1, min(200, val))
         except (TypeError, ValueError):
             pass
-    return max(1, min(10, int(_settings.get("deep_chat_steps", 3))))
+    return max(1, min(200, int(_settings.get("deep_chat_steps", 15))))
+
+
+def is_deep_infinite() -> bool:
+    """True если chat-initiated deep крутится до natural STABLE (как graph
+    autorun infinite mode). False — до collapse_at шагов, затем forced collapse.
+    Default: True (бесконечный) — совпадает с Lab autorun по умолчанию.
+    """
+    return bool(_settings.get("deep_chat_infinite", True))
+
+
+def get_deep_response_format() -> str:
+    """Формат финального synthesis в chat: brief | essay | article | list.
+    Default: essay. Управляется через settings → Advanced → Deep format.
+    """
+    fmt = _settings.get("deep_response_format", "essay")
+    if fmt not in ("brief", "essay", "article", "list"):
+        fmt = "essay"
+    return fmt
+
+
+def is_deep_batched() -> bool:
+    """True — использовать pyramidal batched collapse для надёжности на
+    локальных LLM (sections из batch'ей → финал из sections). False —
+    один LLM call на все ноды сразу (быстрее, но context limit).
+    Default: True.
+    """
+    return bool(_settings.get("deep_batched_synthesis", True))
 
 
 def update_settings(new: dict):
@@ -142,6 +174,7 @@ def update_settings(new: dict):
               "neural_threshold", "neural_temp", "neural_top_k",
               "neural_seed", "neural_novelty", "neural_max_tokens",
               "deep_chat_steps", "deep_mode_steps", "deep_diversity_min",
+              "deep_chat_infinite", "deep_response_format", "deep_batched_synthesis",
               "dmn_converge_max_steps",
               "dmn_converge_stall_window", "dmn_converge_max_wall_s"):
         if k in new:

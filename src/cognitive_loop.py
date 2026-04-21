@@ -29,6 +29,8 @@ from typing import Optional, Tuple
 
 from .graph_logic import _graph
 from .hrv_manager import get_manager as get_hrv_manager
+from .horizon import get_global_state, PROTECTIVE_FREEZE
+from .user_state import get_user_state
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +51,6 @@ def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
     Ограничение O(K²): берём top-K по relevance (K=20), пары только среди них.
     """
     from .main import distinct
-    from .horizon import get_global_state
     from datetime import datetime, timezone
     import math
     import numpy as np
@@ -188,21 +189,63 @@ class CognitiveLoop:
     REM_CREATIVE_PATH_MIN = 3         # BFS-дистанция чтобы считаться «далёкими»
     REM_CREATIVE_MAX_MERGES = 3       # сколько парадоксальных пар линковать за ночь
 
+    # Agency update (OQ #2 — 5-я ось):
+    AGENCY_UPDATE_INTERVAL = 60 * 60  # раз в час обновляем agency EMA
+
+    # Action Memory closing (этап 3):
+    ACTION_OUTCOMES_CHECK_INTERVAL = 5 * 60  # раз в 5 мин проходим open actions
+    # Per-kind timeout (сек): через сколько после emit считаем outcome closed.
+    # До timeout — ждём user-reaction. После — forced close с текущим state.
+    ACTION_TIMEOUTS = {
+        "sync_seeking":            30 * 60,       # 30 мин
+        "dmn_bridge":              24 * 3600,     # 24 часа (увидит утром?)
+        "scout_bridge":            24 * 3600,
+        "suggestion_recurring":    7 * 86400,     # 7 дней на accept/reject
+        "suggestion_constraint":   7 * 86400,
+        "suggestion_generic":      7 * 86400,
+        "reminder_plan":           30 * 60,
+        "alert_low_energy":        60 * 60,
+        "morning_briefing":        4 * 3600,
+    }
+    ACTION_TIMEOUT_DEFAULT = 60 * 60              # 1 час если kind не в словаре
+
+    # Active sync-seeking (resonance protocol механика #3):
+    # Когда `freeze.silence_pressure` высокий И юзер давно не писал — Baddle
+    # пишет мягкое сообщение чтобы восстановить контакт. LLM генерирует
+    # текст с учётом контекста (время дня, recent topics, silence-уровень),
+    # чтобы каждый раз по-разному. Не nag — попытка резонанс зеркала.
+    SYNC_SEEKING_SILENCE_MIN = 0.3         # ниже — не пушим, тишина ещё мягкая
+    SYNC_SEEKING_IDLE_SECONDS = 2 * 3600   # физически давно не писал (2 часа)
+    SYNC_SEEKING_INTERVAL = 2 * 3600       # не чаще раза в 2 часа
+    # Защита от шума: если любой proactive alert был недавно — пропускаем
+    SYNC_SEEKING_QUIET_AFTER_OTHER = 30 * 60   # 30 мин после последнего alert
+
     # Adaptive idle (resonance protocol механики #2 + #4 together):
-    # Multiplier = 1 + freeze.display_burnout × (IDLE_MULTIPLIER_MAX - 1)
-    # применяется ко всем investigation-интервалам. display_burnout — это
-    # max из двух feeder'ов ProtectiveFreeze (см. neurochem.py):
-    #   • conflict_accumulator — графовые конфликты (существует)
-    #   • desync_pressure — хронический рассинхрон с юзером (новое, от времени)
-    # Таким образом «усталость Baddle» в UI и замедление циклов — одна
-    # семантика, не две параллельные переменные.
+    # Multiplier = 1 + combined_burnout × (IDLE_MULTIPLIER_MAX - 1)
+    # применяется ко всем investigation-интервалам. `combined_burnout` это
+    # max(display_burnout, user.burnout) из ProtectiveFreeze (см. neurochem.py):
+    #   • conflict_accumulator — графовые конфликты (single feeder активирует Bayes-freeze)
+    #   • silence_pressure — хроническое молчание юзера (таймер)
+    #   • imbalance_pressure — EMA |UserState.surprise| (predictive error)
+    #   • user.burnout — usage fatigue (decisions_today + rejects)
+    # Семантика UI: «Усталость Baddle» = display_burnout (без user).
     #
-    # Параметры desync_pressure:
-    #   • 7 суток без единого user-event → +1.0 (линейно)
-    #   • 1 user event → -0.05 (~20 событий для полного восстановления)
+    # Параметры silence_pressure живут в `ProtectiveFreeze.SILENCE_RAMP_SECONDS`:
+    #   • 7 суток без user-event → +1.0 (линейно)
+    #   • 1 user event → -SILENCE_EVENT_DROP (~20 событий для восстановления)
     IDLE_MULTIPLIER_MAX = 10.0
-    DESYNC_RAMP_SECONDS = 7 * 24 * 3600        # 1.0 накапливается за 7 суток
-    DESYNC_EVENT_DROP = 0.05                   # сколько снижает 1 user-event
+    SILENCE_EVENT_DROP = 0.05                  # сколько снижает 1 user-event
+
+    # Prime-directive recording: раз в час пишем sync_error EMA trend в
+    # `data/prime_directive.jsonl`. Читается `/assist/prime-directive`
+    # endpoint для валидации через 2 мес use (mean_slow падает = OK).
+    PRIME_DIRECTIVE_INTERVAL = 3600            # 1 час между snapshot'ами
+
+    # User surprise detection (OQ #7): HRV + text markers → event.
+    # Throttle 5 мин — surprise-события редкие, не спамим граф.
+    # Processed message tracking: не повторно анализируем одно сообщение
+    # при каждой проверке.
+    USER_SURPRISE_CHECK_INTERVAL = 300         # 5 мин
 
     def __init__(self):
         self.is_running = False
@@ -228,6 +271,16 @@ class CognitiveLoop:
         self._last_recurring_check = 0.0  # таймер recurring lag check
         self._notified_lag: dict[str, float] = {}  # goal_id → ts последнего alert
         self._last_suggestions_check = 0.0  # таймер observation suggestions
+        self._last_sync_seeking = 0.0       # таймер active sync-seeking
+        self._last_proactive_alert_ts = 0.0 # любой proactive alert (не sync-seek'им если недавно)
+        self._last_agency_update = 0.0      # таймер agency EMA update
+        self._last_action_outcomes_check = 0.0  # таймер closing action outcomes
+        self._last_prime_directive = 0.0    # таймер hourly prime_directive.jsonl записи
+        self._last_user_surprise_check = 0.0  # таймер OQ #7 detector
+        self._last_analyzed_msg_ts: float = 0.0  # timestamp последнего проанализированного user-msg
+        # Action Memory — per-kind storage для open actions:
+        # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
+        self._open_actions: dict[int, float] = {}
         # Persist overnight findings отдельно от alerts_queue — UI drain'ит очередь
         # быстрее чем briefing её читает. Briefing читает recent_bridges напрямую.
         self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
@@ -242,9 +295,10 @@ class CognitiveLoop:
         #    "started_at": ts, "detail": ...}
         self._thinking_state: dict = {"kind": "idle", "started_at": 0.0}
 
-        # Adaptive idle state. desync_pressure живёт в neurochem.ProtectiveFreeze
-        # (через horizon.get_global_state().freeze) — там же display_burnout
-        # для UI. Здесь только timestamp последнего loop tick чтобы считать dt.
+        # Adaptive idle state. silence_pressure / imbalance_pressure /
+        # sync_error_ema_* живут в neurochem.ProtectiveFreeze (через
+        # horizon.get_global_state().freeze). Здесь только timestamp
+        # последнего loop tick чтобы считать dt для `_advance_tick`.
         self._last_loop_tick_ts = 0.0
 
     def set_thinking(self, kind: str, detail: Optional[dict] = None):
@@ -264,13 +318,175 @@ class CognitiveLoop:
     def get_thinking(self) -> dict:
         return dict(self._thinking_state or {"kind": "idle", "started_at": 0.0})
 
+    # ── Action Memory: запись + closing ────────────────────────────────
+
+    def _check_action_outcomes(self):
+        """Раз в 5 мин проходим `_open_actions`, закрываем outcomes.
+
+        Для каждого open action ищем:
+          1. **User-reaction** в окне [action.ts, now]:
+             - `user_chat` → reaction = "chat" (для sync_seeking / reminders)
+             - `user_accept` / `user_reject` → для suggestions
+             Если найдено — closing immediate, latency = от action до reaction.
+          2. **Timeout expired** → forced close с reaction="silence"/"ignore".
+
+        Delta = `sync_error_before` из action.context минус текущий sync_error.
+        """
+        if not self._throttled("_last_action_outcomes_check",
+                                self.ACTION_OUTCOMES_CHECK_INTERVAL):
+            return
+        if not self._open_actions:
+            return
+
+        try:
+            from .graph_logic import list_open_actions, close_action, _graph
+        except Exception:
+            return
+
+        now = time.time()
+        try:
+            current_sync_err = float(get_global_state().sync_error)
+        except Exception:
+            current_sync_err = 0.0
+
+        # Свежий snapshot open-actions из графа (не надёжно верить буферу —
+        # ноды могли быть удалены через consolidation)
+        open_list = list_open_actions()
+        still_open_set = {idx for idx, _ in open_list}
+        # Прочищаем _open_actions от несуществующих
+        for idx in list(self._open_actions.keys()):
+            if idx not in still_open_set:
+                self._open_actions.pop(idx, None)
+
+        # Читаем нод-буфер один раз
+        nodes = _graph.get("nodes", [])
+
+        for action_idx, action_node in open_list:
+            kind = action_node.get("action_kind", "unknown")
+            recorded_ts = self._open_actions.get(action_idx)
+            if recorded_ts is None:
+                # Action из старых сессий — восстановим ts из created_at
+                from datetime import datetime as _dt
+                try:
+                    ts_iso = action_node.get("created_at")
+                    if ts_iso:
+                        recorded_ts = _dt.fromisoformat(str(ts_iso).replace("Z","+00:00")).timestamp()
+                    else:
+                        recorded_ts = now  # нет ts — считаем сейчас, игнорим в этот проход
+                except Exception:
+                    recorded_ts = now
+                self._open_actions[action_idx] = recorded_ts
+
+            age_s = now - recorded_ts
+            timeout = self.ACTION_TIMEOUTS.get(kind, self.ACTION_TIMEOUT_DEFAULT)
+
+            # 1. Ищем user-reaction в окне [recorded_ts, now]
+            reaction = None
+            reaction_ts = None
+            # Быстрый проход по свежим нодам (последние 30 — юзер-реакции редкие)
+            for later_node in reversed(nodes[-50:]):
+                if later_node.get("type") != "action":
+                    continue
+                if later_node.get("actor") != "user":
+                    continue
+                later_kind = later_node.get("action_kind", "")
+                later_ts_iso = later_node.get("created_at", "")
+                try:
+                    from datetime import datetime as _dt
+                    later_ts = _dt.fromisoformat(str(later_ts_iso).replace("Z","+00:00")).timestamp()
+                except Exception:
+                    continue
+                if later_ts < recorded_ts or later_ts > now:
+                    continue
+                # User-chat закрывает sync_seeking, reminder, briefing
+                if later_kind == "user_chat" and kind in ("sync_seeking", "reminder_plan",
+                                                            "morning_briefing", "alert_low_energy"):
+                    reaction = "chat"
+                    reaction_ts = later_ts
+                    break
+                # Accept/reject закрывает suggestions
+                if kind.startswith("suggestion_"):
+                    if later_kind == "user_accept":
+                        reaction = "accept"
+                        reaction_ts = later_ts
+                        break
+                    if later_kind == "user_reject":
+                        reaction = "reject"
+                        reaction_ts = later_ts
+                        break
+
+            # 2. Принимаем решение о закрытии
+            close_now = False
+            latency_s = 0.0
+            if reaction is not None:
+                close_now = True
+                latency_s = (reaction_ts or now) - recorded_ts
+            elif age_s >= timeout:
+                close_now = True
+                # Default reaction по kind
+                if kind.startswith("suggestion_"):
+                    reaction = "ignore"
+                else:
+                    reaction = "silence"
+                latency_s = age_s
+
+            if not close_now:
+                continue
+
+            # Считаем delta = after - before (стандартная математическая дельта)
+            # Negative = sync_error упал = resonance улучшился (good)
+            # Positive = sync_error вырос = стало хуже
+            pre_err = action_node.get("context", {}).get("sync_error_before", current_sync_err)
+            try:
+                pre_err_f = float(pre_err)
+            except Exception:
+                pre_err_f = current_sync_err
+            delta = current_sync_err - pre_err_f
+
+            # Confidence — short latency = высокая; длинное timeout = низкая
+            confidence = max(0.2, min(1.0, 1.0 - (age_s / (timeout * 2.0))))
+
+            try:
+                close_action(
+                    action_idx=action_idx,
+                    delta_sync_error=delta,
+                    user_reaction=reaction,
+                    latency_s=latency_s,
+                    confidence=confidence,
+                )
+                self._open_actions.pop(action_idx, None)
+            except Exception as e:
+                log.debug(f"[action-memory] close_action failed for {action_idx}: {e}")
+
+    def _record_baddle_action(self, action_kind: str, text: str,
+                                extras: Optional[dict] = None) -> Optional[int]:
+        """Записать baddle-side action в граф и запомнить в _open_actions.
+        Возвращает idx action-ноды или None при ошибке. Используется из
+        всех proactive check'ов после успешного emit.
+        """
+        try:
+            from .graph_logic import record_action
+            idx = record_action(
+                actor="baddle",
+                action_kind=action_kind,
+                text=text[:200] if text else action_kind,
+                context=None,    # _current_snapshot() по умолчанию
+                extras=extras,
+            )
+            self._open_actions[idx] = time.time()
+            return idx
+        except Exception as e:
+            log.debug(f"[action-memory] record baddle action failed: {e}")
+            return None
+
     # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
 
     def _get_freeze(self):
-        """Helper: быстрый доступ к ProtectiveFreeze (носитель desync_pressure).
-        Возвращает None если horizon недоступен — защита при init race."""
+        """Helper: быстрый доступ к ProtectiveFreeze (носитель silence / imbalance /
+        sync_error EMA). Возвращает None если horizon недоступен — защита при
+        init race.
+        """
         try:
-            from .horizon import get_global_state
             return get_global_state().freeze
         except Exception:
             return None
@@ -278,41 +494,34 @@ class CognitiveLoop:
     def _idle_multiplier(self) -> float:
         """1.0 при полном resonance, MAX при max combined burnout.
 
-        Combined burnout — max из трёх источников:
-          • system `conflict_accumulator` — графовый кризис (freeze)
-          • system `desync_pressure` — хронический рассинхрон по времени
-          • **user `burnout`** — юзер устал (decisions_today, отказы)
-
-        Логика про user burnout: если юзер устал — Baddle тоже тише.
-        Это эмпатия встроенная, не отдельный check. Фоновые циклы реже,
-        alerts реже, карточки реже. «Ненавязчивое замедление вместе с
-        юзером» — само предложение отдыха без vertical nagging.
+        Делегирует в `ProtectiveFreeze.combined_burnout(user_burnout)` —
+        единый расчёт для UI и замедления циклов. Эмпатия: если юзер
+        устал (decisions/rejects → `user.burnout`), Baddle тоже тише.
+        Это не отдельный check «предлагаем отдых», а встроенное молчание.
         """
         fz = self._get_freeze()
-        system_burnout = float(fz.display_burnout) if fz else 0.0
-
+        if fz is None:
+            return 1.0
         try:
-            from .user_state import get_user_state
             user_burnout = float(get_user_state().burnout)
         except Exception:
             user_burnout = 0.0
-
-        combined = max(system_burnout, user_burnout)
+        combined = fz.combined_burnout(user_burnout)
         return 1.0 + combined * (self.IDLE_MULTIPLIER_MAX - 1.0)
 
     def _register_user_event(self, reason: str = ""):
         """User-event (сообщение, foreground tick, ручная правка графа).
-        Снижает `desync_pressure` на DESYNC_EVENT_DROP (не обнуляет).
+        Снижает `silence_pressure` на SILENCE_EVENT_DROP (не обнуляет).
         ~20 таких событий возвращают multiplier в 1.0 из максимума.
         """
         fz = self._get_freeze()
         if fz is None:
             return
-        prev = fz.desync_pressure
-        fz.add_desync_pressure(-self.DESYNC_EVENT_DROP)
+        prev = fz.silence_pressure
+        fz.add_silence_pressure(-self.SILENCE_EVENT_DROP)
         if prev > 0.001:
-            log.info(f"[cognitive_loop] desync_pressure {prev:.3f} -> "
-                     f"{fz.desync_pressure:.3f} (event: {reason}, "
+            log.info(f"[cognitive_loop] silence_pressure {prev:.3f} -> "
+                     f"{fz.silence_pressure:.3f} (event: {reason}, "
                      f"multiplier now {self._idle_multiplier():.2f}×)")
 
     def signal_user_input(self):
@@ -322,11 +531,24 @@ class CognitiveLoop:
         """
         self._register_user_event(reason="user_input")
 
-    def _advance_desync(self):
-        """Рост desync_pressure по реальному времени между итерациями loop.
-        Плавно линейный: за DESYNC_RAMP_SECONDS (7 суток) от 0 до 1.0 без
-        user-событий. Cap-защита от больших dt после ребута / пауз.
-        Хранится в `ProtectiveFreeze.desync_pressure` (neurochem).
+    def _advance_tick(self):
+        """Единый time-based update всех feeders ProtectiveFreeze + self-prediction.
+
+        За один проход:
+          • silence_pressure += dt / SILENCE_RAMP_SECONDS   (таймер тишины)
+          • imbalance_pressure EMA ← max всех 4 PE-каналов  (Friston-aggregate)
+          • sync_error_ema_fast EMA ← current sync_error     (для sync-seeking)
+          • sync_error_ema_slow EMA ← current sync_error     (для prime-directive)
+          • neuro.tick_expectation()                         (self-baseline Baddle)
+          • user.tick_expectation() уже вызван из update_from_* обёрток
+
+        4 источника imbalance (все нормализованы в [0, 1], берём max):
+          • user ‖PE_vec‖ / √3        — behaviour surprise по 3 осям
+          • user.agency_gap           — goal-prediction miss (1 − agency)
+          • user.hrv_surprise         — physical PE (real Polar baseline)
+          • neuro.self_imbalance / √3 — Baddle's PE на самой себе
+
+        Все EMA — time-constant based (независимы от tick frequency).
         """
         now = time.time()
         if self._last_loop_tick_ts <= 0:
@@ -339,8 +561,165 @@ class CognitiveLoop:
         fz = self._get_freeze()
         if fz is None:
             return
-        step = dt / float(self.DESYNC_RAMP_SECONDS)
-        fz.add_desync_pressure(step)
+        sync_err = 0.0
+        combined_imbalance = 0.0
+        try:
+            gs = get_global_state()
+            u = get_user_state()
+            sync_err = float(gs.sync_error)
+
+            # Self-prediction: Baddle предсказывает собственную нейрохимию
+            gs.neuro.tick_expectation()
+
+            # 4 PE-канала, все в [0, 1]
+            sqrt3 = 1.7320508
+            user_pe = float(u.imbalance) / sqrt3              # ‖3D PE_vec‖ / √3
+            self_pe = float(gs.neuro.self_imbalance) / sqrt3  # self ‖PE_vec‖ / √3
+            agency_gap = float(u.agency_gap)
+            hrv_pe = float(u.hrv_surprise)
+            combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)
+        except Exception:
+            pass
+        fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
+
+    def _check_user_surprise(self):
+        """OQ #7: detect момента когда юзер встретил неожиданное.
+
+        Два канала (OR):
+          A. HRV spike — RMSSD drop > 1.5σ от baseline (требует реального
+             sensor_stream'а с HRV readings, иначе skip)
+          B. Text markers — «воу», «не ожидал», «??», многоточие, капс
+             в последнем user-сообщении
+
+        При detect:
+          1. `user_state.apply_surprise_boost(3)` — ускоренный EMA decay
+             на 3 tick'а (expectation быстро подстроится к новой реальности)
+          2. `record_action("user_surprise")` в граф — для action-memory
+             и последующего DMN pump между surprise-нодами
+          3. Log + alert с мягким wording (без кнопок, молчаливое
+             замечание системы)
+
+        Throttle 5 мин + processed_msg_ts protection — не анализируем
+        одно user-сообщение повторно.
+        """
+        if not self._throttled("_last_user_surprise_check",
+                                self.USER_SURPRISE_CHECK_INTERVAL):
+            return
+        try:
+            from .surprise_detector import detect_user_surprise
+            from .sensor_stream import get_stream
+        except Exception as e:
+            log.debug(f"[cognitive_loop] user_surprise import failed: {e}")
+            return
+
+        # Последнее user-сообщение — только новое (ts > last_analyzed)
+        latest_msg_text = None
+        latest_msg_ts = 0.0
+        try:
+            from .chat_history import load_history
+            history = load_history()
+            for entry in reversed(history[-20:]):  # достаточно 20 свежих
+                if (entry.get("role") or "").lower() == "user":
+                    ts = float(entry.get("ts") or 0)
+                    if ts > self._last_analyzed_msg_ts:
+                        latest_msg_text = entry.get("content") or ""
+                        latest_msg_ts = ts
+                    break
+        except Exception as e:
+            log.debug(f"[cognitive_loop] chat_history load failed: {e}")
+
+        # Activity magnitude — для HRV gate (игнорим если юзер бежит)
+        activity = None
+        try:
+            activity = get_stream().recent_activity(window_s=60)
+        except Exception:
+            activity = None
+
+        # Detect
+        result = detect_user_surprise(
+            text=latest_msg_text,
+            activity_magnitude=activity,
+        )
+
+        # Mark message as processed (чтобы не триггерить дважды на одном)
+        if latest_msg_ts > 0:
+            self._last_analyzed_msg_ts = latest_msg_ts
+
+        if not result.get("event"):
+            return
+
+        source = result.get("source", "unknown")
+        conf = result.get("confidence", 0.0)
+        hrv_info = result.get("hrv") or {}
+        txt_info = result.get("text") or {}
+
+        log.info(
+            f"[cognitive_loop] user_surprise: source={source} "
+            f"conf={conf:.2f} "
+            f"hrv_z={hrv_info.get('score', 0)} "
+            f"text_markers={txt_info.get('markers', [])}"
+        )
+
+        # 1. Apply boost к expectation EMA
+        try:
+            get_user_state().apply_surprise_boost(n_ticks=3)
+        except Exception as e:
+            log.debug(f"[cognitive_loop] surprise_boost failed: {e}")
+
+        # 2. Record user-action в граф для action memory / DMN
+        #    (не baddle-action — это сам юзер произвёл surprise)
+        try:
+            from .graph_logic import record_action
+            summary = (f"User surprise ({source}): "
+                       f"{(latest_msg_text or '')[:80]}" if latest_msg_text
+                       else f"User surprise (hrv-only, Δ={hrv_info.get('delta_ms')}ms)")
+            record_action(
+                actor="user",
+                action_kind="user_surprise",
+                text=summary[:200],
+                context=None,
+                extras={
+                    "source": source,
+                    "confidence": round(conf, 2),
+                    "hrv_z_score": hrv_info.get("score"),
+                    "text_markers": txt_info.get("markers", []),
+                },
+            )
+        except Exception as e:
+            log.debug(f"[cognitive_loop] record user_surprise failed: {e}")
+
+    def _check_prime_directive_record(self):
+        """Раз в час пишем snapshot sync_error EMA в data/prime_directive.jsonl.
+
+        Пишется aggregate burnout_imbalance **плюс** decomposition на
+        4 канала (user_imbalance, self_imbalance, agency_gap, hrv_surprise) —
+        чтобы через 2 мес видеть не только общий тренд, но и какой именно
+        PE-канал реально двигал. Нулевые каналы покажут что сигнал слабый
+        (например Polar не подключен → hrv_surprise=0 везде).
+        """
+        if not self._throttled("_last_prime_directive", self.PRIME_DIRECTIVE_INTERVAL):
+            return
+        fz = self._get_freeze()
+        if fz is None:
+            return
+        try:
+            from .prime_directive import record_tick
+            gs = get_global_state()
+            u = get_user_state()
+            record_tick(
+                sync_error=float(gs.sync_error),
+                sync_error_ema_fast=float(fz.sync_error_ema_fast),
+                sync_error_ema_slow=float(fz.sync_error_ema_slow),
+                imbalance_pressure=float(fz.imbalance_pressure),
+                silence_pressure=float(fz.silence_pressure),
+                conflict_accumulator=float(fz.conflict_accumulator),
+                user_imbalance=float(u.imbalance),
+                self_imbalance=float(gs.neuro.self_imbalance),
+                agency_gap=float(u.agency_gap),
+                hrv_surprise=float(u.hrv_surprise),
+            )
+        except Exception as e:
+            log.debug(f"[cognitive_loop] prime_directive record failed: {e}")
 
     # ── Throttle helper ────────────────────────────────────────────────
 
@@ -403,7 +782,7 @@ class CognitiveLoop:
         from .graph_logic import _compute_edges
 
         self._last_foreground_tick = time.time()
-        # Юзер тикнул руками → снижаем desync (user-event)
+        # Юзер тикнул руками → снижаем silence_pressure (user-event)
         self._register_user_event(reason="foreground_tick")
         nodes = _graph["nodes"]
         edges = _compute_edges(nodes, threshold, sim_mode)
@@ -428,15 +807,16 @@ class CognitiveLoop:
         4. HRV alerts всегда
         5. Сон tick_interval (масштабируется NE)
         """
-        from .horizon import get_global_state, PROTECTIVE_FREEZE
 
         while self.is_running and not self._stop_event.is_set():
             try:
                 state = get_global_state()
 
-                # 0. Adaptive idle: desync накапливается по времени.
-                # User-events через signal_user_input()/tick_foreground его снижают.
-                self._advance_desync()
+                # 0. Adaptive idle + prime-directive feeders. Один проход
+                # обновляет silence_pressure (таймер), imbalance_pressure
+                # (EMA |PE|) и sync_error_ema_{fast,slow}. User-events через
+                # signal_user_input()/tick_foreground снижают silence отдельно.
+                self._advance_tick()
 
                 # 1. NE homeostasis
                 ne = state.neuro.norepinephrine
@@ -474,6 +854,11 @@ class CognitiveLoop:
                 self._check_heartbeat()
                 self._check_recurring_lag()
                 self._check_observation_suggestions()
+                self._check_sync_seeking()
+                self._check_agency_update()
+                self._check_action_outcomes()
+                self._check_prime_directive_record()
+                self._check_user_surprise()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -515,6 +900,13 @@ class CognitiveLoop:
                 "bridge_saved": bridge is not None,
                 "bridge_text": (bridge.get("text", "") if bridge else "")[:60],
             }
+            # Action Memory: ночной scout-save = action. Outcome 24ч.
+            if bridge:
+                self._record_baddle_action(
+                    "scout_bridge",
+                    text=f"Night scout: {(bridge.get('text') or '')[:120]}",
+                    extras={"quality": round(bridge.get("quality", 0), 3)},
+                )
         else:
             summary["scout"] = {"skipped": "graph_too_small"}
 
@@ -751,7 +1143,7 @@ class CognitiveLoop:
         Guard: только если есть хотя бы 1 open-goal + в графе меньше 30 нод
         (иначе не спамим). Лимит: один deep run в 30 мин.
         """
-        # Adaptive idle: интервал масштабируется _idle_multiplier'ом (desync)
+        # Adaptive idle: интервал масштабируется _idle_multiplier'ом (silence + PE)
         if not self._throttled_idle("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
             return
         # Хотя бы 1 open goal и не слишком раздутый граф
@@ -1064,8 +1456,8 @@ class CognitiveLoop:
         if len(_graph.get("nodes", [])) < 4:
             return  # pre-check дёшево, throttle дороже (timestamp write)
         # Adaptive idle: интервал растягивается _idle_multiplier'ом — чем
-        # выше рассинхрон тем реже pump. При desync=0 — стандартные 10 мин,
-        # при desync=1 — 100 мин. Без бинарных порогов.
+        # выше combined_burnout тем реже pump. При burnout=0 — стандартные
+        # 10 мин, при burnout=1 — 100 мин. Без бинарных порогов.
         if not self._throttled_idle("_last_dmn", self.DMN_INTERVAL):
             return
 
@@ -1093,6 +1485,13 @@ class CognitiveLoop:
                 "source": "dmn",
             })
             self._recent_bridges = self._recent_bridges[-10:]
+            # Action Memory: успешный DMN мост = action. Outcome закроется по
+            # timeout (24ч) или раньше если юзер прореагирует.
+            self._record_baddle_action(
+                "dmn_bridge",
+                text=f"DMN bridge: {bridge_text[:120]}",
+                extras={"quality": round(bridge.get("quality", 0), 3)},
+            )
 
     def _run_pump_bridge(self, max_iterations: int = 2, save: bool = False) -> Optional[dict]:
         """Call pump between two most distant nodes. Optionally persist bridge.
@@ -1138,7 +1537,6 @@ class CognitiveLoop:
 
         # Feed back to neurochem: хороший мост = низкое d (новизна подтверждена)
         try:
-            from .horizon import get_global_state
             quality = best.get("quality", 0.0)
             get_global_state().update_neurochem(d=(1.0 - quality))
         except Exception as e:
@@ -1176,7 +1574,6 @@ class CognitiveLoop:
         Формат зеркалит `StateGraph._compute_embedding_text` — чтобы
         сравнение current vs past было эквивалентным.
         """
-        from .horizon import get_global_state
         from .graph_logic import _graph
         cs = get_global_state()
         neuro = cs.neuro
@@ -1382,6 +1779,12 @@ class CognitiveLoop:
             "sections": sections,
         }, dedupe=True)
         log.info(f"[cognitive_loop] morning briefing pushed @ {local_hour}:00")
+        # Action Memory: morning_briefing — action, outcome через 4ч
+        self._record_baddle_action(
+            "morning_briefing",
+            text=f"Morning briefing @ {local_hour}:00",
+            extras={"hour": local_hour, "sections_count": len(sections)},
+        )
 
     def _build_morning_briefing_sections(self) -> list:
         """Структурированный briefing — список карточек {emoji, title, subtitle, kind}.
@@ -1397,7 +1800,6 @@ class CognitiveLoop:
 
         kind ∈ {info, warn, highlight, neutral} → CSS-класс акцента.
         """
-        from .horizon import get_global_state
         from .hrv_manager import get_manager as get_hrv_mgr
         from .goals_store import list_goals
         sections: list = []
@@ -1644,7 +2046,6 @@ class CognitiveLoop:
         Не вызывает LLM — быстрая агрегация из state. UI показывает как alert;
         если юзер откроет /assist/morning — получит расширенную LLM-версию.
         """
-        from .horizon import get_global_state
         from .hrv_manager import get_manager as get_hrv_manager
         from .goals_store import list_goals
 
@@ -1660,7 +2061,6 @@ class CognitiveLoop:
                 bits.append(f"Сон {hrs}ч{suffix}.")
                 # Зеркалим в UserState чтобы simulate-day и другие могли читать
                 try:
-                    from .user_state import get_user_state
                     get_user_state().last_sleep_duration_h = float(hrs)
                 except Exception:
                     pass
@@ -1788,7 +2188,6 @@ class CognitiveLoop:
             return
         try:
             state = mgr.get_baddle_state() or {}
-            from .user_state import get_user_state
             get_user_state().update_from_hrv(
                 coherence=state.get("coherence"),
                 rmssd=state.get("rmssd"),
@@ -1842,6 +2241,13 @@ class CognitiveLoop:
                 ],
             }, dedupe=True)
             log.info(f"[cognitive_loop] low_energy_heavy alert: energy={daily} goal={g0.get('id')}")
+            # Action Memory: низкая энергия → совет перенести. Outcome 1ч.
+            self._record_baddle_action(
+                "alert_low_energy",
+                text=f"Suggested to postpone heavy goal #{g0.get('id')}: {txt[:80]}",
+                extras={"energy": int(daily), "goal_id": g0.get("id"),
+                         "goal_mode": g0.get("mode")},
+            )
         except Exception as e:
             log.debug(f"[cognitive_loop] low_energy check failed: {e}")
 
@@ -1928,7 +2334,6 @@ class CognitiveLoop:
 
         # 5. Neurochem + UserState scalars
         try:
-            from .horizon import get_global_state
             m = get_global_state().get_metrics()
             neuro = m.get("neurochem", {})
             us = m.get("user_state", {})
@@ -1976,7 +2381,6 @@ class CognitiveLoop:
 
         try:
             from .state_graph import get_state_graph
-            from .horizon import get_global_state
             st = get_global_state()
             sg = get_state_graph()
             # state_origin: 1_held если есть active activity, иначе 1_rest
@@ -2044,6 +2448,12 @@ class CognitiveLoop:
                     "minutes_before": mins_left,
                 })
                 log.info(f"[cognitive_loop] plan_reminder: {it.get('name')} in {mins_left}min")
+                self._record_baddle_action(
+                    "reminder_plan",
+                    text=f"Reminder: {it.get('name', '')} in {mins_left}min",
+                    extras={"plan_id": it["id"], "minutes_before": mins_left,
+                             "plan_name": it.get("name", "")},
+                )
         except Exception as e:
             log.debug(f"[cognitive_loop] plan reminder failed: {e}")
 
@@ -2094,11 +2504,285 @@ class CognitiveLoop:
             log.info(f"[cognitive_loop] recurring_lag alert: {p.get('text','')[:40]} "
                      f"lag={lag}")
 
+    # ── Agency update (OQ #2, 5-я ось) ─────────────────────────────────
+
+    def _check_agency_update(self):
+        """Раз в час пересчитываем `UserState.agency` из сегодняшних
+        plans + completed activities. EMA-сглаживание внутри UserState.
+
+        Источник: `plans.schedule_for_day()` даёт запланированное +
+        флаг `done`. Completed = count(done=True), planned = len(schedule).
+        Если planned=0 — пропускаем (нет сигнала, не шумим baseline).
+        """
+        if not self._throttled("_last_agency_update", self.AGENCY_UPDATE_INTERVAL):
+            return
+        try:
+            from .plans import schedule_for_day
+        except Exception:
+            return
+        try:
+            schedule = schedule_for_day()
+        except Exception as e:
+            log.debug(f"[cognitive_loop] schedule_for_day failed: {e}")
+            return
+        if not schedule:
+            return
+        planned = len(schedule)
+        completed = sum(1 for s in schedule if s.get("done"))
+        try:
+            get_user_state().update_from_plan_completion(completed=completed, planned=planned)
+            log.debug(f"[cognitive_loop] agency update: {completed}/{planned}")
+        except Exception as e:
+            log.debug(f"[cognitive_loop] agency update failed: {e}")
+
+    # ── Active sync-seeking: Baddle пишет первым когда долго молчит ────
+
+    def _check_sync_seeking(self):
+        """Resonance protocol #3: когда тишина высокая И юзер давно не
+        писал — Baddle шлёт мягкое сообщение для восстановления контакта.
+
+        Gate'ы (все должны быть True):
+          1. `freeze.silence_pressure > SYNC_SEEKING_SILENCE_MIN` — тишина
+             накопилась, не пишем в активной сессии.
+          2. `time_since_last_input > SYNC_SEEKING_IDLE_SECONDS` — юзер
+             физически давно молчит. Защита от случая «silence накопилась
+             исторически, но юзер только что написал».
+          3. Throttle — не чаще раза в `SYNC_SEEKING_INTERVAL`.
+          4. После последнего proactive alert прошло ≥ `QUIET_AFTER_OTHER`.
+             Иначе получим briefing → через 30 мин seeking → нагромождение.
+        """
+        now = time.time()
+
+        # Gate #4: quiet после других proactive
+        if (self._last_proactive_alert_ts and
+                now - self._last_proactive_alert_ts < self.SYNC_SEEKING_QUIET_AFTER_OTHER):
+            return
+
+        # Gate #1: silence accumulated
+        try:
+            silence = float(get_global_state().freeze.silence_pressure)
+        except Exception:
+            return
+        if silence < self.SYNC_SEEKING_SILENCE_MIN:
+            return
+
+        # Gate #2: юзер физически давно не писал
+        try:
+            last_input_ts = get_user_state()._last_input_ts or 0.0
+        except Exception:
+            last_input_ts = 0.0
+        idle_seconds = now - last_input_ts if last_input_ts else float("inf")
+        if idle_seconds < self.SYNC_SEEKING_IDLE_SECONDS:
+            return
+
+        # Gate #3: throttle (после этой проверки пишем timestamp → будущие
+        # тики skip)
+        if not self._throttled("_last_sync_seeking", self.SYNC_SEEKING_INTERVAL):
+            return
+
+        # Всё ок — генерируем сообщение
+        text, tone = self._generate_sync_seeking_message(
+            silence=silence, idle_hours=idle_seconds / 3600.0,
+        )
+        if not text:
+            return
+
+        log.info(f"[cognitive_loop] sync_seeking: silence={silence:.2f} idle={idle_seconds/3600:.1f}h → «{text[:60]}»")
+        self._add_alert({
+            "type": "sync_seeking",
+            "severity": "info",
+            "text": text,
+            "text_en": text,
+            "tone": tone,                 # caring|ambient|curious|reference|simple
+            "silence_level": round(silence, 3),
+            "idle_hours": round(idle_seconds / 3600.0, 1),
+        })
+        # Action Memory: запоминаем что мы сделали; outcome закроется в
+        # _check_action_outcomes через 30 мин или когда юзер ответит.
+        self._record_baddle_action(
+            "sync_seeking",
+            text=f"Baddle: «{text[:120]}»",
+            extras={"tone": tone, "silence_at_action": round(silence, 3)},
+        )
+
+    def _generate_sync_seeking_message(self, silence: float, idle_hours: float) -> tuple[str, str]:
+        """LLM-генерация мягкого сообщения для восстановления контакта.
+
+        Контекст в prompt: время суток, уровень тишины, сколько юзер
+        молчит, последнее что он делал, recent topics из графа, HRV-снимок.
+        Temperature высокая (0.9) + top_k большой → каждый раз разное.
+
+        Returns: (text, tone) — tone выбирается LLM из палитры.
+        Fallback при ошибке LLM: случайный короткий шаблон.
+        """
+        import random
+        import datetime as _dt
+
+        # --- Контекст ---
+        now = _dt.datetime.now()
+        hour = now.hour
+        if 5 <= hour < 11:      time_of_day = "утро"
+        elif 11 <= hour < 17:   time_of_day = "день"
+        elif 17 <= hour < 23:   time_of_day = "вечер"
+        else:                    time_of_day = "ночь"
+
+        # Уровень тишины → severity hint
+        if silence < 0.4:    severity = "лёгкий"
+        elif silence < 0.7:  severity = "средний"
+        else:                 severity = "высокий"
+
+        # Last activity category
+        last_activity = ""
+        try:
+            from .activity_log import list_activities
+            recent = list_activities(limit=1)
+            if recent:
+                la = recent[0]
+                last_activity = la.get("category", "") or la.get("name", "") or ""
+        except Exception:
+            pass
+
+        # Recent graph topics (top 3 by access)
+        recent_topics = []
+        try:
+            from .graph_logic import _graph
+            nodes = _graph.get("nodes", [])[-10:]  # последние 10 для context
+            seen = set()
+            for n in nodes:
+                topic = n.get("topic", "") or n.get("text", "")[:40]
+                if topic and topic not in seen:
+                    seen.add(topic)
+                    recent_topics.append(topic)
+                if len(recent_topics) >= 3:
+                    break
+        except Exception:
+            pass
+
+        # HRV short summary
+        hrv_hint = ""
+        try:
+            us = get_user_state()
+            coh = us.hrv_coherence
+            if coh is not None:
+                if coh > 0.6:     hrv_hint = "спокоен"
+                elif coh < 0.35:  hrv_hint = "напряжён"
+                else:              hrv_hint = "смешанное"
+        except Exception:
+            pass
+
+        # Эвристический tone до LLM (используется как дефолт если
+        # LLM не отдаст структурированно)
+        if silence > 0.7:             heuristic_tone = "caring"
+        elif hrv_hint == "напряжён":  heuristic_tone = "caring"
+        elif recent_topics:           heuristic_tone = "reference"
+        elif time_of_day == "ночь":   heuristic_tone = "ambient"
+        else:                          heuristic_tone = "simple"
+
+        # Action Memory (этап 5): если у нас есть история past sync_seeking
+        # outcomes, override heuristic_tone если есть явный winner.
+        # Cold start (<3 closed actions) → scoring=all 0 → heuristic wins.
+        try:
+            from .graph_logic import score_action_candidates
+            tone_candidates = ["caring", "ambient", "curious", "reference", "simple"]
+            # Map time_of_day русский → english для context-match
+            tod_map = {"утро": "morning", "день": "day",
+                        "вечер": "evening", "ночь": "night"}
+            scores = score_action_candidates(
+                action_kind="sync_seeking",
+                candidates=tone_candidates,
+                variant_field="tone",
+                time_of_day=tod_map.get(time_of_day),
+                min_history=3,
+            )
+            # Если есть non-trivial преимущество (max ≥ 0.05 разница над 2-м) — берём winner
+            sorted_scores = sorted(scores.items(), key=lambda kv: -kv[1])
+            if sorted_scores and sorted_scores[0][1] >= 0.05:
+                top, top_score = sorted_scores[0]
+                second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
+                if (top_score - second_score) >= 0.05:
+                    log.info(f"[action-memory] sync_seeking tone override: "
+                             f"{heuristic_tone} → {top} "
+                             f"(score={top_score:+.3f}, heuristic lost)")
+                    heuristic_tone = top
+        except Exception as e:
+            log.debug(f"[action-memory] score tones failed: {e}")
+
+        # --- LLM prompt ---
+        system = (
+            "/no_think\n"
+            "Ты — Baddle, партнёр по мышлению одного человека. Он не писал тебе "
+            f"{idle_hours:.0f} часов. Молчание {severity}.\n"
+            "Напиши ОДНО короткое (1 предложение, макс 100 знаков) мягкое "
+            "сообщение — попытка восстановить контакт. Это НЕ приветствие, "
+            "НЕ представление возможностей, НЕ напоминание. Просто присутствие.\n"
+            "БЕЗ восклицаний. БЕЗ сиропа. БЕЗ «не забудь». БЕЗ emoji. БЕЗ кавычек.\n"
+            "Ответ — ТОЛЬКО текст сообщения, одной строкой. Без префиксов, "
+            "без лейблов, без объяснений."
+        )
+        user_ctx_parts = [f"Время: {time_of_day}"]
+        if last_activity:
+            user_ctx_parts.append(f"Последнее что делал: {last_activity}")
+        if recent_topics:
+            user_ctx_parts.append(f"Темы в графе: {', '.join(recent_topics[:3])}")
+        if hrv_hint:
+            user_ctx_parts.append(f"HRV: {hrv_hint}")
+        user_prompt = "\n".join(user_ctx_parts) + "\n\nСообщение:"
+
+        try:
+            from .graph_logic import _graph_generate
+            res, _ent = _graph_generate(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": user_prompt}],
+                max_tokens=150, temp=0.9, top_k=60,
+            )
+            res = (res or "").strip()
+            if res:
+                # Берём первую непустую строку — «сообщение»
+                lines = [l.strip() for l in res.split("\n") if l.strip()]
+                if lines:
+                    text = lines[0].strip(' "«»')
+                    # Отфильтровываем хвостовые tone-слова если модель их
+                    # приклеила (например «... ambient» в конце)
+                    for tw in ("caring", "ambient", "curious", "reference", "simple"):
+                        if text.lower().endswith(" " + tw):
+                            text = text[:-len(tw)].rstrip(" .,")
+                            break
+                    # Sanity: 3..200 знаков, не начинается с лейбла
+                    bad_starts = ("message:", "сообщение:", "tone:", "тон:")
+                    if (3 <= len(text) <= 200
+                            and not any(text.lower().startswith(b) for b in bad_starts)):
+                        return text, heuristic_tone
+        except Exception as e:
+            log.debug(f"[cognitive_loop] sync_seeking LLM failed: {e}")
+
+        # Fallback: случайный мягкий шаблон
+        fallbacks_by_severity = {
+            "лёгкий": ["Как ты?", "Что сегодня?", "Я тут, если нужно.", "На связи?"],
+            "средний": ["Давно не слышу. Всё в порядке?", "Ты как? Я рядом.",
+                        "Если появится момент — я тут.", "Что происходит у тебя?"],
+            "высокий": ["Ты где? Всё ли ок?", "Я начал скучать. Ты в порядке?",
+                        "Давно тебя нет. Просто отмечусь — я тут.",
+                        "Хочу убедиться что с тобой всё хорошо."],
+        }
+        return random.choice(fallbacks_by_severity[severity]), "simple"
+
     def _check_observation_suggestions(self):
         """Раз в сутки: собрать draft-карточки из patterns / checkins /
         stress-зон → положить в alerts. Юзер видит их в chat как
         `intent_confirm` карточки с кнопками Да/Изменить/Нет.
+
+        Guard: если юзер **активен** (последний input < 10 мин) — skip
+        БЕЗ обновления throttle, чтобы при следующей паузе попробовать снова.
         """
+        # Сначала проверка user-active — не долбим юзера предложениями
+        # во время работы над задачей. Throttle НЕ трогаем — чтобы при
+        # следующем тихом моменте попробовать снова в тот же день.
+        try:
+            last_ts = get_user_state()._last_input_ts
+            if last_ts and (time.time() - last_ts) < 600:  # 10 мин
+                return  # silent skip, throttle остаётся на прежнем ts
+        except Exception:
+            pass
         if not self._throttled("_last_suggestions_check",
                                 self.SUGGESTIONS_CHECK_INTERVAL):
             return
@@ -2136,6 +2820,14 @@ class CognitiveLoop:
                     "source": trigger,
                 })
                 log.info(f"[cognitive_loop] suggestion: {trigger} → {draft_text[:60]}")
+                # Action Memory: suggestion — долгий outcome (7 дней, ждём accept/reject).
+                # `action_kind` = kind.subkind для легкой фильтрации позже.
+                suggestion_kind = (card.get("draft") or {}).get("kind", "generic")
+                self._record_baddle_action(
+                    f"suggestion_{suggestion_kind}",
+                    text=f"Suggested: {card.get('title', '')} — {draft_text[:100]}",
+                    extras={"trigger": trigger, "draft_kind": suggestion_kind},
+                )
             except Exception as e:
                 log.debug(f"[cognitive_loop] suggestion card build failed: {e}")
 
@@ -2188,6 +2880,11 @@ class CognitiveLoop:
             "hour": local_hour,
         })
         log.info(f"[cognitive_loop] evening retro pushed @ {local_hour}:00 ({n_un} unfinished)")
+        self._record_baddle_action(
+            "evening_retro",
+            text=f"Evening retro: {n_un} unfinished",
+            extras={"unfinished_count": n_un, "hour": local_hour},
+        )
 
     # ── Activity → energy cost (category-based) ──────────────────────────
 
@@ -2282,6 +2979,15 @@ class CognitiveLoop:
 
     # ── Alerts queue ───────────────────────────────────────────────────
 
+    # Types of alerts которые считаются «мы пишем юзеру» — используются
+    # для gate sync-seeking (не долбим двумя проактивами подряд).
+    _PROACTIVE_ALERT_TYPES = frozenset([
+        "morning_briefing", "night_cycle", "dmn_bridge", "dmn_deep_research",
+        "dmn_converge", "dmn_cross_graph", "state_walk", "observation_suggestion",
+        "plan_reminder", "recurring_lag", "evening_retro", "low_energy_heavy",
+        "scout_bridge", "sync_seeking",
+    ])
+
     def _add_alert(self, alert: dict, dedupe: bool = False):
         with self._lock:
             if dedupe:
@@ -2292,6 +2998,9 @@ class CognitiveLoop:
             self._alerts_queue.append(alert)
             if len(self._alerts_queue) > 20:
                 self._alerts_queue = self._alerts_queue[-20:]
+            # Помечаем время последнего «активного» обращения к юзеру
+            if alert.get("type") in self._PROACTIVE_ALERT_TYPES:
+                self._last_proactive_alert_ts = alert["ts"]
 
     def get_alerts(self, clear: bool = False) -> list:
         with self._lock:
@@ -2329,7 +3038,6 @@ class CognitiveLoop:
         Плюс DMN_INTERVAL между запусками.
         """
         try:
-            from .horizon import get_global_state, PROTECTIVE_FREEZE
             st = get_global_state()
             ne = st.neuro.norepinephrine
             state = st.state

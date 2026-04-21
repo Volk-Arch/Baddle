@@ -1,14 +1,9 @@
 # Ontology — формат всех данных Baddle
 
-Эта страница описывает **что хранится где** и в каком формате. Используется
-как reference когда добавляешь новые поля или пишешь интеграцию.
-
-Принцип: **append-only JSONL** для всего что меняется во времени,
-**single JSON** для snapshot-состояний.
-
-**Где физически:** person-level данные в `data/`, per-workspace графы
-в `graphs/<ws>/`, workspace registry в `workspaces/index.json`. Layout
-целиком → [storage-layout.md](storage-layout.md).
+Reference по schema всех файлов. **Append-only JSONL** для временных
+рядов, **single JSON** для snapshot'ов. Person-level в `data/`,
+per-workspace в `graphs/<ws>/`, registry в `workspaces/index.json` —
+физический layout целиком → [storage-layout.md](storage-layout.md).
 
 ---
 
@@ -351,4 +346,4 @@ Single-path, без миграций и legacy кода. Правила эвол
 
 ---
 
-**Навигация:** [← Activity log](activity-log-design.md)  ·  [Индекс](README.md)  ·  [Следующее: SmartDC →](smartdc-design.md)
+**Навигация:** [← Activity log](activity-log-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Thinking operations →](thinking-operations.md)

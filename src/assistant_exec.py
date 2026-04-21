@@ -639,9 +639,10 @@ def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
             "evidence_added": ev_added,
             "conf_before": round(conf_before, 2),
             "conf_after": round(new_conf, 2),
-            "synthesis": sy[:200] if sy else "",
-            "thesis": fr[:200] if fr else "",
-            "antithesis": ag[:200] if ag else "",
+            # Без обрезки — UI сам решит layout; пусть видно весь текст
+            "synthesis": sy or "",
+            "thesis": fr or "",
+            "antithesis": ag or "",
         }
     except Exception as e:
         return {"error": str(e)[:100], "phase": "smartdc",
@@ -649,7 +650,8 @@ def _deepen_round(weak_idx: int, message: str, lang: str, system: str,
 
 
 def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
-                 profile_hint: str = "", max_steps: int = None) -> Dict:
+                 profile_hint: str = "", max_steps: int = None,
+                 prev_session_indices: Optional[list[int]] = None) -> Dict:
     """Deep research через реальные tools — реальное использование
     того же engine что и в graph tab autorun, не замена одним brainstorm'ом.
 
@@ -689,10 +691,19 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         pass
 
     _nd = get_neural_defaults()
-    # Per-mode depth — если caller не передал явно max_steps
+    # Per-mode depth и infinite-режим (как в graph autorun Lab):
+    #   • collapse_at — сколько «настоящих» iteration'ов до принудительного
+    #     финального collapse (по умолчанию per-mode из settings)
+    #   • infinite — если True, loop идёт до should_stop=STABLE, collapse_at
+    #     работает как safety cap (hard_stop = collapse_at × 2)
     if max_steps is None:
         max_steps = get_mode_depth(mode_id)
-    max_steps = max(1, min(10, int(max_steps)))
+    max_steps = max(1, min(200, int(max_steps)))
+    try:
+        from .api_backend import is_deep_infinite
+        _infinite_mode = is_deep_infinite()
+    except Exception:
+        _infinite_mode = False
     # Эти значения override'ят hardcoded max_tokens если они больше дефолта
     _nd_maxtok = _nd.get("max_tokens") or 3000
     _nd_temp = _nd.get("temperature") or 0.7
@@ -804,7 +815,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                                   f"#{closest_pair[0]} и #{closest_pair[1]}",
                         "nodes_touched": [bridge_idx],
                         "pair": list(closest_pair),
-                        "bridge_text": bridge_text[:200],
+                        "bridge_text": bridge_text,
                     })
                     try:
                         _ensure_embeddings([n.get("text", "") for n in _graph["nodes"]])
@@ -914,7 +925,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                         pair_dialectics.append({
                             "a": a, "a_text": a_t, "b": b, "b_text": b_t,
                             "winner": winner_idx, "winner_letter": winner_letter,
-                            "reason": reason[:200],
+                            "reason": reason,
                         })
                     except Exception as e:
                         log.debug(f"[execute_deep] pair {a}x{b} failed: {e}")
@@ -1008,9 +1019,9 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             trace.append({
                 "step": 4, "action": "smartdc",
                 "detail": f"SmartDC на #{top_idx}: FOR×{len(thesis)} AGAINST×{len(antithesis)}",
-                "thesis": thesis[:200],
-                "antithesis": antithesis[:200],
-                "synthesis": synthesis_text[:200] if synthesis_text else "",
+                "thesis": thesis,
+                "antithesis": antithesis,
+                "synthesis": synthesis_text if synthesis_text else "",
                 "parent": top_idx,
             })
         except Exception as e:
@@ -1029,7 +1040,12 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     STALL_LIMIT = 3              # было 2 — слишком чувствительно при скачках
     STALL_DELTA = 0.015          # было 0.02 — 0.015 < типичный +0.12 но выше шума
     base_rounds = 3
-    extra_rounds = max(0, max_steps - base_rounds)
+    # В infinite mode: hardStop (safety cap) = max_steps×2. В limited: max_steps.
+    # В обоих случаях break на should_stop=STABLE — natural convergence.
+    if _infinite_mode:
+        extra_rounds = max(0, max_steps * 2 - base_rounds)
+    else:
+        extra_rounds = max(0, max_steps - base_rounds)
     stall = 0
     def _avg_conf():
         vals = [_graph["nodes"][h].get("confidence", 0.5)
@@ -1060,6 +1076,11 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         _horizon = None
         _goal_node = None
 
+    # Отмечаем как вышли из loop — natural STABLE vs hard cap.
+    # В infinite mode после STABLE финальный synthesis = конвергенция.
+    # В limited mode после cap = forced collapse.
+    exit_reason = "max_steps_reached"
+    stable_at_round = None
     for r in range(extra_rounds):
         # Per-round adaptive stop-check — использует те же 4 кейса что tick
         if _horizon is not None and _goal_node is not None:
@@ -1069,6 +1090,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                                      stable_threshold=0.8)
                 stop_res = should_stop(cl, _graph, _horizon, goal_node=_goal_node)
                 if stop_res.get("resolved"):
+                    exit_reason = "natural_convergence"
+                    stable_at_round = r + 1
                     trace.append({"step": 5 + r, "action": "iterate_exit",
                                   "detail": f"should_stop: {stop_res.get('reason','')}"})
                     break
@@ -1089,6 +1112,18 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                                    temp=float(_nd_temp),
                                    top_k=int(_nd_topk))
         ev_added = round_res.get("evidence_added") or []
+        # System neurochem update от deepen: |Δconfidence| — мера новизны
+        # (сильный update → высокий d → dopamine growth). Без этого система
+        # почти не двигается в метриках даже при активной работе.
+        try:
+            conf_before = float(round_res.get("conf_before", 0.5))
+            conf_after = float(round_res.get("conf_after", conf_before))
+            d_val = min(1.0, abs(conf_after - conf_before) * 2.5)  # 0.12 delta → d=0.30
+            if d_val > 0:
+                from .horizon import get_global_state as _gs
+                _gs().update_neurochem(d=d_val)
+        except Exception:
+            pass
         trace.append({
             "step": 5 + r, "action": "deepen",
             "detail": (f"Углубление #{r+1} на #{weak_idx}: "
@@ -1118,6 +1153,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             stall = 0
         prev_avg_conf = cur_avg_conf
         if stall >= STALL_LIMIT:
+            exit_reason = "stall_safety"
+            stable_at_round = r + 1
             trace.append({"step": 6 + r, "action": "iterate_exit",
                           "detail": f"stall safety: {stall} раунда avg_conf без progress "
                                     f"({cur_avg_conf:.2f})"})
@@ -1126,6 +1163,81 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         # подхватываем последнюю синтезу из deepen-раунда.
         if not synthesis_text and round_res.get("synthesis"):
             synthesis_text = round_res["synthesis"]
+
+    # ── Финальный collapse: session-ноды → один synthesis-абзац ──
+    # Собираем indices созданные/затронутые в ЭТОЙ execute_deep сессии.
+    # Плюс если юзер нажал «Продолжить тему» — добавляем prev_session_indices
+    # (manual continuity), чтобы synthesis учитывал предыдущую беседу.
+    session_indices: list[int] = []
+    if prev_session_indices:
+        # Фильтруем невалидные (могли быть удалены через consolidation)
+        _total_nodes = len(_graph.get("nodes", []))
+        session_indices.extend(
+            i for i in prev_session_indices
+            if isinstance(i, int) and 0 <= i < _total_nodes)
+    try:
+        if goal_idx not in session_indices:
+            session_indices.append(goal_idx)
+    except NameError:
+        pass
+    try:
+        for h in (added_hyp or []):
+            if h not in session_indices:
+                session_indices.append(h)
+    except NameError:
+        pass
+    # Все evidence-ноды созданные в trace (elaborate_per_option, deepen, ...)
+    for t in trace:
+        nt = t.get("nodes_touched") or []
+        for idx in nt:
+            if isinstance(idx, int) and idx not in session_indices:
+                session_indices.append(idx)
+
+    try:
+        from .graph_logic import force_synthesize_top
+        from .api_backend import get_deep_response_format, is_deep_batched
+        _fmt = get_deep_response_format()
+        _batched = is_deep_batched()
+        # Для article format требуется больше токенов — поднимем cap
+        _syn_tokens = int(_nd_maxtok)
+        if _fmt == "article" and _syn_tokens < 6000:
+            _syn_tokens = 6000
+        final_syn = force_synthesize_top(
+            n=12 if _fmt == "article" else 7,
+            lang=lang, max_tokens=_syn_tokens,
+            source_indices=session_indices if session_indices else None,
+            fmt=_fmt, batched=_batched,
+        )
+        if final_syn and final_syn.get("text"):
+            synthesis_text = final_syn["text"]
+            src_n = len(final_syn.get("source_indices") or [])
+            avg_c = final_syn.get('confidence', 0)
+            # Wording зависит от того как вышли: natural convergence (STABLE)
+            # vs forced (max_steps) vs stall safety. infinite-mode обычно
+            # приводит к natural_convergence (или stall), limited — чаще к
+            # max_steps_reached.
+            if exit_reason == "natural_convergence":
+                action_label = "converged"
+                detail = (f"Сошлось за {stable_at_round} раундов · "
+                          f"синтез из топ-{src_n} нод (средняя уверенность {avg_c:.0%})")
+            elif exit_reason == "stall_safety":
+                action_label = "converged"
+                detail = (f"Плато достигнуто за {stable_at_round} раундов — "
+                          f"дальше идеи не развиваются, пора сворачивать · "
+                          f"синтез из топ-{src_n} нод")
+            else:  # max_steps_reached
+                action_label = "final_synthesis"
+                detail = (f"Синтез по {src_n} мыслям сессии "
+                          f"(средняя уверенность {avg_c:.0%})")
+            trace.append({
+                "step": 5 + extra_rounds + 1,
+                "action": action_label,
+                "detail": detail,
+                "nodes_touched": [final_syn.get("node_idx")] if final_syn.get("node_idx") is not None else [],
+                "synthesis": synthesis_text,
+            })
+    except Exception as e:
+        log.debug(f"[execute_deep] final_collapse failed: {e}")
 
     # ── Финальная сборка карточки ── зависит от mode.renderer_style
     # Считаем все ноды трогаемые deepen/elaborate/per-option raунд'ами
@@ -1204,7 +1316,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         for en in _graph["nodes"]:
             if en.get("type") == "evidence" and en.get("evidence_target") == h_idx:
                 ev_for_h.append({
-                    "text": en.get("text", "")[:200],
+                    "text": en.get("text", ""),
                     "polarity": en.get("evidence_polarity"),
                     "confidence": en.get("confidence", 0.5),
                 })
@@ -1226,6 +1338,10 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     return {
         "text": summary,
         "intro": summary,
+        # Session indices — UI сохраняет их в localStorage и при кнопке
+        # «Продолжить тему» передаёт обратно в следующий /assist вызов,
+        # чтобы next synthesis учитывал мысли этой сессии.
+        "session_indices": session_indices,
         "cards": [{
             "type": final_card_type,
             "mode_id": mode_id,
@@ -1324,7 +1440,8 @@ def execute_via_zones(message: str, lang: str = "ru", mode_id: str = "horizon",
 # ═══ Dispatcher ═════════════════════════════════════════════════════
 
 def execute(mode_id: str, message: str, lang: str = "ru",
-            profile_hint: str = "") -> Dict:
+            profile_hint: str = "",
+            prev_session_indices: Optional[list[int]] = None) -> Dict:
     """Единый dispatcher. Все режимы → execute_via_zones кроме двух specials.
 
     Specials остались как pre-hooks потому что они трогают внешнее состояние
@@ -1351,7 +1468,9 @@ def execute(mode_id: str, message: str, lang: str = "ru",
 
         # Остальные 12 non-special modes → deep pipeline. Renderer под style.
         if mode_id in HEAVY_MODES_DEEP:
-            return execute_deep(message, lang, mode_id, profile_hint=profile_hint)
+            return execute_deep(message, lang, mode_id,
+                                 profile_hint=profile_hint,
+                                 prev_session_indices=prev_session_indices)
         # Fallback (если новый mode добавят в будущем без deep-интеграции)
         return execute_via_zones(message, lang, mode_id, profile_hint=profile_hint)
     except Exception as e:

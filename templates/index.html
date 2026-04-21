@@ -156,7 +156,7 @@
             </div>
             <div class="neuro-track"><div id="user-da-fill" class="neuro-fill" style="background:#10b981"></div></div>
           </div>
-          <div class="neuro-lbar" title="Стабильность: HRV coherence + постоянство длины сообщений">
+          <div class="neuro-lbar" title="Стабильность: HRV coherence">
             <div class="neuro-lbar-head">
               <span class="neuro-lbar-name">Стабильность</span>
               <span class="neuro-lbar-tech">S · serotonin</span>
@@ -179,6 +179,14 @@
               <span id="user-burn-val" class="neuro-lbar-val">0.00</span>
             </div>
             <div class="neuro-track"><div id="user-burn-fill" class="neuro-fill" style="background:#ef4444"></div></div>
+          </div>
+          <div class="neuro-lbar" title="Агентность: сделано / запланировано сегодня. Низкое при high energy = learned helplessness — разбивай задачи мельче">
+            <div class="neuro-lbar-head">
+              <span class="neuro-lbar-name">Агентность</span>
+              <span class="neuro-lbar-tech">A · agency</span>
+              <span id="user-agency-val" class="neuro-lbar-val">0.50</span>
+            </div>
+            <div class="neuro-track"><div id="user-agency-fill" class="neuro-fill" style="background:#06b6d4"></div></div>
           </div>
         </div>
       </div>
@@ -619,14 +627,19 @@
       <div id="mode-chip-menu" class="mode-chip-menu" style="display:none" onclick="event.stopPropagation()"></div>
     </div>
 
-    <!-- Input (textarea + / команды + Send) -->
+    <!-- Input (textarea + / команды + Continue + Send) -->
     <div class="assist-input-row">
       <textarea id="assist-input" placeholder="Спроси или поставь задачу..." rows="1"></textarea>
       <div class="chat-cmd-wrap">
         <button id="chat-cmd-btn" class="chat-cmd-btn" onclick="toggleCmdMenu(event)" aria-label="Команды" title="Быстрые команды">/</button>
         <div id="chat-cmd-menu" class="chat-cmd-menu" style="display:none" onclick="event.stopPropagation()"></div>
       </div>
-      <button id="assist-send-btn" onclick="assistSend()" aria-label="Send">→</button>
+      <!-- ↳ Продолжить: показывается только если есть предыдущая сессия -->
+      <button id="assist-continue-btn" onclick="assistSend(true)"
+              aria-label="Продолжить тему"
+              title="Включить мысли предыдущего ответа в финальный synthesis. Полезно когда развиваешь тему."
+              style="display:none;background:#1e1b4b;color:#a5b4fc;border:1px solid #4338ca">↳</button>
+      <button id="assist-send-btn" onclick="assistSend(false)" aria-label="Send">→</button>
     </div>
     </div>
     <!-- ═══ /Sub-page: Chat ═══ -->

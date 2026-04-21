@@ -247,7 +247,17 @@
     requestAnimationFrame(tickFrame);
   }
 
+  // Adaptive poll: быстрый когда идёт видимая работа, медленный в idle.
+  // FAST — для плавной анимации dual-cone при pump/scout/smartdc/elaborate.
+  // SLOW — когда thinking=idle и нет freeze. Сокращает server load в ~4 раза
+  // при обычном use (большую часть времени система idle).
+  const POLL_FAST_MS = 700;
+  const POLL_SLOW_MS = 3000;
+  let _pollTimer = null;
+  let _pollMode = 'fast';
+
   async function pollState() {
+    let newMode = 'fast';
     try {
       const r = await fetch('/assist/state');
       const d = await r.json();
@@ -262,7 +272,21 @@
       // pumpT: 0 → single cone, 1 → full dual. Плавный переход через tween.
       const isPump = target.thinking === 'pump' || target.state === 'integration';
       target.pumpT = isPump ? 1 : 0;
+      // Mode: fast если есть видимая активность, иначе slow.
+      const isActive = target.thinking && target.thinking !== 'idle';
+      newMode = (isActive || target.freeze) ? 'fast' : 'slow';
     } catch(e) { /* silent — сервер может дышать */ }
+
+    // Переключаем interval если режим сменился
+    if (newMode !== _pollMode) {
+      _pollMode = newMode;
+      if (_pollTimer) clearTimeout(_pollTimer);
+      const delay = newMode === 'fast' ? POLL_FAST_MS : POLL_SLOW_MS;
+      _pollTimer = setTimeout(pollState, delay);
+    } else {
+      const delay = newMode === 'fast' ? POLL_FAST_MS : POLL_SLOW_MS;
+      _pollTimer = setTimeout(pollState, delay);
+    }
   }
 
   // Старт: poll + animation. Не запускаем если нет ни одной cone-цели на странице.
@@ -271,8 +295,7 @@
                    || document.getElementById('dash-cone-svg')
                    || document.getElementById('graph-cone-viz');
     if (!hasTarget) return;
-    pollState();
-    setInterval(pollState, 700);
+    pollState();  // первый запуск ставит timeout сам
     requestAnimationFrame(tickFrame);
   }
 

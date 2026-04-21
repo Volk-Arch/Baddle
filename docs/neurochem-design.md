@@ -1,198 +1,202 @@
 # Нейрохимия Baddle
 
-> Три скаляра + один защитный режим. Минимальный набор сигналов, который даёт
-> системе «настроение», любопытство и защиту от перегрузки — без того чтобы
-> копировать состояние пользователя.
+Три скаляра + защитный режим. Минимальный набор сигналов, который даёт
+системе «настроение», любопытство и защиту от перегрузки — без того
+чтобы копировать состояние пользователя.
 
-## Идея в одной фразе
+---
+
+## Идея
 
 Мышление не равно чистой логике. В реальном мозге баланс нейромедиаторов
-модулирует скорость обучения, остроту внимания и тягу к исследованию. Baddle
-использует три скаляра с **чёткими ролями**, каждый обновляется **одной EMA-
-формулой** на основе событий в графе.
+модулирует скорость обучения, остроту внимания и тягу к исследованию.
+Baddle использует три скаляра с чёткими ролями — каждый обновляется
+одной EMA-формулой на основе событий в графе:
 
-```
-dopamine       — реакция на новизну (EMA от d = distinct-расстояний)
-serotonin      — стабильность весов (EMA от 1 − std(ΔW))
-norepinephrine — неопределённость (EMA от энтропии распределения W)
-```
+- **dopamine** — реакция на новизну. EMA от `d = distinct(a, b)`
+- **serotonin** — стабильность весов. EMA от `1 − std(ΔW)`
+- **norepinephrine** — неопределённость. EMA от энтропии распределения `W`
 
-Плюс один защитный режим:
+Плюс **ProtectiveFreeze** — защитный режим накапливающий «усталость» и
+блокирующий Bayes update при перегрузке.
 
-```
-ProtectiveFreeze — накапливается при хроническом конфликте + нестабильности.
-                   При пороге θ блокирует Bayes update.
-```
+---
 
-## Формулы
+## γ derived
 
-Все обновления — одна строка EMA с decay:
-
-```python
-# При каждом тике цикла мышления:
-chem.dopamine       = 0.9  * chem.dopamine       + 0.1  * d
-chem.serotonin      = 0.95 * chem.serotonin      + 0.05 * (1 − std(W_change))
-chem.norepinephrine = 0.9  * chem.norepinephrine + 0.1  * normalized_entropy(W)
-```
-
-### γ derived (не сохраняется отдельно)
+Чувствительность не отдельное поле, а производное:
 
 ```
 γ = 2.0 + 3.0 · norepinephrine · (1 − serotonin)
 ```
 
-Высокое напряжение при низкой стабильности → повышенная Bayesian-
-чувствительность. Спокойный уверенный режим → γ ≈ 2.0 (baseline). Возбуждённый
-ищущий → γ → 5.0.
+Спокойный уверенный режим → γ ≈ 2.0 (baseline). Возбуждённый ищущий →
+γ → 5.0. Напряжение при нестабильности → повышенная Bayesian-чувствительность.
 
-### Bayes update через distinct
+---
+
+## Bayes update через distinct
+
+Signed форма — знаковая:
 
 ```
 logit(post) = logit(prior) + γ · (1 − 2d)
 ```
 
-Signed знаковая форма: d=0 (совпадение) → максимальное усиление, d=0.5 (неясно)
-→ нет изменения, d=1 (противоречие) → максимальное ослабление. γ из формулы
-выше — чувствительность масштаба.
+`d = 0` (совпадение) → максимальное усиление. `d = 0.5` (неясно) → нет
+изменения. `d = 1` (противоречие) → максимальное ослабление.
 
-### RPE — автономный dopamine drift
+---
 
-Помимо EMA-сигнала от `d` в tick'е, dopamine получает **фазовые спайки
-от reward prediction error** при каждом Bayes-обновлении:
+## RPE — автономный dopamine drift
 
-```python
-# В _bayesian_update_distinct (graph_logic.py) после posterior:
-actual    = |posterior − prior|                     # реальная Δ
-predicted = mean(recent_delta_window)               # baseline ожидание
+Помимо EMA от `d`, dopamine получает **фазовые спайки от reward
+prediction error** при каждом Bayes-обновлении:
+
+```
+actual    = |posterior − prior|       # реальная Δ
+predicted = mean(last 20 deltas)      # baseline ожидание
 rpe       = actual − predicted
-dopamine += RPE_GAIN · rpe                          # RPE_GAIN = 0.15
+dopamine += 0.15 · rpe
 ```
 
-Baseline — скользящее окно последних 20 Δ. Эффект: если система «привыкла»
-к слабым уточнениям, сильное изменение confidence даст положительный RPE
-(→ спайк dopamine). Если ожидала большой инсайт а получила слабый — RPE
-отрицательный, dopamine слегка падает. Это делает нейрохимию чувствительной
-к **неожиданности** (не просто новизне).
+Если система привыкла к слабым уточнениям, сильное изменение confidence
+даёт положительный RPE → спайк DA. Ожидала большой инсайт, получила
+слабый → RPE отрицательный, DA падает. Чувствительность к **неожиданности**,
+не просто новизне. Автономно — без feedback от юзера.
 
-Автономно: работает без явного feedback от юзера. Каждый /graph/expand,
-/graph/elaborate, /graph/add-evidence, /graph/assist (bayes path) обновляет
-baseline и RPE.
+---
 
-### Burnout → PROTECTIVE_FREEZE
-
-```python
-conflict_signal = max(0, d − 0.6)            # порог conflict
-instability     = 1 − serotonin
-accumulator     = 0.95 · accumulator + 0.05 · conflict_signal · instability
-
-if accumulator > 0.15:  active = True        # freeze
-if accumulator < 0.08 and active: active = False  # recovery (гистерезис)
-```
-
-Freeze блокирует `apply_to_bayes` — возвращает prior. Система **замораживает
-обновления**, логирует события, продолжает DMN. Выход — при восстановлении
-стабильности.
-
-## Что откуда приходит
+## Откуда приходят сигналы
 
 Три скаляра питаются **динамикой графа**, не прямыми сигналами юзера:
 
 | Скаляр | Источник | Что измеряет |
-|--------|----------|-------------|
-| dopamine | `d` из distinct(a,b) в tick'е | Новизну — насколько новое пришло |
+|---|---|---|
+| dopamine | `d` из distinct в tick'е | Новизна — насколько новое пришло |
 | serotonin | ΔW от Bayes-updates | Стабильность — меняются ли убеждения |
-| norepinephrine | Энтропия текущих weights | Неопределённость — размыто ли распределение |
+| norepinephrine | Энтропия weights | Неопределённость — размыто ли распределение |
 
-Юзерский feedback (кнопки 👍/👎) конвертируется в **pseudo-d**:
-- accepted → d = 0.2 (слабая новизна = подтверждение)
-- rejected → d = 0.8 (сильная новизна = система была неправа)
+Юзерский feedback конвертируется в **pseudo-d**: accepted → `d = 0.2`
+(слабая новизна = подтверждение), rejected → `d = 0.8` (сильная новизна
+= система была неправа). Feedback входит через тот же канал что и весь
+граф.
 
-Так feedback входит через тот же канал, что и весь граф.
+---
 
 ## HRV НЕ влияет на нейрохимию
 
-Важное решение: HRV — сигнал тела **пользователя**, не состояние системы.
-Он идёт в:
-- **Советы юзеру** («ты устал, отложи», «coherence низкая, подыши»)
-- **Расчёт energy recovery** (потолок дневного ресурса)
-- **Хранение HRV-полей** (coherence/rmssd/stress — для UI и алертов)
+Важное решение: HRV — сигнал тела **пользователя**, не системы. Он идёт в:
+- Советы юзеру («ты устал, отложи»)
+- Energy recovery (потолок дневного ресурса)
+- UI-показ (coherence / rmssd / stress)
 
-Он **не трогает** dopamine/serotonin/norepinephrine/freeze. Юзер устал — система
-замечает и помогает, а не «устаёт» вместе с ним. Внутренняя динамика
-эволюционирует по собственным сигналам от графа.
+Но **не трогает** DA / S / NE / freeze. Юзер устал — система замечает и
+помогает, не «устаёт вместе». Внутренняя динамика эволюционирует по
+собственным сигналам от графа.
 
-## Порядок вызовов в тике
+---
+
+## ProtectiveFreeze — защитный режим
+
+Три независимых накопителя → один `display_burnout`:
+
+| Feeder | Откуда | Активирует Bayes-freeze? |
+|---|---|---|
+| **conflict_accumulator** | EMA графовых конфликтов (d > τ при низкой стабильности) | **ДА** |
+| **silence_pressure** | Линейный timer: +dt/7сут, −0.05 на user-event | Нет |
+| **imbalance_pressure** | EMA aggregated PE (см. friston-loop) | Нет |
+
+`display_burnout = max` всех трёх. В UI — «Усталость Baddle».
+`combined_burnout(user_burnout) = max(display, user)` используется в
+`_idle_multiplier` — эмпатия встроена: юзер устал → Baddle тоже тише.
+
+**Только conflict активирует Bayes-freeze** — жёсткий режим где
+`apply_to_bayes` возвращает prior, обновления weights блокируются. Вход
+при accumulator > 0.15, выход при < 0.08 (гистерезис). Silence и
+imbalance только **замедляют** background-циклы через
+`_throttled_idle`, не блокируют обучение графа.
+
+Подробно про 4 PE-канала агрегирующиеся в `imbalance_pressure` — в
+[friston-loop.md](friston-loop.md).
+
+---
+
+## Self-prediction (симметрия Friston-loop)
+
+Помимо предсказания юзера, Baddle предсказывает **себя**:
+
+- `Neurochem.expectation_vec` — 3D EMA `[DA, S, NE]`, baseline «что
+  Baddle ждёт от себя»
+- `self_surprise_vec = vector() − expectation_vec`
+- `self_imbalance = ‖self_surprise_vec‖` — Baddle PE на самой себе
+
+Обновляется в `tick_expectation()` в том же `_advance_tick`. Когда Baddle
+уезжает далеко от baseline (граф ушёл в экзотику / LLM деградирует) —
+это пятый канал в `imbalance_pressure`.
+
+---
+
+## Порядок в тике
 
 ```
-1. d = distinct(a, b) → сравнение идей
-2. apply_to_bayes(prior, d) → posterior (γ derived, freeze-aware)
-3. chem.update(d=d, w_change=ΔW, weights=current_W) → обновить три скаляра
-4. freeze.update(d, serotonin=chem.serotonin) → накопитель + вход/выход из freeze
-5. Git-audit: commit {action, chem.to_dict(), freeze.to_dict(), d, prior, post}
+1. d = distinct(a, b)                       # сравнение идей
+2. apply_to_bayes(prior, d) → posterior     # (γ derived, freeze-aware)
+3. chem.update(d, ΔW, weights)               # три скаляра
+4. freeze.update(d, serotonin)               # conflict accumulator
+5. Git-audit: записать в state_graph        # commit с полной трассой
 ```
 
-## Интеграция
+Остальное (silence, imbalance, sync_error EMA, self-prediction) — в
+`_advance_tick` background-цикла, см. friston-loop.md.
 
-### Структура
+---
 
-- `src/neurochem.py` — `Neurochem` class (3 скаляра + derived gamma + apply_to_bayes) +
-  `ProtectiveFreeze` class (отдельный защитный режим)
-- `src/horizon.py` — `CognitiveState` держит `self.neuro` + `self.freeze`,
-  делегирует через `apply_to_bayes`, `update_neurochem`, `inject_ne`.
-  Legacy свойств `S`/`NE`/`DA_tonic` больше нет — single-path.
-- `/assist/state` endpoint выдаёт `neurochem: {dopamine, serotonin, norepinephrine,
-  burnout, gamma, freeze_active, state_origin}` — других имён нет.
-- `src/tick_nand.py` — в tick'е после distinct-matrix вызывает
-  `update_neurochem(d=mean_d, weights=confidences)` на глобальной и локальной
-  нейрохимии. Это замыкает контур: граф → нейрохимия → apply_to_bayes → граф.
+## UI
 
-### UI
+Панель в header показывает 4 бара:
 
-Панель в header чата показывает 4 бара:
-- **Стабильность** (serotonin) — фиолетовый
-- **Напряжение** (norepinephrine) — оранжевый
-- **Интерес** (dopamine) — зелёный
-- **Усталость** (freeze.accumulator) — красный
+- 🟢 Интерес (dopamine)
+- 🟣 Стабильность (serotonin)
+- 🟠 Напряжение (norepinephrine)
+- 🔴 Усталость (display_burnout)
 
-Тултипы показывают технические имена (Серотонин/Норадреналин/Дофамин/Burnout)
-и что именно измеряется.
+Тултипы: технические имена (Dopamine / Serotonin / Norepinephrine / Burnout).
 
-## Что осталось открытым
-
-- **Полное REM-переработка:** scouts с высоким |rpe| через Pump для замешивания
-  эмоционально-насыщенных эпизодов (перенесено в Автономность)
-- **Intrinsic pull в DMN:** `target = argmax(dopamine · novelty)` — сейчас
-  случайный выбор пар в Scout
-- **Circadian baseline drift:** нейромедиаторы могли бы иметь циркадный
-  ритм (утро = выше dopamine, вечер = выше serotonin)
+---
 
 ## Параметры
 
-Жёстко прошиты в классе; при необходимости — переносятся в `settings.json`.
+| Параметр | Значение | Что делает |
+|---|---|---|
+| `decay_DA` | 0.9 | Быстрая реакция на новизну |
+| `decay_S` | 0.95 | Медленная (стабильность копится) |
+| `decay_NE` | 0.9 | Быстрая (реакция на неопределённость) |
+| `RPE_GAIN` | 0.15 | Сила RPE-спайка |
+| `TAU_STABLE` | 0.6 | Порог d за которым начинается conflict |
+| `THETA_ACTIVE` | 0.15 | Вход во freeze |
+| `THETA_RECOVERY` | 0.08 | Выход из freeze (гистерезис) |
 
-```python
-Neurochem EMA decay:
-  dopamine:       0.9    # быстрая реакция на новизну
-  serotonin:      0.95   # медленная (стабильность копится)
-  norepinephrine: 0.9    # быстрая (реакция на неопределённость)
-
-ProtectiveFreeze:
-  TAU_STABLE      = 0.6   # порог d за которым начинается conflict
-  THETA_ACTIVE    = 0.15  # вход во freeze
-  THETA_RECOVERY  = 0.08  # выход (гистерезис)
-  DECAY           = 0.95  # ≈ 20 тиков до steady state
-
-γ formula: γ = 2.0 + 3.0 · NE · (1 − S)
-  min ≈ 2.0 (S=1, NE=0) — спокойный уверенный режим
-  max ≈ 5.0 (S=0, NE=1) — возбуждённый ищущий
-```
+Все EMA-константы живут в `src/ema.py::Decays`.
 
 ---
 
-*Старая версия этого документа описывала 5 скаляров + γ как отдельное поле.
-Упростили до 3 скаляров + derived γ в духе NeuroBrain-эскиза. Legacy имена
-(`S`/`NE`/`DA_tonic`/`burnout_idx`) полностью удалены — single-path.*
+## Где в коде
+
+- `src/neurochem.py` — `Neurochem` class + `ProtectiveFreeze`
+- `src/horizon.py::CognitiveState` держит `self.neuro` + `self.freeze`,
+  делегирует через `apply_to_bayes`, `update_neurochem`, `inject_ne`
+- `src/tick_nand.py` — после distinct-matrix вызывает
+  `update_neurochem(d=mean_d, weights=confidences)` — замыкает контур:
+  граф → нейрохимия → apply_to_bayes → граф
+- `src/ema.py::Decays` — все decay константы в одном месте
+- `/assist/state` endpoint выдаёт `neurochem: {dopamine, serotonin,
+  norepinephrine, burnout, gamma, freeze_active, ...}`
+
+**Открыто:** REM-переработка эпизодов с высоким |rpe| через Pump,
+intrinsic pull в DMN (`target = argmax(dopamine · novelty)`), circadian
+baseline drift (DA утром, S вечером).
 
 ---
 
-**Навигация:** [← Horizon](horizon-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Symbiosis →](symbiosis-design.md)
+**Навигация:** [← Horizon](horizon-design.md) · [Индекс](README.md) · [Следующее: Symbiosis →](symbiosis-design.md)

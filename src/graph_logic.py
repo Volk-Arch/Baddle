@@ -281,6 +281,18 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("rendered", True)    # legacy nodes считаются уже отрендеренными
         node.setdefault("created_at", None)
         node.setdefault("last_accessed", None)
+        # Action Memory fields (only populated for type=action/outcome nodes)
+        if node.get("type") == "action":
+            node.setdefault("actor", "baddle")
+            node.setdefault("action_kind", "unknown")
+            node.setdefault("context", {})
+            node.setdefault("closed", False)
+            node.setdefault("outcome_idx", None)
+        elif node.get("type") == "outcome":
+            node.setdefault("linked_action_idx", None)
+            node.setdefault("delta_sync_error", 0.0)
+            node.setdefault("user_reaction", "silence")
+            node.setdefault("latency_s", 0.0)
 
 
 # ── Hebbian: touch (обращение к ноде) ───────────────────────────────────────
@@ -329,6 +341,310 @@ def touch_nodes(indices, boost: float = TOUCH_BOOST_DEFAULT) -> int:
     return n
 
 
+# ── Action Memory (самообучение через граф) ─────────────────────────────────
+#
+# Action / outcome — ноды того же графа что и мысли. DMN / pump / consolidate
+# / hebbian decay работают на них автоматически. Cм. docs/action-memory-design.md.
+
+
+def _current_snapshot() -> dict:
+    """Snapshot pre-state для контекста action-ноды.
+
+    Собирает: sync_error, user-state скаляры, system-state (neurochem +
+    freeze), sync_regime, hrv_regime, time_of_day. Все опционально —
+    если что-то не доступно, поле опускается (не падаем).
+    """
+    import datetime as _dt
+    snap: dict = {"ts": _dt.datetime.now(timezone.utc).isoformat()}
+
+    # Time of day
+    try:
+        h = _dt.datetime.now().hour
+        if 5 <= h < 11:      snap["time_of_day"] = "morning"
+        elif 11 <= h < 17:   snap["time_of_day"] = "day"
+        elif 17 <= h < 23:   snap["time_of_day"] = "evening"
+        else:                 snap["time_of_day"] = "night"
+    except Exception:
+        pass
+
+    # User state (4 скаляра + agency + valence)
+    try:
+        from .user_state import get_user_state
+        u = get_user_state()
+        snap["user_state_before"] = {
+            "dopamine":        round(u.dopamine, 3),
+            "serotonin":       round(u.serotonin, 3),
+            "norepinephrine":  round(u.norepinephrine, 3),
+            "burnout":         round(u.burnout, 3),
+            "agency":          round(u.agency, 3),
+            "valence":         round(u.valence, 3),
+        }
+    except Exception:
+        pass
+
+    # System state (Neurochem + freeze) + sync_error + regimes
+    try:
+        from .horizon import get_global_state
+        gs = get_global_state()
+        snap["system_state_before"] = {
+            "dopamine":             round(gs.neuro.dopamine, 3),
+            "serotonin":            round(gs.neuro.serotonin, 3),
+            "norepinephrine":       round(gs.neuro.norepinephrine, 3),
+            "conflict_accumulator": round(gs.freeze.conflict_accumulator, 3),
+            "silence_pressure":     round(gs.freeze.silence_pressure, 3),
+            "imbalance_pressure":   round(gs.freeze.imbalance_pressure, 3),
+        }
+        snap["sync_error_before"] = round(float(gs.sync_error), 3)
+        snap["sync_error_ema_fast"] = round(float(gs.freeze.sync_error_ema_fast), 4)
+        snap["sync_error_ema_slow"] = round(float(gs.freeze.sync_error_ema_slow), 4)
+        snap["sync_regime"] = gs.sync_regime
+    except Exception:
+        pass
+
+    # HRV regime (activity_zone из UserState)
+    try:
+        from .user_state import get_user_state
+        snap["hrv_regime"] = get_user_state().activity_zone
+    except Exception:
+        pass
+
+    return snap
+
+
+def record_action(actor: str, action_kind: str, text: str,
+                   context: Optional[dict] = None,
+                   extras: Optional[dict] = None) -> int:
+    """Записать action-ноду в граф. Возвращает её idx.
+
+    Args:
+        actor: 'baddle' | 'user'
+        action_kind: тип действия (sync_seeking, dmn_bridge, user_chat, ...).
+                      Cм. docs/action-memory-design.md#action_kind-enum.
+        text: human-readable описание для UI/LLM-контекста.
+        context: снапшот состояния ДО action'а. Если None — берём текущее
+                  через `_current_snapshot()`. Можно передать свой чтобы
+                  включить specific поля (sentiment для user_chat).
+        extras: любые дополнительные metadata на верхнем уровне ноды
+                 (например specific-to-kind details). Сливается с node.
+
+    Нода получает: type='action', actor, action_kind, text, context,
+    closed=False, outcome_idx=None, плюс стандартные fields через _make_node.
+    """
+    from datetime import datetime, timezone as _tz
+    ctx = dict(context) if context is not None else _current_snapshot()
+    with graph_lock:
+        nodes = _graph["nodes"]
+        new_id = len(nodes)
+        node = _make_node(new_id, text, depth=0, topic="action",
+                          confidence=0.5, node_type="action",
+                          embedding=None, rendered=True)
+        node["actor"] = str(actor or "baddle")
+        node["action_kind"] = str(action_kind or "unknown")
+        node["context"] = ctx
+        node["closed"] = False
+        node["outcome_idx"] = None
+        if extras:
+            for k, v in extras.items():
+                if k not in node:  # не перезаписываем стандартные fields
+                    node[k] = v
+        nodes.append(node)
+        _graph.pop("_tick_tried", None)
+        log.debug(f"[action-memory] record_action #{new_id}: {actor}/{action_kind} — {text[:60]!r}")
+        return new_id
+
+
+def close_action(action_idx: int, delta_sync_error: float,
+                  user_reaction: str = "silence",
+                  latency_s: float = 0.0,
+                  confidence: float = 0.5,
+                  outcome_text: Optional[str] = None) -> Optional[int]:
+    """Закрыть action-ноду созданием outcome-ноды + edge caused_by.
+
+    Args:
+        action_idx: idx action-ноды которую закрываем.
+        delta_sync_error: sync_error_before - sync_error_after.
+                           Отрицательное = action улучшил resonance (good).
+        user_reaction: 'chat' | 'accept' | 'reject' | 'ignore' | 'silence' |
+                        другое. Не-enumerated значения допустимы.
+        latency_s: время от ts action'а до now.
+        confidence: уверенность в самом measurement (sync_seeking через 2 мин
+                     уверенно, через 4 часа шумно).
+        outcome_text: если None, автогенерится из параметров.
+
+    Returns: outcome_idx либо None если action_idx невалидный / уже closed.
+    """
+    with graph_lock:
+        nodes = _graph["nodes"]
+        if not (0 <= action_idx < len(nodes)):
+            return None
+        action = nodes[action_idx]
+        if action.get("type") != "action" or action.get("closed"):
+            return None
+
+        # Текст outcome (human-readable)
+        if not outcome_text:
+            delta_str = f"{delta_sync_error:+.3f}"
+            outcome_text = (f"Δsync_error={delta_str} · reaction={user_reaction} · "
+                            f"latency={latency_s:.0f}s")
+
+        new_id = len(nodes)
+        onode = _make_node(new_id, outcome_text, depth=0, topic="outcome",
+                           confidence=float(confidence), node_type="outcome",
+                           embedding=None, rendered=True)
+        onode["linked_action_idx"] = int(action_idx)
+        onode["delta_sync_error"] = round(float(delta_sync_error), 4)
+        onode["user_reaction"] = str(user_reaction)
+        onode["latency_s"] = round(float(latency_s), 1)
+        nodes.append(onode)
+
+        # Edge caused_by: outcome → action
+        caused_by = _graph["edges"].setdefault("caused_by", [])
+        caused_by.append([new_id, action_idx])
+
+        # Закрываем action
+        action["closed"] = True
+        action["outcome_idx"] = new_id
+
+        _graph.pop("_tick_tried", None)
+        log.info(f"[action-memory] close_action #{action_idx} "
+                 f"({action.get('action_kind')}) → outcome #{new_id}: "
+                 f"Δ={delta_sync_error:+.3f}, reaction={user_reaction}")
+        return new_id
+
+
+def score_action_candidates(action_kind: str, candidates: list[str],
+                             variant_field: str = "tone",
+                             time_of_day: Optional[str] = None,
+                             min_history: int = 3) -> dict[str, float]:
+    """Для action_kind вернуть {candidate: score} по past outcomes.
+
+    **score > 0** = действие в среднем снижало sync_error (good).
+    **score < 0** = в среднем повышало (избегать).
+    **score = 0** = нет данных / нейтрально.
+
+    `candidates` — варианты внутри kind (например для sync_seeking это
+    tones: ['caring', 'ambient', 'curious', 'reference', 'simple']).
+    `variant_field` — по какому полю action-ноды группировать варианты
+    (для sync_seeking это `tone` в extras).
+    `time_of_day` — опциональный фильтр: считать только actions из того
+    же времени суток (morning / day / evening / night).
+    `min_history` — минимум closed actions чтобы scoring имел вес. Иначе
+    всем возвращаем 0.0 (cold start, fall back to heuristic).
+
+    Реализация через прямой scan графа — O(N) по nodes. На малых
+    графах (<10k actions) быстро. Позже можно переделать на embedding
+    similarity для лучшей context-match.
+    """
+    nodes = _graph.get("nodes", [])
+    # Собираем per-candidate delta lists
+    buckets: dict[str, list[float]] = {c: [] for c in candidates}
+    for n in nodes:
+        if n.get("type") != "action":
+            continue
+        if n.get("action_kind") != action_kind:
+            continue
+        if not n.get("closed"):
+            continue
+        cand = n.get(variant_field)
+        if cand not in buckets:
+            continue
+        # Context filter
+        if time_of_day:
+            ctx = n.get("context") or {}
+            if ctx.get("time_of_day") != time_of_day:
+                continue
+        # Outcome delta
+        oidx = n.get("outcome_idx")
+        if oidx is None:
+            continue
+        if not (0 <= oidx < len(nodes)):
+            continue
+        outcome = nodes[oidx]
+        if outcome.get("type") != "outcome":
+            continue
+        try:
+            delta = float(outcome.get("delta_sync_error", 0.0))
+        except Exception:
+            continue
+        # Convention: delta = after - before. Negative = sync_error упал = good.
+        # Score для максимизации: -delta (positive = good).
+        buckets[cand].append(-delta)
+
+    total = sum(len(v) for v in buckets.values())
+    if total < min_history:
+        return {c: 0.0 for c in candidates}
+    # Mean per candidate; empty buckets → 0 (neutral)
+    out: dict[str, float] = {}
+    for c in candidates:
+        vals = buckets[c]
+        out[c] = round(sum(vals) / len(vals), 4) if vals else 0.0
+    return out
+
+
+def link_chat_continuation(new_idx: int, chat_kinds: tuple = ("user_chat", "baddle_reply"),
+                             window_s: float = 3600) -> Optional[int]:
+    """Связать `new_idx` с предыдущим chat-сообщением через `followed_by` edge.
+
+    Ищет последнее action с action_kind ∈ `chat_kinds` до `new_idx`.
+    Если найдено и оно в окне `window_s` — добавляет edge `[new_idx, prev]`
+    в `_graph.edges.followed_by` (temporal chain). Иначе — new_idx считается
+    корневым сообщением, edge не создаётся.
+
+    Returns: prev_idx если linked, None если корневое.
+    """
+    import datetime as _dt
+    nodes = _graph.get("nodes", [])
+    if not (0 <= new_idx < len(nodes)):
+        return None
+    new_node = nodes[new_idx]
+    try:
+        new_ts = _dt.datetime.fromisoformat(
+            str(new_node.get("created_at", "")).replace("Z", "+00:00")
+        ).timestamp()
+    except Exception:
+        return None
+
+    # Идём с конца назад, ищем последний chat-msg
+    for i in range(new_idx - 1, -1, -1):
+        n = nodes[i]
+        if n.get("type") != "action":
+            continue
+        if n.get("action_kind") not in chat_kinds:
+            continue
+        try:
+            prev_ts = _dt.datetime.fromisoformat(
+                str(n.get("created_at", "")).replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            continue
+        if new_ts - prev_ts > window_s:
+            return None  # слишком давно — это корневое сообщение
+        # Link!
+        fb = _graph["edges"].setdefault("followed_by", [])
+        fb.append([new_idx, i])
+        return i
+    return None
+
+
+def list_open_actions(action_kinds: Optional[list[str]] = None) -> list[tuple[int, dict]]:
+    """Вернуть list (idx, node) action-нод с closed=False.
+
+    Фильтр по kinds если передан. Используется `_check_action_outcomes`
+    чтобы найти какие actions пора закрыть по timeout.
+    """
+    out = []
+    nodes = _graph.get("nodes", [])
+    for idx, n in enumerate(nodes):
+        if n.get("type") != "action":
+            continue
+        if n.get("closed"):
+            continue
+        if action_kinds and n.get("action_kind") not in action_kinds:
+            continue
+        out.append((idx, n))
+    return out
+
+
 def _get_texts(nodes: list[dict] | None = None) -> list[str]:
     """Return list of texts from nodes (for similarity, prompts)."""
     if nodes is None:
@@ -336,21 +652,333 @@ def _get_texts(nodes: list[dict] | None = None) -> list[str]:
     return [n["text"] for n in nodes]
 
 
+# ── Collapse cluster helper (единый путь для всех collapse-путей) ─────────
+#
+# Используется:
+#   • `/graph/collapse` endpoint (Lab manual collapse)
+#   • `force_synthesize_top` batched path (chat execute_deep final)
+#   • `_check_dmn_converge` force collapse (ночной cycle)
+#
+# DRY: smart truncation, lineage tracking, auto-link к topic root/goal —
+# всё в одной функции, чтобы не было двух реализаций.
+
+
+def _collapse_cluster_to_node(
+    indices: list[int],
+    lang: str = "ru",
+    custom_prompt: Optional[str] = None,
+    custom_system: Optional[str] = None,
+    instruction: Optional[str] = None,
+    max_tokens: int = 1500,
+    temp: float = 0.5,
+    top_k: int = 30,
+    no_merge: bool = True,
+    link_to_topic: bool = True,
+    link_to_goal: bool = True,
+) -> Optional[dict]:
+    """Свернуть cluster нод в synthesis-ноду через LLM.
+
+    Единый code-path — smart context truncation, lineage, auto-link.
+
+    Args:
+        indices: индексы нод в `_graph["nodes"]` для collapse
+        lang: ru/en
+        custom_prompt: если задан — используется AS-IS (caller сам обеспечил truncation).
+                        Если None — prompt собирается внутри с smart truncation
+                        контекста.
+        custom_system: если задан — system message. Иначе дефолтный.
+        instruction: финальная инструкция (что написать — "одним абзацем",
+                      "статьёй в 5 параграфов" и т.п.). Добавляется в конец
+                      внутренне-сформированного prompt'а. Игнорируется если
+                      `custom_prompt` задан.
+        max_tokens: cap на LLM-генерацию
+        no_merge: True — keep originals, add collapsed as new linked node (default для
+                   session synthesis — не хотим удалять мысли); False — remove sources
+        link_to_topic: добавить edge от topic-root ноды к collapsed
+        link_to_goal: добавить edge от goal-ноды к collapsed
+
+    Returns: {text, new_idx, confidence, collapsed_from} или None при провале.
+    """
+    nodes = _graph.get("nodes", [])
+    valid_indices = [i for i in indices if 0 <= i < len(nodes)]
+    if not valid_indices:
+        return None
+    cluster_nodes = [nodes[i] for i in valid_indices]
+    cluster_texts = [n.get("text", "") for n in cluster_nodes]
+    topic = _graph["meta"].get("topic", "")
+
+    # Сортируем по confidence (highest first) — если придётся truncate, сохраним лучшее
+    indexed = sorted(
+        enumerate(cluster_texts),
+        key=lambda x: -(cluster_nodes[x[0]].get("confidence", 0.5))
+    )
+
+    # Smart context truncation — то же что было в /graph/collapse endpoint
+    try:
+        from .api_backend import _settings
+        ctx_size = int(_settings.get("local_ctx", 8192))
+    except Exception:
+        ctx_size = 8192
+    # Оценка токенов: len(text)/3 для multilingual, резервируем место system + output
+    token_budget = ctx_size - 200 - max_tokens
+
+    selected_texts = []
+    used_tokens = 100  # грубый оверхед prompt
+    for _orig, t in indexed:
+        t_tokens = len(t) // 3 + 2  # +2 за "- "
+        if used_tokens + t_tokens > token_budget:
+            continue
+        selected_texts.append(t)
+        used_tokens += t_tokens
+
+    # Prompt assembly
+    if custom_prompt:
+        # Caller полностью сам собрал prompt (chat batched mode, /graph/collapse
+        # с collapse_override). Используем AS-IS без truncation — caller уже
+        # ограничил размер.
+        user = custom_prompt
+    else:
+        # Стандартный путь — собираем prompt внутри с smart truncation.
+        default_instruction = (instruction or
+            ("Сверни это в один связный абзац, сохраняя все идеи."
+             if lang == "ru" else
+             "Collapse into one coherent paragraph, preserving all ideas."))
+        if lang == "ru":
+            user = (f"Тема: {topic}\n\nМысли:\n"
+                    + "\n".join(f"- {t}" for t in selected_texts)
+                    + f"\n\n{default_instruction}")
+        else:
+            user = (f"Topic: {topic}\n\nIdeas:\n"
+                    + "\n".join(f"- {t}" for t in selected_texts)
+                    + f"\n\n{default_instruction}")
+    system = custom_system or (
+        "/no_think\nТы сворачиваешь группу мыслей в один связный текст."
+        if lang == "ru" else
+        "/no_think\nYou collapse a group of ideas into one coherent text.")
+
+    try:
+        text, ent = _graph_generate(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user}],
+            max_tokens=max_tokens, temp=temp, top_k=top_k,
+        )
+    except Exception as e:
+        log.debug(f"[collapse_cluster] LLM failed: {e}")
+        return None
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    # Lineage: все источники + их предки
+    lineage = set(valid_indices)
+    for i in valid_indices:
+        lineage |= set(nodes[i].get("collapsed_from", []) or [])
+
+    # Confidence avg
+    avg_conf = round(sum(n.get("confidence", 0.5) for n in cluster_nodes) / len(cluster_nodes), 3)
+
+    if no_merge:
+        # Keep originals, add collapsed as new linked node
+        max_depth = max((n.get("depth", 0) for n in cluster_nodes), default=0)
+        collapsed_topic = next((n.get("topic", "") for n in cluster_nodes if n.get("topic")), topic)
+        new_idx = _add_node(text[:1000], depth=max_depth + 1, topic=collapsed_topic,
+                             entropy=ent, confidence=avg_conf, node_type="synthesis")
+        nodes[new_idx]["collapsed_from"] = sorted(lineage)
+        # Полный текст synthesis сохраняем отдельно в node (для UI display через card)
+        nodes[new_idx]["full_text"] = text
+        directed = _graph["edges"].setdefault("directed", [])
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        for src in valid_indices:
+            directed.append([src, new_idx])
+            pair = [min(src, new_idx), max(src, new_idx)]
+            if pair not in manual_links:
+                manual_links.append(pair)
+    else:
+        # Remove sources, add collapsed at lowest depth. Используется Lab'ом
+        # для классического merge (удалить дубликаты, оставить свёрнутое).
+        min_depth = min((n.get("depth", 0) for n in cluster_nodes), default=0)
+        collapsed_topic = next((n.get("topic", "") for n in cluster_nodes if n.get("topic")), topic)
+        for i in sorted(valid_indices, reverse=True):
+            nodes.pop(i)
+        for k, nd in enumerate(nodes):
+            nd["id"] = k
+        _remap_edges(valid_indices)
+        new_idx = _add_node(text[:1000], depth=min_depth, topic=collapsed_topic,
+                             entropy=ent, confidence=avg_conf, node_type="synthesis")
+        nodes[new_idx]["collapsed_from"] = sorted(lineage)
+        nodes[new_idx]["full_text"] = text
+        directed = _graph["edges"].setdefault("directed", [])
+        manual_links = _graph["edges"].setdefault("manual_links", [])
+        if link_to_topic:
+            for i, nd in enumerate(nodes):
+                if nd.get("depth") == -1 and nd.get("topic") == collapsed_topic:
+                    directed.append([i, new_idx])
+                    break
+        if link_to_goal:
+            for i, nd in enumerate(nodes):
+                if nd.get("type") == "goal":
+                    directed.append([i, new_idx])
+                    break
+
+    return {"text": text, "new_idx": new_idx, "confidence": avg_conf,
+            "collapsed_from": sorted(lineage), "used_count": len(selected_texts)}
+
+
+# ── Smart grouping для batched collapse ───────────────────────────────────
+#
+# Когда source много (15+ нод), надо разбить на осмысленные группы: похожие
+# по embedding + с priority-сортировкой по confidence + без lineage-overlap.
+# Используется `force_synthesize_top` batched mode.
+
+
+def _group_for_collapse(
+    source_indices: list[int],
+    threshold: float = 0.91,
+    min_group_size: int = 2,
+    max_group_size: int = 5,
+) -> list[list[int]]:
+    """Разбить source_indices на группы для batched collapse.
+
+    Логика (по убыванию приоритета):
+      1. Semantic clusters (через `_find_clusters` по embedding similarity).
+         Если группа в cluster'е содержит нужные indices — берём её.
+      2. Fallback: группировка по topic (same `nodes[i].topic`).
+      3. Финальный fallback: sequential chunks по `max_group_size` из
+         остатков, отсортированных по confidence.
+
+    Lineage filter (`_filter_lineage`) применяется — не группируем ноды
+    одной collapse-родословной (избегаем избыточности).
+
+    Returns: list of group-indices lists. Может быть пустым если source
+    меньше min_group_size.
+    """
+    from collections import defaultdict
+    nodes = _graph.get("nodes", [])
+    src_set = set(source_indices)
+    if len(source_indices) < min_group_size:
+        return []
+
+    # Сортируем по confidence для приоритета в fallback
+    sorted_sources = sorted(
+        source_indices,
+        key=lambda i: -(nodes[i].get("confidence", 0.5) if 0 <= i < len(nodes) else 0)
+    )
+    remaining = set(sorted_sources)
+    groups: list[list[int]] = []
+
+    # 1. Semantic clusters через embedding similarity
+    try:
+        edges = _compute_edges(nodes, threshold, "embedding")
+        clusters = _find_clusters(len(nodes), edges, threshold)
+        for c in clusters:
+            # Фильтруем только source-indices + skip evidence/goal
+            group = [i for i in c
+                     if i in remaining
+                     and nodes[i].get("type") not in ("evidence", "goal")]
+            # Lineage filter
+            try:
+                from .thinking import _filter_lineage
+                group = _filter_lineage(group, nodes)
+            except Exception:
+                pass
+            if len(group) >= min_group_size:
+                groups.append(group[:max_group_size])
+                remaining -= set(group[:max_group_size])
+    except Exception as e:
+        log.debug(f"[group_for_collapse] semantic clustering failed: {e}")
+
+    # 2. Topic groups
+    by_topic = defaultdict(list)
+    for i in sorted_sources:
+        if i in remaining and 0 <= i < len(nodes):
+            by_topic[nodes[i].get("topic", "") or ""].append(i)
+    for topic_group in sorted(by_topic.values(), key=len, reverse=True):
+        try:
+            from .thinking import _filter_lineage
+            topic_group = _filter_lineage(topic_group, nodes)
+        except Exception:
+            pass
+        if len(topic_group) >= min_group_size:
+            groups.append(topic_group[:max_group_size])
+            remaining -= set(topic_group[:max_group_size])
+
+    # 3. Sequential chunks из остатков (sorted by confidence)
+    leftovers = [i for i in sorted_sources if i in remaining]
+    for b in range(0, len(leftovers), max_group_size):
+        chunk = leftovers[b:b + max_group_size]
+        if len(chunk) >= min_group_size:
+            groups.append(chunk)
+        elif chunk and groups:
+            # Хвост меньше min_group_size — приклеиваем к последней группе
+            # если итог не превысит max_group_size*1.5 (щадящий cap)
+            if len(groups[-1]) + len(chunk) <= int(max_group_size * 1.5):
+                groups[-1].extend(chunk)
+
+    return groups
+
+
+FORMAT_PROMPTS_RU = {
+    "brief":   ("Напиши краткий синтез одним абзацем (3-5 предложений). "
+                 "Если уверенность низкая — честно признайся об этом."),
+    "essay":   ("Напиши развёрнутое эссе 3-5 параграфов: введение, "
+                 "основная часть с аргументами и примерами, заключение. "
+                 "Сохрани все важные мысли и детали. Если уверенность "
+                 "низкая — честно признайся."),
+    "article": ("Напиши подробную статью 6-10 параграфов: введение, "
+                 "детальное раскрытие по разделам, разбор противоречий, "
+                 "заключение с выводами и следующими шагами. Сохрани все "
+                 "мысли и аргументы с примерами."),
+    "list":    ("Структурированный список: главные выводы маркированным "
+                 "списком, под каждым 1-2 предложения развёртки. В конце "
+                 "итоговое резюме одним абзацем."),
+}
+FORMAT_PROMPTS_EN = {
+    "brief":   ("Write a brief synthesis, one paragraph (3-5 sentences). "
+                 "Be honest about low confidence."),
+    "essay":   ("Write an essay in 3-5 paragraphs: intro, body with "
+                 "arguments and examples, conclusion. Preserve all "
+                 "important ideas."),
+    "article": ("Write a detailed article in 6-10 paragraphs: intro, "
+                 "section-by-section breakdown, tensions, conclusion with "
+                 "next steps. Preserve all arguments with examples."),
+    "list":    ("Structured list: main findings as bullets, each expanded "
+                 "in 1-2 sentences. Summary paragraph at the end."),
+}
+
+
 def force_synthesize_top(n: int = 5, lang: str = "ru",
-                          max_tokens: int = 3000) -> Optional[dict]:
-    """Forced collapse: top-N hypothesis/evidence/thought по confidence
-    + LLM-синтез одним абзацем + добавление synthesis-ноды в граф.
+                          max_tokens: int = 3000,
+                          source_indices: Optional[list[int]] = None,
+                          fmt: str = "essay",
+                          batched: bool = True,
+                          batch_size: int = 5) -> Optional[dict]:
+    """Forced collapse: top-N нод → синтез через LLM + добавление synthesis-ноды.
 
-    Общий helper используется `_check_dmn_converge` (фон) и `/graph/synthesize`
-    endpoint'ом для graph tab autorun. Source of truth — один.
+    Args:
+        n: сколько топ-нод взять
+        lang: ru/en
+        max_tokens: cap для LLM генерации (для article/list — можно 6000+)
+        source_indices: whitelist сессии; None = весь граф
+        fmt: 'brief' | 'essay' | 'article' | 'list' — определяет prompt
+        batched: если True и source_indices > batch_size*1.5 —
+                  двухфазный pyramidal: сначала section из каждого batch,
+                  потом final из sections. Надёжнее для локальных LLM
+                  (меньше токенов на один call, не упирается в context).
+        batch_size: размер пачки для batched режима
 
-    Возвращает {text, confidence, node_idx} или None если граф пустой.
+    Возвращает {text, confidence, node_idx, source_indices, fmt, batched}.
     """
     nodes = _graph.get("nodes", [])
     if not nodes:
         return None
-    cand = [(i, n) for i, n in enumerate(nodes)
-            if n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
+    if source_indices is not None:
+        allowed = set(source_indices)
+        cand = [(i, n) for i, n in enumerate(nodes)
+                if i in allowed
+                and n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
+    else:
+        cand = [(i, n) for i, n in enumerate(nodes)
+                if n.get("type") in ("hypothesis", "evidence", "thought", "synthesis")]
     if not cand:
         return None
     cand.sort(key=lambda p: p[1].get("confidence", 0.5), reverse=True)
@@ -358,37 +986,129 @@ def force_synthesize_top(n: int = 5, lang: str = "ru",
     avg_conf = round(sum(p[1].get("confidence", 0.5) for p in top) / len(top), 2)
     texts = "\n".join(f"- {p[1].get('text','')[:200]} (conf {p[1].get('confidence',0.5):.2f})"
                        for p in top)
-    goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
-    if lang == "ru":
-        prompt = (f"Цель: {goal_text}\n"
-                  f"Найденные мысли (от сильной к слабой):\n{texts}\n\n"
-                  f"Напиши финальный синтез одним абзацем (3-5 предложений). "
-                  f"Если уверенность низкая — честно признайся об этом.")
-        system = "/no_think\nТы ассистент-синтезатор."
+    # Goal text: если source_indices задан — ищем goal в whitelist'е
+    # (session-specific), иначе первый goal в графе.
+    if source_indices is not None:
+        _whitelist = set(source_indices)
+        goal_text = next(
+            (nodes[i].get("text", "") for i in source_indices
+             if 0 <= i < len(nodes) and nodes[i].get("type") == "goal"),
+            "")
+        if not goal_text:
+            goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
     else:
-        prompt = (f"Goal: {goal_text}\nThoughts (strong to weak):\n{texts}\n\n"
-                  f"Final synthesis, one paragraph (3-5 sentences). Be honest "
-                  f"about low confidence.")
-        system = "/no_think\nYou are a synthesizer."
-    try:
-        res, _ = _graph_generate(
-            [{"role": "system", "content": system},
-             {"role": "user", "content": prompt}],
-            max_tokens=max_tokens, temp=0.5, top_k=30,
+        goal_text = next((n.get("text", "") for n in nodes if n.get("type") == "goal"), "")
+    fmt_prompts = FORMAT_PROMPTS_RU if lang == "ru" else FORMAT_PROMPTS_EN
+    format_instruction = fmt_prompts.get(fmt, fmt_prompts["essay"])
+
+    # ── BATCHED MODE: pyramidal collapse через умную группировку ──
+    # Группируем source по similarity + confidence + topic (_group_for_collapse),
+    # каждая группа → section через _collapse_cluster_to_node, потом финал
+    # из sections. Это переиспользует существующую инфраструктуру collapse
+    # (smart truncation, lineage, link-back) — не дублируем код.
+    use_batching = batched and len(cand) > int(batch_size * 1.5)
+    candidate_indices = [p[0] for p in cand]  # для group_for_collapse
+
+    if use_batching:
+        groups = _group_for_collapse(
+            candidate_indices,
+            min_group_size=2,
+            max_group_size=batch_size,
         )
-    except Exception as e:
-        log.debug(f"[force_synthesize_top] LLM failed: {e}")
-        return None
-    text = (res or "").strip()[:2000]
+        sections = []
+        section_node_indices: list[int] = []
+        sec_system = ("/no_think\nТы пишешь раздел для финального эссе."
+                      if lang == "ru" else
+                      "/no_think\nYou are writing a section for a final essay.")
+        for i, group in enumerate(groups):
+            sec_prompt = (
+                (f"Цель: {goal_text}\n\nГруппа мыслей №{i+1}:\n"
+                 + "\n".join(f"- {nodes[j].get('text','')}" for j in group if 0 <= j < len(nodes))
+                 + "\n\nНапиши связный раздел (2-3 параграфа) покрывающий эти мысли "
+                   "с аргументами и примерами. Сохрани все идеи.")
+                if lang == "ru" else
+                (f"Goal: {goal_text}\n\nIdea group {i+1}:\n"
+                 + "\n".join(f"- {nodes[j].get('text','')}" for j in group if 0 <= j < len(nodes))
+                 + "\n\nWrite a coherent section (2-3 paragraphs) covering these "
+                   "ideas with arguments and examples. Preserve all ideas.")
+            )
+            sec_res = _collapse_cluster_to_node(
+                group, lang=lang,
+                custom_prompt=sec_prompt, custom_system=sec_system,
+                max_tokens=max(1500, max_tokens // 2),
+                no_merge=True,        # не удаляем источники в sessions
+                link_to_topic=False,  # промежуточные sections — не линкуем
+                link_to_goal=False,
+            )
+            if sec_res and sec_res.get("text"):
+                sections.append(sec_res["text"])
+                if sec_res.get("new_idx") is not None:
+                    section_node_indices.append(sec_res["new_idx"])
+
+        if sections:
+            # Финальный pass — sections собираются в единый текст
+            combined = "\n\n".join(
+                (f"РАЗДЕЛ {i+1}:\n{s}" if lang == "ru" else f"SECTION {i+1}:\n{s}")
+                for i, s in enumerate(sections))
+            final_prompt = (
+                (f"Цель: {goal_text}\n\nНаписанные разделы:\n{combined}\n\n"
+                 f"{format_instruction} Объедини разделы в цельный текст "
+                 f"с введением и заключением. Сохрани все аргументы.")
+                if lang == "ru" else
+                (f"Goal: {goal_text}\n\nWritten sections:\n{combined}\n\n"
+                 f"{format_instruction} Combine into a coherent text with "
+                 f"intro and conclusion. Preserve all arguments.")
+            )
+            final_system = ("/no_think\nТы финализируешь эссе из готовых разделов."
+                            if lang == "ru" else
+                            "/no_think\nYou finalize an essay from sections.")
+            try:
+                final_res, _ = _graph_generate(
+                    [{"role": "system", "content": final_system},
+                     {"role": "user", "content": final_prompt}],
+                    max_tokens=max_tokens, temp=0.5, top_k=30,
+                )
+                text = (final_res or "").strip()
+            except Exception as e:
+                log.debug(f"[force_synth batched] final failed: {e}")
+                text = "\n\n".join(sections)  # fallback
+        else:
+            text = ""
+    else:
+        # ── SINGLE-CALL MODE (small n, или batched off) ──
+        if lang == "ru":
+            prompt = (f"Цель: {goal_text}\n"
+                      f"Найденные мысли (от сильной к слабой):\n{texts}\n\n"
+                      f"{format_instruction}")
+            system = "/no_think\nТы ассистент-синтезатор."
+        else:
+            prompt = (f"Goal: {goal_text}\nThoughts (strong to weak):\n{texts}\n\n"
+                      f"{format_instruction}")
+            system = "/no_think\nYou are a synthesizer."
+        try:
+            res, _ = _graph_generate(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": prompt}],
+                max_tokens=max_tokens, temp=0.5, top_k=30,
+            )
+        except Exception as e:
+            log.debug(f"[force_synthesize_top] LLM failed: {e}")
+            return None
+        text = (res or "").strip()
+
+    # Cap финального текста — 20000 чар хватит даже на article format.
+    text = text[:20000]
     if not text:
         return None
     try:
-        idx = _add_node(text[:500], depth=0, topic="",
+        # Node-текст укорочен для списка в Lab; полный в card.synthesis отдельно.
+        idx = _add_node(text[:1000], depth=0, topic="",
                         confidence=avg_conf, node_type="synthesis")
     except Exception:
         idx = None
     return {"text": text, "confidence": avg_conf, "node_idx": idx,
-            "source_indices": [p[0] for p in top]}
+            "source_indices": [p[0] for p in top],
+            "fmt": fmt, "batched": use_batching if batched else False}
 
 
 def _add_node(text: str, depth: int = 0, topic: str = "",
@@ -430,6 +1150,13 @@ def _fresh_graph():
             "manual_links": [],
             "manual_unlinks": [],
             "directed": [],
+            # caused_by: action-outcome причинность (outcome_idx → action_idx).
+            # Отдельно от `directed` чтобы pump/DMN по умолчанию их не смешивали
+            # с semantic-рёбрами. См. docs/action-memory-design.md.
+            "caused_by": [],
+            # followed_by: temporal chain (prev_action_idx → next_action_idx).
+            # Без causal claim — просто «за этим пришло то». Для policy-planning.
+            "followed_by": [],
         },
         "meta": {
             "topic": "",
@@ -763,6 +1490,34 @@ def _remap_edges(removed_indices: list[int]):
             continue
         new_dir.append([remap(a), remap(b)])
     edges_dict["directed"] = new_dir
+
+    # Remap Action Memory edges (caused_by, followed_by) — те же ordered pairs
+    for key in ("caused_by", "followed_by"):
+        old = edges_dict.get(key, [])
+        new = []
+        for pair in old:
+            a, b = pair
+            if a in removed or b in removed:
+                continue
+            new.append([remap(a), remap(b)])
+        edges_dict[key] = new
+
+    # Also remap action.outcome_idx and outcome.linked_action_idx in nodes
+    nodes = _graph.get("nodes", [])
+    for n in nodes:
+        if n.get("type") == "action" and n.get("outcome_idx") is not None:
+            oi = n["outcome_idx"]
+            if oi in removed:
+                n["outcome_idx"] = None
+                n["closed"] = False  # outcome исчез — action становится снова open
+            elif oi > 0:
+                n["outcome_idx"] = remap(oi)
+        elif n.get("type") == "outcome" and n.get("linked_action_idx") is not None:
+            ai = n["linked_action_idx"]
+            if ai in removed:
+                n["linked_action_idx"] = None
+            elif ai > 0:
+                n["linked_action_idx"] = remap(ai)
 
     # Remap hub nodes
     meta = _graph["meta"]
