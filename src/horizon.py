@@ -464,12 +464,23 @@ class CognitiveState:
                 "dopamine":       neuro_dict["dopamine"],
                 "serotonin":      neuro_dict["serotonin"],
                 "norepinephrine": neuro_dict["norepinephrine"],
-                # burnout = display_burnout: max(conflict_accumulator, desync_pressure)
-                # conflict_accumulator отдельно для отладки (активирует freeze),
-                # desync_pressure отдельно (хронический рассинхрон с юзером).
+                # burnout = display_burnout: max(conflict_accumulator,
+                # silence_pressure, imbalance_pressure). Три feeder'а:
+                #   • conflict — графовые конфликты (единственный активирует freeze)
+                #   • silence  — хроническое молчание юзера (таймер)
+                #   • imbalance — EMA aggregate 4-х PE-каналов (Friston-loop)
                 "burnout":             round(self.freeze.display_burnout, 3),
                 "burnout_conflict":    round(self.freeze.conflict_accumulator, 3),
-                "burnout_desync":      round(self.freeze.desync_pressure, 3),
+                "burnout_silence":     round(self.freeze.silence_pressure, 3),
+                "burnout_imbalance":   round(self.freeze.imbalance_pressure, 3),
+                # Прайм-директива: EMA sync_error для валидации через 2 мес.
+                # Fast (1ч) — для UI тренда; slow (3д) — для weekly aggregate.
+                # Пишется раз в час в data/prime_directive.jsonl.
+                "sync_error_ema_fast": round(self.freeze.sync_error_ema_fast, 4),
+                "sync_error_ema_slow": round(self.freeze.sync_error_ema_slow, 4),
+                # Self-prediction: Baddle PE на её же baseline.
+                # Входит одной из 4-х компонент в burnout_imbalance.
+                "self_imbalance":      neuro_dict.get("self_imbalance", 0.0),
                 "freeze_active":       self.freeze.active,
                 "state_origin":        self.state_origin_hint,
                 "recent_rpe":          neuro_dict.get("recent_rpe", 0.0),

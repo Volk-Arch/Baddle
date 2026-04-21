@@ -94,4 +94,4 @@ POST /workspace/seed-from-history
 
 ---
 
-**Навигация:** [← Novelty](novelty-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Workspace →](workspace-design.md)
+**Навигация:** [← Thinking operations](thinking-operations.md)  ·  [Индекс](README.md)  ·  [Следующее: Workspace →](workspace-design.md)

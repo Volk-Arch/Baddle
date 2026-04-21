@@ -435,6 +435,211 @@ def _parse_classify_output(text: str) -> Optional[dict]:
     return None
 
 
+# ── Router fast-paths ──────────────────────────────────────────────────
+# Четыре короткие ветки `router_intent`, которые отвечают сразу, не ходя
+# в execute_mode. Каждая возвращает полный response-dict или None (нет
+# применимости — идём к execute_mode). Общий envelope + list-based dispatch
+# убирают 4 параллельных `if ... try ... jsonify({...}) except ...` блока
+# из assist(): было ~200 строк, стало ~115 + один вызов `_try_fastpath`.
+
+def _fastpath_envelope(*, text, mode, mode_name, cards, message,
+                       router_intent, lang, **extra) -> Dict:
+    """Response-dict одинаковой формы для всех fastpath-ов.
+
+    Экстра-поля (например `awaiting_input`) — через kwargs.
+    """
+    ctx_e = _get_context()
+    resp = {
+        "text": text,
+        "mode": mode,
+        "mode_name": mode_name,
+        "message_echo": message,
+        "cards": cards,
+        "steps": [],
+        "energy": ctx_e.get("energy"),
+        "hrv": ctx_e.get("hrv"),
+        "intent_router": router_intent,
+        "lang": lang,
+        "graph_updated": False,
+        "api_offline": False,
+        "warnings": [],
+    }
+    resp.update(extra)
+    return resp
+
+
+def _fastpath_activity(router_intent: dict, message: str, lang: str):
+    """fact/activity — «начал тренировку» / «пошёл гулять».
+
+    Запускаем taskplayer-трекер + матчинг recurring-цели (симметрично
+    с /activity/start).
+    """
+    from .intent_router import extract_activity_name
+    from .activity_log import (start_activity, try_match_recurring_instance,
+                               detect_category)
+    from .workspace import get_workspace_manager
+    act_name = extract_activity_name(message, lang=lang)
+    if not act_name:
+        return None
+    ws_id = "main"
+    try:
+        ws_id = get_workspace_manager().active_id or "main"
+    except Exception:
+        pass
+    category = detect_category(act_name)
+    aid = start_activity(name=act_name, category=category, workspace=ws_id)
+    matched_rec = None
+    try:
+        matched_rec = try_match_recurring_instance(
+            activity_name=act_name, activity_category=category, lang=lang,
+        )
+    except Exception:
+        pass
+    reply_parts = [f"🎬 Запустил трекер: «{act_name}»"
+                   + (f" ({category})" if category else "")]
+    if matched_rec:
+        p = matched_rec.get("progress") or {}
+        reply_parts.append(
+            f"♻✓ Засчитано в «{matched_rec['goal_text']}» — "
+            f"{p.get('done_today', 0)}/{p.get('times_per_day', 0)}"
+        )
+    return _fastpath_envelope(
+        text="\n".join(reply_parts),
+        mode="activity_started", mode_name="Запустил",
+        cards=[{
+            "type": "activity_started",
+            "activity_id": aid,
+            "activity_name": act_name,
+            "category": category,
+            "matched_recurring": matched_rec,
+        }],
+        message=message, router_intent=router_intent, lang=lang,
+    )
+
+
+def _fastpath_instance(router_intent: dict, message: str, lang: str):
+    """fact/instance — «только что выпил воды» → засчитать recurring."""
+    from .goals_store import record_instance, get_goal
+    from .recurring import get_progress
+    gid = router_intent["target_goal_id"]
+    goal = get_goal(gid)
+    if not goal:
+        return None
+    record_instance(gid, note=message[:200])
+    progress = get_progress(gid)
+    txt = goal.get("text", "")
+    done = progress.get("done_today", 0) if progress else 0
+    tpd = progress.get("times_per_day", 0) if progress else 0
+    reply = (f"✓ Засчитал «{txt}» — прогресс {done}/{tpd} сегодня"
+             if lang == "ru" else
+             f"✓ Recorded «{txt}» — progress {done}/{tpd} today")
+    return _fastpath_envelope(
+        text=reply, mode="instance_ack", mode_name="Отметил",
+        cards=[{
+            "type": "instance_ack",
+            "goal_id": gid,
+            "goal_text": txt,
+            "progress": progress,
+        }],
+        message=message, router_intent=router_intent, lang=lang,
+    )
+
+
+def _fastpath_chat(router_intent: dict, message: str, lang: str):
+    """chat — свободный разговор, быстрый LLM-ответ без графа."""
+    from .graph_logic import _graph_generate
+    sys_p = ("/no_think\nТы дружелюбный ассистент. Отвечай кратко "
+             "и по делу, 1-2 предложения."
+             if lang == "ru" else
+             "/no_think\nYou're a friendly assistant. Reply briefly, 1-2 sentences.")
+    reply, _ = _graph_generate(
+        [{"role": "system", "content": sys_p},
+         {"role": "user", "content": message[:400]}],
+        max_tokens=200, temp=0.7, top_k=40,
+    )
+    return _fastpath_envelope(
+        text=(reply or "").strip() or "...",
+        mode="chat", mode_name="Разговор",
+        cards=[],
+        message=message, router_intent=router_intent, lang=lang,
+    )
+
+
+def _fastpath_draft(router_intent: dict, message: str, lang: str):
+    """task/new_{recurring,constraint,goal} — draft-карточка для подтверждения.
+
+    Не тратим токены на execute_mode пока юзер не решил что создавать.
+    """
+    from .intent_router import make_draft_card
+    card = make_draft_card(
+        router_intent["kind"], router_intent["subtype"],
+        message, lang=lang,
+    )
+    return _fastpath_envelope(
+        text=card.get("title", ""),
+        mode=router_intent["subtype"], mode_name="Подтверди",
+        cards=[card],
+        message=message, router_intent=router_intent, lang=lang,
+        awaiting_input=True,
+    )
+
+
+# Predicate вместе с handler'ом — четыре роута. Каждый predicate полностью
+# выражает условие матчинга (kind + subtype + confidence + extra guards),
+# чтобы не раскидывать логику между dispatcher'ом и таблицей.
+
+def _fp_match_activity(ri: dict) -> bool:
+    return (ri.get("kind") == "fact"
+            and ri.get("subtype") == "activity"
+            and ri.get("confidence_sub", 0) >= 0.7)
+
+
+def _fp_match_instance(ri: dict) -> bool:
+    return (ri.get("kind") == "fact"
+            and ri.get("subtype") == "instance"
+            and ri.get("target_goal_id")
+            and ri.get("confidence_sub", 0) >= 0.7)
+
+
+def _fp_match_chat(ri: dict) -> bool:
+    return (ri.get("kind") == "chat"
+            and ri.get("confidence_top", 0) >= 0.7)
+
+
+def _fp_match_draft(ri: dict) -> bool:
+    return (ri.get("kind") == "task"
+            and ri.get("subtype") in ("new_recurring", "new_constraint", "new_goal")
+            and ri.get("confidence_sub", 0) >= 0.7)
+
+
+_FASTPATH_ROUTES = (
+    (_fp_match_activity, _fastpath_activity, "activity"),
+    (_fp_match_instance, _fastpath_instance, "instance"),
+    (_fp_match_chat,     _fastpath_chat,     "chat"),
+    (_fp_match_draft,    _fastpath_draft,    "draft"),
+)
+
+
+def _try_fastpath(router_intent, message: str, lang: str):
+    """Проверить 4 router-intent fastpath'а. Возвращает response-dict,
+    если какой-то сработал, или None (пропускаем к execute_mode).
+
+    Ошибки в конкретном fastpath логируются как warning и не мешают
+    попробовать остальные (исходный код тоже молча «проваливался» после
+    log.warning к следующему if-блоку).
+    """
+    if not router_intent:
+        return None
+    for predicate, handler, tag in _FASTPATH_ROUTES:
+        if not predicate(router_intent):
+            continue
+        try:
+            resp = handler(router_intent, message, lang)
+            if resp is not None:
+                return resp
+        except Exception as e:
+            log.warning(f"[/assist] fastpath {tag} failed: {e}")
+    return None
 
 
 # ── Main /assist endpoint ──────────────────────────────────────────────
@@ -516,168 +721,11 @@ def assist():
     except Exception as _e:
         log.debug(f"[/assist] intent_router failed: {_e}")
 
-    # Быстрый путь: юзер начал активность («начал тренировку» / «пошёл гулять»).
-    # Автоматически запускаем taskplayer — симметрично с тем как «Обед» из
-    # taskplayer засчитывается как instance recurring-цели.
-    if (router_intent
-            and router_intent.get("kind") == "fact"
-            and router_intent.get("subtype") == "activity"
-            and router_intent.get("confidence_sub", 0) >= 0.7):
-        try:
-            from .intent_router import extract_activity_name
-            from .activity_log import start_activity, try_match_recurring_instance, detect_category
-            from .workspace import get_workspace_manager
-            act_name = extract_activity_name(message, lang=lang)
-            if act_name:
-                ws_id = "main"
-                try:
-                    ws_id = get_workspace_manager().active_id or "main"
-                except Exception:
-                    pass
-                category = detect_category(act_name)
-                aid = start_activity(name=act_name, category=category,
-                                      workspace=ws_id)
-                # Матчинг recurring тоже — симметрично с /activity/start
-                matched_rec = None
-                try:
-                    matched_rec = try_match_recurring_instance(
-                        activity_name=act_name, activity_category=category,
-                        lang=lang,
-                    )
-                except Exception:
-                    pass
-                reply_parts = [f"🎬 Запустил трекер: «{act_name}»"
-                               + (f" ({category})" if category else "")]
-                if matched_rec:
-                    p = matched_rec.get("progress") or {}
-                    reply_parts.append(
-                        f"♻✓ Засчитано в «{matched_rec['goal_text']}» — "
-                        f"{p.get('done_today', 0)}/{p.get('times_per_day', 0)}"
-                    )
-                reply = "\n".join(reply_parts)
-                ctx_e = _get_context()
-                return jsonify({
-                    "text": reply,
-                    "mode": "activity_started", "mode_name": "Запустил",
-                    "message_echo": message,
-                    "cards": [{
-                        "type": "activity_started",
-                        "activity_id": aid,
-                        "activity_name": act_name,
-                        "category": category,
-                        "matched_recurring": matched_rec,
-                    }],
-                    "steps": [],
-                    "energy": ctx_e.get("energy"),
-                    "hrv": ctx_e.get("hrv"),
-                    "intent_router": router_intent,
-                    "lang": lang, "graph_updated": False,
-                    "api_offline": False, "warnings": [],
-                })
-        except Exception as _e:
-            log.warning(f"[/assist] activity auto-start failed: {_e}")
-
-    # Быстрый путь: юзер отметил выполнение recurring («только что выпил воды»)
-    if (router_intent
-            and router_intent.get("kind") == "fact"
-            and router_intent.get("subtype") == "instance"
-            and router_intent.get("target_goal_id")
-            and router_intent.get("confidence_sub", 0) >= 0.7):
-        try:
-            from .goals_store import record_instance, get_goal
-            from .recurring import get_progress
-            gid = router_intent["target_goal_id"]
-            goal = get_goal(gid)
-            if goal:
-                record_instance(gid, note=message[:200])
-                progress = get_progress(gid)
-                txt = goal.get("text", "")
-                done = progress.get("done_today", 0) if progress else 0
-                tpd = progress.get("times_per_day", 0) if progress else 0
-                reply = (f"✓ Засчитал «{txt}» — прогресс {done}/{tpd} сегодня"
-                         if lang == "ru" else
-                         f"✓ Recorded «{txt}» — progress {done}/{tpd} today")
-                ctx_e = _get_context()
-                return jsonify({
-                    "text": reply, "mode": "instance_ack", "mode_name": "Отметил",
-                    "message_echo": message,
-                    "cards": [{
-                        "type": "instance_ack",
-                        "goal_id": gid,
-                        "goal_text": txt,
-                        "progress": progress,
-                    }],
-                    "steps": [],
-                    "energy": ctx_e.get("energy"),
-                    "hrv": ctx_e.get("hrv"),
-                    "intent_router": router_intent,
-                    "lang": lang, "graph_updated": False,
-                    "api_offline": False, "warnings": [],
-                })
-        except Exception as _e:
-            log.warning(f"[/assist] instance fast-path failed: {_e}")
-
-    # Свободный chat: простой LLM ответ без графа
-    if (router_intent
-            and router_intent.get("kind") == "chat"
-            and router_intent.get("confidence_top", 0) >= 0.7):
-        try:
-            from .graph_logic import _graph_generate
-            sys_p = ("/no_think\nТы дружелюбный ассистент. Отвечай кратко "
-                     "и по делу, 1-2 предложения."
-                     if lang == "ru" else
-                     "/no_think\nYou're a friendly assistant. Reply briefly, 1-2 sentences.")
-            reply, _ = _graph_generate(
-                [{"role": "system", "content": sys_p},
-                 {"role": "user", "content": message[:400]}],
-                max_tokens=200, temp=0.7, top_k=40,
-            )
-            ctx_e = _get_context()
-            return jsonify({
-                "text": (reply or "").strip() or ("..." if lang == "ru" else "..."),
-                "mode": "chat", "mode_name": "Разговор",
-                "message_echo": message,
-                "cards": [],
-                "steps": [],
-                "energy": ctx_e.get("energy"),
-                "hrv": ctx_e.get("hrv"),
-                "intent_router": router_intent,
-                "lang": lang, "graph_updated": False,
-                "api_offline": False, "warnings": [],
-            })
-        except Exception as _e:
-            log.warning(f"[/assist] chat fast-path failed: {_e}")
-
-    # Draft-confirm: юзер высказал намерение создать recurring/constraint/goal.
-    # Возвращаем карточку с черновиком, юзер подтверждает кнопкой → создание.
-    # Не тратим токены на execute_mode пока юзер не решил что создавать.
-    if (router_intent
-            and router_intent.get("kind") == "task"
-            and router_intent.get("subtype") in ("new_recurring", "new_constraint", "new_goal")
-            and router_intent.get("confidence_sub", 0) >= 0.7):
-        try:
-            from .intent_router import make_draft_card
-            card = make_draft_card(
-                router_intent["kind"], router_intent["subtype"],
-                message, lang=lang,
-            )
-            ctx_e = _get_context()
-            return jsonify({
-                "text": card.get("title", ""),
-                "mode": router_intent["subtype"],
-                "mode_name": "Подтверди",
-                "message_echo": message,
-                "cards": [card],
-                "steps": [],
-                "energy": ctx_e.get("energy"),
-                "hrv": ctx_e.get("hrv"),
-                "intent_router": router_intent,
-                "lang": lang, "graph_updated": False,
-                "api_offline": False, "warnings": [],
-                "awaiting_input": True,
-            })
-        except Exception as _e:
-            log.warning(f"[/assist] draft-confirm failed: {_e}")
+    # 4 fast-path ветки (activity / instance / chat / draft) — сразу
+    # возвращаем ответ без execute_mode. Определения и dispatcher — выше.
+    _fastpath_resp = _try_fastpath(router_intent, message, lang)
+    if _fastpath_resp is not None:
+        return jsonify(_fastpath_resp)
     # ── конец router prefilter ─────────────────────────────────────────
 
     # Inject NE spike — user engagement = Horizon takes budget from DMN
@@ -1211,6 +1259,44 @@ def assist_history():
         "top_rejected_modes": top_rejected,
         "count": len(out_entries),
     })
+
+
+@assistant_bp.route("/assist/prime-directive", methods=["GET"])
+def assist_prime_directive():
+    """Агрегат sync_error trend из `data/prime_directive.jsonl`.
+
+    Query params:
+      window_days: float (optional) — окно аггрегации. Если не задан —
+                    весь лог. Например 7 = неделя, 30 = месяц.
+      daily: '1' → добавить per-day breakdown (default выключен).
+
+    Returns:
+      {
+        ok: True,
+        count, days_span, first_ts, last_ts,
+        mean_sync_error, mean_ema_fast, mean_ema_slow,
+        mean_imbalance, mean_silence, mean_conflict,
+        trend_slow_delta, trend_verdict,   # last-third minus first-third
+        daily?: [{date, count, mean_fast, mean_slow}, ...]
+      }
+
+    Валидация через 2 мес use: если `trend_slow_delta` < 0 (mean slow EMA
+    упал) — резонансный протокол работает, прайм-директива validates.
+    """
+    from .prime_directive import aggregate, daily_bins
+
+    try:
+        window_str = request.args.get("window_days", "").strip()
+        window_days = float(window_str) if window_str else None
+    except Exception:
+        window_days = None
+    include_daily = request.args.get("daily", "").strip() == "1"
+
+    summary = aggregate(window_days=window_days)
+    if include_daily:
+        days = int(window_days) if window_days else 30
+        summary["daily"] = daily_bins(window_days=days)
+    return jsonify({"ok": True, **summary})
 
 
 @assistant_bp.route("/assist/simulate-day", methods=["POST"])

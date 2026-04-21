@@ -351,4 +351,4 @@ Single-path, без миграций и legacy кода. Правила эвол
 
 ---
 
-**Навигация:** [← Activity log](activity-log-design.md)  ·  [Индекс](README.md)  ·  [Следующее: SmartDC →](smartdc-design.md)
+**Навигация:** [← Activity log](activity-log-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Thinking operations →](thinking-operations.md)

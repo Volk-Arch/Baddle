@@ -309,6 +309,23 @@ WORKSPACE_ATTRACTORS = {
 
 ## 6. Prediction error как вектор — attribution по осям
 
+> **Статус 2026-04-23: resolved (3D + attribution).**
+> - 3D `surprise_vec` в `UserState` и `Neurochem` — см. [friston-loop.md](friston-loop.md).
+> - `UserState.attribution` возвращает доминирующую ось ('dopamine' | 'serotonin'
+>   | 'norepinephrine'), `attribution_magnitude` и `attribution_signed` —
+>   для UI debug «что именно недооценили».
+> - Per-channel decomposition в `data/prime_directive.jsonl` (user_imbalance,
+>   self_imbalance, agency_gap, hrv_surprise) — видно какой канал реально
+>   двигал burnout через 2 мес.
+>
+> **Что остаётся:** расширить `vector()` до 4D (включить agency) если через
+> месяц use окажется что она соизмерима с нейрохимическими осями. Пока
+> agency держим как отдельный канал в `imbalance_pressure` через `agency_gap`.
+> Секция ниже оставлена как историческая запись.
+
+---
+
+
 ### Контекст
 
 Сейчас `UserState.surprise = reality − expectation` и `Neurochem.recent_rpe` — **скаляры**. «Насколько реальность отклонилась от ожидания», один number.
@@ -355,6 +372,29 @@ attribution = argmax(abs(surprise_vec))  # ось с максимальной о
 ---
 
 ## 7. Surprise detection у **юзера** — триггер «он только что что-то не ожидал»
+
+> **Статус 2026-04-23: resolved (MVP A+B).**
+> - `src/surprise_detector.py` — HRV-based (rolling RMSSD σ-threshold +
+>   activity gate) + text markers (ru/en regex + капс + `??`/`!!!` bursts).
+> - Combined check `detect_user_surprise(text, activity)` — OR обоих.
+> - Integration: `cognitive_loop._check_user_surprise` раз в 5 мин;
+>   throttle + processed_msg_ts защита от повторной обработки.
+> - Side-effects: `UserState.apply_surprise_boost(3)` → EMA decay
+>   ускоряется 0.98→0.85 на 3 tick'а (baseline быстро адаптируется к
+>   новой реальности юзера); `record_action(actor="user",
+>   action_kind="user_surprise", extras={source, confidence, ...})`
+>   в граф для action-memory и DMN-bridge discovery.
+>
+> **Не реализовано** (см. [friston-loop.md § User-side surprise](friston-loop.md#user-side-surprise-oq-7)):
+> - LLM fallback для borderline text scores
+> - Dialog pivot detection через embedding distance
+> - Per-user adaptive HRV threshold (связано с OQ #1)
+> - Pupil tracking (D) и GSR/EDA (E) — зависят от hardware
+>
+> Секция ниже оставлена как историческая запись дизайна.
+
+---
+
 
 ### Контекст
 
@@ -427,4 +467,4 @@ ixbt-статья 2026-04-21 про зрачки как pre-activation signal + 
 
 ---
 
-**Навигация:** [Индекс docs](README.md) · [TODO](../TODO.md)
+**Навигация:** [Индекс docs](README.md) · [TODO](../planning/TODO.md)

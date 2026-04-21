@@ -5,7 +5,7 @@ Scout bridges, конвергенции). Новая сессия начинае
 cross-graph модуль извлекает conclusions из недавней истории и создаёт
 seed-ноды в текущем content-графе с унаследованными embedding'ами.
 
-Seeds создаются как `rendered=False` (см. embedding-first-design.md):
+Seeds создаются как `rendered=False` (см. docs/thinking-operations.md § Embedding-first):
 embedding есть, текст-плейсхолдер разворачивается лениво когда юзер откроет.
 
 Модуль не автоматический — предоставляет `seed_from_history()` для явного

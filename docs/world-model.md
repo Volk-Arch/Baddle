@@ -30,22 +30,25 @@
 
 **Было:** юзер не пишет — система тихо ждёт. Фоновые циклы (pump/scout/DMN) генерируют alerts как побочный эффект, но не как целенаправленный поиск контакта.
 
-**Реализовано:** `_check_sync_seeking` в `cognitive_loop.py`. Gate'ы: `freeze.desync_pressure > 0.3` И idle > 2ч И 30мин тишины после любого другого proactive alert. Throttle раз в 2ч. LLM-генерирует сообщение с контекстом (время дня, recent topics из графа, HRV-снимок, последняя активность) — разные тексты каждый раз. Tone (caring/ambient/curious/reference/simple) → разные иконки и фоны карточки в UI. Fallback-шаблоны при недоступном LLM. Подробности → [docs/alerts-and-cycles.md](alerts-and-cycles.md) секция «Типы alerts → sync_seeking».
+**Реализовано:** `_check_sync_seeking` в `cognitive_loop.py`. Gate'ы: `freeze.silence_pressure > 0.3` И idle > 2ч И 30мин тишины после любого другого proactive alert. Throttle раз в 2ч. LLM-генерирует сообщение с контекстом (время дня, recent topics из графа, HRV-снимок, последняя активность) — разные тексты каждый раз. Tone (caring/ambient/curious/reference/simple) → разные иконки и фоны карточки в UI. Fallback-шаблоны при недоступном LLM. Подробности → [docs/alerts-and-cycles.md](alerts-and-cycles.md) секция «Типы alerts → sync_seeking».
 
-### 2. System-burnout от persistent desync ✅ 2026-04-20
+### 2. System-burnout от persistent desync ✅ 2026-04-20 · расширено 2026-04-23
 
-**Сейчас:** `sync_error` высокий → разовая реакция (alert, suggestion). После — всё как было. Накопления нет.
+**Было:** `sync_error` высокий → разовая реакция (alert, suggestion). После — всё как было. Накопления нет.
 
-**Реализовано:** В `ProtectiveFreeze` (`src/neurochem.py`) два feeder'а, одна UI-ось «Усталость Baddle»:
+**Реализовано:** единая «Усталость Baddle» из трёх источников:
 
-- `conflict_accumulator` — графовые конфликты (существовал, активирует Bayes-freeze)
-- `desync_pressure` — **новый**, растёт по времени без user-events (1/7сут), падает 0.05 за event
+- **Графовые конфликты** — единственный источник, активирующий Bayes-freeze (останавливает обучение).
+- **Молчание юзера** — таймер, ползёт вверх при отсутствии событий (~7 суток без контакта → полный), падает при любом сигнале.
+- **Накопленный рассинхрон** — EMA aggregate 4-х каналов prediction error: где юзер, куда тянут его цели, тело, собственные ожидания Baddle. Берётся max по каналам, baseline'ы TOD-scoped (утренняя apathy не маскирует вечернюю). Это и есть настоящее «рассогласование предсказания».
 
-`display_burnout = max(обоих)` показывается в UI и управляет `_idle_multiplier()` в cognitive_loop. Все investigation-циклы (DMN continuous/deep/converge/cross-graph, night cycle, state_walk) плавно замедляются через `_throttled_idle(base × multiplier)`. Multiplier растёт линейно от 1× до 10× по мере burnout.
+UI показывает максимум трёх. Юзер-усталость добавляется поверх, замедляя фоновые циклы (DMN, night cycle, scout) линейно до 10×. Важно: молчание и рассинхрон НЕ замораживают обучение графа — это замедление, не остановка.
 
-Параллель с человеком: длинный дезконнект с миром → депрессивное снижение активности как защитный механизм. Важно: `desync_pressure` НЕ активирует Bayes-freeze — это замедление, не замирание обучения графа.
+Параллель с человеком: длинный дезконнект с миром → депрессивное снижение активности как защитный механизм.
 
-Подробно → [docs/alerts-and-cycles.md](alerts-and-cycles.md) секция «Adaptive idle».
+**Прайм-директива: sync_error измеряется сам.** Две EMA (быстрая 1ч, медленная 3д) + append-only лог `data/prime_directive.jsonl`. Endpoint `/assist/prime-directive?window_days=30` возвращает aggregate + trend verdict (`improving`/`stable`/`worsening`). Это закрывает разрыв между манифестом («единственная метрика — sync_error») и возможностью её измерить через 2 мес use.
+
+Подробно → [alerts-and-cycles.md](alerts-and-cycles.md) § Adaptive idle + § Прайм-директива. Предиктивный контур — [friston-loop.md](friston-loop.md).
 
 ### 3. Естественный отбор мыслей
 
@@ -58,7 +61,7 @@
 
 Не я решаю что забыть, не юзер — **частота использования**.
 
-**Реализация:** доработать existing consolidation — добавить `_decay_unused_nodes` шаг в ночном цикле. Константы decay лучше подбирать под реальное использование (см. [open-questions #1](open-questions.md#1)).
+**Реализация:** доработать existing consolidation — добавить `_decay_unused_nodes` шаг в ночном цикле. Константы decay лучше подбирать под реальное использование (см. [open-questions #1](../planning/open-questions.md#1)).
 
 ### 4. Циклы мышления затухают без пищи
 
@@ -131,9 +134,9 @@
 - `consolidation.py` — уже чистит слабые, нужно добавить decay по времени без access
 - `cognitive_loop._check_*` — уже структура, нужно 1 новый check (`_check_sync_seeking`) и 1 adaptive throttle (stable-count для pump/DMN)
 
-Подробные задачи → [TODO.md раздел Resonance protocol](../TODO.md).
+Подробные задачи → [TODO § Resonance protocol](../planning/TODO.md).
 
-Открытые вопросы по параметрам (какие пороги, скорости decay, размеры окон) — [open-questions.md](open-questions.md).
+Открытые вопросы по параметрам (какие пороги, скорости decay, размеры окон) — [open-questions.md](../planning/open-questions.md).
 
 ---
 
@@ -143,19 +146,20 @@
 
 | Внешний термин | Наш аналог | Где в коде | Семантика |
 |---|---|---|---|
-| Free Energy / surprise (Friston) | `UserState.surprise`, `Neurochem.recent_rpe` | `user_state.py::tick_expectation`, `neurochem.py` | Reality − Expectation, signed в [−1,1] |
-| Prediction Error (active inference) | то же самое — `surprise` | user_state.py | Скаляр. Вектор — [open-questions #6](open-questions.md#6-prediction-error-как-вектор) |
-| Valence-Arousal-Dominance (VAD, Russell+Mehrabian) | DA/S/NE/burnout + `UserState.valence` | neurochem.py + user_state.py | Наши 4 оси покрывают VA, valence отдельно, D = agency в [open-questions #2](open-questions.md#2) |
-| Belief space / state distribution | `UserState.vector()` (4D) | user_state.py | Continuous, EMA-smoothed |
+| Free Energy / surprise (Friston) | `UserState.surprise` + `surprise_vec` (3D) | `user_state.py::tick_expectation`, подробно → [friston-loop.md](friston-loop.md) | 3D PE-вектор + attribution |
+| Prediction Error (active inference) | 5 PE-каналов → `imbalance_pressure` | friston-loop.md § Анатомия | user 3D + TOD + goal + HRV + self, max-aggregated |
+| Valence-Arousal-Dominance (VAD, Russell+Mehrabian) | DA/S/NE + `UserState.valence` + `UserState.agency` | neurochem.py + user_state.py | 3 оси арусала, valence отдельно, D = agency (OQ #2 measurements) |
+| Belief space / state distribution | `UserState.vector()` (3D, 2026-04-23) | user_state.py | Continuous, EMA-smoothed, burnout как отдельное поле |
 | Precision weighting | `CognitiveState.precision`, `effective_precision` | horizon.py | Уже есть, гейтит policy weights |
 | Cost of control / регуляторное усилие | `energy` dual-pool + `decisions_today × 6` + cascading tax | user_state.py, assistant.py | Dynamic cost, не статический счётчик |
-| Allostatic load | `Neurochem.burnout` (conflict + desync feeders) | neurochem.py `ProtectiveFreeze` | Два feeder'а, один display_burnout |
+| Allostatic load | `ProtectiveFreeze` (conflict + silence + imbalance feeders) | neurochem.py | Три feeder'а, один display_burnout, плюс `combined_burnout(user)` для idle multiplier |
 | Affective inertia / smoothing | EMA decay (0.9–0.98) во всех апдейтах | везде | Даёт ту же плавность что explicit velocity, без второго поля |
-| Attractors in belief space | workspaces (пока — контейнеры; аттракторы в [OQ #5](open-questions.md#5)) | workspace.py | Открыто: аттракторы в neurochem-пространстве |
+| Attractors in belief space | workspaces (пока — контейнеры; аттракторы в [OQ #5](../planning/open-questions.md#5)) | workspace.py | Открыто: аттракторы в neurochem-пространстве |
 | Soft context blending | `sync_regime` derived из continuous sync_error | user_state.py | Не if/else, derived-state |
-| Recovery / return-to-baseline | `ProtectiveFreeze.THETA_RECOVERY` + `desync_pressure` drop | neurochem.py | Гистерезис, не жёсткий reset |
-| Pre-activation / anticipatory computation (зрачки, [ixbt 2026-04](https://www.ixbt.com/live/science/)) | `UserState.expectation` (EMA baseline) + `CognitiveState.precision` | user_state.py, horizon.py | Ожидание формируется до входа — у нас это expectation prior, обновляется на каждый сигнал |
-| User-side surprise detection | пока нет, [OQ #7](open-questions.md#7-surprise-detection) | — | Триггер «юзер что-то не ожидал» — HRV spike + text markers |
+| Recovery / return-to-baseline | `ProtectiveFreeze.THETA_RECOVERY` + `silence_pressure` drop | neurochem.py | Гистерезис, не жёсткий reset |
+| Pre-activation / anticipatory computation (зрачки, [ixbt 2026-04](https://www.ixbt.com/live/science/)) | `UserState.expectation_by_tod` (per-TOD baseline) + `CognitiveState.precision` | user_state.py, friston-loop.md | Ожидание контекстуально (morning/day/evening/night), не один глобальный baseline |
+| User-side surprise detection | `src/surprise_detector.py` (HRV + text + LLM) | см. [friston-loop.md § User-side surprise](friston-loop.md#user-side-surprise-oq-7) | ✅ 2026-04-23 — MVP A+B+C |
+| Self-prediction (симметрия Friston-loop) | `Neurochem.expectation_vec` + `self_imbalance` | neurochem.py | Baddle предсказывает собственную [DA,S,NE] |
 
 **Что это значит на практике:**
 
@@ -164,11 +168,12 @@
 - Когда предлагается «CognitiveState → affect + velocity + PE» — это рефакторинг того что есть, не добавление. Existing EMA даёт ту же плавность что explicit velocity.
 - Когда предлагается «UserModel параллельно CognitiveState» — у нас уже `UserState` симметричен `Neurochem` + `sync_error` как расстояние между ними.
 
-Расширения **реально новые** (не переоткрытия существующего) уезжают в [open-questions](open-questions.md):
-- **#5 Workspace-аттракторы** — контексты как точки притяжения
-- **#6 PE как вектор** — attribution surprise по осям
-- **#2 Agency как 5-я ось** — подтверждается и SDT, и VAD dominance
+Расширения **реально новые** (не переоткрытия существующего):
+- **#5 Workspace-аттракторы** — контексты как точки притяжения (открыто)
+- ~~#6 PE как вектор~~ — resolved 2026-04-23 в [friston-loop.md](friston-loop.md)
+- ~~#7 User-side surprise~~ — resolved 2026-04-23 в [src/surprise_detector.py](../src/surprise_detector.py)
+- **#2 Agency как 5-я ось** — в процессе measurements, подтверждается и SDT, и VAD dominance
 
 ---
 
-**Навигация:** [← Closure architecture](closure-architecture.md) · [Индекс](README.md) · [Open questions →](open-questions.md)
+**Навигация:** [← Closure architecture](closure-architecture.md) · [Индекс](README.md) · [Open questions →](../planning/open-questions.md)

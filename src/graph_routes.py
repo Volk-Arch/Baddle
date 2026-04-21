@@ -22,6 +22,7 @@ from .graph_logic import (
     touch_node, touch_nodes, TOUCH_BOOST_DEFAULT,
 )
 from .hrv_manager import get_manager as get_hrv_manager
+from .http_utils import APIError, json_endpoint
 
 graph_bp = Blueprint("graph", __name__)
 
@@ -1207,23 +1208,21 @@ def workspace_list():
 
 
 @graph_bp.route("/workspace/create", methods=["POST"])
+@json_endpoint
 def workspace_create():
     """Create a new workspace (directory + meta entry)."""
     from .workspace import get_workspace_manager
     d = request.get_json(force=True) or {}
     ws_id = (d.get("id") or "").strip().lower().replace(" ", "_")
-    title = d.get("title", ws_id)
-    tags = d.get("tags", [])
     if not ws_id:
-        return jsonify({"error": "id required"})
-    try:
-        info = get_workspace_manager().create(ws_id, title, tags)
-        return jsonify({"ok": True, "workspace": info})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+        raise APIError("id required")
+    info = get_workspace_manager().create(ws_id, d.get("title", ws_id),
+                                          d.get("tags", []))
+    return {"ok": True, "workspace": info}
 
 
 @graph_bp.route("/workspace/switch", methods=["POST"])
+@json_endpoint
 def workspace_switch():
     """Switch active workspace. Flushes current, loads target graph into _graph.
 
@@ -1235,11 +1234,8 @@ def workspace_switch():
     ws_id = d.get("id", "").strip().lower()
     auto_seed = bool(d.get("auto_seed", True))
     if not ws_id:
-        return jsonify({"error": "id required"})
-    try:
-        get_workspace_manager().switch(ws_id)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+        raise APIError("id required")
+    get_workspace_manager().switch(ws_id)
 
     seeded = None
     if auto_seed and not _graph.get("nodes"):
@@ -1249,7 +1245,7 @@ def workspace_switch():
         except Exception as e:
             print(f"[workspace/switch] auto-seed failed: {e}")
 
-    return jsonify({"ok": True, "active": ws_id, "seeded": seeded})
+    return {"ok": True, "active": ws_id, "seeded": seeded}
 
 
 @graph_bp.route("/workspace/save", methods=["POST"])
@@ -1261,15 +1257,13 @@ def workspace_save():
 
 
 @graph_bp.route("/workspace/delete", methods=["POST"])
+@json_endpoint
 def workspace_delete():
     from .workspace import get_workspace_manager
     d = request.get_json(force=True) or {}
     ws_id = d.get("id", "").strip().lower()
-    try:
-        get_workspace_manager().delete(ws_id)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    get_workspace_manager().delete(ws_id)
+    return {"ok": True}
 
 
 @graph_bp.route("/workspace/cross-edges", methods=["GET"])

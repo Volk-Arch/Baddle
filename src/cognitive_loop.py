@@ -29,6 +29,8 @@ from typing import Optional, Tuple
 
 from .graph_logic import _graph
 from .hrv_manager import get_manager as get_hrv_manager
+from .horizon import get_global_state, PROTECTIVE_FREEZE
+from .user_state import get_user_state
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +51,6 @@ def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
     Ограничение O(K²): берём top-K по relevance (K=20), пары только среди них.
     """
     from .main import distinct
-    from .horizon import get_global_state
     from datetime import datetime, timezone
     import math
     import numpy as np
@@ -209,31 +210,42 @@ class CognitiveLoop:
     ACTION_TIMEOUT_DEFAULT = 60 * 60              # 1 час если kind не в словаре
 
     # Active sync-seeking (resonance protocol механика #3):
-    # Когда `freeze.desync_pressure` высокий И юзер давно не писал — Baddle
+    # Когда `freeze.silence_pressure` высокий И юзер давно не писал — Baddle
     # пишет мягкое сообщение чтобы восстановить контакт. LLM генерирует
-    # текст с учётом контекста (время дня, recent topics, desync-уровень),
+    # текст с учётом контекста (время дня, recent topics, silence-уровень),
     # чтобы каждый раз по-разному. Не nag — попытка резонанс зеркала.
-    SYNC_SEEKING_DESYNC_MIN = 0.3         # ниже — не пушим, рассинхрон ещё мягкий
-    SYNC_SEEKING_IDLE_SECONDS = 2 * 3600  # физически давно не писал (2 часа)
-    SYNC_SEEKING_INTERVAL = 2 * 3600      # не чаще раза в 2 часа
+    SYNC_SEEKING_SILENCE_MIN = 0.3         # ниже — не пушим, тишина ещё мягкая
+    SYNC_SEEKING_IDLE_SECONDS = 2 * 3600   # физически давно не писал (2 часа)
+    SYNC_SEEKING_INTERVAL = 2 * 3600       # не чаще раза в 2 часа
     # Защита от шума: если любой proactive alert был недавно — пропускаем
-    SYNC_SEEKING_QUIET_AFTER_OTHER = 30 * 60  # 30 мин после последнего alert
+    SYNC_SEEKING_QUIET_AFTER_OTHER = 30 * 60   # 30 мин после последнего alert
 
     # Adaptive idle (resonance protocol механики #2 + #4 together):
-    # Multiplier = 1 + freeze.display_burnout × (IDLE_MULTIPLIER_MAX - 1)
-    # применяется ко всем investigation-интервалам. display_burnout — это
-    # max из двух feeder'ов ProtectiveFreeze (см. neurochem.py):
-    #   • conflict_accumulator — графовые конфликты (существует)
-    #   • desync_pressure — хронический рассинхрон с юзером (новое, от времени)
-    # Таким образом «усталость Baddle» в UI и замедление циклов — одна
-    # семантика, не две параллельные переменные.
+    # Multiplier = 1 + combined_burnout × (IDLE_MULTIPLIER_MAX - 1)
+    # применяется ко всем investigation-интервалам. `combined_burnout` это
+    # max(display_burnout, user.burnout) из ProtectiveFreeze (см. neurochem.py):
+    #   • conflict_accumulator — графовые конфликты (single feeder активирует Bayes-freeze)
+    #   • silence_pressure — хроническое молчание юзера (таймер)
+    #   • imbalance_pressure — EMA |UserState.surprise| (predictive error)
+    #   • user.burnout — usage fatigue (decisions_today + rejects)
+    # Семантика UI: «Усталость Baddle» = display_burnout (без user).
     #
-    # Параметры desync_pressure:
-    #   • 7 суток без единого user-event → +1.0 (линейно)
-    #   • 1 user event → -0.05 (~20 событий для полного восстановления)
+    # Параметры silence_pressure живут в `ProtectiveFreeze.SILENCE_RAMP_SECONDS`:
+    #   • 7 суток без user-event → +1.0 (линейно)
+    #   • 1 user event → -SILENCE_EVENT_DROP (~20 событий для восстановления)
     IDLE_MULTIPLIER_MAX = 10.0
-    DESYNC_RAMP_SECONDS = 7 * 24 * 3600        # 1.0 накапливается за 7 суток
-    DESYNC_EVENT_DROP = 0.05                   # сколько снижает 1 user-event
+    SILENCE_EVENT_DROP = 0.05                  # сколько снижает 1 user-event
+
+    # Prime-directive recording: раз в час пишем sync_error EMA trend в
+    # `data/prime_directive.jsonl`. Читается `/assist/prime-directive`
+    # endpoint для валидации через 2 мес use (mean_slow падает = OK).
+    PRIME_DIRECTIVE_INTERVAL = 3600            # 1 час между snapshot'ами
+
+    # User surprise detection (OQ #7): HRV + text markers → event.
+    # Throttle 5 мин — surprise-события редкие, не спамим граф.
+    # Processed message tracking: не повторно анализируем одно сообщение
+    # при каждой проверке.
+    USER_SURPRISE_CHECK_INTERVAL = 300         # 5 мин
 
     def __init__(self):
         self.is_running = False
@@ -263,6 +275,9 @@ class CognitiveLoop:
         self._last_proactive_alert_ts = 0.0 # любой proactive alert (не sync-seek'им если недавно)
         self._last_agency_update = 0.0      # таймер agency EMA update
         self._last_action_outcomes_check = 0.0  # таймер closing action outcomes
+        self._last_prime_directive = 0.0    # таймер hourly prime_directive.jsonl записи
+        self._last_user_surprise_check = 0.0  # таймер OQ #7 detector
+        self._last_analyzed_msg_ts: float = 0.0  # timestamp последнего проанализированного user-msg
         # Action Memory — per-kind storage для open actions:
         # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
         self._open_actions: dict[int, float] = {}
@@ -280,9 +295,10 @@ class CognitiveLoop:
         #    "started_at": ts, "detail": ...}
         self._thinking_state: dict = {"kind": "idle", "started_at": 0.0}
 
-        # Adaptive idle state. desync_pressure живёт в neurochem.ProtectiveFreeze
-        # (через horizon.get_global_state().freeze) — там же display_burnout
-        # для UI. Здесь только timestamp последнего loop tick чтобы считать dt.
+        # Adaptive idle state. silence_pressure / imbalance_pressure /
+        # sync_error_ema_* живут в neurochem.ProtectiveFreeze (через
+        # horizon.get_global_state().freeze). Здесь только timestamp
+        # последнего loop tick чтобы считать dt для `_advance_tick`.
         self._last_loop_tick_ts = 0.0
 
     def set_thinking(self, kind: str, detail: Optional[dict] = None):
@@ -324,7 +340,6 @@ class CognitiveLoop:
 
         try:
             from .graph_logic import list_open_actions, close_action, _graph
-            from .horizon import get_global_state
         except Exception:
             return
 
@@ -467,10 +482,11 @@ class CognitiveLoop:
     # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
 
     def _get_freeze(self):
-        """Helper: быстрый доступ к ProtectiveFreeze (носитель desync_pressure).
-        Возвращает None если horizon недоступен — защита при init race."""
+        """Helper: быстрый доступ к ProtectiveFreeze (носитель silence / imbalance /
+        sync_error EMA). Возвращает None если horizon недоступен — защита при
+        init race.
+        """
         try:
-            from .horizon import get_global_state
             return get_global_state().freeze
         except Exception:
             return None
@@ -478,41 +494,34 @@ class CognitiveLoop:
     def _idle_multiplier(self) -> float:
         """1.0 при полном resonance, MAX при max combined burnout.
 
-        Combined burnout — max из трёх источников:
-          • system `conflict_accumulator` — графовый кризис (freeze)
-          • system `desync_pressure` — хронический рассинхрон по времени
-          • **user `burnout`** — юзер устал (decisions_today, отказы)
-
-        Логика про user burnout: если юзер устал — Baddle тоже тише.
-        Это эмпатия встроенная, не отдельный check. Фоновые циклы реже,
-        alerts реже, карточки реже. «Ненавязчивое замедление вместе с
-        юзером» — само предложение отдыха без vertical nagging.
+        Делегирует в `ProtectiveFreeze.combined_burnout(user_burnout)` —
+        единый расчёт для UI и замедления циклов. Эмпатия: если юзер
+        устал (decisions/rejects → `user.burnout`), Baddle тоже тише.
+        Это не отдельный check «предлагаем отдых», а встроенное молчание.
         """
         fz = self._get_freeze()
-        system_burnout = float(fz.display_burnout) if fz else 0.0
-
+        if fz is None:
+            return 1.0
         try:
-            from .user_state import get_user_state
             user_burnout = float(get_user_state().burnout)
         except Exception:
             user_burnout = 0.0
-
-        combined = max(system_burnout, user_burnout)
+        combined = fz.combined_burnout(user_burnout)
         return 1.0 + combined * (self.IDLE_MULTIPLIER_MAX - 1.0)
 
     def _register_user_event(self, reason: str = ""):
         """User-event (сообщение, foreground tick, ручная правка графа).
-        Снижает `desync_pressure` на DESYNC_EVENT_DROP (не обнуляет).
+        Снижает `silence_pressure` на SILENCE_EVENT_DROP (не обнуляет).
         ~20 таких событий возвращают multiplier в 1.0 из максимума.
         """
         fz = self._get_freeze()
         if fz is None:
             return
-        prev = fz.desync_pressure
-        fz.add_desync_pressure(-self.DESYNC_EVENT_DROP)
+        prev = fz.silence_pressure
+        fz.add_silence_pressure(-self.SILENCE_EVENT_DROP)
         if prev > 0.001:
-            log.info(f"[cognitive_loop] desync_pressure {prev:.3f} -> "
-                     f"{fz.desync_pressure:.3f} (event: {reason}, "
+            log.info(f"[cognitive_loop] silence_pressure {prev:.3f} -> "
+                     f"{fz.silence_pressure:.3f} (event: {reason}, "
                      f"multiplier now {self._idle_multiplier():.2f}×)")
 
     def signal_user_input(self):
@@ -522,11 +531,24 @@ class CognitiveLoop:
         """
         self._register_user_event(reason="user_input")
 
-    def _advance_desync(self):
-        """Рост desync_pressure по реальному времени между итерациями loop.
-        Плавно линейный: за DESYNC_RAMP_SECONDS (7 суток) от 0 до 1.0 без
-        user-событий. Cap-защита от больших dt после ребута / пауз.
-        Хранится в `ProtectiveFreeze.desync_pressure` (neurochem).
+    def _advance_tick(self):
+        """Единый time-based update всех feeders ProtectiveFreeze + self-prediction.
+
+        За один проход:
+          • silence_pressure += dt / SILENCE_RAMP_SECONDS   (таймер тишины)
+          • imbalance_pressure EMA ← max всех 4 PE-каналов  (Friston-aggregate)
+          • sync_error_ema_fast EMA ← current sync_error     (для sync-seeking)
+          • sync_error_ema_slow EMA ← current sync_error     (для prime-directive)
+          • neuro.tick_expectation()                         (self-baseline Baddle)
+          • user.tick_expectation() уже вызван из update_from_* обёрток
+
+        4 источника imbalance (все нормализованы в [0, 1], берём max):
+          • user ‖PE_vec‖ / √3        — behaviour surprise по 3 осям
+          • user.agency_gap           — goal-prediction miss (1 − agency)
+          • user.hrv_surprise         — physical PE (real Polar baseline)
+          • neuro.self_imbalance / √3 — Baddle's PE на самой себе
+
+        Все EMA — time-constant based (независимы от tick frequency).
         """
         now = time.time()
         if self._last_loop_tick_ts <= 0:
@@ -539,8 +561,165 @@ class CognitiveLoop:
         fz = self._get_freeze()
         if fz is None:
             return
-        step = dt / float(self.DESYNC_RAMP_SECONDS)
-        fz.add_desync_pressure(step)
+        sync_err = 0.0
+        combined_imbalance = 0.0
+        try:
+            gs = get_global_state()
+            u = get_user_state()
+            sync_err = float(gs.sync_error)
+
+            # Self-prediction: Baddle предсказывает собственную нейрохимию
+            gs.neuro.tick_expectation()
+
+            # 4 PE-канала, все в [0, 1]
+            sqrt3 = 1.7320508
+            user_pe = float(u.imbalance) / sqrt3              # ‖3D PE_vec‖ / √3
+            self_pe = float(gs.neuro.self_imbalance) / sqrt3  # self ‖PE_vec‖ / √3
+            agency_gap = float(u.agency_gap)
+            hrv_pe = float(u.hrv_surprise)
+            combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)
+        except Exception:
+            pass
+        fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
+
+    def _check_user_surprise(self):
+        """OQ #7: detect момента когда юзер встретил неожиданное.
+
+        Два канала (OR):
+          A. HRV spike — RMSSD drop > 1.5σ от baseline (требует реального
+             sensor_stream'а с HRV readings, иначе skip)
+          B. Text markers — «воу», «не ожидал», «??», многоточие, капс
+             в последнем user-сообщении
+
+        При detect:
+          1. `user_state.apply_surprise_boost(3)` — ускоренный EMA decay
+             на 3 tick'а (expectation быстро подстроится к новой реальности)
+          2. `record_action("user_surprise")` в граф — для action-memory
+             и последующего DMN pump между surprise-нодами
+          3. Log + alert с мягким wording (без кнопок, молчаливое
+             замечание системы)
+
+        Throttle 5 мин + processed_msg_ts protection — не анализируем
+        одно user-сообщение повторно.
+        """
+        if not self._throttled("_last_user_surprise_check",
+                                self.USER_SURPRISE_CHECK_INTERVAL):
+            return
+        try:
+            from .surprise_detector import detect_user_surprise
+            from .sensor_stream import get_stream
+        except Exception as e:
+            log.debug(f"[cognitive_loop] user_surprise import failed: {e}")
+            return
+
+        # Последнее user-сообщение — только новое (ts > last_analyzed)
+        latest_msg_text = None
+        latest_msg_ts = 0.0
+        try:
+            from .chat_history import load_history
+            history = load_history()
+            for entry in reversed(history[-20:]):  # достаточно 20 свежих
+                if (entry.get("role") or "").lower() == "user":
+                    ts = float(entry.get("ts") or 0)
+                    if ts > self._last_analyzed_msg_ts:
+                        latest_msg_text = entry.get("content") or ""
+                        latest_msg_ts = ts
+                    break
+        except Exception as e:
+            log.debug(f"[cognitive_loop] chat_history load failed: {e}")
+
+        # Activity magnitude — для HRV gate (игнорим если юзер бежит)
+        activity = None
+        try:
+            activity = get_stream().recent_activity(window_s=60)
+        except Exception:
+            activity = None
+
+        # Detect
+        result = detect_user_surprise(
+            text=latest_msg_text,
+            activity_magnitude=activity,
+        )
+
+        # Mark message as processed (чтобы не триггерить дважды на одном)
+        if latest_msg_ts > 0:
+            self._last_analyzed_msg_ts = latest_msg_ts
+
+        if not result.get("event"):
+            return
+
+        source = result.get("source", "unknown")
+        conf = result.get("confidence", 0.0)
+        hrv_info = result.get("hrv") or {}
+        txt_info = result.get("text") or {}
+
+        log.info(
+            f"[cognitive_loop] user_surprise: source={source} "
+            f"conf={conf:.2f} "
+            f"hrv_z={hrv_info.get('score', 0)} "
+            f"text_markers={txt_info.get('markers', [])}"
+        )
+
+        # 1. Apply boost к expectation EMA
+        try:
+            get_user_state().apply_surprise_boost(n_ticks=3)
+        except Exception as e:
+            log.debug(f"[cognitive_loop] surprise_boost failed: {e}")
+
+        # 2. Record user-action в граф для action memory / DMN
+        #    (не baddle-action — это сам юзер произвёл surprise)
+        try:
+            from .graph_logic import record_action
+            summary = (f"User surprise ({source}): "
+                       f"{(latest_msg_text or '')[:80]}" if latest_msg_text
+                       else f"User surprise (hrv-only, Δ={hrv_info.get('delta_ms')}ms)")
+            record_action(
+                actor="user",
+                action_kind="user_surprise",
+                text=summary[:200],
+                context=None,
+                extras={
+                    "source": source,
+                    "confidence": round(conf, 2),
+                    "hrv_z_score": hrv_info.get("score"),
+                    "text_markers": txt_info.get("markers", []),
+                },
+            )
+        except Exception as e:
+            log.debug(f"[cognitive_loop] record user_surprise failed: {e}")
+
+    def _check_prime_directive_record(self):
+        """Раз в час пишем snapshot sync_error EMA в data/prime_directive.jsonl.
+
+        Пишется aggregate burnout_imbalance **плюс** decomposition на
+        4 канала (user_imbalance, self_imbalance, agency_gap, hrv_surprise) —
+        чтобы через 2 мес видеть не только общий тренд, но и какой именно
+        PE-канал реально двигал. Нулевые каналы покажут что сигнал слабый
+        (например Polar не подключен → hrv_surprise=0 везде).
+        """
+        if not self._throttled("_last_prime_directive", self.PRIME_DIRECTIVE_INTERVAL):
+            return
+        fz = self._get_freeze()
+        if fz is None:
+            return
+        try:
+            from .prime_directive import record_tick
+            gs = get_global_state()
+            u = get_user_state()
+            record_tick(
+                sync_error=float(gs.sync_error),
+                sync_error_ema_fast=float(fz.sync_error_ema_fast),
+                sync_error_ema_slow=float(fz.sync_error_ema_slow),
+                imbalance_pressure=float(fz.imbalance_pressure),
+                silence_pressure=float(fz.silence_pressure),
+                conflict_accumulator=float(fz.conflict_accumulator),
+                user_imbalance=float(u.imbalance),
+                self_imbalance=float(gs.neuro.self_imbalance),
+                agency_gap=float(u.agency_gap),
+                hrv_surprise=float(u.hrv_surprise),
+            )
+        except Exception as e:
+            log.debug(f"[cognitive_loop] prime_directive record failed: {e}")
 
     # ── Throttle helper ────────────────────────────────────────────────
 
@@ -603,7 +782,7 @@ class CognitiveLoop:
         from .graph_logic import _compute_edges
 
         self._last_foreground_tick = time.time()
-        # Юзер тикнул руками → снижаем desync (user-event)
+        # Юзер тикнул руками → снижаем silence_pressure (user-event)
         self._register_user_event(reason="foreground_tick")
         nodes = _graph["nodes"]
         edges = _compute_edges(nodes, threshold, sim_mode)
@@ -628,15 +807,16 @@ class CognitiveLoop:
         4. HRV alerts всегда
         5. Сон tick_interval (масштабируется NE)
         """
-        from .horizon import get_global_state, PROTECTIVE_FREEZE
 
         while self.is_running and not self._stop_event.is_set():
             try:
                 state = get_global_state()
 
-                # 0. Adaptive idle: desync накапливается по времени.
-                # User-events через signal_user_input()/tick_foreground его снижают.
-                self._advance_desync()
+                # 0. Adaptive idle + prime-directive feeders. Один проход
+                # обновляет silence_pressure (таймер), imbalance_pressure
+                # (EMA |PE|) и sync_error_ema_{fast,slow}. User-events через
+                # signal_user_input()/tick_foreground снижают silence отдельно.
+                self._advance_tick()
 
                 # 1. NE homeostasis
                 ne = state.neuro.norepinephrine
@@ -677,6 +857,8 @@ class CognitiveLoop:
                 self._check_sync_seeking()
                 self._check_agency_update()
                 self._check_action_outcomes()
+                self._check_prime_directive_record()
+                self._check_user_surprise()
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -961,7 +1143,7 @@ class CognitiveLoop:
         Guard: только если есть хотя бы 1 open-goal + в графе меньше 30 нод
         (иначе не спамим). Лимит: один deep run в 30 мин.
         """
-        # Adaptive idle: интервал масштабируется _idle_multiplier'ом (desync)
+        # Adaptive idle: интервал масштабируется _idle_multiplier'ом (silence + PE)
         if not self._throttled_idle("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
             return
         # Хотя бы 1 open goal и не слишком раздутый граф
@@ -1274,8 +1456,8 @@ class CognitiveLoop:
         if len(_graph.get("nodes", [])) < 4:
             return  # pre-check дёшево, throttle дороже (timestamp write)
         # Adaptive idle: интервал растягивается _idle_multiplier'ом — чем
-        # выше рассинхрон тем реже pump. При desync=0 — стандартные 10 мин,
-        # при desync=1 — 100 мин. Без бинарных порогов.
+        # выше combined_burnout тем реже pump. При burnout=0 — стандартные
+        # 10 мин, при burnout=1 — 100 мин. Без бинарных порогов.
         if not self._throttled_idle("_last_dmn", self.DMN_INTERVAL):
             return
 
@@ -1355,7 +1537,6 @@ class CognitiveLoop:
 
         # Feed back to neurochem: хороший мост = низкое d (новизна подтверждена)
         try:
-            from .horizon import get_global_state
             quality = best.get("quality", 0.0)
             get_global_state().update_neurochem(d=(1.0 - quality))
         except Exception as e:
@@ -1393,7 +1574,6 @@ class CognitiveLoop:
         Формат зеркалит `StateGraph._compute_embedding_text` — чтобы
         сравнение current vs past было эквивалентным.
         """
-        from .horizon import get_global_state
         from .graph_logic import _graph
         cs = get_global_state()
         neuro = cs.neuro
@@ -1620,7 +1800,6 @@ class CognitiveLoop:
 
         kind ∈ {info, warn, highlight, neutral} → CSS-класс акцента.
         """
-        from .horizon import get_global_state
         from .hrv_manager import get_manager as get_hrv_mgr
         from .goals_store import list_goals
         sections: list = []
@@ -1867,7 +2046,6 @@ class CognitiveLoop:
         Не вызывает LLM — быстрая агрегация из state. UI показывает как alert;
         если юзер откроет /assist/morning — получит расширенную LLM-версию.
         """
-        from .horizon import get_global_state
         from .hrv_manager import get_manager as get_hrv_manager
         from .goals_store import list_goals
 
@@ -1883,7 +2061,6 @@ class CognitiveLoop:
                 bits.append(f"Сон {hrs}ч{suffix}.")
                 # Зеркалим в UserState чтобы simulate-day и другие могли читать
                 try:
-                    from .user_state import get_user_state
                     get_user_state().last_sleep_duration_h = float(hrs)
                 except Exception:
                     pass
@@ -2011,7 +2188,6 @@ class CognitiveLoop:
             return
         try:
             state = mgr.get_baddle_state() or {}
-            from .user_state import get_user_state
             get_user_state().update_from_hrv(
                 coherence=state.get("coherence"),
                 rmssd=state.get("rmssd"),
@@ -2158,7 +2334,6 @@ class CognitiveLoop:
 
         # 5. Neurochem + UserState scalars
         try:
-            from .horizon import get_global_state
             m = get_global_state().get_metrics()
             neuro = m.get("neurochem", {})
             us = m.get("user_state", {})
@@ -2206,7 +2381,6 @@ class CognitiveLoop:
 
         try:
             from .state_graph import get_state_graph
-            from .horizon import get_global_state
             st = get_global_state()
             sg = get_state_graph()
             # state_origin: 1_held если есть active activity, иначе 1_rest
@@ -2344,7 +2518,6 @@ class CognitiveLoop:
             return
         try:
             from .plans import schedule_for_day
-            from .user_state import get_user_state
         except Exception:
             return
         try:
@@ -2365,14 +2538,14 @@ class CognitiveLoop:
     # ── Active sync-seeking: Baddle пишет первым когда долго молчит ────
 
     def _check_sync_seeking(self):
-        """Resonance protocol #3: когда рассинхрон высокий И юзер давно не
+        """Resonance protocol #3: когда тишина высокая И юзер давно не
         писал — Baddle шлёт мягкое сообщение для восстановления контакта.
 
         Gate'ы (все должны быть True):
-          1. `freeze.desync_pressure > SYNC_SEEKING_DESYNC_MIN` — рассинхрон
-             уже накопился, не пишем в активной сессии.
+          1. `freeze.silence_pressure > SYNC_SEEKING_SILENCE_MIN` — тишина
+             накопилась, не пишем в активной сессии.
           2. `time_since_last_input > SYNC_SEEKING_IDLE_SECONDS` — юзер
-             физически давно молчит. Защита от случая «desync накопился
+             физически давно молчит. Защита от случая «silence накопилась
              исторически, но юзер только что написал».
           3. Throttle — не чаще раза в `SYNC_SEEKING_INTERVAL`.
           4. После последнего proactive alert прошло ≥ `QUIET_AFTER_OTHER`.
@@ -2385,18 +2558,16 @@ class CognitiveLoop:
                 now - self._last_proactive_alert_ts < self.SYNC_SEEKING_QUIET_AFTER_OTHER):
             return
 
-        # Gate #1: desync accumulated
+        # Gate #1: silence accumulated
         try:
-            from .horizon import get_global_state
-            desync = float(get_global_state().freeze.desync_pressure)
+            silence = float(get_global_state().freeze.silence_pressure)
         except Exception:
             return
-        if desync < self.SYNC_SEEKING_DESYNC_MIN:
+        if silence < self.SYNC_SEEKING_SILENCE_MIN:
             return
 
         # Gate #2: юзер физически давно не писал
         try:
-            from .user_state import get_user_state
             last_input_ts = get_user_state()._last_input_ts or 0.0
         except Exception:
             last_input_ts = 0.0
@@ -2411,19 +2582,19 @@ class CognitiveLoop:
 
         # Всё ок — генерируем сообщение
         text, tone = self._generate_sync_seeking_message(
-            desync=desync, idle_hours=idle_seconds / 3600.0,
+            silence=silence, idle_hours=idle_seconds / 3600.0,
         )
         if not text:
             return
 
-        log.info(f"[cognitive_loop] sync_seeking: desync={desync:.2f} idle={idle_seconds/3600:.1f}h → «{text[:60]}»")
+        log.info(f"[cognitive_loop] sync_seeking: silence={silence:.2f} idle={idle_seconds/3600:.1f}h → «{text[:60]}»")
         self._add_alert({
             "type": "sync_seeking",
             "severity": "info",
             "text": text,
             "text_en": text,
             "tone": tone,                 # caring|ambient|curious|reference|simple
-            "desync_level": round(desync, 3),
+            "silence_level": round(silence, 3),
             "idle_hours": round(idle_seconds / 3600.0, 1),
         })
         # Action Memory: запоминаем что мы сделали; outcome закроется в
@@ -2431,13 +2602,13 @@ class CognitiveLoop:
         self._record_baddle_action(
             "sync_seeking",
             text=f"Baddle: «{text[:120]}»",
-            extras={"tone": tone, "desync_at_action": round(desync, 3)},
+            extras={"tone": tone, "silence_at_action": round(silence, 3)},
         )
 
-    def _generate_sync_seeking_message(self, desync: float, idle_hours: float) -> tuple[str, str]:
+    def _generate_sync_seeking_message(self, silence: float, idle_hours: float) -> tuple[str, str]:
         """LLM-генерация мягкого сообщения для восстановления контакта.
 
-        Контекст в prompt: время суток, уровень рассинхрона, сколько юзер
+        Контекст в prompt: время суток, уровень тишины, сколько юзер
         молчит, последнее что он делал, recent topics из графа, HRV-снимок.
         Temperature высокая (0.9) + top_k большой → каждый раз разное.
 
@@ -2455,10 +2626,10 @@ class CognitiveLoop:
         elif 17 <= hour < 23:   time_of_day = "вечер"
         else:                    time_of_day = "ночь"
 
-        # Уровень рассинхрона → severity hint
-        if desync < 0.4:    severity = "лёгкий"
-        elif desync < 0.7:  severity = "средний"
-        else:                severity = "высокий"
+        # Уровень тишины → severity hint
+        if silence < 0.4:    severity = "лёгкий"
+        elif silence < 0.7:  severity = "средний"
+        else:                 severity = "высокий"
 
         # Last activity category
         last_activity = ""
@@ -2490,7 +2661,6 @@ class CognitiveLoop:
         # HRV short summary
         hrv_hint = ""
         try:
-            from .user_state import get_user_state
             us = get_user_state()
             coh = us.hrv_coherence
             if coh is not None:
@@ -2502,7 +2672,7 @@ class CognitiveLoop:
 
         # Эвристический tone до LLM (используется как дефолт если
         # LLM не отдаст структурированно)
-        if desync > 0.7:              heuristic_tone = "caring"
+        if silence > 0.7:             heuristic_tone = "caring"
         elif hrv_hint == "напряжён":  heuristic_tone = "caring"
         elif recent_topics:           heuristic_tone = "reference"
         elif time_of_day == "ночь":   heuristic_tone = "ambient"
@@ -2541,7 +2711,7 @@ class CognitiveLoop:
         system = (
             "/no_think\n"
             "Ты — Baddle, партнёр по мышлению одного человека. Он не писал тебе "
-            f"{idle_hours:.0f} часов. Рассинхрон {severity}.\n"
+            f"{idle_hours:.0f} часов. Молчание {severity}.\n"
             "Напиши ОДНО короткое (1 предложение, макс 100 знаков) мягкое "
             "сообщение — попытка восстановить контакт. Это НЕ приветствие, "
             "НЕ представление возможностей, НЕ напоминание. Просто присутствие.\n"
@@ -2608,7 +2778,6 @@ class CognitiveLoop:
         # во время работы над задачей. Throttle НЕ трогаем — чтобы при
         # следующем тихом моменте попробовать снова в тот же день.
         try:
-            from .user_state import get_user_state
             last_ts = get_user_state()._last_input_ts
             if last_ts and (time.time() - last_ts) < 600:  # 10 мин
                 return  # silent skip, throttle остаётся на прежнем ts
@@ -2869,7 +3038,6 @@ class CognitiveLoop:
         Плюс DMN_INTERVAL между запусками.
         """
         try:
-            from .horizon import get_global_state, PROTECTIVE_FREEZE
             st = get_global_state()
             ne = st.neuro.norepinephrine
             state = st.state

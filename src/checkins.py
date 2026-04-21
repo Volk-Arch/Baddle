@@ -163,34 +163,52 @@ def apply_to_user_state(entry: dict):
     - energy (0-100) → long_reserve bump/pull
     - stress (0-100) → NE EMA bump
     - focus  (0-100) → serotonin EMA bump
-    - surprise       → UserState.surprise напрямую
-    - reality        → valence hint
+    - reality (-2..+2) → valence + subjective_surprise (если есть expected)
+    - expected (-2..+2) → используется вместе с reality для nudge expectation
+
+    Decay constants — см. `src/ema.py::Decays.CHECKIN_*`. Checkin decays
+    агрессивнее обычных (0.6-0.85 vs 0.9-0.98) — явный user input должен
+    корректировать модель сильнее чем автоматические feeders.
     """
     try:
         from .user_state import get_user_state, LONG_RESERVE_MAX
+        from .ema import Decays
         user = get_user_state()
         # Energy: corrective — если юзер пишет 30 а мы думаем 80, притянуть
         if entry.get("energy") is not None:
             target_pct = entry["energy"] / 100.0
             cur_pct = user.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX else 0.5
-            # weak correction (15%) чтобы ручной ввод не обнулил всю модель
-            new_pct = cur_pct * 0.85 + target_pct * 0.15
+            de = Decays.CHECKIN_ENERGY
+            new_pct = de * cur_pct + (1 - de) * target_pct
             user.long_reserve = new_pct * LONG_RESERVE_MAX
-        # Stress → NE (EMA 0.3)
+        # Stress → NE
         if entry.get("stress") is not None:
             target_ne = entry["stress"] / 100.0
-            user.norepinephrine = user.norepinephrine * 0.7 + target_ne * 0.3
-        # Focus → serotonin (EMA 0.3) + dopamine partially
+            ds = Decays.CHECKIN_STRESS
+            user.norepinephrine = ds * user.norepinephrine + (1 - ds) * target_ne
+        # Focus → serotonin
         if entry.get("focus") is not None:
             target_s = entry["focus"] / 100.0
-            user.serotonin = user.serotonin * 0.7 + target_s * 0.3
-        # Valence — прямой сигнал
+            df = Decays.CHECKIN_FOCUS
+            user.serotonin = df * user.serotonin + (1 - df) * target_s
+        # Reality rating → valence
         if entry.get("reality") is not None:
-            user.valence = user.valence * 0.6 + (entry["reality"] / 2.0) * 0.4
-        # Surprise — заменяет предсказание ожидания
+            dv = Decays.CHECKIN_VALENCE
+            user.valence = dv * user.valence + (1 - dv) * (entry["reality"] / 2.0)
+        # Subjective surprise → nudge expectation (2026-04-23: было broken —
+        # раньше `user.surprise = ...`, но surprise теперь derived @property).
+        # Правильный fix: корректируем baseline так, чтобы будущий observed
+        # surprise сошёлся с subjective. Алгебра: `new_expectation =
+        # reality_now − subjective_surprise`.
         if entry.get("expected") is not None and entry.get("reality") is not None:
-            surprise = (entry["reality"] - entry["expected"]) / 4.0  # normalize → [-1, 1]
-            user.surprise = user.surprise * 0.5 + surprise * 0.5
+            subjective_surprise = (float(entry["reality"]) - float(entry["expected"])) / 4.0
+            target_expectation = max(0.0, min(1.0,
+                user.state_level() - subjective_surprise
+            ))
+            # Moderate nudge (decay 0.6 = 40% влияния) через EMA override
+            user._expectation.feed(target_expectation, decay_override=0.6)
+            tod = user._current_tod()
+            user._expectation_by_tod[tod].feed(target_expectation, decay_override=0.6)
         user._clamp()
     except Exception as e:
         log.warning(f"[checkins] apply_to_user_state failed: {e}")
