@@ -1,135 +1,60 @@
 # Полный цикл Baddle — статика + динамика
 
-Остальные design-доки описывают **куски**. Этот — как всё собирается
-в работающий организм. Читать если: хочешь понять что зачем, планируешь
-фичу и не знаешь куда приземлять, или вернулся после паузы и нужен
-быстрый re-boot.
+Остальные design-документы описывают **куски**. Этот — как всё собирается в работающий организм. Читать если: хочешь понять что зачем, планируешь фичу и не знаешь куда приземлять, или вернулся после паузы и нужен быстрый re-boot.
 
 ---
 
 ## Два слоя
 
-Всё что делает Baddle делится на **статику** (что ты есть и что уже
-сделал) и **динамику** (как ты думаешь прямо сейчас).
+Всё что делает Baddle делится на **статику** (что ты есть и что уже сделал) и **динамику** (как ты думаешь прямо сейчас).
 
-```
-┌─────────────────────────── СТАТИКА ───────────────────────────┐
-│                                                                │
-│  USER PROFILE           GOALS STORE          SOLVED ARCHIVE    │
-│  (who you are)          (what you solve)     (how you solved)  │
-│                                                                │
-│  • 5 категорий          • append-only        • snapshot графа  │
-│  • preferences          • create/done/abandon • state_trace    │
-│  • constraints          • stats aggregate    • final_synthesis │
-│  • context (wake/tz)                                           │
-└────────────────────────────────────────────────────────────────┘
-                              ▲ ▼
-┌─────────────────────────── ДИНАМИКА ──────────────────────────┐
-│                                                                │
-│     USER STATE                   SYSTEM STATE                  │
-│     (your now)                   (baddle's now)                │
-│                                                                │
-│  dopamine ← feedback         dopamine ← distinct(d) в tick     │
-│  serotonin ← HRV coherence   serotonin ← ΔW стабильность       │
-│  norepinephrine ← HRV stress norepinephrine ← H(W) энтропия    │
-│  burnout ← rejects           freeze.accumulator ← d·(1−S)      │
-│  valence ← feedback signed   recent_rpe ← |Δposterior|         │
-│  expectation ← EMA reality   maturity ← verifieds++            │
-│                     sync_error = ‖user − system‖ (3D)          │
-│                                                                │
-│  CONTENT GRAPH               COGNITIVE LOOP                    │
-│  ноды с embedding'ами        DMN 10m / state_walk 20m /        │
-│  distinct-matrix в тике      night cycle 24h / briefing 24h    │
-│  NAND zones: CONFIRM/        tick_foreground при /graph/tick   │
-│  EXPLORE/CONFLICT                                              │
-│                                                                │
-│  STATE GRAPH                 META-TICK                         │
-│  append-only Git-аудит       паттерны в tail(20)               │
-│  каждый tick → запись        stuck/rejection/rpe/monotony      │
-└────────────────────────────────────────────────────────────────┘
-```
+**Статика:**
+- **Профиль пользователя** (user_profile) — 5 категорий, preferences, constraints, контекст (время подъёма, часовой пояс).
+- **Хранилище целей** (goals_store) — append-only лог create / done / abandon + агрегаты.
+- **Архив решённого** (solved_archive) — snapshot графа, state_trace, финальный синтез.
 
-**Статика** хранится и меняется редко (когда явно добавляешь / решаешь).
-**Динамика** живёт каждую секунду — апдейт от сигналов, от тика, от
-ночного цикла. Статика читается в LLM-промпт; динамика при резолве
-пишется в статику (goals / archive), valence / neurochem реагируют на
-feedback.
+**Динамика** живёт в двух симметричных объектах:
+
+- **Состояние пользователя** (UserState) — дофамин от feedback'а, серотонин от когерентности HRV, норадреналин от HRV-стресса, выгорание от отказов, валентность от подписанного feedback'а, ожидания как EMA от реальности.
+- **Состояние системы** (Neurochem) — дофамин от различия (d) в тике, серотонин от стабильности изменений весов (ΔW), норадреналин от энтропии распределения весов, накопитель конфликтов от d·(1−серотонин), недавняя ошибка предсказания награды (RPE) от модуля разности posterior и prior, зрелость растёт по verifieds.
+
+Плюс: **рассогласование** (sync_error) = ‖UserState − Neurochem‖ в 3D, **граф контента** с embedding-ами и матрицей различий в тике (зоны NAND: согласие / исследование / конфликт), **цикл когнитивной петли** (DMN 10 минут, state_walk 20 минут, ночной цикл 24 часа, briefing 24 часа, foreground-тик при `/graph/tick`), **state_graph** как append-only git-аудит (каждый тик → запись), **meta-tick** на хвосте из 20 последних состояний (паттерны stuck / rejection / rpe / monotony).
+
+Статика хранится и меняется редко (когда явно добавляешь / решаешь). Динамика живёт каждую секунду — апдейт от сигналов, от тика, от ночного цикла. Статика читается в LLM-промпт; динамика при резолве пишется в статику (goals / архив), валентность / нейрохимия реагируют на feedback.
 
 ---
 
 ## Прайм-директива
 
-Одна метрика меряет всё: **sync_error = ‖UserState − SystemState‖**
-в 3D нейрохимическом пространстве (DA / S / NE). Фича оценивается по
-одному критерию — снижает ли она рассинхрон с конкретным юзером.
+Одна метрика меряет всё: **рассогласование** (sync_error) = ‖UserState − Neurochem‖ в 3D нейрохимическом пространстве (дофамин / серотонин / норадреналин). Фича оценивается по одному критерию — снижает ли она рассинхрон с конкретным пользователем.
 
-Отсюда `sync_regime` ∈ {FLOW / REST / PROTECT / CONFESS} — адаптивное
-поведение. Детали — [symbiosis-design.md](symbiosis-design.md). Полный
-предиктивный контур — [friston-loop.md](friston-loop.md).
+Отсюда **режим синхронизации** (sync_regime) ∈ {FLOW / REST / PROTECT / CONFESS} — адаптивное поведение. Детали — [symbiosis-design.md](symbiosis-design.md). Полный предиктивный контур — [friston-loop.md](friston-loop.md).
 
 ---
 
 ## Data flow: один запрос
 
-Юзер пишет сообщение. Что происходит:
+Пользователь пишет сообщение. Что происходит:
 
-1. **/assist** эндпоинт регистрирует вход — `inject_ne(0.4)` поднимает
-   arousal системы, `user.register_input()` обновляет timestamp,
-   `user.update_from_energy` бьёт по burnout.
-
-2. **Категория** (`_detect_category`) → food/work/health/... Если
-   категория профиля пуста → **profile_clarify card** («что любишь /
-   избегаешь?»), parse-ответ через LLM → `profile.food.preferences`
-   append → auto-retry оригинала.
-
-3. **Контекст сбирается:**
-   - `recurring_ctx` — активные привычки/constraints
-     («покушать 3/день, 1/3 сегодня, не орехи»)
-   - `find_similar_solved` — RAG по архиву past syntheses, инжектится
-     если sim ≥ 0.6
-
-4. **Intent router** (2-level LLM) решает: `fact / activity / task /
-   chat`. Fact и activity быстрые (~1.5с), task → intent_confirm
-   card с draft и кнопками, chat → свободный LLM-ответ. Fallthrough
-   — полный `classify_intent_llm` → `execute_deep`.
-
-5. **Execute** через `execute_via_zones(message, mode, profile_hint)`:
-   LLM генерит идеи учитывая constraints / recurring / RAG,
-   distinct-matrix раскладывает на zones CONFIRM / EXPLORE / CONFLICT,
-   `_render_card` рендерит (tournament / builder / dispute / ...).
-
-6. **Post-check:** `scan_message_for_violations` — LLM проверяет
-   нарушил ли юзер активные constraints. Если да → `record_violation` +
-   constraint_violation card.
-
-7. **`_log_decision`** списывает energy через `user.debit_energy(cost,
-   daily_remaining)` — mode-weighted (tournament 12 energy, fan 3, ...).
-
-8. Юзер жмёт 👎 → **/assist/feedback** → `cs.update_neurochem(d=0.8)` +
-   `user.update_from_feedback("rejected")`. DA/valence падают, burnout
-   растёт, streak bias учитывается. Следующий запрос — в новом
-   sync_regime.
+1. **`/assist`** эндпоинт регистрирует вход — `inject_ne(0.4)` поднимает arousal системы, `user.register_input()` обновляет timestamp, `user.update_from_energy` бьёт по выгоранию.
+2. **Категория** (`_detect_category`) → food / work / health / ... Если категория профиля пуста → карточка `profile_clarify` («что любишь / избегаешь?»), parse-ответ через LLM → preferences append → auto-retry оригинала.
+3. **Контекст собирается:** активные привычки и ограничения (`recurring_ctx`), RAG по архиву прошлых синтезов (`find_similar_solved`, инжектится если similarity ≥ 0.6).
+4. **Intent router** (2-level LLM) решает: fact / activity / task / chat. Fact и activity быстрые (около 1.5 с), task → карточка `intent_confirm` с draft и кнопками, chat → свободный LLM-ответ. Fallthrough — полный `classify_intent_llm` → `execute_deep`.
+5. **Execute** через `execute_via_zones(message, mode, profile_hint)`: LLM генерит идеи учитывая ограничения / recurring / RAG, матрица различий раскладывает на зоны согласия / исследования / конфликта, `_render_card` рендерит (tournament / builder / dispute / ...).
+6. **Post-check:** `scan_message_for_violations` — LLM проверяет нарушил ли пользователь активные ограничения. Если да → `record_violation` + карточка `constraint_violation`.
+7. **`_log_decision`** списывает энергию через `user.debit_energy(cost, daily_remaining)` — mode-weighted (tournament 12 энергии, fan 3, ...).
+8. Пользователь жмёт 👎 → `/assist/feedback` → `cs.update_neurochem(d=0.8)` + `user.update_from_feedback("rejected")`. Дофамин и валентность падают, выгорание растёт, учитывается streak bias. Следующий запрос — в новом режиме синхронизации.
 
 ---
 
-## Жизненный цикл goal'а
+## Жизненный цикл цели
 
 Статика и динамика работают вместе через весь путь цели:
 
-1. **CREATE.** `POST /graph/add {node_type: "goal", mode, text}` →
-   goals_store.add_goal (static), goal-нода в графе с subgoals (dynamic).
-
-2. **PROCESS.** Юзер пишет, делает ticks, добавляет evidence. Confidence
-   subgoals растёт через Bayes updates. Каждый tick → state_graph entry.
-   `maturity` чуть-чуть ↑ при crossing 0.8.
-
-3. **RESOLVE.** `should_stop() → True` (через distinct-зоны или
-   convergence) → `cs.note_verified()` → `solved_archive.archive_solved()`
-   → `goals_store.complete_goal(id, reason, snapshot_ref)` →
-   `node._goal_completed = True` (идемпотентность).
-
-4. **RETROSPECT.** UI 🎯 Goals → archive → клик → `load_solved(ref)`
-   показывает goal_text + final_synthesis + nodes + state_trace.
+1. **CREATE.** `POST /graph/add {node_type: "goal", mode, text}` → goals_store.add_goal (static), goal-нода в графе с подцелями (dynamic).
+2. **PROCESS.** Пользователь пишет, делает тики, добавляет evidence. Confidence подцелей растёт через байесовские обновления. Каждый тик → запись в state_graph. Зрелость чуть-чуть растёт при пересечении 0.8.
+3. **RESOLVE.** `should_stop() → True` (через зоны различия или сходимость) → `cs.note_verified()` → `solved_archive.archive_solved()` → `goals_store.complete_goal(id, reason, snapshot_ref)` → `node._goal_completed = True` (идемпотентность).
+4. **RETROSPECT.** UI 🎯 Goals → archive → клик → `load_solved(ref)` показывает текст цели + финальный синтез + ноды + state_trace.
 
 Что осталось в live-графе — временно. Что в solved archive — permanent.
 
@@ -137,98 +62,55 @@ feedback.
 
 ## Ночной цикл
 
-Пока юзер спит, единый проход (раньше 3 параллельных):
+Пока пользователь спит, единый проход:
 
-1. **Scout Pump+Save** — новый bridge-мост между далёкими нодами
-   (persisted как новая hypothesis)
-2. **REM Emotional** — state_nodes с `|rpe| > 0.15` из tail(100) →
-   Pump между их `content_touched` парами («эмоционально насыщенные
-   эпизоды пере-обрабатываются поверх удивлявших нод»)
-3. **REM Creative** — пары `distinct(emb) < 0.2` + BFS-path ≥ 3 →
-   `manual_link`. «Далёкие но близкие» — ноды разных областей с одной
-   семантикой
-4. **Consolidation** — прунинг weak-old-orphans + архив state_graph
-   (> 14d → `.archive.jsonl`)
+1. **Scout Pump+Save** — новый bridge-мост между далёкими нодами (persisted как новая гипотеза).
+2. **REM Emotional** — state-ноды с модулем RPE выше 0.15 из хвоста 100 → pump между парами их `content_touched` («эмоционально насыщенные эпизоды пере-обрабатываются поверх удивлявших нод»).
+3. **REM Creative** — пары с различием эмбеддингов ниже 0.2 + BFS-путь ≥ 3 → `manual_link`. «Далёкие но близкие» — ноды разных областей с одной семантикой.
+4. **Consolidation** — прунинг слабых / старых / осиротевших нод + архив state_graph (старше 14 дней → `.archive.jsonl`).
 
-Плюс независимо: **DMN 10м** (пробные pump без save, alerts если
-quality > 0.5), **state_walk 20м** (query_similar в state_graph),
-**daily_briefing 24ч** (утренний alert).
+Плюс независимо: **DMN 10 минут** (пробные pump без save, alerts если качество выше 0.5), **state_walk 20 минут** (query_similar в state_graph), **daily_briefing 24 часа** (утренний alert).
 
-Подробно — [dmn-scout-design.md § Night cycle](dmn-scout-design.md#night-cycle--scout--rem--consolidation)
-и [episodic-memory.md § Consolidation](episodic-memory.md#consolidation--забывание-как-фича).
+Подробно — [dmn-scout-design.md § Night cycle](dmn-scout-design.md#night-cycle--scout--rem--consolidation) и [episodic-memory.md § Consolidation](episodic-memory.md#consolidation--забывание-как-фича).
 
 ---
 
 ## Три контура замкнутости
 
-**Информационный:**
-```
-message → classify → execute (LLM + graph) → card → feedback → neurochem
-   ↑                                                                ↓
-   └────────── profile/state read при каждом запросе ──────────────┘
-```
+**Информационный:** message → classify → execute (LLM + граф) → карточка → feedback → нейрохимия; профиль / состояние читаются при каждом запросе.
 
-**Физиологический (UserState):** HRV coherence / stress → S / NE,
-accelerometer → activity_magnitude, feedback → dopamine / valence,
-timing → dopamine, decision cost → burnout / long_reserve. Итог —
-`sync_error → regime` → advice + alert. Плюс `activity_zone` (4 региона)
-→ zone-specific alerts.
+**Физиологический (UserState):** когерентность HRV / стресс → серотонин / норадреналин, акселерометр → величина активности, feedback → дофамин / валентность, timing → дофамин, стоимость решения → выгорание / долгий резерв. Итог — рассогласование → режим → advice + alert. Плюс зона активности (4 региона) → zone-specific алерты.
 
-**Диалоговый + uncertainty learning:**
-```
-профиль пуст в food → «что любишь?» → LLM-parse → profile append
-   ↑                                                    │
-   └──── следующий раз НЕ переспрашивает ───────────────┘
-```
+**Диалоговый + uncertainty learning:** профиль пуст в food → «что любишь?» → LLM-parse → preferences append → следующий раз не переспрашивает.
 
 ---
 
 ## Тонкие места
 
-- **Race conditions при параллельных /assist** — не обработаны. Два
-  одновременных запроса могут дважды списать energy (дедуп в classify
-  cache прощает, но не гарантированно).
-- **goals.jsonl растёт монотонно.** Consolidation архивит state_graph,
-  но не goals. Для лет-пользования нужна ротация.
-- **Embedding-кэш content-графа не персистится.** `_graph["embeddings"]`
-  только в памяти, пересчитывается при старте. State_graph embeddings —
-  да, в `state_embeddings.jsonl`.
-- **Profile LLM-parse может галлюцинировать.** Fallback на split если
-  LLM промажет формат. Юзер видит результат в 👤 и правит вручную.
-- **Multi-workspace + UserState.** UserState глобальный per-person —
-  переключение workspace его не меняет (HRV один на человека). Profile
-  тоже один — разные preferences для work vs personal не поддерживаются.
-- **cognitive_loop.tick_foreground** синхронный в request-контексте
-  Flask. Thread-safety через `graph_lock` в `_add_node` / `_remove_node`,
-  остальное полагается на GIL.
+- **Race conditions при параллельных `/assist`** не обработаны. Два одновременных запроса могут дважды списать энергию (дедуп в classify-кеше прощает, но не гарантированно).
+- **`goals.jsonl` растёт монотонно.** Consolidation архивит state_graph, но не goals. Для лет-пользования нужна ротация.
+- **Embedding-кэш content-графа не персистится.** `_graph["embeddings"]` только в памяти, пересчитывается при старте. Embeddings state-графа — да, в `state_embeddings.jsonl`.
+- **LLM-parse профиля может галлюцинировать.** Fallback на split если LLM промажет формат. Пользователь видит результат в 👤 и правит вручную.
+- **Multi-workspace + UserState.** UserState глобальный per-person — переключение workspace его не меняет (HRV один на человека). Профиль тоже один — разные preferences для work vs personal не поддерживаются.
+- **`cognitive_loop.tick_foreground`** синхронный в request-контексте Flask. Thread-safety через `graph_lock` в `_add_node` / `_remove_node`, остальное полагается на GIL.
 
-Реестр workstreams — [planning/TODO.md](../planning/TODO.md) и
-[planning/TODO.md](../planning/TODO.md).
+Реестр workstreams — [planning/TODO.md](../planning/TODO.md).
 
 ---
 
 ## Где что живёт
 
-**Static:** `user_profile.py`, `goals_store.py`, `solved_archive.py` →
-[static-storage-design.md](static-storage-design.md).
+**Статика:** [user_profile.py](../src/user_profile.py), [goals_store.py](../src/goals_store.py), [solved_archive.py](../src/solved_archive.py) → [static-storage-design.md](static-storage-design.md).
 
-**Dynamic состояние:** `user_state.py` + `neurochem.py` + `horizon.py`
-→ [symbiosis-design.md](symbiosis-design.md), [friston-loop.md](friston-loop.md).
+**Динамическое состояние:** [user_state.py](../src/user_state.py) + [neurochem.py](../src/neurochem.py) + [horizon.py](../src/horizon.py) → [symbiosis-design.md](symbiosis-design.md), [friston-loop.md](friston-loop.md).
 
-**Dynamic работа:** `cognitive_loop.py` + `tick_nand.py` + `thinking.py`
-+ `meta_tick.py` → [tick-design.md](tick-design.md),
-[dmn-scout-design.md](dmn-scout-design.md), [episodic-memory.md](episodic-memory.md).
+**Динамическая работа:** [cognitive_loop.py](../src/cognitive_loop.py) + [tick_nand.py](../src/tick_nand.py) + [thinking.py](../src/thinking.py) + [meta_tick.py](../src/meta_tick.py) → [tick-design.md](tick-design.md), [dmn-scout-design.md](dmn-scout-design.md), [episodic-memory.md](episodic-memory.md).
 
-**Операции:** `pump_logic.py` + SmartDC + embedding-first →
-[thinking-operations.md](thinking-operations.md).
+**Операции:** [pump_logic.py](../src/pump_logic.py) + SmartDC + embedding-first → [thinking-operations.md](thinking-operations.md).
 
-**Graph / persistence:** `graph_logic.py` + `state_graph.py` +
-`consolidation.py` + `workspace.py` + `cross_graph.py` →
-[nand-architecture.md](nand-architecture.md), [episodic-memory.md](episodic-memory.md),
-[workspace-design.md](workspace-design.md).
+**Граф / persistence:** [graph_logic.py](../src/graph_logic.py) + [state_graph.py](../src/state_graph.py) + [consolidation.py](../src/consolidation.py) + [workspace.py](../src/workspace.py) + [cross_graph.py](../src/cross_graph.py) → [nand-architecture.md](nand-architecture.md), [episodic-memory.md](episodic-memory.md), [workspace-design.md](workspace-design.md).
 
-**UI:** `templates/index.html`, `static/js/{assistant,graph,modes}.js`,
-`static/css/style.css`.
+**UI:** `templates/index.html`, `static/js/{assistant,graph,modes}.js`, `static/css/style.css`.
 
 Schemas всех data-файлов — [ontology.md](ontology.md).
 

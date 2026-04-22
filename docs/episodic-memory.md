@@ -20,23 +20,14 @@ JSONL). Унифицирован с Git-аудитом из [nand-architecture.m
 каждая сессия начинается с нуля; детерминистский replay невозможен;
 meta-tick нечего читать.
 
-**Что записывается.** Каждая tick-нода содержит `hash` + `parent`
-(DAG-цепочка), timestamp, `action` и `phase`, индексы content-нод которые
-тик тронул, полный snapshot `CognitiveState.get_metrics()` (precision,
-neurochem, HRV, sync_error). Плюс опциональные `rpe` и `user_feedback`
-когда они измеримы. `hash` — sha1 prefix от канонического JSON фиксированных
-полей; при рестарте StateGraph сканирует хвост файла чтобы восстановить
-parent chain.
+**Что записывается.** Каждая тик-нода содержит хеш и ссылку на предыдущий (DAG-цепочка), timestamp, действие и фазу, индексы content-нод которые тик тронул, полный snapshot метрик когнитивного состояния (точность, нейрохимия, HRV, **рассогласование с пользователем** — sync_error). Плюс опциональные **ошибка предсказания награды** (RPE) и **реакция пользователя** (user_feedback), когда они измеримы. Хеш — sha1-префикс от канонического JSON фиксированных полей; при рестарте StateGraph сканирует хвост файла чтобы восстановить цепочку родителей.
 
 **Где лежит.** `data/state_graph.jsonl` для default workspace, или
 `graphs/{ws}/state_graph.jsonl` в мульти-графе. Плюс ленивый кэш
 embedding'ов в `state_embeddings.jsonl`. Append-only — запись быстрая,
 файл растёт, никаких rewrites.
 
-**Эпизодическая память через distinct.** Тот же `distinct(a, b)` что
-работает на content-графе применяется к state-графу. Embedding state-ноды
-— конкатенация `action:phase | state | state_origin | "S=X NE=Y DA=Z" |
-reason`, лениво считается при первом `query_similar`, кэшируется.
+**Эпизодическая память через различение.** Та же **мера различия** (d = distinct(a, b)) что работает на content-графе применяется к state-графу. Embedding state-ноды — конкатенация «действие:фаза | состояние | state_origin | S=X NE=Y DA=Z | причина», лениво считается при первом `query_similar`, кэшируется.
 
 Use case: «когда в последний раз система была в похожем состоянии — что
 она делала и что сработало?» Это основа meta-tick и heartbeat substrate

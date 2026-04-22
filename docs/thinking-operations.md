@@ -39,10 +39,7 @@
 
 Если embeddings недоступны — fallback на entropy логпробов.
 
-**Куда идёт confidence.** В ноду графа, в Bayes update через
-[Neurochem](neurochem-design.md), в heatmap UI, и обратно в
-[Horizon](horizon-design.md) как `surprise = 1 − confidence` —
-корректирует precision для следующего шага.
+**Куда идёт confidence.** В ноду графа, в байесовское обновление через [Neurochem](neurochem-design.md), в heatmap UI, и обратно в [Horizon](horizon-design.md) как **удивление** (surprise = 1 − confidence) — корректирует точность для следующего шага.
 
 ---
 
