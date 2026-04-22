@@ -194,4 +194,4 @@ Neurochem (системная сторона) эволюционирует по 
 
 ---
 
-**Навигация:** [← User Model](user-model-design.md) · [Индекс](README.md) · [Следующее: Friston loop →](friston-loop.md)
+**Навигация:** [← User Model](user-model-design.md) · [Индекс](README.md) · [Следующее: Capacity →](capacity-design.md)

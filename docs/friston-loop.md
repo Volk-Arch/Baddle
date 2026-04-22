@@ -147,4 +147,4 @@ curl http://localhost:7860/assist/prime-directive?window_days=1
 
 ---
 
-**Навигация:** [← HRV](hrv-design.md) · [Индекс](README.md) · [Следующее: Episodic memory →](episodic-memory.md)
+**Навигация:** [← Capacity](capacity-design.md) · [Индекс](README.md) · [Следующее: Episodic memory →](episodic-memory.md)

@@ -160,6 +160,14 @@ MVP stream работает ([hrv-design.md](../docs/hrv-design.md#sensor-stream
 - **#14 Emergent emotions (отчаяние, радость) из 2D.** (P3/R2) Расселл разбивает 2D-плоскость на квадранты: high-neg-arousal+negative = anger/despair, low-arousal+negative = apathy. Можно назвать зоны и показывать как label. Зависит от #2. Риск: эмоции не должны быть UI-primary — мы не терапевт.
   *Мнение:* **не делать.** Один и тот же point в (V, A) может быть «отчаянием» или «grief» в зависимости от контекста — дискретизация навязчива. Риск false positive «ты в отчаянии» → psychologically concerning. Baddle не терапевт. Координаты пусть будут координаты, без ярлыков.
 
+### Пакет «Capacity: три контура нагрузки»
+
+- [ ] Заменить dual-pool energy (хардкод 100 + 2000) на трёхконтурную модель: физио / эмо / когнитивный, с capacity-зоной как derived state. Миграция фазами (наблюдение → параллельное вычисление → дубляж decision gate → переключение). Подробности, формулы, поля, call-sites в [docs/capacity-design.md](../docs/capacity-design.md).
+
+### Пакет «Задачный слой — backlog + auto-scheduling»
+
+- [ ] Расширение taskplayer'а на полный задачный слой: отдельное хранилище `data/tasks.jsonl` (append-only), оценка сложности при создании, auto-scheduling в план дня через capacity-зону, возврат незавершённого с флагом `touched_today`, калибровка оценки через `surprise_at_start`. Структура, схема, алгоритм matching'а, API, миграция — в [docs/task-tracker-design.md](../docs/task-tracker-design.md). Связан с [capacity-design.md](../docs/capacity-design.md) и идеей #6 из пакета «Всё через граф». Архитектурная граница: Baddle **предлагает**, не настаивает — никакой streak-gamification («никакой логики оптимизирующей время в приложении» из [world-model](../docs/world-model.md)).
+
 ### Пакет «UX/работа графа»
 
 - **#4 Пересмотр 14 режимов.** (P3/R4) Каких реально юзаешь? Dispute/tournament/fan/rhythm/horizon/... — отсев не-используемых, merge похожих. Требует статистики за N недель чтобы знать какие activate часто.

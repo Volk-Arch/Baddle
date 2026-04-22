@@ -61,25 +61,27 @@ order + 6 вспомогательных (reference / context).
 9. [symbiosis-design.md](symbiosis-design.md) *(15 мин)* — двойной state-вектор USER ↕ SYSTEM, `sync_error` как прайм-директива, 4 режима (flow/rest/protect/confess).
 10. [user-model-design.md](user-model-design.md) *(20 мин)* — `UserState`: surprise, dual-pool energy, 10 named_states (Voronoi), day simulator.
 11. [hrv-design.md](hrv-design.md) *(20 мин)* — HRV как физический вход: coherence → θ/φ конуса, 4 activity zones, источники данных.
-12. [friston-loop.md](friston-loop.md) *(20 мин)* — **canonical PE layer**: 2 предиктора (user/self), 5 PE-каналов, `imbalance_pressure` aggregate, прайм-директива через `prime_directive.jsonl`.
+12. [capacity-design.md](capacity-design.md) *(20 мин)* — три контура нагрузки: физио / эмо / когн. Capacity через зоны, дневная метрика через observable, decision gate через компоненты.
+13. [friston-loop.md](friston-loop.md) *(20 мин)* — **canonical PE layer**: 2 предиктора (user/self), 5 PE-каналов, `imbalance_pressure` aggregate, прайм-директива через `prime_directive.jsonl`.
 
-### 📚 Глава 4 — Knowledge structures (80 мин)
+### 📚 Глава 4 — Knowledge structures (100 мин)
 *Как Baddle помнит.*
 
-13. [episodic-memory.md](episodic-memory.md) *(30 мин)* — жизнь системы: state-graph → meta-tick → consolidation. Один pipeline doc.
-14. [static-storage-design.md](static-storage-design.md) *(25 мин)* — profile / goals / solved archive. Замкнутый цикл с uncertainty-learning.
-15. [activity-log-design.md](activity-log-design.md) *(15 мин)* — `activity.jsonl`, 3 контура (event log / content graph / UserState), category → energy.
-16. [ontology.md](ontology.md) *(10 мин)* — **reference**: схемы всех 13 data-файлов. Держи под рукой когда пишешь код.
+14. [episodic-memory.md](episodic-memory.md) *(30 мин)* — жизнь системы: state-graph → meta-tick → consolidation. Один pipeline doc.
+15. [static-storage-design.md](static-storage-design.md) *(25 мин)* — profile / goals / solved archive. Замкнутый цикл с uncertainty-learning.
+16. [activity-log-design.md](activity-log-design.md) *(15 мин)* — `activity.jsonl`, 3 контура (event log / content graph / UserState), category → energy.
+17. [task-tracker-design.md](task-tracker-design.md) *(20 мин)* — задачный слой: backlog с оценкой сложности, auto-scheduling в план дня через capacity-зону, возврат незавершённого.
+18. [ontology.md](ontology.md) *(10 мин)* — **reference**: схемы всех 13 data-файлов. Держи под рукой когда пишешь код.
 
 ### 🔧 Глава 5 — Implementation (90 мин)
 *Как всё собрано в единую систему.*
 
-17. [thinking-operations.md](thinking-operations.md) *(40 мин)* — 4 атомные операции на графе: SmartDC (диалектика), Pump (скрытые мосты), Novelty (фильтр повторов), Embedding-first (мышление без слов).
-18. [dmn-scout-design.md](dmn-scout-design.md) *(25 мин)* — фоновое сознание 24/7: 4 DMN-check + night cycle (Scout + REM + Consolidation) + heartbeat substrate.
-19. [cross-graph-design.md](cross-graph-design.md) *(10 мин)* — continuity между сессиями: seed-ноды при switch, перенос embedding'ов.
-20. [workspace-design.md](workspace-design.md) *(15 мин)* — multi-graph: WorkspaceManager, cross-graph edges (серендипити), meta-graph.
-21. [storage-layout.md](storage-layout.md) *(10 мин)* — где что лежит на диске: `data/` / `graphs/<ws>/` / `workspaces/`, data flow, reset.
-22. [closure-architecture.md](closure-architecture.md) *(20 мин)* — как замкнуты инструменты: intent router, recurring / constraints, plan↔goal link, observation → suggestion, RAG.
+19. [thinking-operations.md](thinking-operations.md) *(40 мин)* — 4 атомные операции на графе: SmartDC (диалектика), Pump (скрытые мосты), Novelty (фильтр повторов), Embedding-first (мышление без слов).
+20. [dmn-scout-design.md](dmn-scout-design.md) *(25 мин)* — фоновое сознание 24/7: 4 DMN-check + night cycle (Scout + REM + Consolidation) + heartbeat substrate.
+21. [cross-graph-design.md](cross-graph-design.md) *(10 мин)* — continuity между сессиями: seed-ноды при switch, перенос embedding'ов.
+22. [workspace-design.md](workspace-design.md) *(15 мин)* — multi-graph: WorkspaceManager, cross-graph edges (серендипити), meta-graph.
+23. [storage-layout.md](storage-layout.md) *(10 мин)* — где что лежит на диске: `data/` / `graphs/<ws>/` / `workspaces/`, data flow, reset.
+24. [closure-architecture.md](closure-architecture.md) *(20 мин)* — как замкнуты инструменты: intent router, recurring / constraints, plan↔goal link, observation → suggestion, RAG.
 
 ---
 

@@ -141,4 +141,4 @@ edit start/end time в UI, sleep duration из gap-между-днями,
 
 ---
 
-**Навигация:** [← Static storage](static-storage-design.md) · [Индекс](README.md) · [Следующее: Ontology →](ontology.md)
+**Навигация:** [← Static storage](static-storage-design.md) · [Индекс](README.md) · [Следующее: Task Tracker →](task-tracker-design.md)
