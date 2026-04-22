@@ -24,7 +24,8 @@ Baddle для одного человека, один контекст. 2 worksp
 ---
 
 ## 📌 Задачи
-
+- [ ] **Embeddings** Убрать хранение embeddings
+- [ ] **Унифицировать связи графов и их хранения** Очень много файлов непонятно зачем
 - [ ] **Desktop notifications.** Alerts работают только пока вкладка открыта. Закрыл → morning briefing / DMN-мосты / night cycle уходят в пустоту. MVP: `pystray` + `plyer` (иконка в трее + OS toast). ~2-3ч.
 - [ ] **Alerts coverage — проверить что 21 check работает.** `/debug/alerts/trigger-all` показывал 10 silent_ok на demo-данных. Пройтись по каждому, покрыть пустые условия или пометить «not applicable on empty state». ~2ч.
 - [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн, но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts. ~1ч.
