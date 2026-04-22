@@ -1,230 +1,153 @@
 # Action Memory — самообучение через граф
 
-> Действия (свои и юзера) живут в том же графе что и мысли. DMN, pump,
-> consolidate, touch_node, hebbian decay — всё что уже работает для
-> мыслей — **автоматически** начинает работать для действий. Baddle
-> учится что работает без отдельного RL-loop'а.
+> Действия (свои и пользовательские) живут в том же графе что и мысли. DMN, pump, consolidate, touch_node, хеббовское затухание — всё что уже работает для мыслей — **автоматически** начинает работать для действий. Baddle учится что работает без отдельного RL-loop'а.
 >
-> Пятая механика резонансного протокола. Структурно другого уровня —
-> не новый check, а расширение семантики графа.
+> Пятая механика резонансного протокола. Структурно другого уровня — не новый check, а расширение семантики графа.
 
 ---
 
 ## Зачем
 
-4 первые механики дали Baddle сенсорику (HRV, feedback, energy, agency),
-симметричный слой (sync_error, silence/imbalance pressure) и реактивный
-слой (sync-seeking, suggestions, reminders, DMN bridges). Но actions
-выполнялись — никто не запоминал **что именно** работает с этим конкретным
-человеком.
+Первые 4 механики дали Baddle сенсорику (HRV, feedback, энергия, агентность), симметричный слой (рассогласование, давление тишины и дисбаланса) и реактивный слой (sync-seeking, suggestions, reminders, DMN-мосты). Но действия выполнялись — никто не запоминал **что именно** работает с этим конкретным человеком.
 
-Как собака которая видит что ты грустный, подходит, виляет хвостом. Если
-прогнать — в следующий раз подойдёт ровно так же. Не учится.
+Как собака которая видит что ты грустный, подходит, виляет хвостом. Если прогнать — в следующий раз подойдёт ровно так же. Не учится.
 
 Пятишаговый цикл сознания замыкается так:
-1. Замечает рассогласование — `sync_error` ✓
-2. Хочет уменьшить — через `valence = -Δsync_error` per action type
-3. Пробует действие — 6+ proactive checks ✓
-4. Запоминает сработало ли — **action/outcome ноды в графе**
-5. Повторяет успешное — **score_action_candidates через similarity**
-
-Шаги 4 и 5 — то что раньше было дырой.
+1. Замечает рассогласование — **рассогласование с пользователем** (sync_error).
+2. Хочет уменьшить — через **валентность** (valence, −Δsync_error) per action type.
+3. Пробует действие — 6+ проактивных проверок.
+4. Запоминает сработало ли — **action/outcome ноды в графе**.
+5. Повторяет успешное — `score_action_candidates` через similarity.
 
 ---
 
 ## Почему именно через граф
 
-Альтернатива — отдельный RL-layer (experience replay buffer, Q-table
-по (state, action) → reward). **Именно то что не хочется:** плодит
-структуры, дублирует embedding/similarity/decay (в графе уже есть), не
-интегрируется с DMN (ищет мосты между нодами, не между записями таблицы),
-не inspectable в Graph Lab.
+Альтернатива — отдельный RL-слой (experience replay buffer, Q-table по (state, action) → reward). **Именно то что не хочется:** плодит структуры, дублирует embedding / similarity / затухание (в графе уже есть), не интегрируется с DMN (ищет мосты между нодами, не между записями таблицы), не инспектируется в Graph Lab.
 
 Через граф всё достаётся **бесплатно:**
 
-| Механика | На мыслях | На actions (без нового кода) |
+| Механика | На мыслях | На действиях (без нового кода) |
 |---|---|---|
 | `touch_node(idx)` +0.02 | мысль крепнет от обращений | успешное действие крепнет когда выбирается |
-| decay −0.005/сутки | неиспользуемая тает | неудачное тает |
-| `pump(a, b)` | мост между ideas | мост между action и outcome |
-| `smartdc` | верифицирует hypothesis | верифицирует что действие сработало |
-| embedding similarity | похожие идеи | похожие контексты где применялось |
+| Затухание −0.005/сутки | неиспользуемая тает | неудачное тает |
+| `pump(a, b)` | мост между идеями | мост между действием и результатом |
+| `smartdc` | верифицирует гипотезу | верифицирует что действие сработало |
+| Embedding similarity | похожие идеи | похожие контексты где применялось |
 | DMN continuous | связи между мыслями | что работало когда |
 
-Когда DMN находит мост между `action:sync_seeking(evening, high_burnout)`
-и `outcome:user_returned_quick` — связь крепнет через hebbian. В следующий
-раз в похожем контексте та же связь найдётся быстрее и влияет на выбор.
+Когда DMN находит мост между «действие: sync_seeking (вечер, высокое выгорание)» и «результат: пользователь быстро вернулся» — связь крепнет через хеббовское правило. В следующий раз в похожем контексте та же связь найдётся быстрее и влияет на выбор.
 
 Без RL-loop'а. DMN уже это делает, просто ему дали больше типов нод.
 
 ---
 
-## Новые node-типы
+## Новые типы нод
 
 ### `action` — что-то было сделано
 
-Поля помимо обычных node-fields: `actor` ∈ {baddle, user},
-`action_kind` (строка, см. enum), `context` со snapshot'ом всех
-скаляров системы и юзера на момент действия + `time_of_day`,
-`hrv_regime`, `sync_regime`. Плюс `closed: bool` и `outcome_idx`.
+Поля помимо обычных полей ноды: **актор** (actor ∈ {baddle, user}), **вид действия** (action_kind — строка, см. перечень), **контекст** (context со снимком всех скаляров системы и пользователя на момент действия + время суток, режим HRV, режим синхронизации). Плюс флаг закрытости (closed) и индекс результата (outcome_idx).
 
-**Baddle-side:** sync_seeking, dmn_bridge, scout_bridge, suggestion_habit /
-constraint, reminder_plan, alert_low_energy, morning_briefing, pump_run,
-baddle_reply, chat_event_{mode}, evening_retro.
+**На стороне Baddle:** sync_seeking, dmn_bridge, scout_bridge, suggestion_habit / constraint, reminder_plan, alert_low_energy, morning_briefing, pump_run, baddle_reply, chat_event_{mode}, evening_retro.
 
-**User-side:** user_chat (со sentiment в context), user_accept / reject,
-user_goal_create / done, user_activity_start / stop, user_checkin.
+**На стороне пользователя:** user_chat (со sentiment в контексте), user_accept / reject, user_goal_create / done, user_activity_start / stop, user_checkin.
 
-`action_kind` не hardcoded — любая строка, UI фильтруется по наблюдаемым.
+Вид действия не захардкожен — любая строка, UI фильтруется по наблюдаемым.
 
 ### `outcome` — что произошло после
 
-Поля: `linked_action_idx` (обратная ссылка), `delta_sync_error` =
-`after − before` (negative = good), `user_reaction` ∈ {chat, accept,
-reject, ignore, silence}, `latency_s`, `confidence` (измеряется
-надёжность — sync_seeking через 2 мин уверенный, через 4 часа — шумный).
+Поля: **индекс связанного действия** (linked_action_idx, обратная ссылка), **изменение рассогласования** (delta_sync_error = after − before, отрицательное = хорошо), **реакция пользователя** (user_reaction ∈ {chat, accept, reject, ignore, silence}), **задержка в секундах** (latency_s), **доверие к замеру** (confidence — sync_seeking через 2 мин уверенный, через 4 часа — шумный).
 
-### Edges
+### Рёбра
 
-- **`caused_by`** (outcome → action) — жёсткий causal claim. Pump/DMN
-  **не** traverse'ят по умолчанию — слишком прямо, не insight.
-- **`followed_by`** (action-N → action-N+1) — temporal, без causal
-  claim. Даёт цепочку для policy-planning.
+- **`caused_by`** (outcome → action) — жёсткое causal claim. Pump и DMN **не** traverse'ят по умолчанию — слишком прямо, не инсайт.
+- **`followed_by`** (action N → action N+1) — temporal, без causal claim. Даёт цепочку для policy-planning.
 
 ---
 
-## Sentiment как metadata
+## Sentiment как метаданные
 
-Каждое user-сообщение создаёт `action:user_chat` ноду. Sentiment — поле
-в её context'е. LLM classify однократно при создании (лёгкий вызов с
-SHA1-кэшем, повторные сообщения не бьют LLM).
+Каждое сообщение пользователя создаёт ноду `action: user_chat`. Sentiment — поле в её контексте. LLM-classify однократно при создании (лёгкий вызов с кэшем по SHA1 текста, повторные сообщения не бьют LLM).
 
-Плюс UserState.valence получает **высокочастотный feeder**: было только
-от accept/reject (редко), теперь каждое сообщение — EMA с baseline 0.92.
+Плюс валентность пользователя (UserState.valence) получает **высокочастотный feeder**: было только от accept/reject (редко), теперь каждое сообщение — EMA с baseline 0.92.
 
-Не меняет структуру. Ещё один вход в существующий слой + поле в
-action-node.
+Не меняет структуру. Ещё один вход в существующий слой + поле в action-ноде.
 
 ---
 
-## Closing outcomes
+## Закрытие outcome'ов
 
-Раз в 5 минут `_check_action_outcomes` проходит по open actions
-(`closed=False`). Для каждого измеряет post-state, создаёт outcome-ноду
-+ edge `caused_by`, закрывает action.
+Раз в 5 минут `_check_action_outcomes` проходит по открытым действиям (closed = false). Для каждого измеряет post-state, создаёт outcome-ноду + ребро `caused_by`, закрывает действие.
 
-**Timeout per kind:**
+**Таймаут по виду действия:**
 
-| action_kind | timeout | user_reaction signal |
+| Вид действия | Таймаут | Сигнал реакции |
 |---|---|---|
-| sync_seeking | 30 мин | chat within = «chat», else «silence» |
-| reminder_plan | 30 мин | started task = «acted», else «skipped» |
-| alert_low_energy | 1 ч | не взял heavy = «heeded», else «ignored» |
-| morning_briefing | 4 ч | chat within = «engaged» |
-| dmn_bridge / scout_bridge | 24 ч | next briefing include = «seen», else «missed» |
+| sync_seeking | 30 мин | chat within — «chat», иначе «silence» |
+| reminder_plan | 30 мин | started task — «acted», иначе «skipped» |
+| alert_low_energy | 1 ч | не взял heavy — «heeded», иначе «ignored» |
+| morning_briefing | 4 ч | chat within — «engaged» |
+| dmn_bridge / scout_bridge | 24 ч | next briefing include — «seen», иначе «missed» |
 | suggestion_{kind} | 7 дней | accept / reject card / ignore |
 
-User_chat сам по себе не требует closing. Он **закрывает open
-baddle-actions** в своём timeout window'е — прямая обратная связь.
-Если открытых нет — просто stored node со sentiment, доступен для
-similarity-поиска.
+User_chat сам по себе не требует закрытия. Он **закрывает открытые baddle-действия** в своём таймаут-окне — прямая обратная связь. Если открытых нет — просто stored-нода с sentiment, доступна для similarity-поиска.
 
 ---
 
 ## Retrieval для policy
 
-Когда проактивный check готов emit'нуть action — можно сначала спросить:
-«какой вариант в похожих прошлых контекстах давал meaningful
-`-delta_sync_error`?». Это `score_action_candidates(kind, candidates,
-variant_field, time_of_day, min_history)` — positive score = past
-success.
+Когда проактивный check готов эмитить действие — можно сначала спросить: «какой вариант в похожих прошлых контекстах давал значимое отрицательное изменение рассогласования?». Это `score_action_candidates(kind, candidates, variant_field, time_of_day, min_history)` — положительный скор = past success.
 
-MVP: применено в `_check_sync_seeking` для выбора tone (caring / ambient
-/ curious / reference / simple). Если winner ≥ 0.05 over 2nd place
-после ≥ 3 prior closed actions — override эвристики. Cold start (< 3
-данных) возвращает 0, fallback на heuristic. Постепенно расширяется на
-другие checks.
+MVP: применено в `_check_sync_seeking` для выбора тона (caring / ambient / curious / reference / simple). Если победитель даёт минимум 0.05 над вторым местом после минимум 3 закрытых действий — override эвристики. Cold start (меньше 3 данных) возвращает 0, fallback на heuristic. Постепенно расширяется на другие проверки.
 
 ---
 
 ## Ловушки
 
-**Actions растут быстро.** 150+/день баддл + 20-50 user-сообщений за
-месяц = ~6000 нод. Решение: агрессивный consolidation — |delta| < 0.05
-через 30 дней → archive; значимые (|delta| ≥ 0.1) остаются как
-долгосрочная action-memory.
+**Действия растут быстро.** 150+ в день от Baddle + 20-50 сообщений пользователя за месяц = около 6000 нод. Решение: агрессивный consolidation — при модуле изменения меньше 0.05 через 30 дней → архив; значимые (модуль ≥ 0.1) остаются как долгосрочная action-memory.
 
-**Pump путает actions с мыслями.** В `_find_distant_pair` по умолчанию
-исключаем action+outcome. Отдельный метод для намеренного поиска
-action-outcome связей, DMN использует раз в N тиков.
+**Pump путает действия с мыслями.** В `_find_distant_pair` по умолчанию исключаем action + outcome. Отдельный метод для намеренного поиска action-outcome связей, DMN использует раз в N тиков.
 
-**False causality.** Sync-seeking не гарантированно вернул юзера —
-мог прийти в себя. Принимаем noise — статистика за 1-3 месяца
-усредняет. Плюс `outcome.confidence` отражает измерительную
-неопределённость. Counterfactual honesty (намеренно не действовать
-в части случаев) — в OQ, пока не делается.
+**Ложная причинность.** Sync-seeking не гарантированно вернул пользователя — мог прийти в себя. Принимаем шум — статистика за 1-3 месяца усредняет. Плюс `outcome.confidence` отражает измерительную неопределённость. Counterfactual honesty (намеренно не действовать в части случаев) — в [TODO § Открытые вопросы](../planning/TODO.md), пока не делается.
 
-**Cold start.** Первые недели нет данных → score=0 → policy
-эквивалентна hardcoded. Это **правильно**: Baddle начинает с нулевого
-знания о конкретном человеке. Никаких fallback hardcoded preferences —
-иначе теряем главное качество (personalization).
+**Cold start.** Первые недели нет данных → скор = 0 → policy эквивалентна эвристике. Это **правильно**: Baddle начинает с нулевого знания о конкретном человеке. Никаких fallback-значений по умолчанию — иначе теряем главное качество (персонализация).
 
 ---
 
 ## Как это работает через месяц
 
-Вечер четверга, юзер устал, sync_error растёт.
+Вечер четверга, пользователь устал, рассогласование растёт.
 
-**Без Action Memory:** sync-seeking шлёт случайный template. Юзер
-игнорирует. Через 2ч снова случайный.
+**Без Action Memory:** sync-seeking шлёт случайный template. Пользователь игнорирует. Через 2 часа снова случайный.
 
 **С Action Memory, месяц данных:**
-- DMN pump за прошлый месяц нашёл мост между
-  `action:sync_seeking(evening, burnout>0.5, tone=caring)` и
-  `outcome:user_ignored`.
-- Параллельно — мост между
-  `action:sync_seeking(evening, burnout>0.5, tone=reference, topic=recent_goal)`
-  и `outcome:user_chatted_quick`.
-- В четверг вечером `score_action_candidates` возвращает
-  `{caring: +0.02, reference: −0.14}`. Reference выбран.
-- LLM prompt включает recent_goal_topic. Юзер отвечает. `outcome(delta=−0.18, reaction=chat)`
-  — мост крепнет ещё.
+- DMN-pump за прошлый месяц нашёл мост между «действие: sync_seeking (вечер, выгорание > 0.5, тон = caring)» и «результат: user_ignored».
+- Параллельно — мост между «действие: sync_seeking (вечер, выгорание > 0.5, тон = reference, topic = recent_goal)» и «результат: user_chatted_quick».
+- В четверг вечером `score_action_candidates` возвращает: caring +0.02, reference −0.14. Reference выбран.
+- LLM-промпт включает recent_goal_topic. Пользователь отвечает. outcome (delta = −0.18, реакция = chat) — мост крепнет ещё.
 
-Это произошло без написания RL-кода. Pump/DMN уже делают ровно это.
+Это произошло без написания RL-кода. Pump и DMN уже делают ровно это.
 
 ---
 
 ## Что это НЕ
 
-- **Не замена графа мыслей.** Actions и thoughts живут параллельно, разные
-  типы узлов. Pump/DMN на thoughts работают как раньше; отдельный
-  action_pump на action-outcome пары.
-- **Не RL-framework.** Нет reward function извне. Reward = `-Δsync_error`,
-  вытекает из прайм-директивы. Policy = softmax over scored candidates.
-  Никаких Q-tables, replay buffers, TD-learning.
-- **Не формальное сознание.** Операциональное: counters, EMA, hebbian
-  decay, embedding similarity. «Замечает / хочет / пробует / запоминает /
-  повторяет» — механические свойства, не переживания.
-- **Не blackbox.** Каждый action и outcome — node в графе, inspectable
-  в Lab, можно удалить ложный outcome и scoring изменится.
+- **Не замена графа мыслей.** Действия и мысли живут параллельно, разные типы узлов. Pump и DMN на мыслях работают как обычно; отдельный action_pump — на пары действие–результат.
+- **Не RL-framework.** Нет reward-функции извне. Награда = изменение рассогласования (−Δsync_error), вытекает из прайм-директивы. Policy = softmax по скорированным кандидатам. Никаких Q-таблиц, replay buffer'ов, TD-learning.
+- **Не формальное сознание.** Операциональное: счётчики, EMA, хеббовское затухание, embedding similarity. «Замечает / хочет / пробует / запоминает / повторяет» — механические свойства, не переживания.
+- **Не blackbox.** Каждое действие и каждый результат — нода в графе, инспектируется в Lab, можно удалить ложный результат и скоринг изменится.
 
 ---
 
 ## Валидация
 
-Через 2-3 месяца `avg sync_error` за неделю должен быть ниже чем в
-первом месяце при прочих равных — прайм-директива валидирует
-расширение сама себя (детали — [friston-loop.md § Связь с прайм-директивой](friston-loop.md#связь-с-прайм-директивой)).
+Через 2-3 месяца среднее рассогласование за неделю должно быть ниже чем в первом месяце при прочих равных — прайм-директива валидирует расширение сама себя (детали — [friston-loop.md § Связь с прайм-директивой](friston-loop.md#связь-с-прайм-директивой)).
 
 ---
 
 ## Где в коде
 
-Ключевые точки: `graph_logic.record_action` / `score_action_candidates`,
-`sentiment.classify_message_sentiment`, `cognitive_loop._check_action_outcomes`,
-`consolidation` per-type archive. Связь: [world-model.md](world-model.md)
-(5-я механика), [alerts-and-cycles.md](alerts-and-cycles.md) (в 21-check
-таблице), [episodic-memory.md § Consolidation](episodic-memory.md#consolidation).
+Ключевые точки: [graph_logic.record_action / score_action_candidates](../src/graph_logic.py), [sentiment.classify_message_sentiment](../src/sentiment.py), [cognitive_loop._check_action_outcomes](../src/cognitive_loop.py), [consolidation](../src/consolidation.py) per-type archive. Связь: [world-model.md](world-model.md) (5-я механика), [alerts-and-cycles.md](alerts-and-cycles.md) (в таблице 21 check), [episodic-memory.md § Consolidation](episodic-memory.md#consolidation).
 
 ---
 

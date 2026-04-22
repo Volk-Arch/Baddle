@@ -126,7 +126,7 @@ order + 6 вспомогательных (reference / context).
 |---|---|
 | [world-model.md](world-model.md) | Оптика проекта: каскад зеркал + resonance protocol + 5 механик |
 | [alerts-and-cycles.md](alerts-and-cycles.md) | Полная карта 21 check + alert types + throttling math |
-| [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа (Action Memory, 2026-04-21) |
+| [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа |
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
 | [mockup.html](mockup.html) | Интерактивный мокап UI |
 
@@ -136,25 +136,11 @@ order + 6 вспомогательных (reference / context).
 
 ---
 
-## Закрытые пробелы (2026-04-23 consolidation)
-
-- **Prediction error layer** → [friston-loop.md](friston-loop.md). 2 предиктора, 5 PE-каналов.
-- **DMN / Scout** → [dmn-scout-design.md](dmn-scout-design.md). Фоновое сознание 24/7.
-- **Thinking operations** → [thinking-operations.md](thinking-operations.md). 4 операции в одном doc (было 4 отдельных).
-- **Episodic memory pipeline** → [episodic-memory.md](episodic-memory.md). state-graph + meta-tick + consolidation (было 3 отдельных).
-- **Universal rhythm** → [cone-design.md § Универсальный ритм](cone-design.md#универсальный-ритм-divergence--convergence) (был отдельный convergence-divergence.md).
-- **Energy model** — в [user-model § 5](user-model-design.md) + [activity-log](activity-log-design.md). Отдельный doc не нужен.
-
-**Всё ещё открыто:**
-- `dmn-scout-design.md` закрыл один gap; остался `plans-checkins-design.md` как отдельный (plans описаны в [activity-log](activity-log-design.md) + [static-storage](static-storage-design.md), разрозненно).
-
----
-
 ## Соглашения
 
 - Все docs на русском. `inline code` = имя файла / функции / переменной из `src/`.
 - Science-mapping (Friston, DMN, Hebb, Bayes) — **LLM context** для быстрого re-boot сессии. Не ornamental, не удалять.
-- После 2026-04-23 единственный source-of-truth для prediction error — [friston-loop.md](friston-loop.md). Остальные docs на эту тему оставляют stub pointers + исторический контекст.
+- Единственный source-of-truth для ошибки предсказания (PE) — [friston-loop.md](friston-loop.md). Остальные doc'и на эту тему оставляют stub pointer на него.
 
 ---
 

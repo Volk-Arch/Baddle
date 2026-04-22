@@ -1,17 +1,10 @@
 # CognitiveState — адаптивный контроллер
 
-Один объект контроля для всей системы: Horizon-слой (precision, policy,
-γ, τ) + нейрохимия через композицию с [Neurochem + ProtectiveFreeze](neurochem-design.md).
+Один объект контроля для всей системы: Horizon-слой (точность, политика, чувствительность γ, пороги τ) + нейрохимия через композицию с [Neurochem и ProtectiveFreeze](neurochem-design.md).
 
-Без контроллера все фазы tick'а использовали бы одинаковые LLM-параметры
-(temperature=0.9, top_k=40) — brainstorm, SmartDC, collapse в одной
-«ширине мышления». Это как ехать на одной передаче. `CognitiveState`
-(`src/horizon.py`) — контроллер между tick и LLM: не генерирует контент,
-управляет **как** генерировать.
+Без контроллера все фазы тика использовали бы одинаковые LLM-параметры (температура 0.9, top_k 40) — brainstorm, SmartDC, collapse в одной «ширине мышления». Это как ехать на одной передаче. **Когнитивное состояние** (CognitiveState, [src/horizon.py](../src/horizon.py)) — контроллер между тиком и LLM: не генерирует контент, управляет **как** генерировать.
 
-`get_global_state()` — singleton, один на систему (одна нейрохимия на
-человека, sync-prime). Workspace'ы имеют свой Horizon snapshot в graph
-state, но neurochem общий.
+`get_global_state()` — singleton, один на систему (одна нейрохимия на человека, sync-prime). Workspace'ы имеют свой Horizon snapshot в graph state, но neurochem общий.
 
 ---
 
@@ -21,129 +14,105 @@ state, но neurochem общий.
 
 | Параметр | Что контролирует | Как обновляется |
 |---|---|---|
-| **Π (precision)** | Уверенность в модели мира (0–1). Управляет temp, top_k, novelty | `P += α·(target − surprise)` |
-| **Λ (policy_weights)** | Веса фаз {generate, merge, elaborate, doubt} | Успех → вес ↑, провал → вес ↓ |
-| **γ (gamma)** | Байесовская чувствительность (NAND) | Autocal через EMA(d(A,A)) + HRV nudge |
-| **T (temperature_nand)** | «Резкость» выбора в NAND | `T₀ · (1 − κ·NE) + T_floor` |
-| **τ_in / τ_out** | Пороги distinct-зон CONFIRM / EXPLORE / CONFLICT | HRV nudge + S modulation |
+| **Точность** (precision, Π) | Уверенность в модели мира (0–1). Управляет температурой, top_k, новизной | новое значение = старое + скорость обучения (α) · (target − surprise) |
+| **Веса политики** (policy_weights, Λ) | Веса фаз (generate, merge, elaborate, doubt) | Успех → вес ↑, провал → вес ↓ |
+| **Байесовская чувствительность** (γ) | Чувствительность обновления в NAND | Авто-калибровка через EMA самосравнения distinct(A, A) + nudge по HRV |
+| **Температура выбора** (T в NAND) | «Резкость» выбора в NAND | базовая температура · (1 − κ·NE) + floor |
+| **Пороги зон** (τ_in / τ_out) | Границы зон согласия / исследования / конфликта | nudge по HRV + модуляция серотонином |
 
 ### Нейрохимический слой
 
 | Скаляр | Роль |
 |---|---|
-| **serotonin** | Стабильность весов → входит в γ (низкий S → γ растёт) |
-| **norepinephrine** | Arousal → T_eff, horizon_budget, входит в γ |
-| **dopamine** | Новизна (EMA от distinct) — тянет в сторону нового в DMN |
-| **freeze.accumulator** | Хронический конфликт → триггер PROTECTIVE_FREEZE |
+| **Серотонин** (S) | Стабильность весов → входит в γ (низкий S → γ растёт) |
+| **Норадреналин** (NE) | Arousal → эффективная температура, бюджет горизонта, входит в γ |
+| **Дофамин** (DA) | Новизна (EMA от различия) — тянет в сторону нового в DMN |
+| **Накопитель конфликтов** (freeze.accumulator) | Хронический конфликт → триггер защитной заморозки |
 
-γ — derived: `γ = 2.0 + 3.0 · NE · (1 − S)`. Отдельного поля нет.
-Детали — [neurochem-design.md](neurochem-design.md).
-
----
-
-## Maturity drift
-
-Скаляр `maturity ∈ [0, 1]` растёт логистически на verified-события
-(нода прошла conf ≥ 0.8, goal resolved). **Effective precision** =
-`raw + 0.4 · (maturity − 0.5)`:
-
-```
-maturity=0.0  → effective = raw − 0.2   (младенец — wide cone, temp высокая)
-maturity=0.5  → effective = raw         (нейтрально)
-maturity=1.0  → effective = raw + 0.2   (зрелый — narrow cone, temp низкая)
-```
-
-`to_llm_params()` читает effective. ~1000 verifications для maturity ≈ 0.95 —
-медленный биологический рост.
+Чувствительность (γ) — производная, отдельного поля нет: γ = 2.0 + 3.0 · норадреналин · (1 − серотонин). Детали — [neurochem-design.md](neurochem-design.md).
 
 ---
 
-## Precision → параметры LLM
+## Дрейф зрелости
 
-```
-temperature       = clamp(1.0 − precision, 0.1, 1.5)
-top_k             = clamp(10 + 90·(1 − precision), 10, 100)
-top_p             = clamp(0.5 + 0.5·precision, 0.7, 0.95)
-novelty_threshold = 0.85 + 0.1·precision
-```
+**Зрелость системы** (maturity ∈ [0, 1]) растёт логистически на verified-событиях (нода прошла confidence ≥ 0.8, цель resolved). **Эффективная точность** = сырая точность + 0.4 · (зрелость − 0.5):
 
-| Precision | Temperature | top_k | Novelty | Режим |
+- зрелость 0.0 → эффективная точность = сырая − 0.2 (младенец — широкий конус, высокая температура)
+- зрелость 0.5 → эффективная точность = сырая (нейтрально)
+- зрелость 1.0 → эффективная точность = сырая + 0.2 (зрелый — узкий конус, низкая температура)
+
+Функция `to_llm_params()` читает эффективную точность. Около 1000 verifications нужно для зрелости ≈ 0.95 — медленный биологический рост.
+
+---
+
+## Точность → параметры LLM
+
+Эффективная точность через простые линейные формулы отображается в четыре параметра LLM одновременно:
+- **температура** падает с ростом точности (от 1.5 до 0.1),
+- **top_k** сужается с ростом точности (от 100 до 10),
+- **top_p** сужается с ростом точности (от 0.7 до 0.95),
+- **порог новизны** растёт с ростом точности (от 0.85 до 0.95).
+
+| Точность | Температура | top_k | Новизна | Режим |
 |---|---|---|---|---|
 | 0.3 | 0.7 | 73 | 0.88 | Широкий поиск, креативность |
 | 0.5 | 0.5 | 55 | 0.90 | Сбалансированный |
 | 0.8 | 0.2 | 28 | 0.93 | Узкий фокус, точность |
 
-Один параметр — четыре эффекта. Precision ↓ = конус расширяется.
+Один параметр — четыре эффекта. Точность падает → конус расширяется.
 
 ---
 
 ## Обратная связь
 
-```
-surprise = 1 − confidence_после_SmartDC
+**Удивление** (surprise) = 1 − confidence после SmartDC. Целевая величина удивления (target_surprise) всегда больше нуля: система хочет чтобы реальность чуть не совпадала с ожиданием — иначе зачем думать.
 
-surprise > target → «хаотично»    → precision ↑ → конус сужается
-surprise < target → «предсказуемо» → precision ↓ → конус расширяется
-surprise ≈ target → зона потока
-```
-
-`target_surprise > 0` **всегда**. Система хочет чтобы реальность чуть
-не совпадала с ожиданием — иначе зачем думать.
+- surprise выше target → «хаотично» → точность ↑ → конус сужается
+- surprise ниже target → «предсказуемо» → точность ↓ → конус расширяется
+- surprise около target → зона потока
 
 ---
 
 ## Семь состояний
 
-| Состояние | Precision | Триггер |
+| Состояние | Точность | Триггер |
 |---|---|---|
-| **EXPLORATION** | 0.3–0.5 | Мало гипотез, высокая entropy |
-| **EXECUTION** | 0.7–0.9 | Есть фокус, проверяем |
-| **RECOVERY** | 0.4 → 0.6 | Surprise spike (Δ > 0.3) |
-| **INTEGRATION** | 0.5–0.6 | Данные собраны, low novelty → синтез |
-| **STABILIZE** | — | HRV coherence < 0.3 (калибровка / сброс) |
-| **CONFLICT** | — | sync_error > 0.75 |
-| **PROTECTIVE_FREEZE** | — | `freeze.accumulator > 0.15` — блокирует Bayes updates |
+| **EXPLORATION** (исследование) | 0.3–0.5 | Мало гипотез, высокая энтропия |
+| **EXECUTION** (выполнение) | 0.7–0.9 | Есть фокус, проверяем |
+| **RECOVERY** (восстановление) | 0.4 → 0.6 | Спайк удивления (Δ > 0.3) |
+| **INTEGRATION** (интеграция) | 0.5–0.6 | Данные собраны, низкая новизна → синтез |
+| **STABILIZE** (стабилизация) | — | HRV coherence < 0.3 (калибровка / сброс) |
+| **CONFLICT** (конфликт) | — | sync_error выше 0.75 |
+| **PROTECTIVE_FREEZE** (защитная заморозка) | — | накопитель конфликтов выше 0.15 — блокирует байесовские обновления |
 
-Переходы с гистерезисом — система «залипает» в текущем пока precision
-не уйдёт достаточно далеко (разрыв 0.05 устраняет дребезг).
+Переходы с гистерезисом — система «залипает» в текущем пока точность не уйдёт достаточно далеко (разрыв 0.05 устраняет дребезг).
 
 ---
 
 ## Выбор фазы
 
-`select_phase(available)` — из доступных выбирает с наибольшим policy
-weight. Веса адаптируются: успех (confidence выросла, новые ноды) →
-вес ↑, провал → вес ↓. Нормализация: сумма = 1.0, floor = 0.05. Не
-round-robin, система учится что работает.
+Функция `select_phase(available)` из доступных выбирает с наибольшим **весом политики** (policy_weights). Веса адаптируются: успех (confidence выросла, новые ноды) → вес ↑, провал → вес ↓. Нормализация: сумма = 1.0, пол (floor) = 0.05. Не round-robin, система учится что работает.
 
 ---
 
-## Presets (13 режимов)
+## Пресеты (13 режимов)
 
 Каждый из 13 режимов = preset для Horizon:
 
-| Режим | Precision | Target surprise | Policy акцент |
+| Режим | Точность | Целевое удивление | Акцент политики |
 |---|---|---|---|
 | Исследование | 0.4 | 0.3 | generate 0.3 |
 | Мозговой штурм | 0.3 | 0.5 | generate 0.5 |
 | Фокус | 0.7 | 0.15 | doubt 0.5 |
 | Выбор | 0.7 | 0.15 | doubt 0.5 |
 
-Один движок, 13 настроек. Не 13 алгоритмов — один Horizon с разными
-пресетами.
+Один движок, 13 настроек. Не 13 алгоритмов — один Horizon с разными пресетами.
 
 ---
 
 ## Цикл
 
-```
-tick() → horizon.select_phase(available)   → какую фазу запустить
-      → horizon.to_llm_params()            → {temp, top_k, novelty}
-      → LLM вызов
-      → surprise = 1 − confidence
-      → horizon.update(surprise, gradient)  → precision обновляется
-      → следующий tick с новыми параметрами
-```
+Тик вызывает `horizon.select_phase(available)` для выбора фазы, затем `horizon.to_llm_params()` для получения параметров генерации (температура, top_k, порог новизны), далее LLM-вызов и расчёт удивления (1 − confidence). После этого `horizon.update(surprise, gradient)` обновляет точность, и следующий тик идёт с новыми параметрами.
 
 UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`.
 
@@ -151,14 +120,10 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`.
 
 ## Где в коде
 
-- `src/horizon.py` — `CognitiveState`, `get_global_state()`,
-  `create_horizon()`, 14 presets; методы `apply_to_bayes`,
-  `update_neurochem`, `effective_temperature`, `horizon_budget`,
-  `get_metrics`, `to_dict`/`from_dict`
-- `src/neurochem.py` — composition (`self.neuro`, `self.freeze`)
-- `src/tick_nand.py` — tick загружает Horizon, считает distinct-matrix,
-  кормит нейрохимию, маршрутизирует по зонам
-- `/graph/horizon-feedback` — autorun отправляет surprise обратно
+- [src/horizon.py](../src/horizon.py) — CognitiveState, `get_global_state()`, `create_horizon()`, 14 пресетов; методы `apply_to_bayes`, `update_neurochem`, `effective_temperature`, `horizon_budget`, `get_metrics`, `to_dict`/`from_dict`.
+- [src/neurochem.py](../src/neurochem.py) — композиция (self.neuro, self.freeze).
+- [src/tick_nand.py](../src/tick_nand.py) — тик загружает Horizon, считает матрицу различий, кормит нейрохимию, маршрутизирует по зонам.
+- Endpoint `/graph/horizon-feedback` — autorun отправляет удивление обратно.
 
 ---
 

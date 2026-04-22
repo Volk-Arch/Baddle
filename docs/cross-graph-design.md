@@ -68,21 +68,6 @@ POST /workspace/seed-from-history
 - **Provenance.** Каждый seed хранит `seeded_from` (hash state_node) —
   можно проследить откуда пришла идея. Встраивается в будущий audit trail.
 
-## Что не реализовано
-
-- **Cross-workspace seeding.** Сейчас `graph_id` фильтрует same-workspace.
-  Можно было бы подбрасывать conclusions из "work" в "personal" по
-  sync_regime (когда уместно) — это будущая фича "ассоциативная pollination".
-- **Weighted by similarity.** Seeds просто берутся топ-K по приоритету.
-  Можно было бы query_similar к текущему topic и брать наиболее
-  релевантные.
-- **Forgetting linkage.** Если consolidation удаляет seed, его
-  `seeded_from` тоже уходит — дубликат может создаться при следующем
-  seed-from-history. Можно добавить отдельный log «уже импортированные
-  hashes».
-- **UI-интеграция.** Seeds показываются в общем списке как 💭; нет
-  отдельного chip'а «seed из вчера» с hover-подсказкой. Будущая работа.
-
 ## Файлы
 
 - [src/cross_graph.py](../src/cross_graph.py) — `extract_conclusions`,

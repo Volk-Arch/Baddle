@@ -195,15 +195,11 @@ Heartbeat даёт equidistant «кадры» ритма системы.
 
 ## DMN walks по state-графу (open)
 
-Сейчас DMN continuous работает на **content graph**. Вторая форма,
-описана в [episodic-memory.md § Meta-tick](episodic-memory.md#meta-tick--паттерны-в-собственной-истории)
-(open improvements) но не реализована:
+DMN continuous работает на **content graph**. Вторая форма — walks по state-графу — описана в [episodic-memory.md § Meta-tick](episodic-memory.md#meta-tick--паттерны-в-собственной-истории):
 
-Выбирать random state_node → искать похожие через `query_similar()` →
-если в обоих случаях tick был DMN + pump дал bridge → обобщаем эти два
-случая в новый insight.
+Выбирать случайную state-ноду → искать похожие через `query_similar()` → если в обоих случаях тик был DMN + pump дал bridge → обобщаем эти два случая в новый insight.
 
-Это **REM-аналог v11** — переработка опыта, не только содержания.
+Это **REM-аналог уровня опыта** — переработка опыта, не только содержания.
 Остаётся открытым — нужно решить когда DMN продуктивно смотреть на свою
 историю.
 
