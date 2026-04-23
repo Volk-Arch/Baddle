@@ -81,7 +81,7 @@ graphs/
 | `activity` | по факту движения | magnitude 0–5 от акселерометра |
 | `subjective` | ручной check-in | тон, активация, свободная заметка |
 
-**Источники (source):** Polar H10, симулятор, Apple Watch, Oura, Garmin, manual. У каждого источника свой confidence по умолчанию: polar 1.0, apple 0.8, oura 0.9, manual 0.7. Абсолютные значения chest-strap (Polar) и optical (Apple) различаются, поэтому нормализация идёт относительно baseline **каждого источника**.
+**Источники (source):** Polar H10, симулятор, Apple Watch, manual. У каждого источника свой confidence по умолчанию: polar 1.0, apple 0.8, manual 0.7. Абсолютные значения chest-strap (Polar) и optical (Apple) различаются, поэтому нормализация идёт относительно baseline **каждого источника**.
 
 **Взвешенный агрегат.** Когда одновременно доступны Polar (high-freq) + Apple Watch (sparse) + manual (10 минут назад), финальное значение считается с весом `confidence × exp(−возраст/τ)`: свежее и надёжное получает больший вклад. Это ключевая операция stream'а при multi-source setup.
 
@@ -91,7 +91,7 @@ graphs/
 
 **Где в коде:**
 - [src/sensor_stream.py](../src/sensor_stream.py) — SensorStream + SensorReading, взвешенный агрегат, persist
-- [src/sensor_adapters.py](../src/sensor_adapters.py) — адаптеры Polar / Apple / Oura / Garmin
+- [src/sensor_adapters.py](../src/sensor_adapters.py) — адаптеры Polar / Apple
 - Endpoints `/sensor/readings`, `/sensor/aggregate` в [graph_routes.py](../src/graph_routes.py)
 
 Физиологическая интерпретация сигналов — в [hrv-design.md](hrv-design.md).

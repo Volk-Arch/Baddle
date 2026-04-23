@@ -43,14 +43,8 @@ def _weekday_today() -> int:
 
 # ── Filters ───────────────────────────────────────────────────────────────
 
-def list_recurring(active_only: bool = True,
-                    workspace: Optional[str] = None) -> list[dict]:
-    """Все recurring-цели. active_only=True отфильтровывает done/abandoned.
-
-    workspace: если задан — фильтрует только цели этого workspace. Если None —
-    возвращает глобально. Используется в intent_router чтобы match'ить
-    instance'ы только с целями активного контекста.
-    """
+def list_recurring(active_only: bool = True) -> list[dict]:
+    """Все recurring-цели. active_only=True отфильтровывает done/abandoned."""
     state = _replay()
     out = []
     for g in state.values():
@@ -58,24 +52,18 @@ def list_recurring(active_only: bool = True,
             continue
         if active_only and g.get("status") != "open":
             continue
-        if workspace and g.get("workspace") not in (workspace, None):
-            # None workspace-цели видны во всех воркспейсах (global)
-            continue
         out.append(g)
     return out
 
 
-def list_constraints(active_only: bool = True,
-                      workspace: Optional[str] = None) -> list[dict]:
-    """Все constraint-цели. workspace — аналогично list_recurring."""
+def list_constraints(active_only: bool = True) -> list[dict]:
+    """Все constraint-цели."""
     state = _replay()
     out = []
     for g in state.values():
         if g.get("kind") != "constraint":
             continue
         if active_only and g.get("status") != "open":
-            continue
-        if workspace and g.get("workspace") not in (workspace, None):
             continue
         out.append(g)
     return out
@@ -249,14 +237,10 @@ def _violations_recent(goal: dict, days: int = 7) -> list[dict]:
             if (v.get("ts") or 0) >= cutoff]
 
 
-def list_constraint_status(days: int = 7,
-                             workspace: Optional[str] = None) -> list[dict]:
-    """Для каждого constraint — recent violations + summary.
-
-    workspace: опциональный фильтр (workspace-aware router).
-    """
+def list_constraint_status(days: int = 7) -> list[dict]:
+    """Для каждого constraint — recent violations + summary."""
     out = []
-    for g in list_constraints(active_only=True, workspace=workspace):
+    for g in list_constraints(active_only=True):
         vs = _violations_recent(g, days)
         # За сегодня отдельно
         day_start, day_end = _day_bounds()
@@ -276,19 +260,15 @@ def list_constraint_status(days: int = 7,
 
 # ── Context для assist hook ───────────────────────────────────────────────
 
-def scan_message_for_violations(message: str, lang: str = "ru",
-                                  workspace: Optional[str] = None) -> list[dict]:
+def scan_message_for_violations(message: str, lang: str = "ru") -> list[dict]:
     """Быстрый LLM-сканер нарушений constraints в сообщении юзера.
 
     Возвращает список `{goal_id, text, note}` записанных нарушений. Если
     constraints нет или LLM не детектил — пустой список.
 
-    workspace: фильтрует constraints по workspace (cross-workspace
-    constraints не видны). Если None — глобально.
-
     Стоимость ~0.5-1 сек на вызов. Skipped если `constraints = []`.
     """
-    constraints = list_constraints(active_only=True, workspace=workspace)
+    constraints = list_constraints(active_only=True)
     if not constraints or not (message or "").strip():
         return []
     from .goals_store import record_violation
@@ -348,14 +328,9 @@ def scan_message_for_violations(message: str, lang: str = "ru",
 
 
 def build_active_context_summary(max_recurring: int = 5,
-                                  max_constraints: int = 8,
-                                  workspace: Optional[str] = None) -> str:
+                                  max_constraints: int = 8) -> str:
     """Компактный текст про активные recurring+constraints для инжекции в
     LLM prompt. Юзер не видит этот текст — он только для модели.
-
-    workspace: если задан — только цели этого workspace (плюс global —
-    без workspace поля). Используется в `/assist` чтобы не загрязнять
-    personal-контекст work-целями и наоборот.
 
     Формат:
         Активные привычки:
@@ -367,7 +342,7 @@ def build_active_context_summary(max_recurring: int = 5,
     """
     lines = []
 
-    recurring = list_recurring(active_only=True, workspace=workspace)[:max_recurring]
+    recurring = list_recurring(active_only=True)[:max_recurring]
     if recurring:
         lines.append("Активные привычки:")
         for g in recurring:
@@ -389,7 +364,7 @@ def build_active_context_summary(max_recurring: int = 5,
                 status += f", отставание {p['lag']}"
             lines.append(f"  - {p['text']} ({status})")
 
-    constraints = list_constraint_status(days=7, workspace=workspace)[:max_constraints]
+    constraints = list_constraint_status(days=7)[:max_constraints]
     if constraints:
         lines.append("Ограничения:")
         for c in constraints:

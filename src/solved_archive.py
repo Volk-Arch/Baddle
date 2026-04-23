@@ -1,9 +1,9 @@
 """Solved-tasks archive — snapshot «как решалась задача» при goal-resolved.
 
 Когда tick эмитит action=stable с reason=GOAL REACHED, этот модуль:
-  1. Берёт snapshot content-графа (ноды + edges, фильтруя по subtree цели)
+  1. Берёт snapshot content-графа (ноды + edges)
   2. Берёт tail state_graph (последние N ticks касающиеся этой цели)
-  3. Сохраняет в `solved/{snapshot_ref}.json`
+  3. Сохраняет в `graphs/main/solved/{snapshot_ref}.json`
   4. Возвращает snapshot_ref для записи в goals.jsonl
 
 Юзер потом может открыть архив и увидеть полный replay:
@@ -11,8 +11,6 @@
   • какие hypothesis генерились
   • какие smartdc-циклы прошли
   • финальный synthesis
-
-Хранение per-workspace не требуется — snapshot_ref глобально уникален.
 """
 import json
 import logging
@@ -25,37 +23,32 @@ log = logging.getLogger(__name__)
 
 from .paths import PROJECT_ROOT
 
-
-def _ws_archive_dir(workspace: str) -> Path:
-    """Per-workspace архив: `graphs/<ws>/solved/`. Создаётся при первом write."""
-    return PROJECT_ROOT / "graphs" / workspace / "solved"
+_ARCHIVE_DIR = PROJECT_ROOT / "graphs" / "main" / "solved"
 
 
-def _ensure_dir(workspace: str = "main") -> Path:
-    d = _ws_archive_dir(workspace)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _ensure_dir() -> Path:
+    _ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    return _ARCHIVE_DIR
 
 
 def archive_solved(goal_id: str,
                    goal_text: str,
-                   workspace: str = "main",
                    reason: str = "",
                    state_trace_limit: int = 50) -> Optional[str]:
     """Сохранить snapshot и вернуть snapshot_ref.
 
     Содержит:
-      - goal: {id, text, workspace, reason, ts}
+      - goal: {id, text, reason, ts}
       - graph_snapshot: {nodes, edges, meta}
       - state_trace: последние N state_graph entries
       - final_synthesis: если удалось выделить (последняя verified нода)
 
-    Пишется в `graphs/<workspace>/solved/{snapshot_ref}.json`.
+    Пишется в `graphs/main/solved/{snapshot_ref}.json`.
     """
     from .graph_logic import _graph
     from .state_graph import get_state_graph
 
-    archive_dir = _ensure_dir(workspace)
+    archive_dir = _ensure_dir()
     snapshot_ref = f"{int(time.time())}_{goal_id}_{uuid.uuid4().hex[:6]}"
 
     try:
@@ -94,7 +87,6 @@ def archive_solved(goal_id: str,
             "goal": {
                 "id": goal_id,
                 "text": (goal_text or "")[:400],
-                "workspace": workspace,
                 "reason": (reason or "")[:200],
                 "archived_at": time.time(),
             },
@@ -106,7 +98,7 @@ def archive_solved(goal_id: str,
         path = archive_dir / f"{snapshot_ref}.json"
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info(f"[solved_archive] saved {snapshot_ref} ({len(graph_snap['nodes'])} nodes, "
-                 f"{len(entries)} state entries) → ws={workspace}")
+                 f"{len(entries)} state entries)")
         return snapshot_ref
 
     except Exception as e:
@@ -115,17 +107,8 @@ def archive_solved(goal_id: str,
 
 
 def _find_snapshot(snapshot_ref: str) -> Optional[Path]:
-    """Scan all workspaces для snapshot_ref. Первый hit wins."""
-    graphs_root = PROJECT_ROOT / "graphs"
-    if not graphs_root.exists():
-        return None
-    for ws_dir in graphs_root.iterdir():
-        if not ws_dir.is_dir():
-            continue
-        cand = ws_dir / "solved" / f"{snapshot_ref}.json"
-        if cand.exists():
-            return cand
-    return None
+    cand = _ARCHIVE_DIR / f"{snapshot_ref}.json"
+    return cand if cand.exists() else None
 
 
 def load_solved(snapshot_ref: str) -> Optional[dict]:
@@ -141,16 +124,10 @@ def load_solved(snapshot_ref: str) -> Optional[dict]:
 
 
 def _iter_archive_files():
-    """Yield `.json` archive files across all workspaces."""
-    graphs_root = PROJECT_ROOT / "graphs"
-    if not graphs_root.exists():
+    """Yield `.json` archive files."""
+    if not _ARCHIVE_DIR.exists():
         return
-    for ws_dir in graphs_root.iterdir():
-        if not ws_dir.is_dir():
-            continue
-        sd = ws_dir / "solved"
-        if sd.exists():
-            yield from sd.glob("*.json")
+    yield from _ARCHIVE_DIR.glob("*.json")
 
 
 def find_similar_solved(query_text: str, top_k: int = 3,
@@ -222,7 +199,6 @@ def find_similar_solved(query_text: str, top_k: int = 3,
         scored.append({
             "snapshot_ref": data.get("snapshot_ref") or f.stem,
             "goal_text": goal_text,
-            "workspace": goal.get("workspace"),
             "archived_at": goal.get("archived_at"),
             "final_synthesis": (final_synth.get("text") or "")[:400],
             "similarity": round(sim, 3),
@@ -233,10 +209,7 @@ def find_similar_solved(query_text: str, top_k: int = 3,
 
 
 def list_solved(limit: int = 50) -> list[dict]:
-    """List archive index, newest first. Each entry — short summary.
-
-    Сканирует per-workspace `graphs/<ws>/solved/`.
-    """
+    """List archive index, newest first. Each entry — short summary."""
     files = sorted(_iter_archive_files(),
                    key=lambda p: p.stat().st_mtime, reverse=True)
     out: list[dict] = []
@@ -250,7 +223,6 @@ def list_solved(limit: int = 50) -> list[dict]:
                 "snapshot_ref": data.get("snapshot_ref") or f.stem,
                 "goal_id": goal.get("id"),
                 "goal_text": goal.get("text"),
-                "workspace": goal.get("workspace"),
                 "archived_at": goal.get("archived_at"),
                 "reason": goal.get("reason"),
                 "nodes_count": len(graph.get("nodes") or []),

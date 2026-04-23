@@ -13,14 +13,9 @@
     <span id="token-counter" style="color:var(--text-tertiary);font-size:11px"></span>
     <span class="flex-1"></span>
     <span id="batch-tag" style="color:var(--text-tertiary);font-size:11px"></span>
-    <button onclick="openCrossSearch()"
-            title="Искать во всех workspace'ах"
-            style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">🔍</button>
   </div>
 
   {% include "partials/settings_modal.html" %}
-  {% include "partials/workspaces_modal.html" %}
-  {% include "partials/cross_search_modal.html" %}
 
   <!-- ══ ASSISTANT mode ══ (default, mockup-styled) -->
   <div id="cfg-assist" class="assist-root">
@@ -536,26 +531,8 @@
     </div>
     <!-- ═══ /Sub-page: Tasks ═══ -->
 
-    <!-- ═══ Sub-page: Settings (workspace + HRV sim + profile + dev toggles) ═══ -->
+    <!-- ═══ Sub-page: Settings (HRV sim + profile + dev toggles) ═══ -->
     <div class="baddle-sub-page" data-sub-page="settings" style="display:none">
-
-    <!-- Workspace selector — перенесён с верхней панели в sub-page,
-         чтобы main screen был чистый. Переключается редко. -->
-    <div class="assist-settings-block">
-      <div class="assist-settings-label">🗂 Workspace</div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <select id="workspace-select" onchange="workspaceSwitch(this.value)"
-          class="modal-select"
-          style="flex:1;min-width:140px;font-size:12px;padding:4px 8px"
-          title="Активный контекст. Переключение перезагружает страницу.">
-          <option value="main">main</option>
-        </select>
-        <button onclick="workspaceNewPrompt()" class="activity-btn"
-          title="Создать новый workspace">＋ Новый</button>
-        <button onclick="workspacesOpen()" class="activity-btn"
-          title="Список всех workspaces">Все</button>
-      </div>
-    </div>
 
     <!-- Язык интерфейса -->
     <div class="assist-settings-block">

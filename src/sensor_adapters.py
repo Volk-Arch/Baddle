@@ -6,8 +6,7 @@
 `push_rr / push_hrv_snapshot / push_activity / push_subjective`.
 
 Polar H10 — готов по структуре, реальный BLE (bleak) не подключён.
-Apple Watch / Oura / Garmin — тоже заготовки. Реальная интеграция
-добавляется когда появится устройство + ключи/credentials у пользователя.
+Apple Watch — заготовка, HealthKit-импорт не реализован.
 
 simulator уже работает — он внутри HRVManager._start_simulator, пушит
 в stream автоматически (см. hrv_manager.py).
@@ -21,7 +20,7 @@ from typing import Optional
 
 from .sensor_stream import (
     push_rr, push_hrv_snapshot, push_activity,
-    SOURCE_POLAR, SOURCE_APPLE, SOURCE_OURA, SOURCE_GARMIN,
+    SOURCE_POLAR, SOURCE_APPLE,
 )
 
 log = logging.getLogger(__name__)
@@ -85,46 +84,11 @@ class AppleWatchAdapter(BaseSensorAdapter):
         return False
 
 
-# ── Oura Ring ────────────────────────────────────────────────────────────
-
-class OuraAdapter(BaseSensorAdapter):
-    """Oura Ring v3 через REST API v2.
-
-    Подключение:
-      adapter = OuraAdapter()
-      adapter.start(token="oura-personal-token")
-    Polling: утренний sleep HRV snapshot (low confidence в течение дня,
-    high confidence после wake), dauring-day heart rate samples.
-    """
-    source = SOURCE_OURA
-
-    def start(self, token: Optional[str] = None, **_) -> bool:
-        log.warning("[sensor:oura] REST integration not implemented")
-        return False
-
-
-# ── Garmin ───────────────────────────────────────────────────────────────
-
-class GarminAdapter(BaseSensorAdapter):
-    """Garmin Connect через garminconnect pip-пакет.
-
-    Поддержка HR-stream (раз в секунду когда часы на руке), stress score
-    (Garmin deriveит сам), body battery (их собственный energy-model).
-    """
-    source = SOURCE_GARMIN
-
-    def start(self, username: Optional[str] = None, password: Optional[str] = None, **_) -> bool:
-        log.warning("[sensor:garmin] garminconnect integration not implemented")
-        return False
-
-
 # ── Registry ─────────────────────────────────────────────────────────────
 
 ADAPTERS = {
     SOURCE_POLAR:  PolarH10Adapter,
     SOURCE_APPLE:  AppleWatchAdapter,
-    SOURCE_OURA:   OuraAdapter,
-    SOURCE_GARMIN: GarminAdapter,
 }
 
 

@@ -261,7 +261,6 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                         snapshot_ref = archive_solved(
                             goal_id=gid,
                             goal_text=goal_node.get("text", ""),
-                            workspace=graph.get("meta", {}).get("workspace", "main"),
                             reason=stop["reason"],
                         )
                         complete_goal(gid, reason=stop["reason"],

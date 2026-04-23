@@ -40,25 +40,23 @@ app.register_blueprint(graph_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(assistant_bp)
 
-# Seed-on-empty: первый запуск (нет workspaces/index.json, нет graphs/*) —
-# заливаем демо-контент чтобы UI не выглядел мёртвым. Юзер видит два живых
-# workspace'а (work-demo + personal-demo) вместо пустой страницы.
+# Seed-on-empty: первый запуск (нет `graphs/main/`) — заливаем демо-контент,
+# чтобы UI не выглядел мёртвым.
 try:
     from src.demo import should_auto_seed, seed_demo
     if should_auto_seed():
         seed_demo()
-        print("  [demo] auto-seed: work-demo + personal-demo (first run)")
+        print("  [demo] auto-seed: main (first run)")
 except Exception as _e:
     print(f"  [demo] auto-seed skipped: {_e}")
 
-# Bootstrap: загрузить активный workspace (nodes + embeddings) в runtime-state.
-# Без этого embeddings/ноды терялись бы на рестарт — были бы живы только до
-# первого /workspace/switch.
+# Bootstrap: загрузить граф (nodes + embeddings) в runtime-state. Без этого
+# embeddings/ноды терялись бы на рестарт.
 try:
-    from src.workspace import get_workspace_manager
-    get_workspace_manager().load_active_graph()
+    from src.graph_store import bootstrap as _bootstrap_graph
+    _bootstrap_graph()
 except Exception as _e:
-    print(f"  [workspace] bootstrap failed: {_e}")
+    print(f"  [graph_store] bootstrap failed: {_e}")
 
 # Start background cognitive loop (Scout, DMN, HRV alerts, NE homeostasis)
 get_cognitive_loop().start()
@@ -185,20 +183,17 @@ def demo_reload():
     """Сносит все user-данные и заливает DEMO. Атомарная операция.
 
     Требует {"confirm": "DEMO"} в body для защиты от случайного вызова.
-    Создаёт два workspace'а: work-demo (релиз) + personal-demo (wellbeing).
     """
     data = request.get_json(silent=True) or {}
     if data.get("confirm") != "DEMO":
         return jsonify({"error": "need {\"confirm\": \"DEMO\"}"}), 400
     try:
         from src.demo import reset_and_seed
-        result = reset_and_seed(active=data.get("active") or "personal-demo")
-        # После wipe+seed — нужно перезагрузить активный workspace в runtime
+        result = reset_and_seed()
+        # После wipe+seed — перезагружаем граф в runtime
         try:
-            from src.workspace import get_workspace_manager
-            mgr = get_workspace_manager()
-            mgr._loaded = False  # force reload index
-            mgr.load_active_graph()
+            from src.graph_store import bootstrap as _bootstrap_graph
+            _bootstrap_graph()
         except Exception as e:
             return jsonify({"ok": True, "result": result,
                             "warning": f"reload failed: {e}"})

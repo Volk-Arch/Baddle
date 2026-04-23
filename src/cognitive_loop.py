@@ -21,6 +21,7 @@ NE-бюджет:
 Design: poll-based, non-blocking. UI дёргает /assist/alerts чтобы увидеть
 накопленные инсайты.
 """
+import json
 import threading
 import time
 import logging
@@ -140,7 +141,7 @@ class CognitiveLoop:
     TICK_INTERVAL = 60                # частота бэкграунд-проверок
     FOREGROUND_COOLDOWN = 30          # после юзер-тика DMN ждёт столько секунд
     DEFAULT_WAKE_HOUR = 7             # если profile.context.wake_hour не задан
-    WS_FLUSH_INTERVAL = 120           # каждые 2 мин — auto-save активного workspace
+    GRAPH_FLUSH_INTERVAL = 120        # каждые 2 мин — auto-save графа на диск
                                       # (nodes + embeddings) чтобы рестарт не терял данные
     LOW_ENERGY_THRESHOLD = 30         # ниже этого — тяжёлые решения предлагаем отложить
     LOW_ENERGY_CHECK_INTERVAL = 30 * 60  # раз в 30 мин — не спамить
@@ -175,7 +176,6 @@ class CognitiveLoop:
     DMN_CONVERGE_MAX_STEPS = 100      # глубокое исследование, не вечно
     DMN_CONVERGE_MAX_WALL_S = 15 * 60 # но не дольше 15 минут wall-time
     DMN_CONVERGE_STALL_WINDOW = 12    # если за 12 тиков ноды не выросли — стоп
-    DMN_CROSS_GRAPH_INTERVAL = 60 * 60 # раз в час — ищем мосты между workspaces
 
     # NE gating
     NE_BASELINE = 0.3            # baseline к которому дрейфует NE
@@ -217,6 +217,12 @@ class CognitiveLoop:
     SYNC_SEEKING_SILENCE_MIN = 0.3         # ниже — не пушим, тишина ещё мягкая
     SYNC_SEEKING_IDLE_SECONDS = 2 * 3600   # физически давно не писал (2 часа)
     SYNC_SEEKING_INTERVAL = 2 * 3600       # не чаще раза в 2 часа
+    SYNC_SEEKING_COUNTERFACTUAL_RATE = 0.10  # в 10% случаев когда все gate'ы
+                                             # прошли — намеренно промолчать и
+                                             # залогировать как counterfactual.
+                                             # Baseline для A/B измерения:
+                                             # двигает ли recovery само вмешательство
+                                             # Baddle vs юзер возвращается сам.
     # Защита от шума: если любой proactive alert был недавно — пропускаем
     SYNC_SEEKING_QUIET_AFTER_OTHER = 30 * 60   # 30 мин после последнего alert
 
@@ -257,7 +263,7 @@ class CognitiveLoop:
         self._last_briefing = 0.0
         self._last_hrv_push = 0.0
         self._last_foreground_tick = 0.0
-        self._last_ws_flush = 0.0
+        self._last_graph_flush = 0.0
         self._last_activity_tick = 0.0  # для activity → energy cost
         self._activity_cost_carry = 0.0  # остаток < 0.1 между тиками (не терять копейки)
         self._last_low_energy_check = 0.0  # дроссель low_energy_heavy alerts
@@ -747,6 +753,27 @@ class CognitiveLoop:
         effective = base_interval_s * self._idle_multiplier()
         return self._throttled(attr, effective)
 
+    def _log_throttle_drop(self, check: str, **ctx):
+        """Записать что proactive check сработал по pre-conditions, но
+        throttle заблокировал. Данные для OQ «теряем ли ценное?»:
+        через 2 нед анализа увидим какие дропы high-urgency (silence=0.9,
+        lag=5, patterns=3) vs noise (silence=0.32, lag=1).
+
+        Вызывается ТОЛЬКО из alert-emitting check'ов в точке «я бы
+        выпустил alert сейчас, но throttle не даёт». Не инструментировать
+        bookkeeping-циклы (heartbeat / flush / hrv_push / consolidation).
+
+        Пишет в `data/throttle_drops.jsonl` append-only. Формат:
+            {"ts": 1234.5, "check": "sync_seeking", "ctx": {...}}
+        """
+        try:
+            from .paths import THROTTLE_DROPS_FILE
+            entry = {"ts": round(time.time(), 3), "check": check, "ctx": ctx}
+            with THROTTLE_DROPS_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.debug(f"[throttle_log] write failed: {e}")
+
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     def start(self):
@@ -834,7 +861,6 @@ class CognitiveLoop:
                     self._check_dmn_continuous()
                     self._check_dmn_deep_research()
                     self._check_dmn_converge()
-                    self._check_dmn_cross_graph()
                     self._check_state_walk()
                     self._check_night_cycle()
 
@@ -846,7 +872,7 @@ class CognitiveLoop:
                 self._check_hrv_alerts()
                 self._check_daily_briefing()
                 self._check_hrv_push()
-                self._check_ws_flush()
+                self._check_graph_flush()
                 self._check_activity_cost()
                 self._check_low_energy_heavy()
                 self._check_plan_reminders()
@@ -1409,48 +1435,6 @@ class CognitiveLoop:
             "synthesis_confidence": forced_confidence,
         })
         log.info(f"[cognitive_loop] DMN converge done: {summary_txt}")
-
-    def _check_dmn_cross_graph(self):
-        """DMN scans all workspaces (не только текущий) для поиска cross-graph
-        bridges через embedding similarity. Находка → cross_edge в workspace
-        index + alert.
-
-        Суть: система ищет связи между твоими «исследование» и «личное»,
-        «работа» и «здоровье» и т.д. — скрытые оси между разными областями.
-        """
-        if not self._throttled_idle("_last_dmn_cross", self.DMN_CROSS_GRAPH_INTERVAL):
-            return
-        try:
-            from .workspace import get_workspace_manager
-            wm = get_workspace_manager()
-            wm.load_index()
-            workspaces = wm._index.get("workspaces", {})
-            if len(workspaces) < 2:
-                return
-            log.info(f"[cognitive_loop] DMN cross-graph scan ({len(workspaces)} workspaces)")
-            # Поискать нашёлся ли метод find_bridges
-            if hasattr(wm, "find_serendipity_bridges"):
-                bridges = wm.find_serendipity_bridges(min_distinct=0.3, max_results=3)
-            elif hasattr(wm, "meta_graph"):
-                # Попытка meta
-                meta = wm.meta_graph()
-                bridges = meta.get("bridges", [])[:3] if isinstance(meta, dict) else []
-            else:
-                # Фолбэк: просто считаем что доступно API /workspace/meta
-                bridges = []
-            if bridges:
-                first = bridges[0] if isinstance(bridges, list) else None
-                if first:
-                    self._add_alert({
-                        "type": "dmn_cross_graph",
-                        "severity": "info",
-                        "text": (f"🔗 Cross-graph мост найден: "
-                                 f"{first.get('from_graph','?')} ↔ {first.get('to_graph','?')}"),
-                        "bridges": bridges,
-                    })
-                    log.info(f"[cognitive_loop] cross-graph bridges found: {len(bridges)}")
-        except Exception as e:
-            log.debug(f"[cognitive_loop] cross_graph failed: {e}")
 
     def _check_dmn_continuous(self):
         if len(_graph.get("nodes", [])) < 4:
@@ -2484,6 +2468,14 @@ class CognitiveLoop:
             # Dedup: не шлём чаще чем раз в 2×interval
             last = self._notified_lag.get(gid, 0.0)
             if now - last < self.RECURRING_LAG_CHECK_INTERVAL * 2:
+                # Цель реально отстаёт, но dedup блокирует — логируем
+                self._log_throttle_drop("recurring_lag",
+                    reason="dedup_per_goal",
+                    goal=(p.get("text") or "")[:60],
+                    lag=p.get("lag", 0),
+                    done_today=p.get("done_today", 0),
+                    times_per_day=p.get("times_per_day", 0),
+                    seconds_since_last=round(now - last, 0))
                 continue
             self._notified_lag[gid] = now
             lag = p.get("lag", 0)
@@ -2553,12 +2545,8 @@ class CognitiveLoop:
         """
         now = time.time()
 
-        # Gate #4: quiet после других proactive
-        if (self._last_proactive_alert_ts and
-                now - self._last_proactive_alert_ts < self.SYNC_SEEKING_QUIET_AFTER_OTHER):
-            return
-
-        # Gate #1: silence accumulated
+        # Gate #1: silence accumulated (проверяем до quiet_after_other —
+        # если silence низкая, это не «мы бы действовали», нечего логировать)
         try:
             silence = float(get_global_state().freeze.silence_pressure)
         except Exception:
@@ -2575,9 +2563,43 @@ class CognitiveLoop:
         if idle_seconds < self.SYNC_SEEKING_IDLE_SECONDS:
             return
 
+        # Начиная отсюда — «мы бы выпустили alert сейчас». Throttle-дропы
+        # ниже логируются для OQ «теряем ли ценное?».
+
+        # Gate #4: quiet после других proactive
+        if (self._last_proactive_alert_ts and
+                now - self._last_proactive_alert_ts < self.SYNC_SEEKING_QUIET_AFTER_OTHER):
+            self._log_throttle_drop("sync_seeking",
+                reason="quiet_after_other",
+                silence=round(silence, 3),
+                idle_hours=round(idle_seconds / 3600.0, 1),
+                seconds_since_other=round(now - self._last_proactive_alert_ts, 0))
+            return
+
         # Gate #3: throttle (после этой проверки пишем timestamp → будущие
         # тики skip)
         if not self._throttled("_last_sync_seeking", self.SYNC_SEEKING_INTERVAL):
+            self._log_throttle_drop("sync_seeking",
+                reason="interval",
+                silence=round(silence, 3),
+                idle_hours=round(idle_seconds / 3600.0, 1),
+                seconds_since_last=round(now - (self._last_sync_seeking or 0), 0))
+            return
+
+        # Counterfactual honesty: в SYNC_SEEKING_COUNTERFACTUAL_RATE случаев
+        # намеренно молчим когда все gate'ы прошли. Это A/B baseline —
+        # через месяц сравнить recovery-time (время до следующего
+        # user_input) с вмешательством и без. Throttle уже записан выше,
+        # так что следующий check будет через стандартный интервал.
+        import random as _rnd
+        if _rnd.random() < self.SYNC_SEEKING_COUNTERFACTUAL_RATE:
+            log.info(f"[cognitive_loop] sync_seeking COUNTERFACTUAL skip: silence={silence:.2f} idle={idle_seconds/3600:.1f}h")
+            self._record_baddle_action(
+                "sync_seeking_counterfactual",
+                text=f"Counterfactual skip: silence={silence:.2f} idle={idle_seconds/3600:.1f}h",
+                extras={"silence_at_skip": round(silence, 3),
+                        "idle_hours": round(idle_seconds / 3600.0, 1)},
+            )
             return
 
         # Всё ок — генерируем сообщение
@@ -2798,6 +2820,16 @@ class CognitiveLoop:
             return
         if not items:
             return
+        # Логируем дропы: если items > MAX_PER_DAY, отсекаем хвост —
+        # он может содержать важные паттерны.
+        if len(items) > self.SUGGESTIONS_MAX_PER_DAY:
+            for dropped in items[self.SUGGESTIONS_MAX_PER_DAY:]:
+                trig = (dropped.get("trigger") or {}).get("type", "")
+                self._log_throttle_drop("observation_suggestion",
+                    reason="daily_cap",
+                    trigger_type=trig,
+                    total_items=len(items),
+                    cap=self.SUGGESTIONS_MAX_PER_DAY)
         # Ограничиваем количество карточек в день
         for item in items[:self.SUGGESTIONS_MAX_PER_DAY]:
             try:
@@ -2941,23 +2973,22 @@ class CognitiveLoop:
         finally:
             self._last_activity_tick = now
 
-    # ── Workspace auto-save (embeddings + nodes persistence) ─────────────
+    # ── Graph auto-save (embeddings + nodes persistence) ─────────────
 
-    def _check_ws_flush(self):
-        """Каждые ~2 мин сбрасываем активный workspace на диск.
+    def _check_graph_flush(self):
+        """Каждые ~2 мин сбрасываем граф на диск.
 
-        До этого save происходил только на /workspace/switch или явный
-        /workspace/save. При крэше/рестарте терялись новые ноды +
-        embeddings с момента последнего switch. Теперь auto-flush раз
-        в 2 минуты делает persistence надёжным.
+        При крэше/рестарте без periodic flush терялись бы новые ноды и
+        embeddings, накопленные с момента старта. Auto-flush делает
+        persistence надёжным.
         """
-        if not self._throttled("_last_ws_flush", self.WS_FLUSH_INTERVAL):
+        if not self._throttled("_last_graph_flush", self.GRAPH_FLUSH_INTERVAL):
             return
         try:
-            from .workspace import get_workspace_manager
-            get_workspace_manager().save_active()
+            from .graph_store import save_graph
+            save_graph()
         except Exception as e:
-            log.debug(f"[cognitive_loop] ws flush failed: {e}")
+            log.debug(f"[cognitive_loop] graph flush failed: {e}")
 
     # ── HRV alerts ─────────────────────────────────────────────────────
 

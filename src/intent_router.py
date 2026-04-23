@@ -264,13 +264,8 @@ def _classify_subtype_fact(message: str, lang: str,
 # ── Главная функция маршрутизации ─────────────────────────────────────────
 
 def route(message: str, lang: str = "ru",
-          use_cache: bool = True,
-          workspace: Optional[str] = None) -> dict:
+          use_cache: bool = True) -> dict:
     """Маршрутизация сообщения юзера в структурированный intent.
-
-    workspace: если указан, matching для fact/instance и fact/activity
-    ищет только recurring-цели из этого воркспейса (плюс global без
-    workspace поля). Это разделяет work-привычки от personal.
 
     Возвращает dict:
       {
@@ -279,14 +274,10 @@ def route(message: str, lang: str = "ru",
         "target_goal_id": str|None,
         "confidence_top": float,
         "confidence_sub": float,
-        "workspace": str|None,        # отражает в каком контексте классифицировали
         "source": "cache"|"llm"|"fallback",
       }
     """
-    # Cache key учитывает workspace — одно и то же сообщение в разных
-    # воркспейсах может матчиться к разным целям.
-    ws_key = workspace or "_"
-    key = f"{ws_key}::{_cache_key(message)}"
+    key = _cache_key(message)
     if use_cache:
         cached = _cache_get(key)
         if cached:
@@ -300,7 +291,6 @@ def route(message: str, lang: str = "ru",
         "target_goal_id": None,
         "confidence_top": top_conf,
         "confidence_sub": 0.0,
-        "workspace": workspace,
         "source": "llm",
     }
 
@@ -316,10 +306,9 @@ def route(message: str, lang: str = "ru",
         return result
 
     if top_kind == "fact":
-        # Нужен список recurring для matching — scoped к workspace
         try:
             from .recurring import list_recurring
-            recs = list_recurring(active_only=True, workspace=workspace)
+            recs = list_recurring(active_only=True)
         except Exception:
             recs = []
         sub, sub_conf, gid = _classify_subtype_fact(message, lang=lang,

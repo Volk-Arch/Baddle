@@ -1,21 +1,18 @@
-"""Demo seeder — создаёт 2 workspace'а с готовым наполнением.
+"""Demo seeder — наполняет единственный граф Baddle реалистичным контентом.
 
-Зачем: пустой Baddle не демонстрирует ничего. Morning briefing без данных =
-plain text, pump без графа = ничего, dashboard без checkins = нули. DEMO
-заполняет оба workspace'а содержательными нодами/целями/активностями,
-чтобы система сразу работала как задумано.
+Пустой Baddle не демонстрирует ничего: morning briefing без данных пуст,
+pump без графа ничего не находит, dashboard без checkins — нули. DEMO
+заливает `graphs/main/` содержательными нодами, recurring-целями и
+7 днями истории (activity + checkins), чтобы система сразу работала как
+задумано.
 
-Два workspace'а:
-  work-demo       — «релиз MVP»: goals, hypothesis, evidence, synthesis;
-                    recurring (daily standup, code review); 3 дня activity.
-  personal-demo   — «wellbeing»: сон/прогулки/кофе/вода; recurring
-                    (прогулка 3/нед, вода 5/день, медитация 1/день);
-                    7 дней activity + 7 дней checkins.
+Тематика: wellbeing + сторонние треки (сон / движение / кофе / вода /
+работа / код) — отражает обычный микс юзера, а не чистый «work».
 
 Использование:
   from src.demo import seed_demo, wipe_all_runtime
   wipe_all_runtime()   # удалить существующие данные
-  seed_demo()          # создать оба demo-workspace'а
+  seed_demo()          # заполнить graphs/main/
 
 Timestamps относительные (now() − N часов/дней) — DEMO всегда выглядит
 свежим независимо от того когда его загрузили.
@@ -39,8 +36,7 @@ log = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).parent.parent
 _GRAPHS_DIR = _ROOT / "graphs"
-_WORKSPACES_DIR = _ROOT / "workspaces"
-_WS_INDEX = _WORKSPACES_DIR / "index.json"
+_GRAPH_DIR = _GRAPHS_DIR / "main"
 
 
 # ── Wipe ─────────────────────────────────────────────────────────────────
@@ -64,19 +60,11 @@ def wipe_all_runtime() -> dict:
             except OSError as e:
                 log.warning(f"[demo.wipe] {f}: {e}")
     if _GRAPHS_DIR.exists():
-        for ws in _GRAPHS_DIR.iterdir():
-            if ws.is_dir():
-                try:
-                    shutil.rmtree(ws)
-                    removed.append(f"graphs/{ws.name}")
-                except OSError as e:
-                    log.warning(f"[demo.wipe] graphs/{ws.name}: {e}")
-    if _WS_INDEX.exists():
         try:
-            _WS_INDEX.unlink()
-            removed.append("workspaces/index.json")
+            shutil.rmtree(_GRAPHS_DIR)
+            removed.append("graphs/")
         except OSError as e:
-            log.warning(f"[demo.wipe] index.json: {e}")
+            log.warning(f"[demo.wipe] graphs/: {e}")
     log.info(f"[demo.wipe] removed {len(removed)} items")
     return {"removed": removed, "count": len(removed)}
 
@@ -116,18 +104,16 @@ def _mknode(idx: int, text: str, ntype: str, topic: str = "",
     }
 
 
-def _write_graph(ws_id: str, nodes: list, directed_edges: list,
-                  topic: str, mode: str = "free"):
-    """Записать graph.json для workspace'а."""
-    ws_dir = _GRAPHS_DIR / ws_id
-    ws_dir.mkdir(parents=True, exist_ok=True)
+def _write_graph(nodes: list, directed_edges: list,
+                 topic: str, mode: str = "free") -> None:
+    """Записать graph.json в `graphs/main/`."""
+    _GRAPH_DIR.mkdir(parents=True, exist_ok=True)
     graph = {
         "nodes": nodes,
         "edges": {
-            "manual_links": [list(p) for p in directed_edges],  # для undirected-проекций
+            "manual_links": [list(p) for p in directed_edges],
             "manual_unlinks": [],
             "directed": [list(p) for p in directed_edges],
-            # Action Memory edge-типы — пустые для демо (actions накопятся на use)
             "caused_by": [],
             "followed_by": [],
         },
@@ -135,12 +121,21 @@ def _write_graph(ws_id: str, nodes: list, directed_edges: list,
         "embeddings": [],
         "tp_overrides": {},
     }
-    (ws_dir / "graph.json").write_text(
+    (_GRAPH_DIR / "graph.json").write_text(
         json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    # meta.json
+    now = _iso_now()
+    (_GRAPH_DIR / "meta.json").write_text(
+        json.dumps({
+            "id": "main", "title": "Main",
+            "created": now, "last_active": now,
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8"
     )
 
 
-def _append_jsonl(path: Path, events: list[dict]):
+def _append_jsonl(path: Path, events: list[dict]) -> None:
     """Добавить events в jsonl (создаст файл если нужно)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -148,183 +143,10 @@ def _append_jsonl(path: Path, events: list[dict]):
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
-def _register_workspace(ws_id: str, title: str, tags: list[str]):
-    """Добавить запись в workspaces/index.json."""
-    _WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
-    if _WS_INDEX.exists():
-        idx = json.loads(_WS_INDEX.read_text(encoding="utf-8"))
-    else:
-        idx = {"active_id": ws_id, "workspaces": {}, "cross_edges": []}
-    now = _iso_now()
-    info = {
-        "id": ws_id,
-        "title": title,
-        "tags": tags,
-        "created": now,
-        "last_active": now,
-    }
-    idx.setdefault("workspaces", {})[ws_id] = info
-    # meta.json per workspace
-    ws_dir = _GRAPHS_DIR / ws_id
-    ws_dir.mkdir(parents=True, exist_ok=True)
-    (ws_dir / "meta.json").write_text(
-        json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    return idx
+# ── Content ──────────────────────────────────────────────────────────────
 
-
-def _set_active(ws_id: str):
-    """Поставить активный workspace в index.json."""
-    if not _WS_INDEX.exists():
-        return
-    idx = json.loads(_WS_INDEX.read_text(encoding="utf-8"))
-    idx["active_id"] = ws_id
-    _WS_INDEX.write_text(json.dumps(idx, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
-
-
-# ── work-demo content ────────────────────────────────────────────────────
-
-def _seed_work_demo():
-    """Проект релиза: ~25 нод, 4 goal, 2 recurring, 3 дня activity."""
-    ws = "work-demo"
-    idx = _register_workspace(ws, "Work: release v1", ["demo", "work"])
-    _WS_INDEX.write_text(json.dumps(idx, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
-
-    # Граф — связная дискуссия про релиз
-    nodes_spec = [
-        # id, text, type, topic
-        (0, "Зарелизить v1 до пятницы", "goal", "release"),
-        (1, "Главная фича: AI-чат с памятью", "hypothesis", "release"),
-        (2, "Главная фича: визуальный граф мышления", "hypothesis", "release"),
-        (3, "Юзеры сразу понимают чат — low-friction onboarding", "evidence", "release"),
-        (4, "Чат без контекста = ещё один WhatsApp, не unique", "evidence", "release"),
-        (5, "Граф выделяет продукт среди AI-ассистентов", "evidence", "release"),
-        (6, "Нужен onboarding — первый экран пустой пугает", "hypothesis", "release"),
-        (7, "Seed-demo решает проблему пустого экрана", "hypothesis", "release"),
-        (8, "Починить LM Studio интеграцию", "goal", "llm"),
-        (9, "qwen3 игнорит /no_think — сливаем токены в reasoning", "hypothesis", "llm"),
-        (10, "max_tokens=120 обрезал TEXT: строку, карточки пустые", "evidence", "llm"),
-        (11, "Увеличили до 400 — парсер не ломается", "fact", "llm"),
-        (12, "Написать статью на Хабр с живым примером", "goal", "habr"),
-        (13, "Начать с конкретного: pump нашёл связь процесс↔кабачки", "hypothesis", "habr"),
-        (14, "Объяснить архитектуру через distinct() как ядро", "hypothesis", "habr"),
-        (15, "Distinct — редкое решение, большинство строят на generate", "evidence", "habr"),
-        (16, "Добавить HRV через Polar H10 (real sensor)", "hypothesis", "future"),
-        (17, "Bluetooth теряется — нужен fallback на симулятор", "evidence", "future"),
-        (18, "MVP без Polar — симулятор достаточен для демо", "synthesis", "release"),
-        (19, "Сколько self-test перед релизом?", "question", "release"),
-        (20, "1 неделя ежедневного использования достаточно", "hypothesis", "release"),
-        (21, "UI split + dark-theme модалки готовы (сегодня)", "fact", "release"),
-        (22, "DEMO seed готов (сегодня же)", "fact", "release"),
-        (23, "Остался smoke-тест LM + 3-минутное демо-видео", "synthesis", "release"),
-        (24, "Релиз-готовность: 85%, осталась полировка", "synthesis", "release"),
-    ]
-    nodes = [_mknode(i, t, ty, tp) for (i, t, ty, tp) in nodes_spec]
-    # Confidence tweaks — сделать граф живым
-    nodes[0]["confidence"] = 0.8  # главная цель почти уверена
-    nodes[4]["confidence"] = 0.3  # слабый argument against
-    nodes[5]["confidence"] = 0.75
-    nodes[11]["confidence"] = 0.9  # fact
-    nodes[21]["confidence"] = 0.95
-    nodes[22]["confidence"] = 0.95
-    nodes[24]["confidence"] = 0.7
-
-    edges = [
-        # goal#0 → hypotheses
-        (0, 1), (0, 2), (0, 6), (0, 7), (0, 18),
-        # #1 pro/con
-        (1, 3), (1, 4),
-        # #2 evidence
-        (2, 5),
-        # #6 solved by #7
-        (6, 7),
-        # #8 LLM goal
-        (8, 9), (8, 10), (8, 11),
-        (9, 10), (10, 11),
-        # #12 Habr
-        (12, 13), (12, 14),
-        (14, 15),
-        # #16 future
-        (16, 17),
-        # synthesis связи
-        (18, 16), (18, 17),
-        (19, 20),
-        # release progress
-        (0, 21), (0, 22), (0, 23), (0, 24),
-        (23, 24),
-    ]
-    _write_graph(ws, nodes, edges, "Release v1", mode="free")
-
-    # Goals + recurring
-    ts = _now()
-    events = [
-        {"action": "create", "id": _mkid(), "workspace": ws,
-         "text": "Зарелизить v1 до пятницы", "mode": "horizon",
-         "priority": 1, "deadline": None, "category": "work",
-         "ts": ts - 5 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
-         "text": "Починить LM Studio интеграцию", "mode": "free",
-         "priority": 2, "deadline": None, "category": "work",
-         "ts": ts - 3 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
-         "text": "Написать статью на Хабр", "mode": "free",
-         "priority": 3, "deadline": None, "category": "work",
-         "ts": ts - 2 * 86400},
-        # Recurring
-        {"action": "create", "id": _mkid(), "workspace": ws,
-         "text": "Daily standup", "kind": "recurring", "mode": "rhythm",
-         "schedule": {"times_per_day": 1}, "category": "work",
-         "ts": ts - 7 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
-         "text": "Code review сессия", "kind": "recurring", "mode": "rhythm",
-         "schedule": {"times_per_week": 3}, "category": "work",
-         "ts": ts - 7 * 86400},
-    ]
-    _append_jsonl(GOALS_FILE, events)
-
-    # Activity 3 дня
-    act = []
-    for d in range(3, 0, -1):
-        day_start = ts - d * 86400
-        # 10:00 — stand-up (короткий)
-        aid = _mkid()
-        act.append({"action": "start", "id": aid, "name": "Daily standup",
-                    "category": "work", "workspace": ws, "ts": day_start + 10 * 3600})
-        act.append({"action": "stop", "id": aid, "reason": "manual",
-                    "ts": day_start + 10 * 3600 + 15 * 60})
-        # 10:30 — coding
-        aid = _mkid()
-        act.append({"action": "start", "id": aid, "name": "UI split implementation",
-                    "category": "work", "workspace": ws, "ts": day_start + 10.5 * 3600})
-        act.append({"action": "stop", "id": aid, "reason": "switch",
-                    "ts": day_start + 13 * 3600})
-        # 14:00 — code review
-        if d % 2 == 0:
-            aid = _mkid()
-            act.append({"action": "start", "id": aid, "name": "Code review сессия",
-                        "category": "work", "workspace": ws, "ts": day_start + 14 * 3600})
-            act.append({"action": "stop", "id": aid, "reason": "manual",
-                        "ts": day_start + 14 * 3600 + 45 * 60})
-        # 16:00 — debug
-        aid = _mkid()
-        act.append({"action": "start", "id": aid, "name": "Debug LM integration",
-                    "category": "work", "workspace": ws, "ts": day_start + 16 * 3600})
-        act.append({"action": "stop", "id": aid, "reason": "manual",
-                    "ts": day_start + 18 * 3600})
-    _append_jsonl(ACTIVITY_FILE, act)
-
-
-# ── personal-demo content ────────────────────────────────────────────────
-
-def _seed_personal_demo():
-    """Wellbeing: сон/прогулки/кофе/вода, recurring, 7 дней истории."""
-    ws = "personal-demo"
-    idx = _register_workspace(ws, "Personal: wellbeing", ["demo", "personal"])
-    _WS_INDEX.write_text(json.dumps(idx, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
-
+def _seed_content() -> None:
+    """Наполнение единственного графа. Смешивает темы wellbeing и code."""
     nodes_spec = [
         (0, "Снизить хронический стресс", "goal", "wellbeing"),
         (1, "Больше сна — 7+ часов в будни", "hypothesis", "sleep"),
@@ -362,101 +184,86 @@ def _seed_personal_demo():
     nodes[24]["confidence"] = 0.7
 
     edges = [
-        # goal#0 → hypotheses
         (0, 1), (0, 2), (0, 3), (0, 13), (0, 21),
-        # #1 evidence
         (1, 4),
-        # #3 evidence
         (3, 5), (3, 20),
-        # #2 → #7 → #9
         (2, 6), (2, 7), (7, 8), (7, 9),
-        # #10 dilemma
         (10, 11), (11, 12),
-        # #13 meditation
         (13, 14),
-        # #15 water
         (15, 16),
-        # food
         (17, 18),
-        # synthesis
         (21, 1), (21, 7), (21, 15),
         (22, 23),
         (0, 9), (0, 15), (0, 19),
         (0, 24),
     ]
-    _write_graph(ws, nodes, edges, "Wellbeing", mode="free")
+    _write_graph(nodes, edges, "Wellbeing", mode="free")
 
     # Goals + recurring
     ts = _now()
     events = [
-        {"action": "create", "id": _mkid(), "workspace": ws,
+        {"action": "create", "id": _mkid(),
          "text": "Снизить хронический стресс", "mode": "horizon",
          "priority": 1, "deadline": None, "category": "health",
          "ts": ts - 10 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
+        {"action": "create", "id": _mkid(),
          "text": "10 000 шагов в день", "mode": "free",
          "priority": 2, "deadline": None, "category": "health",
          "ts": ts - 8 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
+        {"action": "create", "id": _mkid(),
          "text": "Снизить кофе до 2 чашек", "mode": "free",
          "priority": 3, "deadline": None, "category": "health",
          "ts": ts - 5 * 86400},
         # Recurring
-        {"action": "create", "id": _mkid(), "workspace": ws,
+        {"action": "create", "id": _mkid(),
          "text": "Прогулка 30 минут", "kind": "recurring", "mode": "rhythm",
          "schedule": {"times_per_week": 3}, "category": "health",
          "ts": ts - 14 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
+        {"action": "create", "id": _mkid(),
          "text": "Стакан воды", "kind": "recurring", "mode": "rhythm",
          "schedule": {"times_per_day": 5}, "category": "health",
          "ts": ts - 14 * 86400},
-        {"action": "create", "id": _mkid(), "workspace": ws,
+        {"action": "create", "id": _mkid(),
          "text": "Медитация утром", "kind": "recurring", "mode": "rhythm",
          "schedule": {"times_per_day": 1}, "category": "health",
          "ts": ts - 14 * 86400},
     ]
     _append_jsonl(GOALS_FILE, events)
 
-    # Activity 7 дней (ниже — паттерны для Scout/pattern detector)
+    # Activity 7 дней
     act = []
     for d in range(7, 0, -1):
         day_start = ts - d * 86400
-        # Завтрак 8:00
         aid = _mkid()
         act.append({"action": "start", "id": aid, "name": "Завтрак",
-                    "category": "food", "workspace": ws, "ts": day_start + 8 * 3600})
+                    "category": "food", "ts": day_start + 8 * 3600})
         act.append({"action": "stop", "id": aid, "reason": "manual",
                     "ts": day_start + 8 * 3600 + 20 * 60})
-        # Работа 9:30-13:00
         aid = _mkid()
         act.append({"action": "start", "id": aid, "name": "Deep work блок",
-                    "category": "work", "workspace": ws, "ts": day_start + 9.5 * 3600})
+                    "category": "work", "ts": day_start + 9.5 * 3600})
         act.append({"action": "stop", "id": aid, "reason": "manual",
                     "ts": day_start + 13 * 3600})
-        # Обед 13:00-13:40
         aid = _mkid()
         act.append({"action": "start", "id": aid, "name": "Обед",
-                    "category": "food", "workspace": ws, "ts": day_start + 13 * 3600})
+                    "category": "food", "ts": day_start + 13 * 3600})
         act.append({"action": "stop", "id": aid, "reason": "manual",
                     "ts": day_start + 13 * 3600 + 40 * 60})
-        # Прогулка — понедельник/среда/суббота (day 6, 4, 1 considering loop from 7 down)
         if d in (6, 4, 1):
             aid = _mkid()
             act.append({"action": "start", "id": aid, "name": "Прогулка 30 минут",
-                        "category": "health", "workspace": ws, "ts": day_start + 15 * 3600})
+                        "category": "health", "ts": day_start + 15 * 3600})
             act.append({"action": "stop", "id": aid, "reason": "manual",
                         "ts": day_start + 15 * 3600 + 30 * 60})
-        # Вечерняя работа
         aid = _mkid()
         act.append({"action": "start", "id": aid, "name": "Evening review",
-                    "category": "work", "workspace": ws, "ts": day_start + 17 * 3600})
+                    "category": "work", "ts": day_start + 17 * 3600})
         act.append({"action": "stop", "id": aid, "reason": "manual",
                     "ts": day_start + 18.5 * 3600})
     _append_jsonl(ACTIVITY_FILE, act)
 
     # Checkins 7 дней
     checkins_data = [
-        # (days_ago, energy, focus, stress, expected, reality, note)
         (6, 70, 75, 30, 0, 1, "хорошо отдохнул в выходные"),
         (5, 65, 70, 40, 1, 0, "затянуло в работу, забыл про перерыв"),
         (4, 50, 50, 60, 0, -1, "плохо спал, кофе после 18"),
@@ -472,7 +279,7 @@ def _seed_personal_demo():
             "energy": float(e), "focus": float(f), "stress": float(s),
             "expected": exp, "reality": real,
             "note": note or "",
-            "ts": ts - days_ago * 86400 + 20 * 3600,  # 20:00 каждого дня
+            "ts": ts - days_ago * 86400 + 20 * 3600,
         }
         checkins.append(entry)
     _append_jsonl(CHECKINS_FILE, checkins)
@@ -480,37 +287,23 @@ def _seed_personal_demo():
 
 # ── Public API ───────────────────────────────────────────────────────────
 
-def seed_demo(active: str = "personal-demo") -> dict:
-    """Создать оба demo-workspace'а + выставить active.
-
-    Идемпотентна: если workspaces уже существуют — перетирает.
-    Возвращает статистику для UI.
-    """
-    _GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
-    _WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
-
-    _seed_work_demo()
-    _seed_personal_demo()
-    _set_active(active)
-    log.info(f"[demo.seed] created work-demo + personal-demo, active={active}")
-    return {
-        "workspaces": ["work-demo", "personal-demo"],
-        "active": active,
-        "ts": _iso_now(),
-    }
+def seed_demo() -> dict:
+    """Наполнить `graphs/main/` + goals + activity + checkins."""
+    _GRAPH_DIR.mkdir(parents=True, exist_ok=True)
+    _seed_content()
+    log.info("[demo.seed] populated graphs/main/")
+    return {"graph": "main", "ts": _iso_now()}
 
 
-def reset_and_seed(active: str = "personal-demo") -> dict:
+def reset_and_seed() -> dict:
     """Полный цикл: wipe → seed. Атомарная операция для UI-кнопки."""
     wiped = wipe_all_runtime()
-    seeded = seed_demo(active=active)
+    seeded = seed_demo()
     return {"wiped": wiped, "seeded": seeded}
 
 
 def should_auto_seed() -> bool:
-    """True если runtime пустой (первый запуск) — seed-on-empty путь."""
-    if _WS_INDEX.exists():
-        return False
-    if _GRAPHS_DIR.exists() and any(_GRAPHS_DIR.iterdir()):
+    """True если runtime пустой (первый запуск)."""
+    if (_GRAPH_DIR / "graph.json").exists():
         return False
     return True

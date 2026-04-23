@@ -67,12 +67,6 @@ def _get_user_context_lines(max_activities: int = 3) -> list[str]:
     generic, а зацеплялся за реальные данные. Возвращает список строк."""
     lines: list[str] = []
     try:
-        from .workspace import get_workspace_manager
-        ws = get_workspace_manager().active_id or "main"
-        lines.append(f"workspace: {ws}")
-    except Exception:
-        pass
-    try:
         from .activity_log import list_activities
         acts = list_activities(limit=max_activities)
         if acts:
