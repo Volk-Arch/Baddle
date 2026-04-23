@@ -23,9 +23,26 @@ Baddle для одного человека, один контекст. 2 worksp
 
 ---
 
+## 🌊 Резонансная модель — пакет (2026-04-23)
+
+Единый словарь для существующих механик Baddle через оптику «сознание как резонатор в едином поле». Теоретическая рамка + 4 практических документа. Большая часть уже есть в коде — это reframing, не rewrite.
+
+**Основа:** [docs/resonance-model.md](../docs/resonance-model.md) — overview с mapping-таблицей «резонансный словарь ↔ Baddle-концепт ↔ код».
+
+**Патчи в существующие docs** (сделано): [cone-design](../docs/cone-design.md) — частота и чистота конуса; [hrv-design](../docs/hrv-design.md) — ВНС как переключатель несущей; [friston-loop](../docs/friston-loop.md) — отсутствующий объект и PE = 0; [neurochem-design](../docs/neurochem-design.md) — нейромодуляторы как регуляторы чистоты и полосы.
+
+**Открытые пункты:**
+
+- [ ] **Резонансные код-изменения** — `aperture` скаляр в depth engine (заменяет разрозненные knobs), `frequency_regime` derived field в UserState, `focus_residue` EMA для attentional residue. Подробно, с трейд-оффами и call-sites — в [resonance-code-changes.md](resonance-code-changes.md). ~4ч суммарно, можно по одному.
+- [ ] **Дыхательный режим (breathing_suggestion).** Baddle предлагает 5→5 / 4-4-4-4 / 4-7-8 при rassogласовании frequency_regime и ближайшей задачи. Self-guided, не лечит. Action Memory cycle закрывает обучение по outcome. Спецификация + менее инвазивные альтернативы в [breathing-mode.md](breathing-mode.md). Блокируется frequency_regime. ~5ч.
+- [ ] **Резонансный промпт-преset.** Chat UI: dropdown 🔵/🔴/⚪ + шаблон `[Контекст волны] [Состояние] [Запрос] [Параметры]`. Делает active inference юзера явным, zero backend change. Опционально auto-detect через frequency_regime (Variant C). Спецификация — [resonance-prompt-preset.md](resonance-prompt-preset.md). ~1-2ч.
+
+---
+
 ## 📌 Задачи
 - [ ] **Embeddings** Убрать хранение embeddings
 - [ ] **Унифицировать связи графов и их хранения** Очень много файлов непонятно зачем
+- [ ] **Все формулы в один файл для наглядности.** Сейчас математика разбросана: γ в `neurochem.py`, EMA-константы в `ema.py`, precision/T в `horizon.py`, RMSSD/LF-HF в `hrv_metrics.py`, distinct в `main.py`, expectation/surprise в `user_state.py`, Bayesian update в `graph_logic.py`. Сделать `src/formulas.py` — pure-functions helpers (`compute_gamma(NE, S)`, `compute_effective_precision(raw, maturity)`, `bayes_update_logit(prior, d, gamma)`, `compute_cognitive_load(events)`, и т.д.). Объекты state (Neurochem / CognitiveState / UserState) вызывают их, сами держат только данные и диспетчеризацию. Одна точка для чтения всей математики + калибровка констант рядом. ~3ч, средний риск (затрагивает 5+ модулей).
 - [ ] **Desktop notifications.** Alerts работают только пока вкладка открыта. Закрыл → morning briefing / DMN-мосты / night cycle уходят в пустоту. MVP: `pystray` + `plyer` (иконка в трее + OS toast). ~2-3ч.
 - [ ] **Alerts coverage — проверить что 21 check работает.** `/debug/alerts/trigger-all` показывал 10 silent_ok на demo-данных. Пройтись по каждому, покрыть пустые условия или пометить «not applicable on empty state». ~2ч.
 - [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн, но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts. ~1ч.
@@ -47,6 +64,16 @@ MVP stream работает ([hrv-design.md](../docs/hrv-design.md#sensor-stream
 - [ ] **UserState → sensor stream.** Сейчас `UserState.update_from_hrv` через `hrv_manager.get_baddle_state()`. Мигрировать на `stream.latest_hrv_aggregate()` + `stream.recent_activity()` — любой источник влияет на UserState напрямую. ~15 call-sites. Блокирует реальные адаптеры.
 - [ ] **`PolarH10Adapter`** — `bleak` + `bleakheart`, async BLE loop. Push `rr_ms` + accelerometer. Каждые 15с агрегат через `calculate_hrv_metrics` → `push_hrv_snapshot`. ~2-3ч.
 - [ ] **Polar H10 cone viz с θ/φ** — polyvagal двухпараметрическая визуализация когда реальный сенсор подключён.
+
+### Расширенная HRV-аналитика
+
+- [ ] **Тест VO2max (оценка аэробной выносливости).** Один из протоколов: Cooper 12-минутный бег, Åstrand submaximal cycle, или оценка через HR-response на стандартизированную нагрузку (step test). Замер раз в 2-4 недели — тренд показывает реальные изменения тренированности. Persist в `data/fitness_tests.jsonl`.
+- [ ] **Метрики восстановления после движения.** Heart Rate Recovery (HRR1 — падение пульса за 1 мин после прекращения нагрузки, HRR2 — за 2 мин, slope — крутизна). Низкий HRR = плохая парасимпатическая регуляция. Сравнивать с baseline, тренд за недели. Automatic detection через accelerometer (активность кончилась) + HR-stream.
+- [ ] **«Аварийный режим коробки» детектор.** Паттерн хронического симпатического перегруза: (а) resting HR поднят на 5-10 bpm выше baseline несколько дней, (б) при старте активности HR **скачком** достигает 80%+ от HRmax (нет плавной рампы), (в) упирается в потолок, не даёт резерва, (г) медленное восстановление. Композитный score по 4 признакам → event `autonomic_strain` в `hrv_events.jsonl`. Алерт только при устойчивом паттерне (3+ дня), не по одному замеру — чтобы не паниковать на плохом сне.
+
+### Event-based сжатие HRV-потока
+
+- [ ] **Вместо сырых RR — интерпретируемые события.** Сейчас `data/sensor_readings.jsonl` хранит downsampled RR (каждый 10-й). Перейти на `data/hrv_events.jsonl` с событиями: `rest_baseline_update` (тренд resting HR / RMSSD), `activity_start / peak / recovery`, `coherence_shift`, `anomaly_spike`, `autonomic_strain`. Сырые RR живут в памяти 1-2 часа как ring buffer, на диск уходит только **интерпретация**. Файл в 50-100× меньше, данные читаемые глазом, Baddle потребляет сигналы как поток событий, не timeseries. Детекторы из пунктов выше — производители этих событий.
 
 ---
 
@@ -75,6 +102,13 @@ MVP stream работает ([hrv-design.md](../docs/hrv-design.md#sensor-stream
 **Критерий:** A/B 2 недели `ceiling_static=100` vs `ceiling_estimated`. Принимаем если avg `sync_error` падает >15%.
 **Где:** новый `src/capacity_estimator.py`, кормит `UserState._compute_energy`.
 **Блок:** минимум 1 мес реальных данных — иначе гадание.
+
+### #3 Память как ключ настройки vs text + embedding
+**Проблема:** Нода графа хранит `{text, embedding, confidence, ts, ...}`. Embedding — это уже «ключ настройки» (вектор в семантическом пространстве), а `text` — копия объекта, которую мозг-как-резонатор физически не хранит (см. [resonance-model.md § Research challenge](../docs/resonance-model.md#research-challenge-память-как-ключ-настройки)). Возможно дублирование избыточно.
+**Направление:** В пределе — хранить только embedding + контекст + energy; text восстанавливается LLM'ом из embedding при retrieval. Ближе к биологической реальности, меньше storage. Против: LLM-generation шумит, теряется audit/debug/human-readable trail, git-backup удобнее когда text живой.
+**Критерий:** Через 1-2 мес измерить storage breakdown (сколько на text vs embedding на типичном графе 500+ нод) + log частоту ручного чтения text пользователем. Если text читается редко а embedding retrieval стабильный → можно уходить к ключ-only. Если часто → оставляем дубль.
+**Где:** структура node'а в [graph_logic.py](../src/graph_logic.py), storage в [storage-layout.md](../docs/storage-layout.md).
+**Блок:** минимум 1-2 мес реального use, статистика по чтению text + работоспособность LLM-reconstruction.
 
 ### #2 Agency как 5-я ось (в процессе)
 **Статус:** `UserState.agency` уже собирается (EMA decay 0.95, UI 5-я карточка), но **не** в `vector()` 3D→4D.

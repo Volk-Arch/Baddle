@@ -33,6 +33,7 @@ order + 6 вспомогательных (reference / context).
 | «Prediction error?» | [friston-loop](friston-loop.md) — 2 предиктора, 5 PE-каналов, прайм-директива |
 | «Как измерить что работает?» | [friston-loop § Прайм-директива](friston-loop.md#связь-с-прайм-директивой) → `/assist/prime-directive` |
 | «Место Baddle относительно меня?» | [world-model](world-model.md) — каскад зеркал |
+| «Резонансная оптика / единый словарь?» | [resonance-model](resonance-model.md) — mapping «концепт ↔ Baddle ↔ код» |
 | «Что не решено?» | [planning/TODO § Открытые вопросы](../planning/TODO.md) |
 
 ---
@@ -127,6 +128,7 @@ order + 6 вспомогательных (reference / context).
 | Doc | Зачем |
 |---|---|
 | [world-model.md](world-model.md) | Оптика проекта: каскад зеркал + resonance protocol + 5 механик |
+| [resonance-model.md](resonance-model.md) | Единый словарь: резонансная рамка как цемент между docs. Mapping «статья ↔ Baddle ↔ код» |
 | [alerts-and-cycles.md](alerts-and-cycles.md) | Полная карта 21 check + alert types + throttling math |
 | [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа |
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
@@ -134,7 +136,10 @@ order + 6 вспомогательных (reference / context).
 
 **Планирование** — [../planning/](../planning/):
 [TODO.md](../planning/TODO.md) (все задачи + открытые архитектурные вопросы + кристаллизация),
-[ui-split-plan.md](../planning/ui-split-plan.md) (UI split Baddle vs Graph Lab).
+[ui-split-plan.md](../planning/ui-split-plan.md) (UI split Baddle vs Graph Lab),
+[resonance-code-changes.md](../planning/resonance-code-changes.md) (3 код-изменения по резонансной рамке),
+[breathing-mode.md](../planning/breathing-mode.md) (guided дыхательная сессия),
+[resonance-prompt-preset.md](../planning/resonance-prompt-preset.md) (chat UI 🔵/🔴 preset).
 
 ---
 
