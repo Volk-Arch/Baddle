@@ -346,4 +346,4 @@ Single-path, без миграций и legacy кода. Правила эвол
 
 ---
 
-**Навигация:** [← Activity log](activity-log-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Thinking operations →](thinking-operations.md)
+**Навигация:** [← Task Tracker](task-tracker-design.md)  ·  [Индекс](README.md)  ·  [Следующее: Thinking operations →](thinking-operations.md)

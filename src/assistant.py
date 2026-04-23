@@ -477,17 +477,11 @@ def _fastpath_activity(router_intent: dict, message: str, lang: str):
     from .intent_router import extract_activity_name
     from .activity_log import (start_activity, try_match_recurring_instance,
                                detect_category)
-    from .workspace import get_workspace_manager
     act_name = extract_activity_name(message, lang=lang)
     if not act_name:
         return None
-    ws_id = "main"
-    try:
-        ws_id = get_workspace_manager().active_id or "main"
-    except Exception:
-        pass
     category = detect_category(act_name)
-    aid = start_activity(name=act_name, category=category, workspace=ws_id)
+    aid = start_activity(name=act_name, category=category)
     matched_rec = None
     try:
         matched_rec = try_match_recurring_instance(
@@ -682,20 +676,10 @@ def assist():
     # хочет (task/fact/constraint_event/chat), потом подтип. Для некоторых
     # kind'ов обрабатываем прямо тут без execute_mode/classify_intent_llm —
     # это сильно экономит tokens на простых сообщениях.
-    #
-    # Workspace-aware: router видит только recurring/constraints текущего
-    # воркспейса (+ глобальные без workspace поля). Personal и work не
-    # смешиваются — «выпил воды» в work не триггерит personal recurring.
     router_intent = None
-    _active_ws = "main"
-    try:
-        from .workspace import get_workspace_manager
-        _active_ws = get_workspace_manager().active_id or "main"
-    except Exception:
-        pass
     try:
         from .intent_router import route as _route_intent
-        router_intent = _route_intent(message, lang=lang, workspace=_active_ws)
+        router_intent = _route_intent(message, lang=lang)
     except Exception as _e:
         log.debug(f"[/assist] intent_router failed: {_e}")
 
@@ -751,8 +735,7 @@ def assist():
     # «привычка: покушать 3 раза (1/3 сегодня)» + «ограничение: не орехи».
     try:
         from .recurring import build_active_context_summary
-        # workspace-scoped — не смешиваем привычки work и personal
-        recurring_ctx = build_active_context_summary(workspace=_active_ws)
+        recurring_ctx = build_active_context_summary()
         if recurring_ctx:
             profile_hint = (profile_hint + "\n" + recurring_ctx).strip()
     except Exception as _e:
@@ -964,9 +947,7 @@ def assist():
     if not api_offline:
         try:
             from .recurring import scan_message_for_violations
-            violations_found = scan_message_for_violations(
-                message, lang=lang, workspace=_active_ws,
-            )
+            violations_found = scan_message_for_violations(message, lang=lang)
         except Exception as _e:
             log.debug(f"[assist] violation scan failed: {_e}")
     if violations_found:
@@ -1451,16 +1432,15 @@ def profile_learn():
 
 @assistant_bp.route("/goals", methods=["GET"])
 def goals_list():
-    """Query: ?status=open|done|abandoned &workspace=X &category=Y &limit=N"""
+    """Query: ?status=open|done|abandoned &category=Y &limit=N"""
     from .goals_store import list_goals
     status = request.args.get("status")
-    ws = request.args.get("workspace")
     cat = request.args.get("category")
     try:
         limit = int(request.args.get("limit", 100))
     except ValueError:
         limit = 100
-    return jsonify({"goals": list_goals(status=status, workspace=ws,
+    return jsonify({"goals": list_goals(status=status,
                                         category=cat, limit=limit)})
 
 
@@ -1505,7 +1485,7 @@ def _push_event_to_chat(text: str, mode_name: str = "Событие"):
 def goals_add():
     """Manual add (обычно создаётся автоматом из /graph/add node_type=goal).
 
-    Body: {text, mode, workspace, priority, deadline, category,
+    Body: {text, mode, priority, deadline, category,
            kind?, schedule?, polarity?}
 
     kind: "oneshot" (default) | "recurring" | "constraint"
@@ -1519,7 +1499,6 @@ def goals_add():
     gid = add_goal(
         text=text,
         mode=d.get("mode", "horizon"),
-        workspace=d.get("workspace", "main"),
         priority=d.get("priority"),
         deadline=d.get("deadline"),
         category=d.get("category"),
@@ -1746,10 +1725,10 @@ def activity_active():
     })
 
 
-def _sync_activity_to_graph(activity_id: str, name: str, category, workspace: str,
+def _sync_activity_to_graph(activity_id: str, name: str, category,
                             node_index=None, finalize: bool = False,
                             ts_start=None, ts_end=None, duration_s=None):
-    """Создать/обновить ноду type=activity в текущем workspace графе.
+    """Создать/обновить ноду type=activity в графе.
 
     - При start: добавляем ноду, возвращаем её index.
     - При stop (finalize=True): обновляем ts_end + duration_s на существующей.
@@ -1793,19 +1772,14 @@ def activity_start():
     """Начать новую задачу. Если есть активная — она автоматически стопается
     со `stop_reason='switch'` (поведение кнопки «Следующая» в Time Player).
 
-    Body: {name, category?, workspace?}
+    Body: {name, category?}
     """
     from .activity_log import start_activity, get_active, update_activity
-    from .workspace import get_workspace_manager
 
     d = request.get_json(force=True) or {}
     name = (d.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name_required"}), 400
-    try:
-        ws_id = get_workspace_manager().active_id or d.get("workspace") or "main"
-    except Exception:
-        ws_id = d.get("workspace") or "main"
 
     # Закрываем предыдущую ноду в графе (обновляем duration)
     prev = get_active()
@@ -1813,7 +1787,7 @@ def activity_start():
         started = prev.get("started_at") or 0
         _sync_activity_to_graph(
             activity_id=prev["id"], name=prev.get("name", ""),
-            category=prev.get("category"), workspace=prev.get("workspace", "main"),
+            category=prev.get("category"),
             node_index=prev["node_index"], finalize=True,
             ts_end=time.time(),
             duration_s=round(time.time() - float(started)),
@@ -1821,11 +1795,11 @@ def activity_start():
 
     # Старт новой (автоматический stop_reason='switch' для предыдущей происходит внутри)
     category = d.get("category")
-    aid = start_activity(name=name, category=category, workspace=ws_id)
+    aid = start_activity(name=name, category=category)
 
     # Создаём ноду в графе и связываем
     node_idx = _sync_activity_to_graph(
-        activity_id=aid, name=name, category=category, workspace=ws_id,
+        activity_id=aid, name=name, category=category,
         ts_start=time.time(),
     )
     if node_idx is not None:
@@ -1839,23 +1813,21 @@ def activity_start():
         from .activity_log import try_match_recurring_instance
         matched_recurring = try_match_recurring_instance(
             activity_name=name, activity_category=category, lang="ru",
-            workspace=ws_id,
         )
     except Exception as _e:
         log.debug(f"[/activity/start] recurring match failed: {_e}")
 
     # Activity ↔ constraint: если activity-имя нарушает один из constraints,
-    # пишем violation. Scoped к тому же workspace.
+    # пишем violation.
     violations = []
     try:
         from .activity_log import try_detect_constraint_violation
-        violations = try_detect_constraint_violation(name, lang="ru",
-                                                      workspace=ws_id)
+        violations = try_detect_constraint_violation(name, lang="ru")
     except Exception as _e:
         log.debug(f"[/activity/start] violation scan failed: {_e}")
 
     resp = {"ok": True, "id": aid, "node_index": node_idx,
-            "name": name, "workspace": ws_id}
+            "name": name}
     if matched_recurring:
         resp["matched_recurring"] = matched_recurring
     if violations:
@@ -1886,7 +1858,7 @@ def activity_stop():
     if rec.get("node_index") is not None:
         _sync_activity_to_graph(
             activity_id=rec["id"], name=rec.get("name", ""),
-            category=rec.get("category"), workspace=rec.get("workspace", "main"),
+            category=rec.get("category"),
             node_index=rec["node_index"], finalize=True,
             ts_end=rec.get("stopped_at"),
             duration_s=round(rec.get("duration_s") or 0),
@@ -2458,7 +2430,7 @@ def assist_decompose():
 # день заново не ждя полуночи.
 
 # ── Sensor stream (polymorphic body sensors) ──────────────────────────
-# Unified поток от любого источника: simulator, Polar, Apple Watch, Oura,
+# Unified поток от любого источника: simulator, Polar, Apple Watch,
 # manual check-in. UserState читает агрегат отсюда (не из конкретного
 # HRVManager). См. docs/alerts-and-cycles.md + src/sensor_stream.py
 
@@ -2597,53 +2569,6 @@ def debug_alerts_trigger_all():
         "include_heavy": include_heavy,
     }
     return jsonify({"summary": summary, "results": results})
-
-
-# ── Cross-workspace semantic search ────────────────────────────────────
-# Сразу синхронный поиск по всем графам. DMN async-путь (`_check_dmn_cross_graph`
-# каждые 60 мин) пишет cross_edges в `workspaces/index.json` — здесь мы
-# используем их плюс live-cosine как fallback.
-
-@assistant_bp.route("/search/cross", methods=["POST"])
-def search_cross():
-    """Вход: {query, top_k?, min_similarity?} → список hit'ов по всем ws."""
-    from .search import search_across_workspaces
-    d = request.get_json(force=True, silent=True) or {}
-    query = (d.get("query") or "").strip()
-    if not query:
-        return jsonify({"error": "empty query"}), 400
-    try:
-        result = search_across_workspaces(
-            query,
-            top_k=int(d.get("top_k") or 12),
-            min_similarity=float(d.get("min_similarity") or 0.35),
-            ensure_embeddings=bool(d.get("ensure_embeddings", True)),
-        )
-        return jsonify(result)
-    except Exception as e:
-        log.warning(f"[/search/cross] failed: {e}")
-        return jsonify({"error": str(e)[:200]}), 500
-
-
-@assistant_bp.route("/search/node-related", methods=["GET"])
-def search_node_related():
-    """Для открытой ноды в Lab — связи в других workspace'ах.
-
-    Query: ?ws=work-demo&node=22
-    """
-    from .search import node_related_across_workspaces
-    ws = request.args.get("ws") or ""
-    try:
-        node = int(request.args.get("node") or "-1")
-    except ValueError:
-        return jsonify({"error": "bad node index"}), 400
-    if not ws or node < 0:
-        return jsonify({"error": "need ws and node"}), 400
-    try:
-        result = node_related_across_workspaces(ws, node)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)[:200]}), 500
 
 
 @assistant_bp.route("/user_state/reset-energy", methods=["POST"])

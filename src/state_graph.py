@@ -17,19 +17,14 @@ state_node structure:
   "rpe":           float | None,
   "user_feedback": "accepted" | "rejected" | "ignored" | None,
   "reason":        str (from tick result),
-  "graph_id":      str (workspace id, "main" by default)
 }
 
 Embeddings are computed lazily on query, cached in state_embeddings.jsonl.
 Supports episodic query: query_similar(embedding, k=5) → k most-similar moments.
 
 File layout:
-  state_graph.jsonl            — append-only log (human readable)
-  state_embeddings.jsonl       — lazily-filled cache (hash → embedding)
-
-For v4 multi-graph, layout will become:
-  graphs/{id}/state_graph.jsonl
-  graphs/{id}/state_embeddings.jsonl
+  graphs/main/state_graph.jsonl       — append-only log (human readable)
+  graphs/main/state_embeddings.jsonl  — lazily-filled cache (hash → embedding)
 """
 
 import json
@@ -45,10 +40,10 @@ log = logging.getLogger(__name__)
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 
-# Legacy (pre multi-workspace): state_graph.jsonl жил в корне. Теперь в
-# `data/` (если base_dir=None) для workspace=main fallback. Новые воркспейсы
-# передают свой base_dir из WorkspaceManager → graphs/<ws>/.
-from .paths import DATA_DIR as _DEFAULT_DIR
+# По умолчанию state_graph живёт в `graphs/main/` рядом с content-графом.
+# base_dir можно переопределить для тестов.
+_ROOT = Path(__file__).parent.parent
+_DEFAULT_DIR = _ROOT / "graphs" / "main"
 _STATE_GRAPH_FILE = "state_graph.jsonl"
 _STATE_EMBEDDINGS_FILE = "state_embeddings.jsonl"
 
@@ -62,9 +57,9 @@ class StateGraph:
     and optional embedding cache. The log file is the source of truth.
     """
 
-    def __init__(self, base_dir: Optional[Path] = None, graph_id: str = "main"):
+    def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else _DEFAULT_DIR
-        self.graph_id = graph_id
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.base_dir / _STATE_GRAPH_FILE
         self.emb_path = self.base_dir / _STATE_EMBEDDINGS_FILE
         self._lock = threading.Lock()
@@ -130,7 +125,6 @@ class StateGraph:
             "rpe": rpe,
             "user_feedback": user_feedback,
             "reason": reason,
-            "graph_id": self.graph_id,
         }
 
         with self._lock:
@@ -361,7 +355,7 @@ _global_state_graph: Optional[StateGraph] = None
 
 
 def get_state_graph() -> StateGraph:
-    """Global default StateGraph (workspace 'main'). Per-workspace graphs come in v4."""
+    """Global StateGraph — живёт в `graphs/main/`."""
     global _global_state_graph
     if _global_state_graph is None:
         _global_state_graph = StateGraph()

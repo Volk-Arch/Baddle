@@ -15,9 +15,6 @@
     <span id="token-counter" style="color:var(--text-tertiary);font-size:11px"></span>
     <span class="flex-1"></span>
     <span id="batch-tag" style="color:var(--text-tertiary);font-size:11px"></span>
-    <button onclick="openCrossSearch()"
-            title="Искать во всех workspace'ах"
-            style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">🔍</button>
   </div>
 
   <!-- Status bar (fixed bottom) -->
@@ -30,31 +27,14 @@
   </div>
 
   {% include "partials/settings_modal.html" %}
-  {% include "partials/workspaces_modal.html" %}
-  {% include "partials/cross_search_modal.html" %}
 
-  <!-- Mode tabs (graph / chat only) + workspace selector + Load + Lang -->
+  <!-- Mode tabs (graph / chat only) + Load + Lang -->
   <div class="tab-bar flex items-center" style="margin:0 -12px;padding:0 12px;">
     <button id="tab-graph" onclick="setMode('graph')"
       class="tab-active px-4 py-2 text-sm">graph</button>
     <button id="tab-chat" onclick="setMode('chat')"
       class="tab-inactive px-4 py-2 text-sm">chat</button>
     <span style="flex:1"></span>
-    <!-- Workspace selector + management -->
-    <div style="position:relative;display:inline-flex;align-items:center;gap:3px;margin-right:6px">
-      <span style="font-size:10px;color:var(--text-tertiary)" title="Активный контекст">🗂</span>
-      <select id="workspace-select" onchange="workspaceSwitch(this.value)"
-        style="font-size:11px;padding:2px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);max-width:140px;cursor:pointer"
-        title="Активный workspace. Переключение перезагружает страницу.">
-        <option value="main">main</option>
-      </select>
-      <button onclick="workspaceNewPrompt()" class="btn-secondary"
-        style="padding:3px 8px;font-size:11px;font-weight:500"
-        title="Создать новый workspace">＋ Новый</button>
-      <button onclick="workspacesOpen()" class="btn-secondary"
-        style="padding:3px 8px;font-size:11px"
-        title="Список всех workspaces">Все</button>
-    </div>
     <div style="position:relative;display:inline-block">
       <button onclick="graphLoadList()" class="btn-secondary" style="padding:3px 10px;font-size:11px" title="Load saved graph">Load</button>
       <div id="graph-load-panel-top" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px;z-index:50;min-width:320px;max-width:450px;max-height:350px;overflow-y:auto;box-shadow:var(--shadow-lg)"></div>
@@ -211,16 +191,6 @@
               <div class="gl-item gl-tip">Размер ~ degree · цвет ≈ тип · обводка = статус</div>
             </div>
           </div>
-          <svg id="meta-graph-svg" width="260" height="180"
-               style="position:absolute;top:8px;right:8px;display:none;
-                      background:rgba(24,24,27,0.92);border:1px solid #3f3f46;
-                      border-radius:8px;pointer-events:auto;">
-          </svg>
-          <button id="meta-graph-toggle" onclick="metaGraphToggle()"
-                  style="position:absolute;top:196px;right:8px;font-size:10px;
-                         background:#18181b;color:#a1a1aa;border:1px solid #3f3f46;
-                         border-radius:4px;padding:2px 6px;cursor:pointer;"
-                  title="Meta-graph overlay (workspace connections)">🗺</button>
           <svg id="graph-cone-viz" width="180" height="180" style="position:absolute;top:8px;left:8px;pointer-events:none;opacity:0.9;">
           </svg>
           <div id="graph-run-overlay" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.92);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:11px;color:var(--text-secondary);pointer-events:none;min-width:160px;box-shadow:var(--shadow);">

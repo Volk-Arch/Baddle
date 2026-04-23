@@ -218,17 +218,12 @@ def _card_status(lang: str = "ru") -> dict:
 def _card_start(name: str, lang: str = "ru") -> dict:
     """Запустить activity."""
     from .activity_log import start_activity, detect_category
-    from .workspace import get_workspace_manager
-    try:
-        ws_id = get_workspace_manager().active_id or "main"
-    except Exception:
-        ws_id = "main"
     name = name.strip().strip(".").strip('"')[:200]
     if not name:
         return _card_error("name_required", lang)
     cat = detect_category(name)
     try:
-        aid = start_activity(name=name, category=cat, workspace=ws_id)
+        aid = start_activity(name=name, category=cat)
     except Exception as e:
         return _card_error(str(e), lang)
     # Graph-sync delegated to main endpoint; тут просто подтверждение

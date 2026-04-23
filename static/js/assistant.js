@@ -42,98 +42,6 @@ async function _chatStoreLoad() {
   }
 }
 
-// ── Cross-workspace search ────────────────────────────────────────────
-
-function openCrossSearch() {
-  const m = document.getElementById('cross-search-modal');
-  if (!m) return;
-  m.style.display = 'flex';
-  const inp = document.getElementById('cross-search-input');
-  if (inp) { inp.value = inp.value || ''; setTimeout(() => inp.focus(), 30); }
-  // Подсказка
-  const stats = document.getElementById('cross-search-stats');
-  if (stats) stats.textContent = '';
-  const res = document.getElementById('cross-search-results');
-  if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:12px;text-align:center">Напиши что-то и нажми Найти. Ищу по всем workspace\'ам одновременно.</div>';
-}
-
-function closeCrossSearch() {
-  const m = document.getElementById('cross-search-modal');
-  if (m) m.style.display = 'none';
-}
-
-function crossSearchOverlayClick(ev) {
-  if (ev.target.id === 'cross-search-modal') closeCrossSearch();
-}
-
-async function runCrossSearch() {
-  const inp = document.getElementById('cross-search-input');
-  const query = (inp && inp.value || '').trim();
-  const res = document.getElementById('cross-search-results');
-  const stats = document.getElementById('cross-search-stats');
-  if (!query) { if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:12px">Введи текст для поиска.</div>'; return; }
-  if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:20px;text-align:center">Ищу… (первый поиск может быть дольше — генерятся embeddings)</div>';
-  if (stats) stats.textContent = '';
-  try {
-    const r = await fetch('/search/cross', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query, top_k: 15, min_similarity: 0.30}),
-    });
-    const d = await r.json();
-    if (d.error) { if (res) res.innerHTML = `<div style="color:#ef4444;padding:12px">Ошибка: ${_esc(d.error)}</div>`; return; }
-    const hits = d.hits || [];
-    const st = d.stats || {};
-    if (stats) stats.textContent = `${hits.length} совпадений · ${st.workspaces_scanned || 0} workspace'ов · ${st.nodes_with_embedding || 0}/${st.nodes_total || 0} нод с embeddings`;
-    if (!hits.length) {
-      if (res) res.innerHTML = '<div style="color:#71717a;font-size:12px;padding:20px;text-align:center">Не нашлось близкого. Попробуй другую формулировку или понизь min_similarity.</div>';
-      return;
-    }
-    res.innerHTML = hits.map(h => {
-      const simPct = Math.round((h.similarity || 0) * 100);
-      const typeColor = h.type === 'goal' ? '#f43f5e'
-                      : h.type === 'hypothesis' ? '#a78bfa'
-                      : h.type === 'fact' ? '#10b981'
-                      : h.type === 'evidence' ? '#06b6d4'
-                      : '#71717a';
-      return `<div class="cross-hit" data-ws="${_esc(h.ws_id)}" data-node="${h.node_idx}"
-                   onclick="crossSearchGotoHit('${_esc(h.ws_id)}', ${h.node_idx})"
-                   style="padding:10px 12px;border:1px solid #27272a;border-radius:8px;margin-bottom:6px;cursor:pointer;background:#0a0a0f">
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
-          <span style="font-size:10px;color:${typeColor};font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${_esc(h.type || 'thought')}</span>
-          <span style="font-size:10px;color:#71717a">${_esc(h.ws_title || h.ws_id)} · #${h.node_idx}</span>
-          <span style="flex:1"></span>
-          <span style="font-size:11px;color:#818cf8;font-weight:600">${simPct}%</span>
-        </div>
-        <div style="font-size:13px;color:#e4e4e7;line-height:1.4">${_esc(h.text)}</div>
-      </div>`;
-    }).join('');
-  } catch(e) {
-    if (res) res.innerHTML = `<div style="color:#ef4444;padding:12px">Сеть: ${_esc(e.message)}</div>`;
-  }
-}
-
-async function crossSearchGotoHit(wsId, nodeIdx) {
-  // Переключить workspace + открыть Lab со скроллом на node.
-  // localStorage — чтобы Lab после загрузки знал куда прокрутить.
-  try {
-    await fetch('/workspace/switch', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id: wsId}),
-    });
-  } catch(e) { /* silent */ }
-  try { localStorage.setItem('lab-focus-node', String(nodeIdx)); } catch(e) {}
-  window.location.href = '/lab';
-}
-
-// Close on Esc
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    const m = document.getElementById('cross-search-modal');
-    if (m && m.style.display === 'flex') closeCrossSearch();
-  }
-});
-
 // Debug: прогон всех _check_* в cognitive_loop с force-throttle reset.
 // Ответ приходит в чат — останется в истории, можно прокрутить.
 async function debugAlertsCheck() {
@@ -219,7 +127,7 @@ async function reloadDemo() {
     '• История чата\n' +
     '• User state, user profile\n\n' +
     'Settings (API url/модель), roles, templates — сохранятся.\n\n' +
-    'Взамен появятся два workspace\'а: work-demo (релиз MVP) и personal-demo (wellbeing).\n\n' +
+    'Взамен граф заполнится DEMO-контентом (wellbeing тема, 25 нод, 7 дней истории).\n\n' +
     'Введи "DEMO" (заглавными) чтобы подтвердить:'
   );
   if (typed !== 'DEMO') {
@@ -230,12 +138,12 @@ async function reloadDemo() {
     const r = await fetch('/demo/reload', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({confirm: 'DEMO', active: 'personal-demo'}),
+      body: JSON.stringify({confirm: 'DEMO'}),
     });
     const d = await r.json();
     if (d.error) { alert('Ошибка: ' + d.error); return; }
-    // Полная перезагрузка — runtime подхватит новый active workspace,
-    // bottom-nav и чат отрисуются с DEMO-данными.
+    // Полная перезагрузка — runtime подхватит свежий граф, bottom-nav и чат
+    // отрисуются с DEMO-данными.
     window.location.reload();
   } catch (e) {
     alert('Reload failed: ' + e.message);
@@ -2360,7 +2268,7 @@ async function _refreshGoals() {
         return `<div class="goals-row status-open">
           <span class="goal-status"></span>
           <span class="goal-text" title="${_esc(g.text)}">${_esc(g.text)}</span>
-          <span class="goal-meta">${_esc(g.mode || '?')} · ${_esc(g.workspace || 'main')} · ${date}</span>
+          <span class="goal-meta">${_esc(g.mode || '?')} · ${date}</span>
           <span class="goal-actions">
             <button onclick="goalComplete('${g.id}')">✓</button>
             <button onclick="goalAbandon('${g.id}')">×</button>
@@ -2637,70 +2545,6 @@ function profileClarifyDismiss(cardEl) {
   cardEl.innerHTML = '<div class="pc-q" style="color:#71717a">Пропущено. Можешь заполнить профиль вручную 👤</div>';
 }
 
-// ── Meta-graph overlay (SVG circular layout) ─────────────────────────
-
-let _metaOpen = false;
-
-async function metaGraphToggle() {
-  const el = document.getElementById('meta-graph-svg');
-  if (!el) return;
-  _metaOpen = el.style.display === 'none';
-  el.style.display = _metaOpen ? 'block' : 'none';
-  if (_metaOpen) await _refreshMetaGraph();
-}
-
-async function _refreshMetaGraph() {
-  const el = document.getElementById('meta-graph-svg');
-  if (!el) return;
-  try {
-    const r = await fetch('/workspace/meta');
-    const d = await r.json();
-    const nodes = d.nodes || [];
-    const edges = d.edges || [];
-    const W = 260, H = 180, cx = W/2, cy = H/2, R = Math.min(cx, cy) - 20;
-    if (!nodes.length) {
-      el.innerHTML = `<text x="${cx}" y="${cy}" text-anchor="middle" fill="#52525b" font-size="10">нет workspaces</text>`;
-      return;
-    }
-    // Circular layout
-    const positions = {};
-    nodes.forEach((n, i) => {
-      const angle = (i / nodes.length) * 2 * Math.PI - Math.PI/2;
-      positions[n.id] = {
-        x: cx + R * Math.cos(angle),
-        y: cy + R * Math.sin(angle),
-      };
-    });
-    // Edges first (underneath nodes)
-    let edgesSvg = '';
-    for (const e of edges) {
-      const p1 = positions[e.from], p2 = positions[e.to];
-      if (!p1 || !p2) continue;
-      const w = Math.min(4, 0.5 + (e.count || 1) * 0.3);
-      edgesSvg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}"
-                          x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}"
-                          stroke="#6366f1" stroke-width="${w.toFixed(1)}" opacity="0.5"/>`;
-    }
-    let nodesSvg = '';
-    for (const n of nodes) {
-      const p = positions[n.id];
-      const isActive = n.id === d.active;
-      const fill = isActive ? '#a855f7' : '#3f3f46';
-      const stroke = isActive ? '#e9d5ff' : '#71717a';
-      const r_ = 6 + Math.log(Math.max(1, n.node_count || 0)) * 1.5;
-      nodesSvg += `<g><title>${_esc(n.title || n.id)} · ${n.node_count || 0} nodes</title>
-        <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r_.toFixed(1)}"
-                fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>
-        <text x="${p.x.toFixed(1)}" y="${(p.y + r_ + 10).toFixed(1)}"
-              text-anchor="middle" fill="#e4e4e7" font-size="9">${_esc(n.id.slice(0, 10))}</text>
-      </g>`;
-    }
-    el.innerHTML = `<text x="8" y="12" fill="#a1a1aa" font-size="9">meta-graph · ${nodes.length} ws · ${edges.length} bridges</text>${edgesSvg}${nodesSvg}`;
-  } catch(e) {
-    el.innerHTML = `<text x="${130}" y="90" text-anchor="middle" fill="#ef4444" font-size="10">error: ${_esc(String(e))}</text>`;
-  }
-}
-
 function _updateNeurochemAction(action, reason) {
   const el = document.getElementById('neuro-action');
   if (!el) return;
@@ -2771,181 +2615,6 @@ async function assistToggleCamera() {
     fetch('/assist/state').then(r => r.json()).then(_updateNeurochemPanel).catch(()=>{});
   } catch(e) {
     console.warn('[camera] toggle failed:', e);
-  }
-}
-
-// ── Workspace tabs (FE-4) ──────────────────────────────────────────────
-
-async function workspaceRefresh() {
-  try {
-    const r = await fetch('/workspace/list');
-    const d = await r.json();
-    const sel = document.getElementById('workspace-select');
-    if (!sel) return;
-    const list = d.workspaces || [];
-    let opts = list.map(w =>
-      `<option value="${w.id}">${_esc(w.title || w.id)} (${w.node_count || 0})</option>`
-    ).join('');
-    // Добавляем служебную опцию — клик создаёт новый workspace.
-    // Пользователь видит явный способ что делать если workspace один.
-    opts += `<option value="__new__" style="color:#818cf8">＋ создать новый…</option>`;
-    sel.innerHTML = opts;
-    sel.value = d.active || 'main';
-  } catch(e) { /* silent */ }
-}
-
-async function workspaceSwitch(wsId) {
-  if (!wsId) return;
-  // Служебная опция «+ создать новый» из selector → сразу prompt
-  if (wsId === '__new__') {
-    // Вернуть selector в предыдущее значение чтобы не залипло на __new__
-    const sel = document.getElementById('workspace-select');
-    if (sel) {
-      // find active option
-      try {
-        const r = await fetch('/workspace/list');
-        const d = await r.json();
-        sel.value = d.active || 'main';
-      } catch(_) {}
-    }
-    await workspaceNewPrompt();
-    return;
-  }
-  try {
-    const r = await fetch('/workspace/switch', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ id: wsId })
-    });
-    const d = await r.json();
-    if (d.error) {
-      alert('Ошибка: ' + d.error);
-      return;
-    }
-    // Full UI refresh: graph reloaded, state reset
-    if (typeof graphDrawSvg === 'function') {
-      // Graph data gets loaded fresh from server on next call
-      setTimeout(() => window.location.reload(), 200);
-    } else {
-      window.location.reload();
-    }
-  } catch(e) {
-    alert('Switch failed: ' + e.message);
-  }
-}
-
-// Workspaces management modal — полный список графов с node counts
-async function workspacesOpen() {
-  const modal = document.getElementById('workspaces-modal');
-  if (!modal) return;
-  modal.style.display = 'flex';
-  const host = document.getElementById('workspaces-list');
-  if (host) host.innerHTML = '<div style="padding:20px;text-align:center;color:#52525b;font-size:12px">Загружаю…</div>';
-  try {
-    const r = await fetch('/workspace/list');
-    const d = await r.json();
-    const list = d.workspaces || [];
-    if (!list.length) {
-      if (host) host.innerHTML = '<div style="padding:20px;text-align:center;color:#52525b;font-size:12px">Нет workspace. Создай новый.</div>';
-      return;
-    }
-    // Sort: active first, then by last_active desc
-    list.sort((a, b) => {
-      if (a.active && !b.active) return -1;
-      if (!a.active && b.active) return 1;
-      return (b.last_active || '').localeCompare(a.last_active || '');
-    });
-    host.innerHTML = list.map(w => {
-      const activeClass = w.active ? 'active' : '';
-      const tagsStr = (w.tags || []).join(', ');
-      const last = w.last_active ? new Date(w.last_active).toLocaleString('ru-RU', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) : '';
-      const activeBadge = w.active ? '<span class="ws-badge-active">активный</span>' : '';
-      const canDelete = w.id !== 'main' && !w.active;
-      return `<div class="ws-item ${activeClass}" data-ws="${_esc(w.id)}">
-        <div class="ws-title">
-          <div class="ws-name">${_esc(w.title || w.id)} ${activeBadge} <span class="ws-id">${_esc(w.id)}</span></div>
-          <div class="ws-meta">${last ? 'последний доступ: ' + last : ''}${tagsStr ? ' · тэги: ' + _esc(tagsStr) : ''}</div>
-        </div>
-        <div>
-          <div class="ws-nodes">${w.node_count || 0}</div>
-          <div class="ws-nodes-label">нод</div>
-        </div>
-        <div class="ws-actions">
-          <button class="ws-btn" onclick="workspacesSwitchAndOpenGraph('${_esc(w.id)}', event)" title="Переключиться и открыть в Graph">${w.active ? 'в Graph →' : 'Открыть'}</button>
-          ${canDelete ? `<button class="ws-btn danger" onclick="workspacesDelete('${_esc(w.id)}', event)" title="Удалить">🗑</button>` : ''}
-        </div>
-      </div>`;
-    }).join('');
-  } catch (e) {
-    if (host) host.innerHTML = '<div style="color:#ef4444;padding:20px">Ошибка: ' + _esc(String(e)) + '</div>';
-  }
-}
-
-function workspacesClose(ev) {
-  if (ev && ev.target.closest('.weekly-content') && !ev.target.classList.contains('weekly-close')) return;
-  const m = document.getElementById('workspaces-modal');
-  if (m) m.style.display = 'none';
-}
-
-async function workspacesSwitchAndOpenGraph(wsId, ev) {
-  if (ev) ev.stopPropagation();
-  if (!wsId) return;
-  try {
-    const r = await fetch('/workspace/switch', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({id: wsId}),
-    });
-    const d = await r.json();
-    if (d.error) { alert('Ошибка: ' + d.error); return; }
-    // Переключить top-level tab на graph — перезагрузить страницу чтобы все
-    // JS-модули (graph.js) подхватили новый workspace
-    try { localStorage.setItem('open-graph-after-load', '1'); } catch(e) {}
-    window.location.reload();
-  } catch (e) {
-    alert('Switch failed: ' + e.message);
-  }
-}
-
-async function workspacesDelete(wsId, ev) {
-  if (ev) ev.stopPropagation();
-  if (!confirm(`Удалить workspace "${wsId}"? Все ноды и state_graph будут потеряны.`)) return;
-  try {
-    const r = await fetch('/workspace/delete', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({id: wsId}),
-    });
-    const d = await r.json();
-    if (d.error) { alert('Ошибка: ' + d.error); return; }
-    await workspacesOpen();
-  } catch (e) {
-    alert('Delete failed: ' + e.message);
-  }
-}
-
-async function workspaceNewPrompt() {
-  const title = prompt(
-    'Название нового workspace?\n\n' +
-    'Workspace — отдельный контекст для графа, привычек и целей.\n' +
-    'Примеры: work, personal, research, health.\n' +
-    'Цели созданные в одном workspace не пересекаются с другими.'
-  );
-  if (!title) return;
-  const id = title.toLowerCase().replace(/[^a-z0-9_]/g, '_').substring(0, 20);
-  if (!id) { alert('Название должно содержать буквы/цифры.'); return; }
-  try {
-    const r = await fetch('/workspace/create', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ id: id, title: title })
-    });
-    const d = await r.json();
-    if (d.error) { alert('Ошибка: ' + d.error); return; }
-    await workspaceRefresh();
-    if (confirm(`Workspace "${title}" создан.\nПереключиться туда сейчас?`)) {
-      workspaceSwitch(id);
-    }
-  } catch(e) {
-    alert('Create failed: ' + e.message);
   }
 }
 
@@ -3653,13 +3322,11 @@ async function assistInit() {
   // Start neurochem polling (v5d panel)
   assistStartNeurochemPolling();
 
-  // Populate workspace selector (v4)
-  workspaceRefresh();
 }
 
 // ── Activity bar (ручной трекер «что я сейчас делаю») ───────────────────
 // Ground-truth слой: каждая задача → event в activity.jsonl + нода type=activity
-// в текущем workspace-графе. День восстанавливается replay'ем событий.
+// в графе. День восстанавливается replay'ем событий.
 
 let _activityTimerInt = null;
 let _activityStartedAt = null;  // ms epoch, для локального тикания таймера
@@ -4508,8 +4175,8 @@ function _modeMenuEsc(ev) { if (ev.key === 'Escape') closeModeMenu(); }
 // ── Step-deeper actions (power-user operations прямо из чата) ────────
 // Каждое assistant-message получает toolbar с 5 операциями: Elaborate,
 // SmartDC (сомнение), Pump (мост), Think more, Open-in-Graph. Таргет —
-// последние N нод в активном workspace графе (те что были созданы
-// последним /assist call'ом или наибольшие по id).
+// последние N нод в графе (те что были созданы последним /assist call'ом
+// или наибольшие по id).
 
 // Step-deeper actions для ассистент-сообщений. Раньше была горизонтальная
 // панель 5 кнопок под каждой карточкой — оверкилл. Теперь одна «⋯» в
@@ -4519,7 +4186,7 @@ const _STEP_ACTIONS = [
   {act: 'smartdc',   label: '⚖ Сомнение',  desc: 'Pro vs contra + синтез'},
   {act: 'pump',      label: '🔀 Мост',     desc: 'Найти скрытую ось между двумя далёкими нодами'},
   {act: 'more',      label: '➕ Ещё',      desc: 'Сгенерировать N идей на ту же тему'},
-  {act: 'graph',     label: '🕸 Graph',    desc: 'Открыть граф workspace\'a в Lab'},
+  {act: 'graph',     label: '🕸 Graph',    desc: 'Открыть граф в Lab'},
 ];
 
 function assistAttachStepActions(cardDiv) {
@@ -4603,7 +4270,7 @@ async function stepAction(action, btn) {
     })).json();
     const nodes = g.nodes || [];
     if (!nodes.length) {
-      assistAddMsg('system', '⚠ Нет нод в workspace — сначала задай вопрос Baddle.');
+      assistAddMsg('system', '⚠ Нет нод в графе — сначала задай вопрос Baddle.');
       return;
     }
     // Последняя нода — обычно самая свежая

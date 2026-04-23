@@ -1,7 +1,7 @@
 """Sensor stream — универсальный поток сигналов тела.
 
 Было: `HRVManager` держал один источник (simulator или Polar-stub) и
-in-memory deque RR-интервалов. Другие источники (Apple Watch, Oura,
+in-memory deque RR-интервалов. Другие источники (Apple Watch,
 manual check-in) не было куда подключить, данные не персистились.
 
 Стало: любой источник пушит `SensorReading` в единый `SensorStream`.
@@ -12,8 +12,6 @@ rolling window + weighted aggregate. UserState читает отсюда,
 Типы источников (`source` поле):
   polar_h10    — реальный Polar H10 BLE (high-freq RR + accelerometer)
   apple_watch  — Apple Watch HR samples (sparse, ~раз в N мин)
-  oura         — Oura Ring (утренние sleep + HRV snapshots)
-  garmin       — Garmin HR stream
   manual       — check-in форма (energy/focus/stress — юзер ввёл)
   simulator    — sim, dev/demo
 
@@ -45,8 +43,6 @@ SENSOR_FILE = SENSOR_READINGS_FILE
 # Источники — enum-like, но строкой для backward compat
 SOURCE_POLAR       = "polar_h10"
 SOURCE_APPLE       = "apple_watch"
-SOURCE_OURA        = "oura"
-SOURCE_GARMIN      = "garmin"
 SOURCE_MANUAL      = "manual"
 SOURCE_SIMULATOR   = "simulator"
 
@@ -74,7 +70,6 @@ class SensorReading:
     confidence ∈ [0,1] — насколько надёжна выборка:
       - polar_h10/simulator hrv_snapshot: 1.0
       - apple_watch sparse (редко): 0.8
-      - oura morning snapshot: 0.9 (свежий снимок)
       - manual checkin: 0.7 (subjective, но user-reported)
     """
     ts: float

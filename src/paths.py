@@ -1,7 +1,7 @@
 """Единый источник путей ко всем runtime-файлам.
 
-Все runtime-данные живут под `data/` (кроме `graphs/<ws>/` и `workspaces/`,
-у них своя логика). Код ship-with-defaults там где нужно — см. ui.py.
+Все runtime-данные живут под `data/` (кроме `graphs/main/` — граф мыслей,
+state_graph, archive). Код ship-with-defaults там где нужно — см. ui.py.
 """
 import logging
 from pathlib import Path
@@ -23,15 +23,16 @@ PATTERNS_FILE         = DATA_DIR / "patterns.jsonl"
 PLANS_FILE            = DATA_DIR / "plans.jsonl"
 CHAT_HISTORY_FILE     = DATA_DIR / "chat_history.jsonl"
 SENSOR_READINGS_FILE  = DATA_DIR / "sensor_readings.jsonl"
+THROTTLE_DROPS_FILE   = DATA_DIR / "throttle_drops.jsonl"  # когда proactive check
+                                                           # детектил сигнал но
+                                                           # throttle заблокировал
 
 # ── UI defaults (персистентные, но перезаписываемые; см. ui.py fallback) ──
 ROLES_FILE            = DATA_DIR / "roles.json"
 TEMPLATES_FILE        = DATA_DIR / "templates.json"
 
-# ── Workspace=main fallback для StateGraph ─────────────────────────────
-# Когда StateGraph создаётся без base_dir (тесты / единичные вызовы),
-# пишет сюда. В production workspace.load_active_graph() прокидывает
-# base_dir = graphs/<active_ws>/.
+# ── Legacy state-graph fallbacks (используется `/data/reset` для очистки
+# старых расположений; текущий state_graph живёт в `graphs/main/`) ─────
 STATE_GRAPH_FILE           = DATA_DIR / "state_graph.jsonl"
 STATE_EMBEDDINGS_FILE      = DATA_DIR / "state_embeddings.jsonl"
 STATE_GRAPH_ARCHIVE        = DATA_DIR / "state_graph.archive.jsonl"
@@ -62,14 +63,8 @@ def get_resettable_files() -> list[Path]:
         STATE_EMBEDDINGS_FILE,
         STATE_GRAPH_ARCHIVE,
     ]
-    # Per-workspace runtime (graph.json + state_graph.jsonl + solved/)
-    graphs_root = PROJECT_ROOT / "graphs"
-    if graphs_root.exists():
-        for ws in graphs_root.iterdir():
-            if ws.is_dir():
-                paths.append(ws)
-    # Workspace index
-    ws_idx = PROJECT_ROOT / "workspaces" / "index.json"
-    if ws_idx.exists():
-        paths.append(ws_idx)
+    # Граф + state_graph + solved/
+    graph_dir = PROJECT_ROOT / "graphs" / "main"
+    if graph_dir.exists():
+        paths.append(graph_dir)
     return paths

@@ -178,25 +178,6 @@ similarity по goal-text embedding'у, возвращает
 
 ---
 
-## Workspace scoping
-
-`intent_router`, `build_active_context_summary`, `scan_message_for_violations`,
-`try_match_recurring_instance`, `try_detect_constraint_violation` —
-принимают optional `workspace`. Если указан:
-
-- `list_recurring(workspace="work")` отдаёт цели с `workspace="work"`
-  плюс глобальные (без поля `workspace` — видны во всех контекстах)
-- LLM видит только релевантные recurring в subtype-classifier'е
-- Cache router'а ключуется `"{workspace}::{message_key}"` — одно
-  сообщение в разных ws даёт разные результаты
-
-Практически: в workspace=work «сделал стендап» матчится только к
-work-recurring. То же сообщение в personal не триггерит work-цель.
-
-User-flow и примеры — [workspace-design.md § User flow](workspace-design.md).
-
----
-
 ## Background hooks
 
 Фоновые checks через общий `_throttled()`:

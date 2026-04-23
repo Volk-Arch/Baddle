@@ -283,7 +283,6 @@ def graph_add():
         # Store only mode_id — Horizon preset handles behavior (no primitive switches)
         from .modes import get_mode
         from .goals_store import add_goal
-        from .workspace import get_workspace_manager
         mode_id = d.get("mode", "horizon")
         mode_cfg = get_mode(mode_id)
         nodes[new_idx]["mode"] = mode_id
@@ -291,14 +290,9 @@ def graph_add():
 
         # Persistent goal lifecycle: регистрируем в goals_store
         try:
-            ws_id = get_workspace_manager().active_id or "main"
-        except Exception:
-            ws_id = "main"
-        try:
             goal_id = add_goal(
                 text=text,
                 mode=mode_id,
-                workspace=ws_id,
                 priority=d.get("priority"),
                 deadline=d.get("deadline"),
                 category=d.get("category"),
@@ -1195,135 +1189,6 @@ def graph_horizon_feedback():
 
 
 # --------------- tick() — phase-based automatic thinking ---------------
-
-@graph_bp.route("/workspace/list", methods=["GET"])
-def workspace_list():
-    """List all workspaces with active flag + node counts."""
-    from .workspace import get_workspace_manager
-    wm = get_workspace_manager()
-    return jsonify({
-        "workspaces": wm.list_workspaces(),
-        "active": wm.active_id,
-    })
-
-
-@graph_bp.route("/workspace/create", methods=["POST"])
-@json_endpoint
-def workspace_create():
-    """Create a new workspace (directory + meta entry)."""
-    from .workspace import get_workspace_manager
-    d = request.get_json(force=True) or {}
-    ws_id = (d.get("id") or "").strip().lower().replace(" ", "_")
-    if not ws_id:
-        raise APIError("id required")
-    info = get_workspace_manager().create(ws_id, d.get("title", ws_id),
-                                          d.get("tags", []))
-    return {"ok": True, "workspace": info}
-
-
-@graph_bp.route("/workspace/switch", methods=["POST"])
-@json_endpoint
-def workspace_switch():
-    """Switch active workspace. Flushes current, loads target graph into _graph.
-
-    Cross-graph auto-seed: если target content-граф пустой И есть history
-    за последние 7 дней по этому graph_id — подбросим 3 seed-ноды.
-    """
-    from .workspace import get_workspace_manager
-    d = request.get_json(force=True) or {}
-    ws_id = d.get("id", "").strip().lower()
-    auto_seed = bool(d.get("auto_seed", True))
-    if not ws_id:
-        raise APIError("id required")
-    get_workspace_manager().switch(ws_id)
-
-    seeded = None
-    if auto_seed and not _graph.get("nodes"):
-        try:
-            from .cross_graph import seed_from_history
-            seeded = seed_from_history(days=7, limit=3, graph_id=ws_id)
-        except Exception as e:
-            print(f"[workspace/switch] auto-seed failed: {e}")
-
-    return {"ok": True, "active": ws_id, "seeded": seeded}
-
-
-@graph_bp.route("/workspace/save", methods=["POST"])
-def workspace_save():
-    """Flush current _graph to active workspace's graph.json."""
-    from .workspace import get_workspace_manager
-    get_workspace_manager().save_active()
-    return jsonify({"ok": True})
-
-
-@graph_bp.route("/workspace/delete", methods=["POST"])
-@json_endpoint
-def workspace_delete():
-    from .workspace import get_workspace_manager
-    d = request.get_json(force=True) or {}
-    ws_id = d.get("id", "").strip().lower()
-    get_workspace_manager().delete(ws_id)
-    return {"ok": True}
-
-
-@graph_bp.route("/workspace/cross-edges", methods=["GET"])
-def workspace_cross_edges():
-    from .workspace import get_workspace_manager
-    ws_filter = request.args.get("workspace")
-    return jsonify({
-        "edges": get_workspace_manager().list_cross_edges(ws_filter),
-    })
-
-
-@graph_bp.route("/workspace/find-cross", methods=["POST"])
-def workspace_find_cross():
-    """Scan other workspaces for distinct candidates. Saves matches as cross_edges."""
-    from .workspace import get_workspace_manager
-    d = request.get_json(force=True) or {}
-    k = int(d.get("k", 5))
-    tau = float(d.get("tau_in", 0.3))
-    wm = get_workspace_manager()
-    hits = wm.find_cross_candidates(k=k, tau_in=tau)
-    saved = 0
-    for h in hits:
-        if wm.add_cross_edge(h["from_graph"], h["from_node"],
-                             h["to_graph"], h["to_node"], h["d"]):
-            saved += 1
-    return jsonify({"hits": hits, "saved": saved})
-
-
-@graph_bp.route("/workspace/seed-from-history", methods=["POST"])
-def workspace_seed_from_history():
-    """Continuity между сессиями: выводы из state_graph → seeds в текущем графе.
-
-    Body (всё опционально):
-      {
-        "days": 7,            # окно истории
-        "limit": 5,            # максимум seeds
-        "graph_id": "main",    # фильтр по workspace (пусто = любой)
-        "topic_hint": ""       # топик для новых нод
-      }
-
-    Создаёт `rendered=false` ноды с embedding'ами из state_embeddings.
-    provenance: `node.seeded_from = <state_hash>`.
-    """
-    from .cross_graph import seed_from_history
-    d = request.get_json(force=True) or {}
-    result = seed_from_history(
-        days=float(d.get("days", 7)),
-        limit=int(d.get("limit", 5)),
-        graph_id=d.get("graph_id"),
-        topic_hint=(d.get("topic_hint") or "").strip(),
-    )
-    return jsonify(result)
-
-
-@graph_bp.route("/workspace/meta", methods=["GET"])
-def workspace_meta():
-    """Meta-graph: derived view of graph-of-graphs."""
-    from .workspace import get_workspace_manager
-    return jsonify(get_workspace_manager().meta_graph())
-
 
 @graph_bp.route("/graph/self", methods=["GET"])
 def graph_self():

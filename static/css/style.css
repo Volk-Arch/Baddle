@@ -2055,7 +2055,7 @@ select {
   color: #71717a;
 }
 
-/* Settings sub-page: workspace / lang блоки. Стиль общий с HRV sim. */
+/* Settings sub-page блоки (lang и пр.). Стиль общий с HRV sim. */
 .assist-settings-block {
   background: #18181b;
   border: 1px solid #27272a;
@@ -2830,97 +2830,6 @@ select {
   resize: vertical;
   font-family: inherit;
 }
-.workspaces-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 10px;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.workspaces-list .ws-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: #18181b;
-  border: 1px solid #27272a;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: border-color .15s, background .15s;
-}
-.workspaces-list .ws-item:hover {
-  border-color: #4f46e5;
-  background: #1f1f23;
-}
-.workspaces-list .ws-item.active {
-  border-color: #10b981;
-  background: rgba(16,185,129,0.06);
-}
-.workspaces-list .ws-title {
-  flex: 1;
-  min-width: 0;
-}
-.workspaces-list .ws-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #e4e4e7;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.workspaces-list .ws-id {
-  font-size: 10px;
-  color: #52525b;
-  font-family: ui-monospace, monospace;
-  background: #27272a;
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-.workspaces-list .ws-meta {
-  font-size: 11px;
-  color: #71717a;
-  margin-top: 2px;
-}
-.workspaces-list .ws-badge-active {
-  background: #166534;
-  color: white;
-  font-size: 9px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-weight: 500;
-}
-.workspaces-list .ws-nodes {
-  font-size: 18px;
-  font-weight: 700;
-  color: #818cf8;
-  font-variant-numeric: tabular-nums;
-  min-width: 40px;
-  text-align: right;
-}
-.workspaces-list .ws-nodes-label {
-  font-size: 9px;
-  color: #71717a;
-  text-align: right;
-}
-.workspaces-list .ws-actions {
-  display: flex;
-  gap: 4px;
-}
-.workspaces-list .ws-btn {
-  background: transparent;
-  border: 1px solid #3f3f46;
-  color: #a1a1aa;
-  border-radius: 6px;
-  padding: 4px 9px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all .15s;
-}
-.workspaces-list .ws-btn:hover { color: #e4e4e7; border-color: #52525b; }
-.workspaces-list .ws-btn.danger { color: #ef4444; border-color: #7f1d1d; }
-.workspaces-list .ws-btn.danger:hover { background: #450a0a; }
-
 .checkin-history {
   margin-top: 12px;
   padding-top: 10px;

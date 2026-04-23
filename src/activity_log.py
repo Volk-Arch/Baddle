@@ -16,7 +16,7 @@ Baddle знает скаляры (HRV, DA/S/NE, daily_remaining), но не зн
 
 Формат `activity.jsonl` (append-only, как state_graph/goals):
 
-    {"action":"start",  "id","ts","name","category","workspace","node_index"}
+    {"action":"start",  "id","ts","name","category","node_index"}
     {"action":"stop",   "id","ts","reason"}                   # reason="manual"|"switch"|"auto"
     {"action":"update", "id","fields":{name,category,...}}
 
@@ -100,7 +100,7 @@ def _read_all() -> list[dict]:
 def _replay() -> dict[str, dict]:
     """Построить {activity_id: {...}} по event log.
 
-    Поля: id, name, category, workspace, node_index, started_at, stopped_at,
+    Поля: id, name, category, node_index, started_at, stopped_at,
           duration_s, status ("active" | "done").
     """
     state: dict[str, dict] = {}
@@ -117,7 +117,6 @@ def _replay() -> dict[str, dict]:
                 "id": aid,
                 "name": e.get("name", ""),
                 "category": e.get("category"),
-                "workspace": e.get("workspace", "main"),
                 "node_index": e.get("node_index"),
                 "started_at": e.get("ts"),
                 "stopped_at": None,
@@ -160,7 +159,6 @@ def get_active() -> Optional[dict]:
 
 def start_activity(name: str,
                    category: Optional[str] = None,
-                   workspace: str = "main",
                    node_index: Optional[int] = None,
                    _reason: str = "manual") -> str:
     """Начать новую задачу. Если уже есть активная — автоматически стопает её
@@ -184,7 +182,6 @@ def start_activity(name: str,
         "id": aid,
         "name": name,
         "category": cat,
-        "workspace": workspace,
         "node_index": node_index,
     })
     return aid
@@ -198,12 +195,9 @@ def start_activity(name: str,
 
 def try_match_recurring_instance(activity_name: str,
                                   activity_category: Optional[str] = None,
-                                  lang: str = "ru",
-                                  workspace: Optional[str] = None) -> Optional[dict]:
+                                  lang: str = "ru") -> Optional[dict]:
     """Если activity-имя похоже на одну из recurring целей, записать
     instance и вернуть {goal_id, goal_text, progress}. Иначе None.
-
-    workspace: ограничить матчинг целями этого воркспейса (+ глобальные).
 
     Использует `intent_router._classify_subtype_fact` который через LLM
     выбирает подходящую recurring цель из списка (или говорит что не
@@ -217,7 +211,7 @@ def try_match_recurring_instance(activity_name: str,
         log.debug(f"[activity→recurring] import failed: {e}")
         return None
 
-    recs = list_recurring(active_only=True, workspace=workspace)
+    recs = list_recurring(active_only=True)
     # Сужаем по категории если известна (меньше LLM токенов + меньше FP)
     if activity_category:
         recs = [r for r in recs if r.get("category") == activity_category] or recs
@@ -252,13 +246,10 @@ def try_match_recurring_instance(activity_name: str,
 
 
 def try_detect_constraint_violation(activity_name: str,
-                                     lang: str = "ru",
-                                     workspace: Optional[str] = None) -> list[dict]:
+                                     lang: str = "ru") -> list[dict]:
     """Activity → constraint: если имя активности нарушает один из активных
     constraint'ов юзера («Пиво в баре» при constraint «не пью»), пишем
     violation через LLM-скан.
-
-    workspace: ограничить проверку constraints этого воркспейса.
 
     Возвращает список записанных violations — симметрично с
     `scan_message_for_violations` для /assist.
@@ -268,8 +259,7 @@ def try_detect_constraint_violation(activity_name: str,
     except Exception:
         return []
     try:
-        return scan_message_for_violations(activity_name, lang=lang,
-                                             workspace=workspace)
+        return scan_message_for_violations(activity_name, lang=lang)
     except Exception as e:
         log.debug(f"[activity→constraint] scan failed: {e}")
         return []

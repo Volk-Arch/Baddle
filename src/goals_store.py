@@ -1,12 +1,12 @@
 """Persistent goals store — append-only event log.
 
-Цели сейчас живут как ноды `type=goal` в `_graph["nodes"]` — эфемерно:
-умирают при workspace switch, нет aggregation по завершениям. Этот модуль
-добавляет **персистентный реестр событий** над goal-нодами.
+Цели живут как ноды `type=goal` в `_graph["nodes"]`. Этот модуль
+добавляет **персистентный реестр событий** над goal-нодами — создание,
+завершение, instance-трек для recurring, violations для constraints.
 
 Файл: `goals.jsonl`. Каждая строка = одно событие:
 
-    {"action": "create", "id", "workspace", "text", "mode", "priority",
+    {"action": "create", "id", "text", "mode", "priority",
      "deadline", "category", "kind", "schedule", "polarity", "ts"}
     {"action": "complete", "id", "reason", "snapshot_ref", "energy_pct", "ts"}
     {"action": "abandon",  "id", "reason", "ts"}
@@ -139,7 +139,6 @@ def _read_all() -> list[dict]:
 
 def add_goal(text: str,
              mode: str = "horizon",
-             workspace: str = "main",
              priority: Optional[int] = None,
              deadline: Optional[str] = None,
              category: Optional[str] = None,
@@ -168,7 +167,6 @@ def add_goal(text: str,
     entry = {
         "action": "create",
         "id": goal_id,
-        "workspace": workspace,
         "text": (text or "").strip()[:400],
         "mode": mode,
         "priority": priority,
@@ -251,7 +249,7 @@ def update_goal(goal_id: str, fields: dict):
 def _replay() -> dict[str, dict]:
     """Построить current-state dict по event log.
 
-    Возвращает {goal_id: {id, text, mode, workspace, priority, deadline,
+    Возвращает {goal_id: {id, text, mode, priority, deadline,
                           category, kind, schedule, polarity, status,
                           created_at, completed_at, instances, violations}}
     """
@@ -266,7 +264,6 @@ def _replay() -> dict[str, dict]:
                 "id": gid,
                 "text": e.get("text", ""),
                 "mode": e.get("mode"),
-                "workspace": e.get("workspace", "main"),
                 "priority": e.get("priority"),
                 "deadline": e.get("deadline"),
                 "category": e.get("category"),
@@ -309,7 +306,6 @@ def _replay() -> dict[str, dict]:
 
 
 def list_goals(status: Optional[str] = None,
-               workspace: Optional[str] = None,
                category: Optional[str] = None,
                limit: int = 100) -> list[dict]:
     """Current goals, newest first. Optional filters."""
@@ -318,8 +314,6 @@ def list_goals(status: Optional[str] = None,
     items.sort(key=lambda g: g.get("created_at") or 0, reverse=True)
     if status:
         items = [g for g in items if g.get("status") == status]
-    if workspace:
-        items = [g for g in items if g.get("workspace") == workspace]
     if category:
         items = [g for g in items if g.get("category") == category]
     return items[:limit]
