@@ -8,18 +8,87 @@
 
 ---
 
+## 🔄 Документация опережает код
+
+2026-04-23 — при реструктуризации book-docs решено писать «как будто готово». Это сознательный выбор: книга описывает целевое состояние системы, TODO хранит путь к нему. Ниже список где docs сейчас обещают больше чем есть в коде, каждый пункт связан с разделом ниже, где лежит конкретный план.
+
+- [**capacity-design.md**](../docs/capacity-design.md) описывает 3-контурную модель и capacity-zone как live — в коде до сих пор dual-pool (100 + 2000). См. секцию 🧠 Capacity ниже.
+- [**storage-layout.md § Sensor stream**](../docs/storage-layout.md) описывает адаптеры Polar / Apple / Oura / Garmin — в коде готов только симулятор + скелет-классы. См. секцию 🧬 Сенсоры.
+- [**dmn-scout-design.md**](../docs/dmn-scout-design.md) и [**alerts-and-cycles.md**](../docs/alerts-and-cycles.md) не упоминают `_check_dmn_cross_graph` — в коде check ещё живёт. См. секцию 🧹 Упразднить workspace.
+- [**user-model-design.md**](../docs/user-model-design.md) убрал секцию dual-pool, `/assist/simulate-day` описан через capacity-zones — код всё ещё через `debit_energy`. Закрывается тем же пунктом миграции capacity.
+- [**closure-architecture.md**](../docs/closure-architecture.md) не упоминает workspace scoping `intent_router` / `build_active_context_summary` — код принимает optional workspace-параметр. Закрывается workspace-removal.
+
+---
+
 ## 🧹 Упразднить workspace — один граф вместо многопространства
 
-Baddle для одного человека, один контекст. 2 workspace в `graphs/` (`personal-demo` 398 нод, `work-demo` 25 нод) — реально используется один. `WorkspaceManager` + `cross_edges` + `find_cross_candidates` — академическая красота без живого use-case. Upshot: −545 строк `src/workspace.py`, −2 doc'а (`workspace-design.md` + `cross-graph-design.md`), упрощение 7 зависимых файлов. Плюс закрывает OQ #5 (аттракторы workspace → неактуально).
+Baddle для одного человека, один контекст. 2 workspace в `graphs/` (`personal-demo` 398 нод, `work-demo` 25 нод) — реально используется один. `WorkspaceManager` + `cross_edges` + `find_cross_candidates` — академическая красота без живого use-case. Upshot: −545 строк `src/workspace.py`, −2 doc'а уйдут в deprecated, упрощение 7 зависимых файлов. Плюс закрывает OQ #5 (аттракторы workspace → неактуально).
 
 - [ ] Слить `graphs/personal-demo/graph.json` в `graphs/main/graph.json` (или выбрать один как canonical).
 - [ ] Удалить `src/workspace.py` (545 строк).
-- [ ] Удалить `src/cross_graph.py` + `docs/cross-graph-design.md` + `docs/workspace-design.md`.
+- [ ] Удалить `src/cross_graph.py`.
 - [ ] Убрать `WorkspaceManager` вызовы из `assistant.py`, `graph_routes.py` (endpoints `/workspace/*`), `cognitive_loop.py`, `suggestions.py`, `state_graph.py`, `search.py`, `demo.py`.
-- [ ] Убрать `workspace` поле из goals / activity / actions.
-- [ ] UI: убрать workspace-switcher в `index.html` / `lab.html`.
-- [ ] Обновить `README.md`, `docs/README.md`, ссылки в `full-cycle.md`, `closure-architecture.md`, `ontology.md`.
+- [ ] Убрать `_check_dmn_cross_graph` из `cognitive_loop.py` + `DMN_CROSS_GRAPH_INTERVAL` из констант.
+- [ ] Убрать optional `workspace` параметр из `intent_router`, `build_active_context_summary`, `scan_message_for_violations`, `try_match_recurring_instance`, `try_detect_constraint_violation` (closure-architecture doc уже зачищен).
+- [ ] Убрать `workspace` поле из goals / activity / actions; убрать per-workspace scoping из cache router'а.
+- [ ] UI: убрать workspace-switcher в `index.html` / `lab.html`, убрать endpoint'ы `/workspace/*`.
 - [ ] Чистить `data/user_profile.json` — убрать workspace-scoped preferences если были.
+- [ ] `workspaces/index.json` и вся папка `workspaces/` — удалить.
+
+---
+
+## 🧠 Capacity миграция — dual-pool → три контура
+
+Docs описывают 3-контурную модель (физио / эмо / когнитивный) с capacity-zone как decision gate как текущую реализацию. Код — всё ещё dual-pool (`daily_spent` 0..100 + `long_reserve` 0..2000). Задача: привести код к описанному состоянию.
+
+Полная спецификация формул, полей и call-sites — [docs/capacity-design.md](../docs/capacity-design.md). Ниже — фазы миграции.
+
+### Новые поля и методы
+
+- [ ] `UserState.day_summary: dict` — ежедневный агрегат (tasks_started, tasks_completed, context_switches, complexity_sum, progress_delta, engagement_mean, cognitive_load).
+- [ ] `UserState.cognitive_load_today: float` — живой агрегат текущего дня.
+- [ ] `UserState.capacity_zone: str` — derived property (`green` / `yellow` / `red`).
+- [ ] `UserState.capacity_reason: list[str]` — причины при жёлтой/красной.
+- [ ] `UserState.rollover_day()` — полуночный reset, вызывается из полуночного check.
+- [ ] `activity_log.surprise_at_start: float` — снимок модуля surprise-вектора при `start_activity`.
+- [ ] `activity_log.surprise_delta: float` — изменение surprise от старта до конца (на `stop_activity`).
+- [ ] `activity_log.context_switches` — category diff между последовательными запусками.
+
+### Формулы (новые)
+
+- [ ] `cognitive_load_day` — агрегат 6 observable (детали в capacity-design).
+- [ ] `phys_ok / affect_ok / cogload_ok` booleans по порогам EMA.
+- [ ] `capacity_zone` через число выполненных условий (green/yellow/red).
+- [ ] `allowed_modes` через зону (all / medium_or_light / light_only).
+- [ ] Explanation генератор при отказе (phys_ok/affect_ok/cogload_ok fail).
+
+### Фоновые check'и и endpoints
+
+- [ ] `_check_cognitive_load_update` в cognitive_loop — раз в 5 мин пересчитывает cognitive_load_today.
+- [ ] `_check_evening_retro` — расширить отчётом по 6 observable + progress дня.
+- [ ] `_check_daily_briefing` — включить текущее состояние capacity + causal explanation.
+- [ ] `/assist/simulate-day` — переписать через прогноз capacity-зон (не через вычитание энергии).
+
+### Удалить (dual-pool legacy)
+
+- [ ] `daily_spent`, `long_reserve` поля в UserState.
+- [ ] `debit_energy`, `_compute_energy` методы.
+- [ ] `_decision_cost`, `_MODE_COST` таблица в `assistant.py`.
+- [ ] `DAILY_ENERGY_MAX = 100`, `LONG_RESERVE_MAX = 2000` константы.
+- [ ] Старый UI-бар «Энергия» в header.
+
+### UI (новый)
+
+- [ ] Три мини-бара 🟢/🟡/🔴: Физо / Эмо / Когн (вместо единой шкалы «Энергия»).
+- [ ] Explanation в decision-gate отказе (какой контур провисает).
+- [ ] Evening retro с 6 observable + progress_delta как главной метрикой.
+
+### Калибровка
+
+- [ ] Коэффициенты в формуле `cognitive_load_day` — крутить на 2-недельном окне данных.
+- [ ] Пороги `phys_ok / affect_ok / cogload_ok` — калибровать по корреляции с sync_error.
+
+OQ #1 (personal capacity prior) из архитектурных вопросов подключается после миграции — сначала базовая 3-контурная модель работает на хардкод-порогах, потом per-user prior.
 
 ---
 
@@ -59,10 +128,13 @@ Baddle для одного человека, один контекст. 2 worksp
 
 ## 🧬 Сенсоры
 
-MVP stream работает ([hrv-design.md](../docs/hrv-design.md#sensor-stream-multi-source-polymorphism)): `SensorReading{ts, source, kind, metrics, confidence}` + `latest_hrv_aggregate(window_s)` + симулятор.
+MVP stream + симулятор работают ([storage-layout § Sensor stream](../docs/storage-layout.md)): `SensorReading{ts, source, kind, metrics, confidence}` + `latest_hrv_aggregate(window_s)` + weighted multi-source aggregate. Docs описывают адаптеры Polar / Apple / Oura / Garmin как часть системы — в коде это пока скелет-классы в `sensor_adapters.py`.
 
 - [ ] **UserState → sensor stream.** Сейчас `UserState.update_from_hrv` через `hrv_manager.get_baddle_state()`. Мигрировать на `stream.latest_hrv_aggregate()` + `stream.recent_activity()` — любой источник влияет на UserState напрямую. ~15 call-sites. Блокирует реальные адаптеры.
 - [ ] **`PolarH10Adapter`** — `bleak` + `bleakheart`, async BLE loop. Push `rr_ms` + accelerometer. Каждые 15с агрегат через `calculate_hrv_metrics` → `push_hrv_snapshot`. ~2-3ч.
+- [ ] **`AppleWatchAdapter`** — через HealthKit export или Shortcuts API. Sparse HR snapshots. Confidence 0.8. Низкий приоритет — Polar даёт лучшее разрешение.
+- [ ] **`OuraAdapter`** — через официальный API. Утренний snapshot (recovery score, sleep HRV). Confidence 0.9. Для baseline long-trend после пробуждения.
+- [ ] **`GarminAdapter`** — через Connect API или FIT files. Аналогично Apple по характеру данных.
 - [ ] **Polar H10 cone viz с θ/φ** — polyvagal двухпараметрическая визуализация когда реальный сенсор подключён.
 
 ### Расширенная HRV-аналитика
@@ -193,10 +265,6 @@ MVP stream работает ([hrv-design.md](../docs/hrv-design.md#sensor-stream
 
 - **#14 Emergent emotions (отчаяние, радость) из 2D.** (P3/R2) Расселл разбивает 2D-плоскость на квадранты: high-neg-arousal+negative = anger/despair, low-arousal+negative = apathy. Можно назвать зоны и показывать как label. Зависит от #2. Риск: эмоции не должны быть UI-primary — мы не терапевт.
   *Мнение:* **не делать.** Один и тот же point в (V, A) может быть «отчаянием» или «grief» в зависимости от контекста — дискретизация навязчива. Риск false positive «ты в отчаянии» → psychologically concerning. Baddle не терапевт. Координаты пусть будут координаты, без ярлыков.
-
-### Пакет «Capacity: три контура нагрузки»
-
-- [ ] Заменить dual-pool energy (хардкод 100 + 2000) на трёхконтурную модель: физио / эмо / когнитивный, с capacity-зоной как derived state. Миграция фазами (наблюдение → параллельное вычисление → дубляж decision gate → переключение). Подробности, формулы, поля, call-sites в [docs/capacity-design.md](../docs/capacity-design.md).
 
 ### Пакет «Задачный слой — backlog + auto-scheduling»
 

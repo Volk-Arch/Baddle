@@ -171,25 +171,11 @@ Neurochem (системная сторона) эволюционирует по 
 
 ---
 
-## Sensor stream — мульти-источник
-
-**Полиморфный поток замеров** (SensorStream): единый поток от любого источника.
-
-**Замер сенсора** (SensorReading) = (ts, source, kind, metrics, confidence). Виды: rr (каждый beat, high-freq), hrv_snapshot (агрегат, каждые 15 секунд), activity (magnitude 0–5), subjective (manual check-in).
-
-Источники: Polar H10, симулятор, Apple Watch (sparse HR), Oura (утренний snapshot), Garmin, manual. Разные confidence: polar 1.0, apple 0.8, oura 0.9, manual 0.7.
-
-**Взвешенный агрегат** — ключевой для multi-source. Когда одновременно Polar (high-freq) + Apple Watch (sparse) + manual (10 минут назад): вес = confidence × exp(−возраст/τ). Свежее и надёжное получает больший вес.
-
-**Persist:** `data/sensor_readings.jsonl` append-only. RR с high-freq downsample'ятся (каждый 10-й на диск) — иначе гигабайт за день.
-
-**Калибровка.** Per-source baselines: абсолютные значения chest-strap (Polar) и optical (Apple) различаются. Нормализация делается относительно baseline **каждого источника**.
-
----
-
 ## Калибровка
 
 10-минутная сессия: спокойное дыхание → baseline когерентности / RMSSD / LF/HF. Пороги = среднее ± 0.5 стандартных отклонения. Сохраняется в конфиг, обновляется со временем.
+
+Инфраструктура приёма сигналов (SensorStream, адаптеры Polar / Apple / Oura / Garmin, формат persist) описана в [storage-layout § Sensor stream](storage-layout.md).
 
 ---
 
@@ -197,12 +183,8 @@ Neurochem (системная сторона) эволюционирует по 
 
 - [src/hrv_manager.py](../src/hrv_manager.py) — HRVManager с симулятором и скелетом для Polar.
 - [src/hrv_metrics.py](../src/hrv_metrics.py) — `calculate_rmssd`, `calculate_hrv_metrics`, `hrv_to_baddle_state` (mapping в ширину/ориентацию).
-- [src/sensor_stream.py](../src/sensor_stream.py) — SensorStream + SensorReading, взвешенный агрегат, persist.
-- [src/sensor_adapters.py](../src/sensor_adapters.py) — скелет-классы для Polar / Apple / Oura / Garmin.
 - [cognitive_loop._check_hrv_push](../src/cognitive_loop.py) — раз в 15 секунд синхронизирует stream → UserState.
-- Endpoints `/hrv/*`, `/sensor/readings`, `/sensor/aggregate` в [assistant.py](../src/assistant.py) и [graph_routes.py](../src/graph_routes.py).
-
-**Открыто** (см. [TODO § Sensors](../planning/TODO.md)): реальный PolarH10Adapter через `bleak`, cone viz θ/φ при реальном Polar. Миграция `UserState.update_from_hrv` полностью на stream (сейчас параллельно с legacy `hrv_manager`).
+- Endpoints `/hrv/*` в [assistant.py](../src/assistant.py).
 
 ---
 

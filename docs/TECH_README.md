@@ -275,11 +275,11 @@ check в [alerts-and-cycles.md](alerts-and-cycles.md).
 | Слой | Что читать |
 |---|---|
 | **Overview** | [full-cycle](full-cycle.md) — статика + динамика в одном месте |
-| **Основа** | [nand-architecture](nand-architecture.md) → [cone-design](cone-design.md) → [tick-design](tick-design.md) |
-| **Когнитивный** | [horizon](horizon-design.md) → [neurochem](neurochem-design.md) → [symbiosis](symbiosis-design.md) → [user-model](user-model-design.md) → [hrv](hrv-design.md) → [friston-loop](friston-loop.md) |
-| **Память** | [episodic-memory](episodic-memory.md) → [static-storage](static-storage-design.md) → [activity-log](activity-log-design.md) → [ontology](ontology.md) |
-| **Реализация** | [thinking-operations](thinking-operations.md) → [dmn-scout](dmn-scout-design.md) → [cross-graph](cross-graph-design.md) → [workspace](workspace-design.md) → [storage-layout](storage-layout.md) → [closure-architecture](closure-architecture.md) |
-| **Optика проекта** | [world-model](world-model.md) · [action-memory-design](action-memory-design.md) · [alerts-and-cycles](alerts-and-cycles.md) |
+| **Основа** | [nand-architecture](nand-architecture.md) → [cone-design](cone-design.md) → [friston-loop](friston-loop.md) → [tick-design](tick-design.md) |
+| **Когнитивный** | [horizon](horizon-design.md) → [neurochem](neurochem-design.md) → [symbiosis](symbiosis-design.md) → [user-model](user-model-design.md) → [hrv](hrv-design.md) → [capacity](capacity-design.md) → [episodic-memory](episodic-memory.md) |
+| **Память** | [static-storage](static-storage-design.md) → [activity-log](activity-log-design.md) → [task-tracker](task-tracker-design.md) → [ontology](ontology.md) |
+| **Реализация** | [thinking-operations](thinking-operations.md) → [dmn-scout](dmn-scout-design.md) → [storage-layout](storage-layout.md) → [closure-architecture](closure-architecture.md) |
+| **Оптика проекта** | [world-model](world-model.md) · [resonance-model](resonance-model.md) · [action-memory-design](action-memory-design.md) · [alerts-and-cycles](alerts-and-cycles.md) |
 
 ---
 

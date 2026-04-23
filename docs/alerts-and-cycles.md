@@ -14,8 +14,7 @@
 | 2 | `_check_dmn_continuous` | 10 мин † | Idle + низкий NE + граф ≥ 4 нод | `dmn_bridge` (качество выше 0.5) | 🔴 heavy |
 | 3 | `_check_dmn_deep_research` | 30 мин † | Idle + низкий NE + ≥ 1 open goal + граф ≤ 30 | `dmn_deep_research` | 🔴 heavy |
 | 4 | `_check_dmn_converge` | 60 мин † | Idle + низкий NE + граф ≥ 5 нод | `dmn_converge` | 🔴 heavy |
-| 5 | `_check_dmn_cross_graph` | 60 мин † | ≥ 2 workspace'а с embeddings | `dmn_cross_graph` + пишет кросс-рёбра | 🔴 heavy |
-| 6 | `_check_state_walk` | 20 мин † | state_graph ≥ 10 past samples | `state_walk` | 🟡 medium |
+| 5 | `_check_state_walk` | 20 мин † | state_graph ≥ 10 past samples | `state_walk` | 🟡 medium |
 | 7 | `_check_daily_briefing` | 20ч | Утро (≥ wake_hour) + не был сегодня | `morning_briefing` | 🟢 light |
 | 8 | `_check_hrv_push` | 15с | HRV manager активен | — (sync HRV → UserState) | 🟢 light |
 | 9 | `_check_low_energy_heavy` | ~10 мин | Юзер открыл heavy цель при энергии ниже 20 | `low_energy_heavy` | 🟢 light |

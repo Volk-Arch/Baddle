@@ -1,12 +1,11 @@
 # Storage layout — где что лежит
 
-Baddle хранит три ортогональных слоя данных:
+Baddle хранит два слоя данных плюс сенсорный поток:
 
 | Слой | Папка | Что | Scope |
 |---|---|---|---|
-| **Person** | `data/` | Настройки + состояние тела + привычки + цели | один-на-юзера |
-| **Workspace** | `graphs/<ws>/` | Граф мыслей + history тиков + архив | per-проект |
-| **Registry** | `workspaces/index.json` | Список воркспейсов + cross-edges | один-на-юзера |
+| **Person** | `data/` | Настройки + состояние тела + привычки + цели + sensor stream | один-на-юзера |
+| **Graph** | `graphs/main/` | Граф мыслей + история тиков + архив | один на пользователя |
 
 ---
 
@@ -44,12 +43,9 @@ data/
 
 ---
 
-## `graphs/<ws>/` — workspace-level
+## `graphs/main/` — единый граф
 
-Один workspace = одна тема/проект/контекст. «main» дефолтный, юзер
-может создать «work», «personal», «research». Граф мыслей, история
-тиков, архив — **per-workspace**, потому что разные темы не пересекаются
-семантически.
+Граф мыслей, история тиков, архив завершённых целей. Один контекст на пользователя.
 
 ```
 graphs/
@@ -60,49 +56,45 @@ graphs/
     meta.json               # title, tags, created, last_active
     solved/
       {snapshot_ref}.json   # archived goal snapshots
-  work/ ...
-  personal/ ...
 ```
 
-**graph.json** — atomic replace на save. Dirty-flush через `_check_ws_flush`
-(каждые 2 мин) + при `switch()`.
+**graph.json** — atomic replace на save. Dirty-flush через фоновый check (каждые 2 мин) + при значимых событиях.
 
-**state_graph.jsonl** — кто-что-когда системы. Источник истины для
-DMN walks, meta_tick `analyze_tail`, Markov transitions. Полный
-дизайн — [episodic-memory.md](episodic-memory.md).
+**state_graph.jsonl** — кто-что-когда системы. Источник истины для DMN walks, meta_tick `analyze_tail`, Markov transitions. Полный дизайн — [episodic-memory.md](episodic-memory.md).
 
-**solved/** — когда tick эмитит `action=stable, reason=GOAL REACHED`,
-`archive_solved()` пишет полный snapshot (копия графа + tail state_graph
-+ final_synthesis). Юзер открывает в 🎯 → Завершённые.
+**solved/** — когда tick эмитит `action=stable, reason=GOAL REACHED`, `archive_solved()` пишет полный snapshot (копия графа + tail state_graph + final_synthesis). Юзер открывает в 🎯 → Завершённые.
 
 `graphs/*` gitignored кроме `graphs/.gitkeep`.
 
-**Swap семантика при switch(ws):** flush текущего `_graph` → load
-target в RAM → rebind `StateGraph` singleton на новый base_dir.
-UserState / CognitiveState / profile — **не** переключаются
-(person-level).
-
 ---
 
-## `workspaces/index.json` — registry
+## Sensor stream — полиморфный поток сигналов
 
-```json
-{
-  "active_id": "main",
-  "workspaces": { "main": {...}, "work": {...} },
-  "cross_edges": [
-    {"from_graph": "work", "from_node": 3,
-     "to_graph": "personal", "to_node": 7, "d": 0.18}
-  ]
-}
-```
+Сигналы от тела приходят через единый канал, независимый от конкретного устройства. Центральная абстракция — **SensorStream**, в который любой адаптер пушит **SensorReading** одного из заранее известных видов.
 
-**cross_edges** — serendipity bridges, node-пары из разных workspaces
-семантически близкие в embedding space. Создаются DMN'ом
-(`_check_dmn_cross_graph` каждый час). Используются в meta-graph
-(граф-над-графами) для визуализации связей между темами.
+**Запись (SensorReading):** `(ts, source, kind, metrics, confidence)`.
 
-`workspaces/*` gitignored кроме `.gitkeep`.
+| Вид (kind) | Частота | Что внутри |
+|---|---|---|
+| `rr` | каждый удар сердца (high-freq) | интервал между ударами в мс |
+| `hrv_snapshot` | раз в 15 секунд (агрегат) | RMSSD, когерентность, LF/HF, пульс |
+| `activity` | по факту движения | magnitude 0–5 от акселерометра |
+| `subjective` | ручной check-in | тон, активация, свободная заметка |
+
+**Источники (source):** Polar H10, симулятор, Apple Watch, Oura, Garmin, manual. У каждого источника свой confidence по умолчанию: polar 1.0, apple 0.8, oura 0.9, manual 0.7. Абсолютные значения chest-strap (Polar) и optical (Apple) различаются, поэтому нормализация идёт относительно baseline **каждого источника**.
+
+**Взвешенный агрегат.** Когда одновременно доступны Polar (high-freq) + Apple Watch (sparse) + manual (10 минут назад), финальное значение считается с весом `confidence × exp(−возраст/τ)`: свежее и надёжное получает больший вклад. Это ключевая операция stream'а при multi-source setup.
+
+**Persist:** `data/sensor_readings.jsonl` append-only. RR с high-freq downsample'ятся (каждый 10-й на диск) — иначе гигабайт за день. Ring-buffer сырых RR живёт в памяти для онлайн-метрик.
+
+**Синхронизация с состоянием.** Раз в 15 секунд `_check_hrv_push` в `cognitive_loop` берёт `stream.latest_hrv_aggregate()` и кормит UserState (серотонин, норадреналин, activity_zone). Любой источник влияет на состояние через тот же канал.
+
+**Где в коде:**
+- [src/sensor_stream.py](../src/sensor_stream.py) — SensorStream + SensorReading, взвешенный агрегат, persist
+- [src/sensor_adapters.py](../src/sensor_adapters.py) — адаптеры Polar / Apple / Oura / Garmin
+- Endpoints `/sensor/readings`, `/sensor/aggregate` в [graph_routes.py](../src/graph_routes.py)
+
+Физиологическая интерпретация сигналов — в [hrv-design.md](hrv-design.md).
 
 ---
 
@@ -121,17 +113,11 @@ UserState / CognitiveState / profile — **не** переключаются
       API backend    execute_deep (chat)
            │                 │
            ▼                 ▼
-┌─────── Workspace (graphs/<ws>/) ──────┐
+┌─────── Graph (graphs/main/) ──────────┐
 │  graph.json         ← writes nodes    │
 │  state_graph.jsonl  ← writes ticks    │
 │  state_embeddings   ← lazy cache      │
 │  solved/*.json      ← goal snapshots  │
-└──────────┬─────────────────────────────┘
-           │
-    reads DMN cross-scan
-           ▼
-┌─── Registry (workspaces/index.json) ──┐
-│  cross_edges: [...]                   │
 └───────────────────────────────────────┘
 ```
 
@@ -146,10 +132,10 @@ UserState / CognitiveState / profile — **не** переключаются
 | `data/user_profile.json` | per-request в `/profile/*`, без кэша |
 | `data/goals.jsonl` | `list_goals()` стримом (rotate при > 2MB) |
 | `data/roles.json`, `templates.json` | на каждый `/roles`, `/templates` endpoint |
-| `graphs/<ws>/graph.json` | один раз на старте; RAM — `_graph` dict |
-| `graphs/<ws>/state_graph.jsonl` | append per tick; read через `read_all()` / `tail(n)` |
-| `graphs/<ws>/solved/*.json` | scan на `list_solved()` |
-| `workspaces/index.json` | при import `workspace` + каждый CRUD |
+| `data/sensor_readings.jsonl` | stream append на каждый sensor reading, read через `latest_hrv_aggregate()` |
+| `graphs/main/graph.json` | один раз на старте; RAM — `_graph` dict |
+| `graphs/main/state_graph.jsonl` | append per tick; read через `read_all()` / `tail(n)` |
+| `graphs/main/solved/*.json` | scan на `list_solved()` |
 
 ---
 
@@ -157,18 +143,12 @@ UserState / CognitiveState / profile — **не** переключаются
 
 `POST /data/reset` с body `{"confirm":"RESET"}` удаляет:
 - Всё в `data/` кроме `settings.json`, `roles.json`, `templates.json`
-- Все `graphs/<ws>/` папки
-- `workspaces/index.json`
+- Папку `graphs/main/`
 
-Сохраняет: `data/settings.json` (API config), `data/roles.json` +
-`data/templates.json` (перезапишутся из defaults если удалить и
-рестартнуть).
+Сохраняет: `data/settings.json` (API config), `data/roles.json` + `data/templates.json` (перезапишутся из defaults если удалить и рестартнуть).
 
-После reset рекомендуется рестарт процесса — runtime singletons
-(`_graph`, `CognitiveState`, `UserState`) пересоздадутся. Без рестарта
-endpoint резетит их через `reset_graph()` + `set_global_state`, но
-workspace manager проще перезапустить.
+После reset рекомендуется рестарт процесса — runtime singletons (`_graph`, `CognitiveState`, `UserState`) пересоздадутся. Без рестарта endpoint резетит их через `reset_graph()` + `set_global_state`.
 
 ---
 
-**Навигация:** [← Workspace](workspace-design.md) · [Индекс](README.md) · [Closure architecture →](closure-architecture.md)
+**Навигация:** [← DMN / Scout](dmn-scout-design.md) · [Индекс](README.md) · [Closure architecture →](closure-architecture.md)

@@ -1,5 +1,10 @@
 # Cross-graph seed — continuity между сессиями
 
+> **Deprecated.** Cross-graph seed зависел от переключения между
+> workspace'ами. После упразднения workspace (см. [workspace-design.md](workspace-design.md))
+> механизм теряет смысл — в одном графе continuity обеспечивается самим
+> графом и state_graph-архивом. Документ оставлен как архив.
+
 > Новая сессия не с пустого листа. Что Baddle решила вчера, остаётся
 > доступным сегодня — как seed-ноды с унаследованными embedding'ами.
 > Это не импорт документа и не LLM-résumé, а перенос позиций в

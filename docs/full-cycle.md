@@ -91,7 +91,7 @@
 - **`goals.jsonl` растёт монотонно.** Consolidation архивит state_graph, но не goals. Для лет-пользования нужна ротация.
 - **Embedding-кэш content-графа не персистится.** `_graph["embeddings"]` только в памяти, пересчитывается при старте. Embeddings state-графа — да, в `state_embeddings.jsonl`.
 - **LLM-parse профиля может галлюцинировать.** Fallback на split если LLM промажет формат. Пользователь видит результат в 👤 и правит вручную.
-- **Multi-workspace + UserState.** UserState глобальный per-person — переключение workspace его не меняет (HRV один на человека). Профиль тоже один — разные preferences для work vs personal не поддерживаются.
+- **Один пользователь — один контекст.** UserState глобальный per-person (HRV один на человека), профиль один — один набор preferences на всю систему. Baddle не поддерживает мульти-контексты, и не стремится: попытка разделить work / personal так и не получила живого use-case.
 - **`cognitive_loop.tick_foreground`** синхронный в request-контексте Flask. Thread-safety через `graph_lock` в `_add_node` / `_remove_node`, остальное полагается на GIL.
 
 Реестр workstreams — [planning/TODO.md](../planning/TODO.md).
@@ -108,7 +108,7 @@
 
 **Операции:** [pump_logic.py](../src/pump_logic.py) + SmartDC + embedding-first → [thinking-operations.md](thinking-operations.md).
 
-**Граф / persistence:** [graph_logic.py](../src/graph_logic.py) + [state_graph.py](../src/state_graph.py) + [consolidation.py](../src/consolidation.py) + [workspace.py](../src/workspace.py) + [cross_graph.py](../src/cross_graph.py) → [nand-architecture.md](nand-architecture.md), [episodic-memory.md](episodic-memory.md), [workspace-design.md](workspace-design.md).
+**Граф / persistence:** [graph_logic.py](../src/graph_logic.py) + [state_graph.py](../src/state_graph.py) + [consolidation.py](../src/consolidation.py) → [nand-architecture.md](nand-architecture.md), [episodic-memory.md](episodic-memory.md).
 
 **UI:** `templates/index.html`, `static/js/{assistant,graph,modes}.js`, `static/css/style.css`.
 

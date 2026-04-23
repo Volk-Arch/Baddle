@@ -1,5 +1,10 @@
 # Multi-graph Workspaces
 
+> **Deprecated.** Baddle работает для одного человека с одним контекстом.
+> Multi-graph концепция так и не получила живого use-case: два workspace
+> в `graphs/` реально использовались как один. Код удаляется, этот
+> документ оставлен как архив. См. [planning/TODO § Упразднить workspace](../planning/TODO.md).
+
 Несколько параллельных графов + привычек + ограничений. Переключение
 через UI. Cross-graph bridges через DMN. Meta-graph как derived view.
 

@@ -171,4 +171,4 @@ curl http://localhost:7860/assist/prime-directive?window_days=1
 
 ---
 
-**Навигация:** [← Capacity](capacity-design.md) · [Индекс](README.md) · [Следующее: Episodic memory →](episodic-memory.md)
+**Навигация:** [← Cone design](cone-design.md) · [Индекс](README.md) · [Следующее: Tick →](tick-design.md)
