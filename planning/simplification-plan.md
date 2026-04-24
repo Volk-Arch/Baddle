@@ -7,9 +7,9 @@
 ## Статус
 
 - **Фаза A (metric registry)** — ✅ **Завершена 2026-04-24.** `src/metrics.py` + 21 EMA мигрирована в три registries (UserState / Neurochem / ProtectiveFreeze). Identity-тесты bit-identical. Consolidation post-merge: `checkins.py` + `assistant.py:2028` (plan-difficulty feedback был silently broken) мигрированы на `fire_event` + shared helper `apply_subjective_surprise`. Правило 2 из §4 реализовано.
-- **Фаза B (Signal dispatcher)** — ⏸ ожидает данных из `throttle_drops.jsonl` (логгер step #1 добавлен, файл накапливается по мере use).
+- **Фаза B (Signal dispatcher)** — 🔨 **в активной работе.** Спека: [phase-b-signal-dispatcher.md](phase-b-signal-dispatcher.md). 2-недельное ожидание данных throttle_drops отменено — калибровка `compute_urgency` через 2 нед после merge'а, не до имплементации. Эвристики для первой версии формул заданы в спеке.
 - **Capacity migration** — 🔜 после Фазы B (будет тонкой через registry).
-- **Код-чистка (21 check → 21 детектор, throttle-константы, `_last_*` timestamps)** — проходит **в Фазе B**, не раньше.
+- **Код-чистка (13 alert-emitting check → 13 детекторов, 10+ throttle-констант, ~12 `_last_*` timestamps)** — проходит **в Фазе B**, не раньше.
 
 ---
 

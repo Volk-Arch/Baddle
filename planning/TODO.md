@@ -1,6 +1,6 @@
 # TODO
 
-> **⚠ Читать первым: [simplification-plan.md](simplification-plan.md).** Consolidation phase. **Фаза A завершена 2026-04-24** (metric registry + checkins/assistant consolidation). Следующая цель — **Фаза B** (Signal dispatcher), ждёт 2 нед данных из `throttle_drops.jsonl` для калибровки `compute_urgency`. Большинство пунктов ниже **заморожены** — берутся после Фазы B. Нарушение дисциплины = возврат к 20k строк.
+> **⚠ Читать первым: [simplification-plan.md](simplification-plan.md).** Consolidation phase. **Фаза A завершена 2026-04-24** (metric registry + checkins/assistant consolidation). **Фаза B** (Signal dispatcher, 13 детекторов + attention budget) — в активной работе; спека: [phase-b-signal-dispatcher.md](phase-b-signal-dispatcher.md), имплементация следующая. 2-недельное ожидание данных throttle_drops — отменено (калибровка urgency через 2 нед реального use после merge). Большинство пунктов ниже **заморожены** до завершения Фазы B. Нарушение дисциплины = возврат к 20k строк.
 
 ## 🎯 Прайм-директива
 
@@ -19,7 +19,7 @@
 Единая точка входа для «как система ведёт себя прямо сейчас»:
 
 - **`GET /assist/prime-directive?window_days=30&daily=1`** — главный дашборд. Сейчас возвращает: `mean_ema_slow`, `trend_verdict` (improving/stable/worsening), `mean_pe_user / _self / _agency / _hrv`, daily breakdown.
-- **`data/throttle_drops.jsonl`** — append-only лог случаев когда proactive check детектил сигнал, но throttle заблокировал emission. Формат `{"ts", "check", "ctx": {reason, urgency-hints}}`. Пишется из `sync_seeking`, `recurring_lag`, `observation_suggestion` (2026-04-23). Читаем через 2 нед — какая доля дропов high-urgency (silence=0.9, lag=5, 3+ items над cap'ом) vs noise (silence=0.32, dedup через пару минут).
+- **`data/throttle_drops.jsonl`** — append-only лог случаев когда proactive check детектил сигнал, но throttle заблокировал emission. Формат `{"ts", "check", "ctx": {reason, urgency-hints}}`. До Фазы B — из 3 check'ов (`sync_seeking`, `recurring_lag`, `observation_suggestion`); после Фазы B — из всех 13 детекторов через dispatcher natively. Через 2 нед после merge'а Фазы B калибруем `compute_urgency` формулы.
 
 Что планируется добавить туда же по мере появления механик:
 
@@ -33,55 +33,21 @@
 
 ---
 
-## 🚦 Throttle — лучше сигналить по urgency, не по времени (планируется)
+## 🚦 Фаза B — Signal dispatcher (активная)
 
-Сейчас все proactive check'и режут по константным интервалам (`SYNC_SEEKING_INTERVAL=2h`, `RECURRING_LAG_CHECK_INTERVAL=30m`, `SUGGESTIONS_MAX_PER_DAY=2` и т.д.). Проблема: **уровень сигнала не учитывается**. sync_seeking при silence=0.92 + HRV-crash режется тем же 2-часовым gate'ом что и обычный silence=0.4. 3-й паттерн observation_suggestion выкидывается вместе с мусором после max=2.
+Все proactive check'и сейчас режут по константным интервалам (`SYNC_SEEKING_INTERVAL=2h`, `RECURRING_LAG_CHECK_INTERVAL=30m`, `SUGGESTIONS_MAX_PER_DAY=2` и т.д.) — уровень сигнала не учитывается. Старые step'ы #1/#2/#3 объединены в одну миграцию.
 
-**Сделано (step #1, 2026-04-23):** throttle-drop logger — см. `data/throttle_drops.jsonl` выше. Собираем 2 недели данных → анализ → решение.
+**Подробная спека:** [phase-b-signal-dispatcher.md](phase-b-signal-dispatcher.md) — 13 детекторов (pure functions) + Dispatcher (urgency sort + attention budget + dedup + expires_at) + `compute_urgency` эвристики.
 
-### Step #2 (отложено, зависит от данных): urgency-scaled throttle
+**Шаги миграции (11-14ч):**
+1. `src/signals.py` (Signal + Dispatcher + unit-тесты) — 2ч
+2. DetectorContext + DETECTORS registry — 1ч
+3. 13 детекторов (easy→hard) — 4-5ч
+4. Переписать `_loop()` — 1-2ч
+5. Удалить мёртвый код (10+ `*_INTERVAL` + ~12 `_last_*` + старый `_log_throttle_drop`) — 1ч
+6. Integration + smoke — 2-3ч
 
-Каждый `_add_alert({...})` получает поле `urgency: float ∈ [0, 1]`, computed из контекста:
-- `sync_seeking`: urgency = f(silence_pressure, idle_hours, HRV_delta)
-- `recurring_lag`: urgency = f(lag_count, days_since_last_completion)
-- `observation_suggestion`: urgency = f(pattern_strength, trigger_novelty)
-- `dmn_bridge`: urgency = f(bridge_quality)
-
-Throttle перестаёт быть константой:
-```
-effective_interval = BASE_INTERVAL / (0.5 + urgency)
-```
-- urgency = 0.5 (стандарт) → нормальный интервал
-- urgency = 1.0 → 2/3 интервала (ускоряем)
-- urgency = 0.0 → 2× интервал (замедляем шум)
-
-Плюс **critical override**: `urgency > 0.9` пропускается мимо throttle полностью. Настоящий инсайт не теряется.
-
-**Оценка:** ~2-3ч. Затрагивает 8-10 alert-emitting check'ов.
-
-**Делать только если** throttle_drops.jsonl покажет что high-urgency события регулярно теряются. Если дропы — мусор, step #2 не нужен.
-
-### Step #3 (отложено, после step #2 и 1-2 мес данных): priority queue dispatcher
-
-Архитектурная трансформация. Каждый check перестаёт эмитить alert напрямую. Вместо этого кладёт **candidate** в очередь `pending_alerts` с полями:
-- `type` — sync_seeking / dmn_bridge / pattern_alert / ...
-- `urgency` — 0..1
-- `content` — текст + метаданные
-- `expires_at` — через какое время сигнал теряет актуальность (DMN-мост 2 часа спустя — уже не нужен)
-- `dedup_key` — чтобы не дублировать одинаковые candidates
-
-Отдельный dispatcher-цикл раз в минуту:
-1. Чистит expired candidates
-2. Сортирует по urgency desc
-3. Применяет глобальный attention-budget (не больше N alert'ов за окно M минут, где N/M — функция burnout/freeze)
-4. Шлёт top-K что прошли фильтр
-5. Остальное либо ждёт следующего окна либо выкидывается как stale
-
-**Эффект:** система видит все сигналы, выбирает какие показать по их относительной важности и свободному attention-budget'у юзера. DMN-мост quality=0.85 пройдёт даже если за 20 минут до этого был morning_briefing, потому что его urgency выше.
-
-**Оценка:** ~1-2 дня рефакторинга. Затрагивает структуру alert-emission во всех 12+ check'ах + новый dispatcher module + возможно UI (attention-budget visible к юзеру).
-
-**Делать только если** step #2 не хватает: urgency-scaling убирает большинство ложных дропов, но теряется возможность расставлять приоритеты между одновременными сигналами разного типа. Если из throttle_drops.jsonl видно что проблема именно в «одновременно DMN-мост + recurring_lag + observation — кто важнее», то нужен dispatcher.
+**После merge:** 2 нед реального use → калибровка `compute_urgency` по реальным дропам в `throttle_drops.jsonl`.
 
 ---
 
@@ -159,9 +125,8 @@ OQ #1 (personal capacity prior) из архитектурных вопросов
 ## 📌 Задачи
 - [ ] **Embeddings** Убрать хранение embeddings
 - [ ] **Унифицировать связи графов и их хранения** Очень много файлов непонятно зачем
-- [ ] **Все формулы в один файл для наглядности.** Сейчас математика разбросана: γ в `neurochem.py`, EMA-константы в `ema.py`, precision/T в `horizon.py`, RMSSD/LF-HF в `hrv_metrics.py`, distinct в `main.py`, expectation/surprise в `user_state.py`, Bayesian update в `graph_logic.py`. Сделать `src/formulas.py` — pure-functions helpers (`compute_gamma(NE, S)`, `compute_effective_precision(raw, maturity)`, `bayes_update_logit(prior, d, gamma)`, `compute_cognitive_load(events)`, и т.д.). Объекты state (Neurochem / CognitiveState / UserState) вызывают их, сами держат только данные и диспетчеризацию. Одна точка для чтения всей математики + калибровка констант рядом. ~3ч, средний риск (затрагивает 5+ модулей).
+- [ ] **Pure-function formulas в один файл.** EMA-часть закрыта Фазой A (все EMA в `src/metrics.py` registry). Остались разбросаны: γ в `neurochem.py`, precision/T в `horizon.py`, RMSSD/LF-HF в `hrv_metrics.py`, distinct в `main.py`, Bayesian update в `graph_logic.py`, cognitive_load (в capacity migration). Сделать `src/formulas.py` — pure-functions helpers (`compute_gamma(NE, S)`, `compute_effective_precision(raw, maturity)`, `bayes_update_logit(prior, d, gamma)`, `compute_cognitive_load(events)`). Объекты state вызывают их, сами держат только данные. ~2ч (меньше после Фазы A), средний риск. После Фазы B.
 - [ ] **Desktop notifications.** Alerts работают только пока вкладка открыта. Закрыл → morning briefing / DMN-мосты / night cycle уходят в пустоту. MVP: `pystray` + `plyer` (иконка в трее + OS toast). ~2-3ч.
-- [ ] **Alerts coverage — проверить что 21 check работает.** `/debug/alerts/trigger-all` показывал 10 silent_ok на demo-данных. Пройтись по каждому, покрыть пустые условия или пометить «not applicable on empty state». ~2ч.
 - [ ] **Patterns × intent_router auto-abandon.** Если детектор нашёл паттерн, но юзер молчит 2+ недели — убирать предложение чтобы не накапливались старые alerts. ~1ч.
 - [ ] **Constraint expansion через LLM.** Юзер добавил `"лактоза"` → LLM раз генерит синонимы `["молоко", "кефир", "сметана", ...]` → сохранить в `profile.categories[cat].constraints_expanded`. `profile_summary_for_prompt` инжектит расширенный вид. Закрывает кейс «8B Q4 предложила кефир как замену молока» (2026-04-24). ~1-2ч.
 - [ ] **Auto-parse constraints из message.** «не ем / аллергия / не перевариваю / без X» в чате → LLM-parse → draft-card через существующий `make_draft_card` flow → юзер подтверждает. Закрывает случай когда ограничение упомянуто в чате но не закреплено в профиле. ~2ч.
