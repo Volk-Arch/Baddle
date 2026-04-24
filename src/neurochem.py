@@ -1,8 +1,8 @@
 """Нейрохимия второго мозга — три скаляра, γ derived, burnout отдельно.
 
-Decay константы и EMA-механика — в [src/ema.py](ema.py) (с 2026-04-23).
-ProtectiveFreeze использует EMA/VectorEMA classes для feed'ов, open-coded
-formulas в этом файле убраны.
+Все EMA-метрики живут в `self.metrics: MetricRegistry` (2026-04-24, Фаза A
+из planning/simplification-plan.md). Правило 2: «любая производная метрика
+это `EMA(source_event, decay)`». Обновления идут через `fire_event(type, **payload)`.
 
 Максимально простой контракт. Каждая формула — одна строка EMA.
 
@@ -35,6 +35,78 @@ import math
 import numpy as np
 
 from .ema import EMA, VectorEMA, Decays, TimeConsts
+from .metrics import MetricRegistry
+
+
+# ── Extractors (module-level, pure functions) ──────────────────────────────
+
+def _extract_d(payload: dict):
+    """dopamine feeder: raw distinct() value, when provided."""
+    return payload.get("d")
+
+
+def _extract_stability(payload: dict):
+    """serotonin feeder: 1 - std(w_change) ∈ [0, 1]. None если w_change пуст."""
+    wc = payload.get("w_change")
+    if wc is None:
+        return None
+    arr = np.asarray(list(wc), dtype=np.float32)
+    if arr.size == 0:
+        return None
+    return max(0.0, 1.0 - float(np.std(arr)))
+
+
+def _extract_entropy_norm(payload: dict):
+    """norepinephrine feeder: normalized entropy of weights ∈ [0, 1]."""
+    w = payload.get("weights")
+    if w is None:
+        return None
+    arr = np.asarray(list(w), dtype=np.float32)
+    if arr.size == 0:
+        return None
+    arr = np.clip(arr, 1e-9, 1.0)
+    total = float(np.sum(arr))
+    if total <= 0:
+        return None
+    pnorm = arr / total
+    ent = -float(np.sum(pnorm * np.log(pnorm + 1e-9)))
+    max_ent = float(np.log(max(2, arr.size)))
+    return min(1.0, ent / max_ent) if max_ent > 0 else 0.0
+
+
+def _extract_vector(payload: dict):
+    """self_expectation_vec feeder: текущий neurochem vector."""
+    return payload.get("vector")
+
+
+def _build_neurochem_registry(dopamine: float,
+                                serotonin: float,
+                                norepinephrine: float) -> MetricRegistry:
+    """Factory: построить registry с initials и подписками."""
+    reg = MetricRegistry()
+    reg.register(
+        "dopamine",
+        EMA(dopamine, decay=Decays.NEURO_DOPAMINE, bounds=(0.0, 1.0)),
+        listens=[("graph_update", _extract_d)],
+    )
+    reg.register(
+        "serotonin",
+        EMA(serotonin, decay=Decays.NEURO_SEROTONIN, bounds=(0.0, 1.0)),
+        listens=[("graph_update", _extract_stability)],
+    )
+    reg.register(
+        "norepinephrine",
+        EMA(norepinephrine, decay=Decays.NEURO_NOREPINEPHRINE,
+            bounds=(0.0, 1.0)),
+        listens=[("graph_update", _extract_entropy_norm)],
+    )
+    reg.register(
+        "self_expectation_vec",
+        VectorEMA([0.5, 0.5, 0.5], decay=Decays.SELF_EXPECTATION,
+                  bounds=(0.0, 1.0)),
+        listens=[("tick", _extract_vector)],
+    )
+    return reg
 
 
 class Neurochem:
@@ -46,9 +118,10 @@ class Neurochem:
     UserState.expectation_vec. Питается через `tick_expectation()`,
     вызывается из cognitive_loop._advance_tick параллельно с user EMA.
 
-    **Implementation note (2026-04-23):** три скаляра и vector хранятся
-    как `EMA` / `VectorEMA` objects. Publicly exposed как float/array
-    properties. Decay константы — в `src.ema.Decays`.
+    **Implementation note (2026-04-24):** все EMA живут в `self.metrics`
+    (MetricRegistry). Обновления через `fire_event("graph_update", ...)` /
+    `fire_event("tick", vector=...)`. Properties `.dopamine` / `.serotonin` /
+    `.norepinephrine` / `.expectation_vec` — backward-compat.
     """
 
     RPE_WINDOW = 20    # скользящее окно для baseline Δconfidence
@@ -58,60 +131,48 @@ class Neurochem:
                  dopamine: float = 0.5,
                  serotonin: float = 0.5,
                  norepinephrine: float = 0.5):
-        self._dopamine_ema = EMA(
-            dopamine, decay=Decays.NEURO_DOPAMINE, bounds=(0.0, 1.0)
-        )
-        self._serotonin_ema = EMA(
-            serotonin, decay=Decays.NEURO_SEROTONIN, bounds=(0.0, 1.0)
-        )
-        self._norepinephrine_ema = EMA(
-            norepinephrine, decay=Decays.NEURO_NOREPINEPHRINE, bounds=(0.0, 1.0)
-        )
+        self.metrics = _build_neurochem_registry(
+            dopamine, serotonin, norepinephrine)
         self._delta_history: list = []
         self.recent_rpe: float = 0.0
-        # Self-expectation: что Baddle сама от себя ожидает.
-        self._expectation_vec_ema = VectorEMA(
-            [0.5, 0.5, 0.5],
-            decay=Decays.SELF_EXPECTATION,
-            bounds=(0.0, 1.0),
-        )
 
     # ── Backward-compat read/write accessors ───────────────────────────────
 
     @property
     def dopamine(self) -> float:
-        return self._dopamine_ema.value
+        return float(self.metrics.value("dopamine"))
 
     @dopamine.setter
     def dopamine(self, v: float):
-        self._dopamine_ema.value = max(0.0, min(1.0, float(v)))
+        self.metrics.get("dopamine").value = max(0.0, min(1.0, float(v)))
 
     @property
     def serotonin(self) -> float:
-        return self._serotonin_ema.value
+        return float(self.metrics.value("serotonin"))
 
     @serotonin.setter
     def serotonin(self, v: float):
-        self._serotonin_ema.value = max(0.0, min(1.0, float(v)))
+        self.metrics.get("serotonin").value = max(0.0, min(1.0, float(v)))
 
     @property
     def norepinephrine(self) -> float:
-        return self._norepinephrine_ema.value
+        return float(self.metrics.value("norepinephrine"))
 
     @norepinephrine.setter
     def norepinephrine(self, v: float):
-        self._norepinephrine_ema.value = max(0.0, min(1.0, float(v)))
+        self.metrics.get("norepinephrine").value = max(0.0, min(1.0, float(v)))
 
     @property
     def expectation_vec(self) -> np.ndarray:
-        return self._expectation_vec_ema.value
+        return self.metrics.value("self_expectation_vec")
 
     @expectation_vec.setter
     def expectation_vec(self, v):
         """Direct assign — для legacy from_dict."""
         arr = np.asarray(v, dtype=np.float32)
-        if arr.shape == self._expectation_vec_ema.value.shape:
-            self._expectation_vec_ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
+        ema = self.metrics.get("self_expectation_vec")
+        if arr.shape == ema.value.shape:
+            ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
 
     # ── Updates ─────────────────────────────────────────────────────────
 
@@ -127,39 +188,22 @@ class Neurochem:
 
         Любой аргумент может быть None — соответствующий скаляр не обновится.
         """
-        if d is not None:
-            self._dopamine_ema.feed(float(d))
-
-        if w_change is not None:
-            arr = np.asarray(list(w_change), dtype=np.float32)
-            if arr.size:
-                stability = max(0.0, 1.0 - float(np.std(arr)))
-                self._serotonin_ema.feed(stability)
-
-        if weights is not None:
-            arr = np.asarray(list(weights), dtype=np.float32)
-            if arr.size:
-                arr = np.clip(arr, 1e-9, 1.0)
-                total = float(np.sum(arr))
-                if total > 0:
-                    p = arr / total
-                    ent = -float(np.sum(p * np.log(p + 1e-9)))
-                    max_ent = float(np.log(max(2, arr.size)))
-                    ent_norm = min(1.0, ent / max_ent) if max_ent > 0 else 0.0
-                    self._norepinephrine_ema.feed(ent_norm)
+        self.metrics.fire_event(
+            "graph_update",
+            d=d,
+            w_change=w_change,
+            weights=weights,
+        )
 
     # ── Self-prediction (Friston-loop симметрия) ─────────────────────────
 
     def vector(self) -> np.ndarray:
         """3D текущее состояние. Зеркально UserState.vector()."""
-        return np.array(
-            [self.dopamine, self.serotonin, self.norepinephrine],
-            dtype=np.float32,
-        )
+        return self.metrics.vector(["dopamine", "serotonin", "norepinephrine"])
 
     def tick_expectation(self):
         """Обновить self-baseline. Вызывается из cognitive_loop._advance_tick."""
-        self._expectation_vec_ema.feed(self.vector())
+        self.metrics.fire_event("tick", vector=self.vector())
 
     @property
     def self_surprise_vec(self) -> np.ndarray:
@@ -201,9 +245,10 @@ class Neurochem:
         else:
             predicted = actual   # первый раз — RPE=0, просто записываем
         rpe = actual - predicted
-        # RPE — additive bump not EMA, direct value mutation + clamp
-        self._dopamine_ema.value = max(0.0, min(1.0,
-            self._dopamine_ema.value + self.RPE_GAIN * rpe))
+        # RPE — additive bump not EMA, direct value mutation + clamp.
+        # Side effect остаётся bespoke (см. planning/phase-a-metric-registry § 6).
+        da = self.metrics.get("dopamine")
+        da.value = max(0.0, min(1.0, da.value + self.RPE_GAIN * rpe))
         self.recent_rpe = rpe
         self._delta_history.append(actual)
         if len(self._delta_history) > self.RPE_WINDOW:
@@ -252,6 +297,61 @@ class Neurochem:
         return n
 
 
+# ── ProtectiveFreeze ───────────────────────────────────────────────────────
+
+def _extract_conflict(payload: dict):
+    """conflict_accumulator feeder: (d - TAU_STABLE)+ * (1 - serotonin)."""
+    d = payload.get("d")
+    if d is None:
+        return None
+    s = payload.get("serotonin", 0.5)
+    conflict_signal = max(0.0, float(d) - ProtectiveFreeze.TAU_STABLE)
+    instability = max(0.0, 1.0 - float(s))
+    return conflict_signal * instability
+
+
+def _extract_imbalance_dt(payload: dict):
+    """imbalance_pressure feeder: (|imbalance|, dt)-tuple для time-const EMA."""
+    dt = payload.get("dt")
+    if dt is None or dt <= 0:
+        return None
+    return (abs(float(payload.get("imbalance", 0.0))), float(dt))
+
+
+def _extract_sync_dt(payload: dict):
+    """sync_error EMA feeder: (sync_err/√3, dt)-tuple. Нормализация ~[0,√3]→[0,1]."""
+    dt = payload.get("dt")
+    if dt is None or dt <= 0:
+        return None
+    s = max(0.0, min(1.0, float(payload.get("sync_err", 0.0)) / 1.732))
+    return (s, float(dt))
+
+
+def _build_freeze_registry() -> MetricRegistry:
+    reg = MetricRegistry()
+    reg.register(
+        "conflict_accumulator",
+        EMA(0.0, decay=Decays.NEURO_CONFLICT_ACCUMULATOR, bounds=(0.0, 1.0)),
+        listens=[("conflict_update", _extract_conflict)],
+    )
+    reg.register(
+        "imbalance_pressure",
+        EMA(0.0, time_const=TimeConsts.IMBALANCE, bounds=(0.0, 1.0)),
+        listens=[("feed_tick", _extract_imbalance_dt)],
+    )
+    reg.register(
+        "sync_error_fast",
+        EMA(0.0, time_const=TimeConsts.SYNC_EMA_FAST, bounds=(0.0, 1.0)),
+        listens=[("feed_tick", _extract_sync_dt)],
+    )
+    reg.register(
+        "sync_error_slow",
+        EMA(0.0, time_const=TimeConsts.SYNC_EMA_SLOW, bounds=(0.0, 1.0)),
+        listens=[("feed_tick", _extract_sync_dt)],
+    )
+    return reg
+
+
 class ProtectiveFreeze:
     """Защитный режим + накопители «усталости» Baddle.
 
@@ -281,11 +381,10 @@ class ProtectiveFreeze:
     Через 2 мес use сравниваем mean(slow) за первый/последний месяц →
     падает = механики резонансного протокола работают.
 
-    **Implementation note (2026-04-23):** все EMA-поля — `EMA` objects
-    из `src/ema.py`. Publicly exposed как float-properties для
-    backward-compat (весь внешний код читает `.conflict_accumulator`
-    как number). `silence_pressure` остаётся как float — это линейный
-    ramp timer, не EMA.
+    **Implementation note (2026-04-24):** все EMA живут в `self.metrics`
+    (MetricRegistry). `update(d, serotonin)` → `fire_event("conflict_update")`,
+    `feed_tick(dt, sync_err, imbalance)` → `fire_event("feed_tick", ...)`.
+    `silence_pressure` остаётся как float — это линейный ramp timer, не EMA.
     """
 
     TAU_STABLE = 0.6          # порог за которым d считается конфликтом
@@ -295,20 +394,8 @@ class ProtectiveFreeze:
     SILENCE_RAMP_SECONDS = TimeConsts.SILENCE_RAMP
 
     def __init__(self):
-        # EMA feeders (see src/ema.py для classes и constants)
-        self._conflict_ema = EMA(
-            0.0, decay=Decays.NEURO_CONFLICT_ACCUMULATOR, bounds=(0.0, 1.0)
-        )
-        self._imbalance_ema = EMA(
-            0.0, time_const=TimeConsts.IMBALANCE, bounds=(0.0, 1.0)
-        )
-        self._sync_ema_fast = EMA(
-            0.0, time_const=TimeConsts.SYNC_EMA_FAST, bounds=(0.0, 1.0)
-        )
-        self._sync_ema_slow = EMA(
-            0.0, time_const=TimeConsts.SYNC_EMA_SLOW, bounds=(0.0, 1.0)
-        )
-        # Linear ramp timer, not EMA
+        self.metrics = _build_freeze_registry()
+        # Linear ramp timer, not EMA (остаётся bespoke)
         self.silence_pressure: float = 0.0
         self.active: bool = False
 
@@ -316,19 +403,19 @@ class ProtectiveFreeze:
 
     @property
     def conflict_accumulator(self) -> float:
-        return self._conflict_ema.value
+        return float(self.metrics.value("conflict_accumulator"))
 
     @property
     def imbalance_pressure(self) -> float:
-        return self._imbalance_ema.value
+        return float(self.metrics.value("imbalance_pressure"))
 
     @property
     def sync_error_ema_fast(self) -> float:
-        return self._sync_ema_fast.value
+        return float(self.metrics.value("sync_error_fast"))
 
     @property
     def sync_error_ema_slow(self) -> float:
-        return self._sync_ema_slow.value
+        return float(self.metrics.value("sync_error_slow"))
 
     # ── Feeders ─────────────────────────────────────────────────────────────
 
@@ -340,16 +427,15 @@ class ProtectiveFreeze:
         Они **не** активируют Bayes-freeze — только display_burnout и
         idle multiplier.
         """
-        if d is not None:
-            conflict_signal = max(0.0, float(d) - self.TAU_STABLE)
-            instability = max(0.0, 1.0 - serotonin)
-            self._conflict_ema.feed(conflict_signal * instability)
+        self.metrics.fire_event("conflict_update", d=d, serotonin=serotonin)
 
+        # State machine остаётся bespoke (не EMA) — см. phase-a-metric-registry § 6.
+        conflict = self.conflict_accumulator
         if self.active:
-            if self._conflict_ema.value < self.THETA_RECOVERY:
+            if conflict < self.THETA_RECOVERY:
                 self.active = False
         else:
-            if self._conflict_ema.value > self.THETA_ACTIVE:
+            if conflict > self.THETA_ACTIVE:
                 self.active = True
 
     def feed_tick(self, dt: float, sync_err: float = 0.0,
@@ -366,19 +452,14 @@ class ProtectiveFreeze:
         """
         if dt <= 0:
             return
-        # Silence — linear ramp. Не EMA.
+        # Silence — linear ramp. Не EMA, не в registry.
         self.silence_pressure = max(0.0, min(1.0,
             self.silence_pressure + dt / float(self.SILENCE_RAMP_SECONDS)
         ))
 
-        # Imbalance EMA (TC 1 день)
-        self._imbalance_ema.feed(abs(float(imbalance)), dt=dt)
-
-        # Sync_error EMAs — нормализация ~[0, √3] → [0, 1] через /1.73.
-        # В 3D max возможный L2 между unit vectors = √3 ≈ 1.732.
-        s = max(0.0, min(1.0, float(sync_err) / 1.732))
-        self._sync_ema_fast.feed(s, dt=dt)
-        self._sync_ema_slow.feed(s, dt=dt)
+        # EMA feeders (imbalance + 2 sync_error) через registry
+        self.metrics.fire_event(
+            "feed_tick", dt=dt, sync_err=sync_err, imbalance=imbalance)
 
     @property
     def display_burnout(self) -> float:
@@ -418,14 +499,18 @@ class ProtectiveFreeze:
     @classmethod
     def from_dict(cls, d: dict) -> "ProtectiveFreeze":
         pf = cls()
-        pf._conflict_ema.value = float(d.get("conflict_accumulator", 0.0))
+        pf.metrics.get("conflict_accumulator").value = float(
+            d.get("conflict_accumulator", 0.0))
         # Legacy fallback: до 2026-04-23 поле называлось `desync_pressure`.
         pf.silence_pressure = float(
             d.get("silence_pressure",
                   d.get("desync_pressure", 0.0))
         )
-        pf._imbalance_ema.value = float(d.get("imbalance_pressure", 0.0))
-        pf._sync_ema_fast.value = float(d.get("sync_error_ema_fast", 0.0))
-        pf._sync_ema_slow.value = float(d.get("sync_error_ema_slow", 0.0))
+        pf.metrics.get("imbalance_pressure").value = float(
+            d.get("imbalance_pressure", 0.0))
+        pf.metrics.get("sync_error_fast").value = float(
+            d.get("sync_error_ema_fast", 0.0))
+        pf.metrics.get("sync_error_slow").value = float(
+            d.get("sync_error_ema_slow", 0.0))
         pf.active = bool(d.get("active", False))
         return pf

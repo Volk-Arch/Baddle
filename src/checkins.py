@@ -205,10 +205,13 @@ def apply_to_user_state(entry: dict):
             target_expectation = max(0.0, min(1.0,
                 user.state_level() - subjective_surprise
             ))
-            # Moderate nudge (decay 0.6 = 40% влияния) через EMA override
-            user._expectation.feed(target_expectation, decay_override=0.6)
+            # Moderate nudge (decay 0.6 = 40% влияния) через EMA override.
+            # Registry-first (2026-04-24, Фаза A): обращаемся к EMA через metrics.get.
+            user.metrics.get("expectation").feed(
+                target_expectation, decay_override=0.6)
             tod = user._current_tod()
-            user._expectation_by_tod[tod].feed(target_expectation, decay_override=0.6)
+            user.metrics.get(f"expectation_by_tod_{tod}").feed(
+                target_expectation, decay_override=0.6)
         user._clamp()
     except Exception as e:
         log.warning(f"[checkins] apply_to_user_state failed: {e}")
