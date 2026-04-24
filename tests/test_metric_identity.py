@@ -214,3 +214,121 @@ def test_freeze_derived(states):
     assert pf.display_burnout == pytest.approx(
         EXPECTED_FREEZE["display_burnout"], abs=TOL)
     assert pf.active == EXPECTED_FREEZE["active"]
+
+
+# ── Checkin-flow identity (2026-04-24 consolidation) ──────────────────────
+
+def test_checkin_event_identity(monkeypatch):
+    """checkin event → NE/serotonin/valence с override-decays должно дать
+    то же значение что inline EMA `x = decay*x + (1-decay)*target` в
+    старом checkins.py (до миграции). Формулы не менялись, только маршрут.
+    """
+    monkeypatch.setattr(UserState, "_current_tod",
+                         staticmethod(lambda: "day"))
+    from src.ema import Decays
+
+    # Path A — ручной inline EMA через setters (semantics старого checkins)
+    us_a = UserState()
+    us_a.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    us_a.update_from_engagement(0.65)
+
+    ds = Decays.CHECKIN_STRESS
+    us_a.norepinephrine = ds * us_a.norepinephrine + (1 - ds) * 0.7
+
+    df = Decays.CHECKIN_FOCUS
+    us_a.serotonin = df * us_a.serotonin + (1 - df) * 0.8
+
+    dv = Decays.CHECKIN_VALENCE
+    us_a.valence = dv * us_a.valence + (1 - dv) * 0.5
+
+    # Path B — через registry fire_event
+    us_b = UserState()
+    us_b.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    us_b.update_from_engagement(0.65)
+    us_b.metrics.fire_event("checkin", stress=70, focus=80, reality=1)
+
+    assert us_a.norepinephrine == pytest.approx(us_b.norepinephrine, abs=1e-6)
+    assert us_a.serotonin == pytest.approx(us_b.serotonin, abs=1e-6)
+    assert us_a.valence == pytest.approx(us_b.valence, abs=1e-6)
+
+
+def test_apply_subjective_surprise_identity(monkeypatch):
+    """apply_subjective_surprise должен быть эквивалентен старому
+    inline nudge `expectation.feed(reality - s, decay_override=0.6)`.
+    """
+    monkeypatch.setattr(UserState, "_current_tod",
+                         staticmethod(lambda: "day"))
+
+    # Path A — ручной nudge (то что делал старый checkins после fix'а)
+    us_a = UserState()
+    us_a.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    us_a.update_from_engagement(0.65)
+    us_a.tick_expectation()
+
+    s = 0.25
+    target = max(0.0, min(1.0, us_a.state_level() - s))
+    us_a.metrics.get("expectation").feed(target, decay_override=0.6)
+    us_a.metrics.get("expectation_by_tod_day").feed(target, decay_override=0.6)
+
+    # Path B — helper
+    us_b = UserState()
+    us_b.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    us_b.update_from_engagement(0.65)
+    us_b.tick_expectation()
+    us_b.apply_subjective_surprise(0.25, blend=0.4)
+
+    assert us_a.expectation == pytest.approx(us_b.expectation, abs=1e-6)
+    assert us_a.expectation_by_tod["day"] == pytest.approx(
+        us_b.expectation_by_tod["day"], abs=1e-6)
+
+
+def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
+    """Integration: apply_to_user_state (миграционный) = inline (старый) по всем полям.
+
+    Использует real function из checkins.py на fresh UserState. Проверяет что
+    end-to-end путь сохраняет семантику — в т.ч. apply_subjective_surprise
+    nudge expectation при присутствии expected+reality.
+    """
+    from src import paths
+    monkeypatch.setattr(paths, "CHECKINS_FILE", tmp_path / "checkins.jsonl")
+    from src import checkins
+    monkeypatch.setattr(checkins, "_CHECKIN_FILE", tmp_path / "checkins.jsonl")
+    monkeypatch.setattr(UserState, "_current_tod",
+                         staticmethod(lambda: "day"))
+
+    from src.user_state import set_user_state, get_user_state, LONG_RESERVE_MAX
+    from src.ema import Decays
+
+    # Prepare fresh user
+    fresh = UserState()
+    fresh.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    fresh.update_from_engagement(0.65)
+    fresh.tick_expectation()
+    set_user_state(fresh)
+
+    # Apply checkin with all fields
+    entry = {"energy": 40, "stress": 70, "focus": 80,
+             "expected": 1, "reality": -1}
+    checkins.apply_to_user_state(entry)
+
+    u = get_user_state()
+
+    # Verify expected mutations vs manual math
+    # energy 40 → target_pct 0.4, decay CHECKIN_ENERGY (0.85)
+    # cur_pct = LONG_RESERVE_DEFAULT(1500) / 2000 = 0.75
+    # new_pct = 0.85*0.75 + 0.15*0.4 = 0.6975, long_reserve = 1395
+    assert u.long_reserve == pytest.approx(0.6975 * LONG_RESERVE_MAX, abs=0.1)
+
+    # stress 70 → target_ne 0.7, decay CHECKIN_STRESS (0.7)
+    # cur_ne after hrv_update(stress=0.3) = 0.9*0.5 + 0.1*0.3 = 0.48
+    # new_ne = 0.7*0.48 + 0.3*0.7 = 0.546
+    assert u.norepinephrine == pytest.approx(0.546, abs=1e-3)
+
+    # focus 80 → target_s 0.8, decay CHECKIN_FOCUS (0.7)
+    # cur_s after hrv_update(coh=0.6) = 0.9*0.5 + 0.1*0.6 = 0.51
+    # new_s = 0.7*0.51 + 0.3*0.8 = 0.597
+    assert u.serotonin == pytest.approx(0.597, abs=1e-3)
+
+    # reality -1 → valence target -0.5, decay CHECKIN_VALENCE (0.6)
+    # cur_v = 0 → 0.6*0 + 0.4*(-0.5) = -0.2
+    assert u.valence == pytest.approx(-0.2, abs=1e-3)

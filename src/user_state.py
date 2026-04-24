@@ -234,6 +234,39 @@ def _extract_for_tod_coherence(tod_name: str):
     return _fn
 
 
+def _extract_checkin_ne(payload: dict):
+    """checkin.stress (0-100) → NE EMA с override CHECKIN_STRESS (0.7).
+
+    Агрессивнее обычных decays — явный user input должен корректировать
+    модель сильнее чем автоматические feeders. Dict-return для per-event
+    override, default decay остаётся USER_NOREPINEPHRINE_HRV (0.9) для
+    hrv_update.
+    """
+    stress = payload.get("stress")
+    if stress is None:
+        return None
+    return {"signal": float(stress) / 100.0,
+            "decay_override": Decays.CHECKIN_STRESS}
+
+
+def _extract_checkin_serotonin(payload: dict):
+    """checkin.focus (0-100) → serotonin EMA с override CHECKIN_FOCUS (0.7)."""
+    focus = payload.get("focus")
+    if focus is None:
+        return None
+    return {"signal": float(focus) / 100.0,
+            "decay_override": Decays.CHECKIN_FOCUS}
+
+
+def _extract_checkin_valence(payload: dict):
+    """checkin.reality (-2..+2) → valence EMA с override CHECKIN_VALENCE (0.6)."""
+    reality = payload.get("reality")
+    if reality is None:
+        return None
+    return {"signal": float(reality) / 2.0,
+            "decay_override": Decays.CHECKIN_VALENCE}
+
+
 def _build_user_registry(dopamine: float,
                           serotonin: float,
                           norepinephrine: float,
@@ -254,13 +287,19 @@ def _build_user_registry(dopamine: float,
     reg.register(
         "serotonin",
         EMA(serotonin, decay=Decays.USER_SEROTONIN_HRV, bounds=(0.0, 1.0)),
-        listens=[("hrv_update", _extract_coherence)],
+        listens=[
+            ("hrv_update", _extract_coherence),
+            ("checkin", _extract_checkin_serotonin),
+        ],
     )
     reg.register(
         "norepinephrine",
         EMA(norepinephrine, decay=Decays.USER_NOREPINEPHRINE_HRV,
             bounds=(0.0, 1.0)),
-        listens=[("hrv_update", _extract_stress)],
+        listens=[
+            ("hrv_update", _extract_stress),
+            ("checkin", _extract_checkin_ne),
+        ],
     )
     reg.register(
         "valence",
@@ -268,6 +307,7 @@ def _build_user_registry(dopamine: float,
         listens=[
             ("chat_sentiment", _extract_sentiment),
             ("feedback", _extract_valence_feedback),
+            ("checkin", _extract_checkin_valence),
         ],
     )
     reg.register(
@@ -674,6 +714,34 @@ class UserState:
             scalar_override=scalar_override,
             vec_override=vec_override,
         )
+
+    def apply_subjective_surprise(self,
+                                    signed_surprise: float,
+                                    blend: float = 0.4):
+        """Nudge `expectation` baseline из субъективного наблюдения surprise.
+
+        Используется когда у нас есть явный user-ввод вроде «ожидал лёгкий
+        день, вышел сложный» (checkin) или «plan_expected_difficulty vs
+        actual_difficulty» (plan complete) — semantic-preserving fix от
+        старого `user.surprise = blend * user.surprise + (1-blend) * s`
+        (broken после того как surprise стал derived @property).
+
+        Алгебра: хотим чтобы next-step `surprise = reality - expectation`
+        трендил к signed_surprise. Значит `new_expectation = reality -
+        signed_surprise`, feed expectation EMA с decay override = 1 - blend.
+
+        Args:
+            signed_surprise: нормированный сигнал в [-1, 1]. Positive →
+                реальность лучше ожиданий; negative → хуже.
+            blend: сколько веса у наблюдения (0..1). 0.4 = 40% влияния.
+        """
+        target = max(0.0, min(1.0,
+            self.state_level() - float(signed_surprise)))
+        override = max(0.001, min(0.999, 1.0 - float(blend)))
+        self.metrics.get("expectation").feed(target, decay_override=override)
+        tod = self._current_tod()
+        self.metrics.get(f"expectation_by_tod_{tod}").feed(
+            target, decay_override=override)
 
     def apply_surprise_boost(self, n_ticks: int = SURPRISE_BOOST_DEFAULT_TICKS):
         """Сигнал «юзер только что удивился чему-то» (OQ #7).

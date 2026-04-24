@@ -38,7 +38,7 @@ reg.value("dopamine")    # 0.5075
 - State flags (`active`)
 - Timestamps (`_last_input_ts`)
 
-См. [planning/phase-a-metric-registry.md § 6](../planning/phase-a-metric-registry.md).
+См. правило 2 в [planning/simplification-plan.md](../planning/simplification-plan.md).
 
 ## Decay override
 
@@ -66,7 +66,7 @@ class MetricRegistry:
     """Registry of EMA metrics + event routing table.
 
     Per-class ownership: UserState / Neurochem / ProtectiveFreeze — каждый
-    свой инстанс. Не global singleton (см. phase-a-metric-registry § Q5).
+    свой инстанс. Не global singleton — следует ownership за state-классами.
     """
 
     __slots__ = ("_metrics", "_routes")

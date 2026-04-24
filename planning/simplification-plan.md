@@ -4,6 +4,13 @@
 >
 > Решение автора: принять **тотальное упрощение** как фазу. Новые фичи не добавляем, пока не схлопнем текущее до core-правил. Без этой дисциплины абстракция не окупается и становится хуже bespoke-реализации.
 
+## Статус
+
+- **Фаза A (metric registry)** — ✅ **Завершена 2026-04-24.** `src/metrics.py` + 21 EMA мигрирована в три registries (UserState / Neurochem / ProtectiveFreeze). Identity-тесты bit-identical. Consolidation post-merge: `checkins.py` + `assistant.py:2028` (plan-difficulty feedback был silently broken) мигрированы на `fire_event` + shared helper `apply_subjective_surprise`. Правило 2 из §4 реализовано.
+- **Фаза B (Signal dispatcher)** — ⏸ ожидает данных из `throttle_drops.jsonl` (логгер step #1 добавлен, файл накапливается по мере use).
+- **Capacity migration** — 🔜 после Фазы B (будет тонкой через registry).
+- **Код-чистка (21 check → 21 детектор, throttle-константы, `_last_*` timestamps)** — проходит **в Фазе B**, не раньше.
+
 ---
 
 ## 1. Контекст: почему эта тема вообще возникла

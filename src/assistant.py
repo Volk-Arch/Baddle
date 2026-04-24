@@ -2015,7 +2015,10 @@ def plans_complete():
         actual_difficulty=d.get("actual_difficulty"),
         note=d.get("note", ""),
     )
-    # Feed surprise в UserState (expected vs actual_difficulty)
+    # Feed surprise в UserState (expected vs actual_difficulty).
+    # До Фазы A было `user.surprise = user.surprise * 0.6 + s * 0.4` —
+    # молча ломалось после того как surprise стал derived @property.
+    # Правильный fix: nudge expectation baseline через shared helper.
     try:
         from .plans import get_plan
         from .user_state import get_user_state
@@ -2024,8 +2027,7 @@ def plans_complete():
             exp = int(p["expected_difficulty"])
             act = int(d["actual_difficulty"])
             s = (act - exp) / 4.0  # norm в [-1, 1]
-            user = get_user_state()
-            user.surprise = user.surprise * 0.6 + s * 0.4
+            get_user_state().apply_subjective_surprise(s, blend=0.4)
     except Exception:
         pass
     resp = {"ok": True}

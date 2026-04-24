@@ -1,6 +1,6 @@
 # TODO
 
-> **⚠ Читать первым: [simplification-plan.md](simplification-plan.md).** Зафиксировано 2026-04-23 решение автора: в ближайшую фазу **не добавляем фичи**, идём в consolidation к 6 правилам (Signal dispatcher + Metric registry + `distinct` + PE + Resonator + опционально Graph-first). Большинство пунктов ниже **заморожены** — оставляются для видимости, но не берутся до завершения Фаз A + B. Первая цель — `src/metrics.py` (metric registry). Нарушение дисциплины = возврат к 20k строк.
+> **⚠ Читать первым: [simplification-plan.md](simplification-plan.md).** Consolidation phase. **Фаза A завершена 2026-04-24** (metric registry + checkins/assistant consolidation). Следующая цель — **Фаза B** (Signal dispatcher), ждёт 2 нед данных из `throttle_drops.jsonl` для калибровки `compute_urgency`. Большинство пунктов ниже **заморожены** — берутся после Фазы B. Нарушение дисциплины = возврат к 20k строк.
 
 ## 🎯 Прайм-директива
 

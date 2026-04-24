@@ -246,7 +246,7 @@ class Neurochem:
             predicted = actual   # первый раз — RPE=0, просто записываем
         rpe = actual - predicted
         # RPE — additive bump not EMA, direct value mutation + clamp.
-        # Side effect остаётся bespoke (см. planning/phase-a-metric-registry § 6).
+        # Side effect остаётся bespoke — правило: registry только для EMA-дрейфа.
         da = self.metrics.get("dopamine")
         da.value = max(0.0, min(1.0, da.value + self.RPE_GAIN * rpe))
         self.recent_rpe = rpe
@@ -429,7 +429,7 @@ class ProtectiveFreeze:
         """
         self.metrics.fire_event("conflict_update", d=d, serotonin=serotonin)
 
-        # State machine остаётся bespoke (не EMA) — см. phase-a-metric-registry § 6.
+        # State machine остаётся bespoke (не EMA) — registry только для EMA-дрейфа.
         conflict = self.conflict_accumulator
         if self.active:
             if conflict < self.THETA_RECOVERY:

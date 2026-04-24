@@ -174,44 +174,32 @@ def apply_to_user_state(entry: dict):
         from .user_state import get_user_state, LONG_RESERVE_MAX
         from .ema import Decays
         user = get_user_state()
-        # Energy: corrective — если юзер пишет 30 а мы думаем 80, притянуть
+
+        # Energy: corrective EMA на long_reserve (не в registry — bespoke
+        # dual-pool legacy, уходит в capacity migration).
         if entry.get("energy") is not None:
             target_pct = entry["energy"] / 100.0
             cur_pct = user.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX else 0.5
             de = Decays.CHECKIN_ENERGY
             new_pct = de * cur_pct + (1 - de) * target_pct
             user.long_reserve = new_pct * LONG_RESERVE_MAX
-        # Stress → NE
-        if entry.get("stress") is not None:
-            target_ne = entry["stress"] / 100.0
-            ds = Decays.CHECKIN_STRESS
-            user.norepinephrine = ds * user.norepinephrine + (1 - ds) * target_ne
-        # Focus → serotonin
-        if entry.get("focus") is not None:
-            target_s = entry["focus"] / 100.0
-            df = Decays.CHECKIN_FOCUS
-            user.serotonin = df * user.serotonin + (1 - df) * target_s
-        # Reality rating → valence
-        if entry.get("reality") is not None:
-            dv = Decays.CHECKIN_VALENCE
-            user.valence = dv * user.valence + (1 - dv) * (entry["reality"] / 2.0)
-        # Subjective surprise → nudge expectation (2026-04-23: было broken —
-        # раньше `user.surprise = ...`, но surprise теперь derived @property).
-        # Правильный fix: корректируем baseline так, чтобы будущий observed
-        # surprise сошёлся с subjective. Алгебра: `new_expectation =
-        # reality_now − subjective_surprise`.
+
+        # Stress/focus/reality → NE/serotonin/valence через checkin event.
+        # Каждая метрика получает per-event decay_override из Decays.CHECKIN_*
+        # (см. extractors в user_state.py).
+        user.metrics.fire_event(
+            "checkin",
+            stress=entry.get("stress"),
+            focus=entry.get("focus"),
+            reality=entry.get("reality"),
+        )
+
+        # Subjective surprise → nudge expectation (bridge от старого сломанного
+        # `user.surprise = ...` к правильному baseline-nudge).
         if entry.get("expected") is not None and entry.get("reality") is not None:
             subjective_surprise = (float(entry["reality"]) - float(entry["expected"])) / 4.0
-            target_expectation = max(0.0, min(1.0,
-                user.state_level() - subjective_surprise
-            ))
-            # Moderate nudge (decay 0.6 = 40% влияния) через EMA override.
-            # Registry-first (2026-04-24, Фаза A): обращаемся к EMA через metrics.get.
-            user.metrics.get("expectation").feed(
-                target_expectation, decay_override=0.6)
-            tod = user._current_tod()
-            user.metrics.get(f"expectation_by_tod_{tod}").feed(
-                target_expectation, decay_override=0.6)
+            user.apply_subjective_surprise(subjective_surprise, blend=0.4)
+
         user._clamp()
     except Exception as e:
         log.warning(f"[checkins] apply_to_user_state failed: {e}")
