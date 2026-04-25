@@ -691,6 +691,44 @@ select {
   color: #ef4444;
 }
 
+/* Phase D: balance() резонансный скаляр (DA·NE·ACh)/(5HT·GABA).
+   User × System pair. Цвет cell по corridor: green/yellow/red. */
+.assist-balance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(24, 24, 27, 0.5);
+  font-size: 11px;
+  cursor: help;
+}
+.balance-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.balance-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #a1a1aa;
+}
+.balance-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  transition: color 0.3s ease, background 0.3s ease;
+}
+.balance-cell.green  { color: #10b981; background: rgba(16, 185, 129, 0.10); }
+.balance-cell.yellow { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.balance-cell.red    { color: #ef4444; background: rgba(239, 68, 68, 0.14); }
+.balance-sep {
+  color: #52525b;
+}
+
 /* Graph legend — оверлей в углу SVG */
 .graph-legend {
   position: absolute;

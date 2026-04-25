@@ -583,7 +583,7 @@ class CognitiveLoop:
         # System GABA: freeze.active boolean. embedding_scattering пока None.
         # User GABA: derived from focus_residue (existing field).
         # User ACh не fed здесь — только при surprise boost (см. _check_user_surprise).
-        # См. planning/rgk-migration-plan.md §6 «ACh+GABA feeders».
+        # См. docs/neurochem-design.md §6 «ACh+GABA feeders».
         try:
             from .graph_logic import nodes_created_within
             rate = min(1.0, nodes_created_within(3600) / 10.0)
@@ -683,7 +683,7 @@ class CognitiveLoop:
         # User-side ACh feeder: surprise event = «юзер открыт новому» → bump
         # plasticity до ≥0.85 с быстрым decay 0.85 (см. UserState.feed_acetylcholine).
         # v1: novelty=conf от detector, boost=True. Документировано в
-        # planning/rgk-migration-plan.md §6 «User-side ACh».
+        # docs/neurochem-design.md §6 «User-side ACh».
         try:
             us = get_user_state()
             us.apply_surprise_boost(n_ticks=3)
@@ -1517,6 +1517,17 @@ class CognitiveLoop:
             text=f"DMN bridge: {bridge_text[:120]}",
             extras={"quality": round(quality, 3)},
         )
+
+        # Phase D: System ACh boost — DMN нашёл значимый мост (quality > 0.5).
+        # Closes 50% отложенных Phase D feeders (см. docs/neurochem-design.md §6.5).
+        # bridge_quality передаётся как secondary feeder; node_creation_rate здесь 0
+        # (этот канал кормится в _advance_tick).
+        try:
+            from .horizon import get_global_state
+            get_global_state().neuro.feed_acetylcholine(
+                node_creation_rate=0.0, bridge_quality=quality)
+        except Exception as e:
+            log.debug(f"[dmn_bridge] ACh feed failed: {e}")
 
         return Signal(
             type="dmn_bridge",

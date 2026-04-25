@@ -1,6 +1,6 @@
 """Property-based tests для РГК прототипа.
 
-См. [planning/rgk-migration-plan.md](../planning/rgk-migration-plan.md) §5
+См. [docs/neurochem-design.md](../docs/neurochem-design.md) §5
 «Property-based test contract». Заменяет bit-identity на инварианты
 которые держатся на любых event sequences (не только Phase A fixed).
 
@@ -194,7 +194,7 @@ class TestCouplingConsistency:
 
     Inv 3-behavioral «counter-wave actually reduces sync_error» отложен
     до реализации wave-generation step(obs, dt) — Tier 2 после Phase D.
-    См. planning/rgk-migration-plan.md §10A.
+    См. docs/neurochem-design.md §10A.
     """
 
     def test_sync_error_zero_when_vectors_equal(self):
@@ -232,7 +232,7 @@ class TestCouplingConsistency:
         assert 0.0 <= e <= math.sqrt(3) + TOL, \
             f"seed={seed} sync_error={e:.4f} out of [0, √3]"
 
-    @pytest.mark.skip(reason="Requires actual counter-wave generation, Tier 2 (rgk-migration-plan.md §10A)")
+    @pytest.mark.skip(reason="Requires actual counter-wave generation (step(obs, dt) with delay buffer), Tier 2 — see TODO.md")
     def test_counter_wave_reduces_sync_error(self):
         """Когда оба resonator в mode=C и генерируют counter-wave,
         sync_error должен монотонно падать. Реализуется после step(obs, dt)

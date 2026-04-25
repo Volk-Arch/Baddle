@@ -151,32 +151,6 @@ ACh + GABA отсутствуют. Без них балансовая форму
 
 ---
 
-## 6.5. Диагностика после прототипа (2026-04-25)
-
-Прототип [src/rgk.py](../src/rgk.py) прогнал фиксированный event sequence из [tests/test_metric_identity.py](../tests/test_metric_identity.py). **Identity 42/42 fields, max Δ=4.97e-7** (TOL 1e-5). Гипотеза «6 правил = проекции одной модели» — подтверждается.
-
-### Что покрылось чисто (ядро ~50 строк)
-
-- 5-chem `Resonator(gain, hyst, aperture, plasticity, damping)` + EMA-обновления
-- `vector()` (3D legacy projection) → sync_error coupling
-- `balance()` formula
-- R/C bit с гистерезисом (механика на месте, в identity не активирован — порог не пробит)
-
-### Что НЕ покрывается ядром (4 declared subsystems, ~200 строк дополнительно)
-
-| Подсистема | Поля | Зачем нужна | Spec говорит |
-|---|---|---|---|
-| **Predictive baselines** (Friston) | `expectation`, `expectation_vec`, `expectation_by_tod`×4, `hrv_baseline_by_tod`×4, `s_exp_vec` | Источник PE для R/C-toggle. Без baselines surprise = 0 → mode never flips | §3.4 «гистерезис», но **где живут baselines** не описано |
-| **Aux axes** | `valence`, `agency`, `burnout` | Observable measurements помимо нейрохимии (sentiment LLM, plan ratio, usage counter) | §6 нет — РГК-spec про резонатор, не про периферийные observable юзера |
-| **Pressure layer** | `conflict_accumulator`, `silence_pressure`, `imbalance_pressure`, `sync_error_fast`/`slow`, `display_burnout`, `freeze_active` | Долговременные накопители (часы/дни), питают idle-multiplier и UI-усталость | §3.4 hysteresis в mode, но не отдельный pressure-блок |
-| **Bespoke counters** | RPE history (window 20), feedback streak, surprise_boost | Discrete bumps поверх EMA — нелинейные events, не подходят под `EMA(source, decay)` | §11 «декларация vs подсистема» — это и есть declared bespoke |
-
-### 5-axis: plasticity/damping без feeders = 0.5
-
-В identity event sequence нет источников ни для ACh, ни для GABA. Они остаются на 0.5 → balance() работает на 3-axis projection. **§4 балансовая формула не замыкается без feeders.** Это блокер Шага 4 миграции — без дизайна feeders переход на полную 5-axis модель невозможен. См. [rgk-migration-plan.md § Дизайн ACh+GABA feeders](rgk-migration-plan.md).
-
----
-
 ## 7. Концепция коллапса
 
 ### Целевая архитектура
@@ -234,30 +208,9 @@ class РГК:
 - DMN/REM heavy work (pump_bridge, REM emotional): ~1000 строк (реальные алгоритмы)
 - UI/CSS/JS: ~500 строк (DOM manipulation forced)
 
-**Итого ~2450 строк vs ~10000 текущих — 4x reduction.**
+**Итого ~2450 строк vs ~10000 текущих — 4x reduction (теоретический target).**
 
----
-
-## 7.5. Уточнённая оценка после прототипа (2026-04-25)
-
-Прототип показал что «~200 строк ядра» — оптимизм. Реальное распределение state+dynamics:
-
-| Слой | Строк (прототип) | Что входит |
-|---|---|---|
-| Resonator (5-chem + balance + R/C) | ~50 | Чистое ядро |
-| AuxAxes (valence/agency/burnout) | ~10 | Observable measurements |
-| PredictiveLayer (4 user EMA + system) | ~25 | Friston baselines |
-| PressureLayer (5 accumulators) | ~30 | conflict + sync EMAs + imbalance + silence |
-| Event-routing methods + bespoke | ~120 | feeders + RPE history + feedback streak + surprise boost |
-| **Итого state+dynamics** | **~235** | vs ~6150 legacy |
-| project() / serialize() / coupling | ~80 | Проекторы |
-| Identity diagnostic (тест) | ~150 | _run_identity_sequence + EXPECTED + diff |
-
-**Реалистичная оценка после интеграции:** ~250 ядра + ~250 проекторов = **~500 строк state+dynamics**. Это 12-25× редукция от 6150 текущих.
-
-Общий прогноз §7 «~2450 строк vs ~10000» сохраняется (heavy work + IO + UI/JS не сжимаются), просто внутри state+dynamics распределение другое: не «200 ядра + 250 проекторов», а **«50 ядра + 200 declared subsystems + 250 проекторов»**.
-
-Структурно это всё равно даёт обещанное §11 свойство: **новая фича = 1 строка в Resonator/AuxAxes/PredictiveLayer + projector**, а не подсистема.
+> **Реализация:** Phase D сделан 2026-04-25, реалистичный target пересмотрен до 1.5-1.8× reduction (adapter overhead). Что реально в коде — [docs/neurochem-design.md § 5-axis](../docs/neurochem-design.md) и [docs/world-model.md § Mapping](../docs/world-model.md). Опциональный line-count cleanup — [TODO.md § 🧹 Cleanup](TODO.md).
 
 ---
 
@@ -285,18 +238,20 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 ---
 
-## 9. Конкретный первый шаг — ✓ выполнено 2026-04-25
+## 9. Реализация
 
-Прототип сделан → [src/rgk.py](../src/rgk.py). Identity 42/42 на event sequence из [tests/test_metric_identity.py](../tests/test_metric_identity.py). Диагностика — §6.5 выше.
+Реализовано 2026-04-25: `src/rgk.py` (Resonator + 2 связанных + balance + проекторы); UserState / Neurochem / ProtectiveFreeze работают как facades поверх `_rgk`. 5-axis ACh+GABA с feeders v1 — ограничения описаны в [docs/neurochem-design.md § 5-axis](../docs/neurochem-design.md). Mapping наших полей к внешним психологическим словарям — [docs/world-model.md § Mapping](../docs/world-model.md).
 
-**Phase D миграция выполнена** в той же сессии 2026-04-25 (без отдельной ветки, todo-14): 8 шагов done, identity preserved 10/10 + 150 property tests + 385 full repo tests pass. UserState / Neurochem / ProtectiveFreeze переписаны как adapters над `_rgk`; `_build_*_registry` + extractors + `MetricRegistry` удалены. 5-axis полная: ACh + GABA с v1 feeders (см. docs/neurochem-design.md «5-axis расширение» + planning/rgk-migration-plan.md §6.5). **§11 «когда делать»** отвечен: окно нашлось, всё в один sitting.
+История миграции — `memory/project_session_20260425_phase_d.md`.
 
 ---
 
 ## 10. Связанные docs
 
-- **РГК v1.0** — исходная спецификация (диалог 2026-04-24, локально у автора). Этот документ — её адаптация под Baddle. Дополнительные слои из v1.0 (counter-wave generation, prompt-routing по химии, экстренные протоколы, 8-region map) → не входят в Phase D core, см. [rgk-migration-plan.md §10](rgk-migration-plan.md#10-что-не-входит-в-phase-d-core-post-merge-или-opt-in)
-- [rgk-migration-plan.md](rgk-migration-plan.md) — пошаговый план Phase D миграции (включает ACh+GABA feeders дизайн)
+- **РГК v1.0** — исходная спецификация (диалог 2026-04-24, локально у автора). Этот документ — её адаптация под Baddle. Дополнительные слои из v1.0 (counter-wave generation, prompt-routing по химии, экстренные протоколы, 8-region map) → Tier 2 в [TODO.md](TODO.md).
+- [docs/neurochem-design.md § 5-axis](../docs/neurochem-design.md) — реализация (Phase D done): feeders v1 для ACh/GABA с лимитами.
+- [docs/world-model.md § Mapping](../docs/world-model.md) — таблица «внешние словари ↔ наши поля ↔ код».
+- [TODO.md § 🧹 Cleanup](TODO.md) — опциональный line-count cleanup (Phase E-I).
 - [simplification-plan.md](simplification-plan.md) §4 — 6 правил, которые проекции РГК аксиом
 - [docs/resonance-model.md](../docs/resonance-model.md) — единый словарь
 - [docs/friston-loop.md](../docs/friston-loop.md) — PE как условие переключения R/C
@@ -315,6 +270,6 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 **Цена:** одна сессия дизайна + одна-две сессии имплементации (новая ветка). Identity не bit-preserved, нужны property-based тесты. Возможно вскроется что модель неполна — тогда переоценка.
 
-**Когда делать:** когда у автора будет контекст на 2-4 часа подряд. Не инкрементально (то что мы делали в Phase A/B/C). Один большой коллапс в ветке, mergeable когда identity-проверка пройдёт. **✓ Сделано 2026-04-25** в todo-14 (без отдельной ветки) — sub-steps 3a/3b/3c + 4a/4b/4c позволили сохранять identity на каждом шаге; см. planning/rgk-migration-plan.md.
+**Когда делать:** когда у автора будет контекст на 2-4 часа подряд. Не инкрементально (то что мы делали в Phase A/B/C). Один большой коллапс в ветке, mergeable когда identity-проверка пройдёт.
 
 **Что сохраняется:** simplification-plan §11 main takeaway — «новая фича = декларация, не подсистема». РГК это финализирует: декларация = новый проектор или новый параметр в chem. Каркас один.

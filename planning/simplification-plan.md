@@ -1,18 +1,10 @@
-# Упрощение Baddle — от 20k строк кода к 6 правилам
+# Strategy: 6 правил для Baddle
 
-> Зафиксировано 2026-04-23 после честной оценки TODO-ландшафта. Документ — **стратегический**: хранит картину «что делаем и чего не делаем в этой фазе проекта».
+> Документ — **стратегический**, не история. Хранит **что делаем и чего не делаем**.
 >
-> Решение автора: принять **тотальное упрощение** как фазу. Новые фичи не добавляем, пока не схлопнем текущее до core-правил. Без этой дисциплины абстракция не окупается и становится хуже bespoke-реализации.
-
-## Статус
-
-- **Фаза A (metric registry)** — ✅ **Завершена 2026-04-24.** `src/metrics.py` + 21 EMA в три registries (UserState / Neurochem / ProtectiveFreeze). Identity-тесты bit-identical. Consolidation post-merge: `checkins.py` + `assistant.py:2028` (silently broken plan-difficulty feedback) → `apply_subjective_surprise` helper. Правило 2 из §4 реализовано.
-- **Фаза B (Signal dispatcher)** — ✅ **Завершена 2026-04-25.** `src/signals.py` (Signal + Dispatcher) + `src/detectors.py` (13 pure-function детекторов с urgency-эвристиками + dmn_eligible gate). 4 heavy `_check_*` → `_run_*(ctx) → Optional[Signal]`. `_loop()` переписан: build context → DETECTORS iteration → dispatch → emit. **Cleanup:** −819/+232 строк в cognitive_loop.py (3320→2534), удалены 9 dead `_check_*`, 8 `*_INTERVAL` констант, 7 `_last_*` полей, `_log_throttle_drop`, `_PROACTIVE_ALERT_TYPES`. Тесты: 175 passed (+24 dispatcher, +52 detector, +7 integration vs Phase A start). Правило 1 из §4 реализовано.
-- **Calibration window** — 🔄 ожидаем 2 нед реального use → анализ `data/throttle_drops.jsonl` → калибровка `compute_urgency` формул в детекторах.
-- **Cheap items после A+B** — ✅ 2026-04-25. `UserState.frequency_regime` derived property + `focus_residue` field/bump/decay. 19 unit-тестов, integrated в `_generate_sync_seeking_message` (tone choice) и `detect_observation_suggestions` (silent skip при residue>0.5). Validates консолидацию: новые сигналы реально cheap (~2.5ч на 2 признака с persistence + tests + integration).
-- **Capacity migration (Фаза C)** — ✅ **Завершена 2026-04-25.** dual-pool (`daily_spent` 0..100 + `long_reserve` 0..2000) → 3-zone capacity (`green`/`yellow`/`red`) из `docs/capacity-design.md`. 6 шагов: UserState fields/properties/methods → activity_log surprise tracking → cognitive_loop bookkeeping → assistant gate refactor → UI 3-индикатора 🟢🟡🔴 → cleanup dual-pool legacy. Удалено: `_MODE_COST` table, `_compute_energy/debit/recover/snapshot`, 4 константы (LONG_RESERVE_*/DAILY_ENERGY_MAX), `/user_state/reset-energy` endpoint, `/assist/simulate-day` endpoint, JS `_assistEnergy` global, energy bar UI. Bonus: docs formula fix (max(0, −progress_delta) per semantic intent), detect_low_energy → detect_low_capacity_heavy с backward-compat alert.type. ~8.5ч в оценке 8-10ч.
-- **РГК (Резонансно-Генерирующий Контур)** — 🌌 **Стратегический документ 2026-04-25.** Поверх Phase A+B+C появилась физическая модель: волновая физика + 5-axis нейрохимия + порог с гистерезисом + R/C режимы. 6 правил §4 — это **проекции одной модели**. Спека: [rgk-spec.md](rgk-spec.md). Гипотеза: коллапс ~10000 строк в ~2500 (4x reduction). Не инкрементально — большой коллапс в отдельной ветке. Делать когда у автора будет 2-4ч непрерывного контекста.
-- **Phase D (РГК-коллапс)** — ✅ **Завершена 2026-04-25.** 8 шагов в одной сессии (todo-14): новый `src/rgk.py` (5-chem Resonator + balance + R/C bit + project) → 6 property-based test инвариантов на ручных random seeds → UserState/Neurochem/ProtectiveFreeze коллапс через **adapter pattern** (все EMA в _rgk, public API сохранён) → удалены `_build_user_registry`, `_build_neurochem_registry`, `_build_freeze_registry` + ~20 extractor функций + `MetricRegistry`/`EMA`/`VectorEMA` impo‌rts из user_state и neurochem → **5-axis полная** (ACh/GABA properties + feed_acetylcholine/feed_gaba methods + balance() diagnostic на UserState и Neurochem) → cognitive_loop._advance_tick + _check_user_surprise hooks с feeders → `nodes_created_within(seconds)` helper в graph_logic.py. **Identity 10/10, property 150/150 + 1 skip, full repo 385 passed** (5 pre-existing workspace_scoping failures unchanged). **v1 ограничения feeders документированы** в docs/neurochem-design.md (Phase D раздел) + planning/rgk-migration-plan.md §6.5. Балансовая формула (DA·NE·ACh)/(5HT·GABA) активна, корридор `[0.3, 1.5]` теоретический → калибровка через 2 нед use данных prime_directive. Tier 2 после merge: DMN bridge_quality hook, embedding_scattering, user continuous novelty, breathing detection, balance() в UI как scalar.
+> Решение автора (2026-04-23): принять **тотальное упрощение** как фазу. 6 правил §4 — каркас в котором новая фича стоит копейки.
+>
+> Где история — `memory/project_session_*.md`. Где текущая реализация подсистем — [docs/](../docs/). Что осталось делать — [TODO.md](TODO.md).
 
 ---
 
@@ -229,69 +221,6 @@ nodes_near(embedding=query_vec, type="pattern", k=5)
 
 ---
 
-## 5. История consolidation (Фазы A+B сделаны)
-
-### Фаза A — Metric registry (✅ 2026-04-24, ~12ч)
-
-`src/metrics.py` — `MetricRegistry` с `fire_event(type, **payload)` API. 21 EMA в трёх registries (UserState/Neurochem/ProtectiveFreeze). `update_from_*` → fire_event с extractor'ами. Identity-тесты bit-identical (10 тестов на фиксированных event-sequence). Bonus catch: `assistant.py:2028` plan-difficulty feedback был silently broken (surprise стал @property без setter, except глотал) — починен через shared `UserState.apply_subjective_surprise(s, blend)`.
-
-### Фаза B — Signal dispatcher (✅ 2026-04-25, ~12ч)
-
-`src/signals.py` — `Signal(type, urgency, content, expires_at, dedup_key, source)` + `Dispatcher` (budget=5/час, window=1ч, critical_threshold=0.9, urgency-sort + dedup + drop logging). `src/detectors.py` — 13 pure-function детекторов (4 simple + 5 medium + 4 heavy с work/envelope split). `_loop()` переписан под DETECTORS+dispatcher path; bookkeeping checks (action_outcomes, hrv_push, heartbeat, agency, activity_cost, graph_flush, user_surprise, prime_directive_record) остались методами CognitiveLoop.
-
-**compute_urgency эвристики (для калибровки через 2 нед):**
-- `coherence_crit`: `1 - coherence` (0.75..1.0, critical bypass)
-- `low_energy_heavy`: `0.5 + 0.4·(1 - daily/30)` (critical при daily<5)
-- `plan_reminder`: `0.7 + 0.3·(1 - mins/10)` (critical при <2мин)
-- `morning_briefing`: 0.8 fixed; `evening_retro`: 0.7 fixed; `night_cycle`: 0.6 fixed; `dmn_converge`: 0.5
-- `sync_seeking`: `0.3 + 0.5·(silence-0.3)/0.7 + 0.2·hrv_surprise`
-- `recurring_lag`: `0.3 + 0.15·min(5, lag)`
-- `observation_suggestion`: `0.2 + 0.6·strength` (per-card)
-- `dmn_bridge`: `0.2 + 0.7·quality`
-- `dmn_deep_research`: `0.4 + 0.3·novelty`
-- `state_walk`: `0.3 + 0.5·similarity`
-
-**Cleanup:** −819/+232 строк в cognitive_loop.py. Удалены 9 dead `_check_*`, 8 `*_INTERVAL` констант, 7 `_last_*` полей, `_log_throttle_drop`, `_PROACTIVE_ALERT_TYPES`. Helpers (`_generate_sync_seeking_message`, `_build_morning_briefing_*`, `_build_current_state_signature`) остались — детекторы вызывают через `ctx.loop.method()`.
-
-### Фаза C — Graph-first (опционально, условно, ~многодневный рефакторинг)
-
-**НЕ делаем сейчас.** Оставляем как возможность после 1-2 мес use. Если через `throttle_drops.jsonl` и observability увидим что параллельные хранилища действительно мешают — возвращаемся. Если нет — они остаются, это нормально.
-
-### Что дальше
-
-1. **2 недели реального use** → анализ `data/throttle_drops.jsonl` → калибровка `compute_urgency` формул.
-2. **Capacity migration** — тонкая через registry (~5-7ч). 3-контурная модель из `docs/capacity-design.md` поверх `MetricRegistry`.
-3. После — Tier 2 фичи (RAG в execute_deep, breathing mode, Polar adapter, 2D Russell).
-
----
-
-## 6. Экономия после consolidation
-
-Стоимость оставшегося TODO падает **нелинейно**:
-
-| Пункт TODO | Bespoke | После consolidation |
-|---|---|---|
-| Capacity migration | 16-22ч | **5-7ч** (declarative в registry) |
-| Breathing suggestion | 5ч | **1.5ч** (один детектор) |
-| META questions | 2-3ч | **1ч** (детектор поверх scout-моста) |
-| Meal suggestions | 3ч | **1.5ч** |
-| `frequency_regime` | 1ч | **1 строка** в registry |
-| `focus_residue` | 1ч | **1 строка** в registry |
-| Constraint expansion | 1-2ч | ~такая же (content-work) |
-| Pattern auto-abandon | 1ч | **бесплатно** (expires_at) |
-| Throttle step #2 | 3ч | **встроено** в dispatcher |
-| Throttle step #3 | 15ч | **встроено** в dispatcher |
-| New proactive check | 2-3ч каждый | **20 строк детектора** |
-| New derived metric | 30 мин каждая | **1 строка в registry** |
-
-**Tier 2 функциональности после consolidation:** ~40-50ч вместо 80-100ч.
-
-**Сокращение существующего кода:** `cognitive_loop.py` с ~3000 строк → ~1800. Чистая вырезка после убирания bespoke-cascade'ов.
-
-**Общая картина проекта:**
-- **Bespoke путь**: ~20000 строк кода, ~30 docs, 28+ модулей, 6-12 мес до Tier 3
-- **Consolidated путь**: ~5000-7000 строк кода, ~10-12 docs, 10-15 модулей, 4-6 мес до Tier 3
-
 ---
 
 ## 7. Tradeoffs честно
@@ -344,99 +273,55 @@ nodes_near(embedding=query_vec, type="pattern", k=5)
 
 ---
 
-## 9. Что происходит в следующую сессию (commit log этого документа)
+## 5. Tradeoffs честно
 
-Решение зафиксировано: **идём в consolidation, не добавляем фичи**.
+### Плюсы
 
-Последовательность:
+- **Проект ~5k строк вместо 20k.** В 3-4 раза меньше кода поддерживать (фактически — see [TODO.md § 🧹 Cleanup](TODO.md) для реалистичного target после Phase E-I).
+- **Новая фича = декларация, не подсистема.** Bar на добавление низкий, цикл добавить/попробовать/удалить быстрый.
+- **Docs сжимаются.** 6 правил ≡ 6 контрактов.
+- **Тестируемость.** 6 контрактов = 6 test-suites. Bespoke-путь = 21 test-suite плюс интеграционные cascades.
+- **Легче онбордить нового разработчика (или себя через год).** «Вот 6 правил, всё остальное — их применения» vs «вот 28 docs, каждый про свою подсистему».
 
-1. **Прочитать этот документ целиком перед следующей сессией кода.** Важно помнить что мы договорились.
-2. **Пропустить TODO-пункты** «добавить X фичу» в ближайшие сессии. Только Фаза A → B → Capacity миграция (через registry).
-3. **Первая кодовая сессия consolidation — Фаза A (metric registry)**. Примерно:
-   - Создать `src/metrics.py` с классами EMA, MetricRegistry
-   - Мигрировать `UserState.update_from_*` методы (8-12 штук)
-   - Мигрировать `Neurochem.update_*` (3-4 штуки)
-   - Мигрировать `CognitiveState` EMA (2-3 штуки)
-   - Проверить что все derived метрики (`vector()`, `sync_error`, `imbalance_pressure`) дают идентичные значения
-4. **Через 2 нед после Фазы A** — Фаза B (dispatcher). Параллельно смотрим `throttle_drops.jsonl`, калибруем `compute_urgency` по реальным данным.
-5. **После Фаз A + B** — Capacity миграция через registry.
+### Минусы
 
-Примерный календарь если 10ч/неделя:
-- **Недели 1-2**: Фаза A (metric registry)
-- **Недели 3-4**: сбор данных из throttle_drops.jsonl, размышление над urgency-формулами
-- **Недели 5-7**: Фаза B (dispatcher)
-- **Недели 8-9**: Capacity migration через registry
-- **Недели 10+**: фичи Tier 2 (RAG в execute_deep, breathing mode, 2D Рассел, Polar adapter)
+- **25-30ч рефакторинга без видимых фич.** Требует дисциплины не добавлять фичи в этот период.
+- **Risk неправильной абстракции.** 6 правил — гипотеза. Если на практике детекторы не влезают в единый Signal — придётся расширять Signal.
+- **Дисциплина после.** Абстракция помогает только если её соблюдают. Через год легко начать писать bespoke cascade снова.
+- **Меньше артефактов проекта.** Для Habr-статьи скучнее — «сделал чистую архитектуру» vs «построил 28 подсистем».
+- **Adapter overhead.** Phase D показал — facades поверх _rgk дают +500 строк boilerplate, чтобы убрать нужны Phase E-I (см. [TODO.md § 🧹 Cleanup](TODO.md)).
 
 ---
 
-## 10. Что меняется в существующих docs
+## 6. Дисциплина — ключевой risk
 
-После consolidation:
+Абстракция работает только если **соблюдается всегда**. Полу-абстракция хуже consistent bespoke, потому что даёт иллюзию структуры без её гарантий.
 
-- **`nand-architecture.md`** — обогатить секцией «6 правил как надстройка над `distinct`».
-- **`full-cycle.md`** — переписать через Signal/Metric/Graph абстракции.
-- **`cognitive_loop` docs** — сократить. Детальные описания 21 check уходят в сторону «21 детектор, каждый 20 строк, см. код».
-- **`alerts-and-cycles.md`** — сокращается: нет больше 21 throttle-константы, есть один dispatcher.
-- **Capacity/Resonance design** — остаются как content, но реализация становится registry-тонкой.
+### Рабочее правило: фильтр для новых фич
 
-Возможно **−15 docs** после consolidation (от 28 к ~12-13).
+**Любая новая фича проходит через фильтр:**
+1. Это новый детектор в dispatcher? — OK, написать как Signal-producer (Правило 1).
+2. Это новый derived metric? — OK, добавить в `_rgk` как extractor функцию или новый axis в Resonator (Правило 2).
+3. Это новый тип ноды графа? — OK, через `record(type=...)` (Правило 3).
+4. Это новый chem axis? — OK, добавить в `Resonator.__init__` + `balance()` formula coverage + 1 feeder вызов (Правило 6).
+5. Это что-то что не влезает? — **СТОП**. Или оно поверх 1-4 (тогда reformulate), или оно 8-е правило (редкий случай, серьёзно думать).
 
----
+### Что делать если правило не влезает
 
-## 11. Main takeaway
+Если появляется реальная фича которая **честно не укладывается** в правила — это означает что правила **неполны**. Тогда расширяем осознанно:
+- Документируем почему не влезло.
+- Обсуждаем что добавить: новое правило? изменить существующее?
+- Не делаем bespoke escape hatch «на этот раз».
 
-**Цель этой фазы:** не добавить фичи, а **собрать каркас** в котором фичи стоят копейки.
-
-**Инвестиция:** 25-30 часов.
-
-**Что получаем:**
-- Проект выглядит как ~5-7k строк, не 20k.
-- Новая фича = декларация 1-20 строк, не подсистема.
-- Прямой путь к Tier 3 за 4-6 месяцев вместо 6-12.
-- Проект понимаем, поддерживаем, масштабируем, объясним Хабру в 10 главах вместо 28.
-
-**Что стоит:**
-- 25-30ч без фич.
-- Дисциплина 6 правил навсегда.
-
-**Рабочее обязательство автора (2026-04-23):** в следующие сессии не добавлять новые фичи до завершения Фазы A. Первая цель — **metric registry**. TODO-пункты на фичи замораживаются, остаются видимыми но не берутся.
-
----
-
-## 12. Возможные будущие расширения (не делать сейчас)
-
-Фиксирую честно: во время обсуждения теории всплыли расширения, которые укладываются в 6 правил, но **не берутся в эту фазу**. Записаны чтобы не забыть и чтобы при появлении данных можно было к ним вернуться.
-
-### Расширение нейрохимии до 5 осей
-
-Сейчас: 3 оси (DA / S / NE) в Neurochem. Формула γ = 2.0 + 3.0 · NE · (1 − S) покрывает основную динамику «фокус vs поиск».
-
-Полная 5-осевая модель из [resonance-model § Нейрохимия как параметры резонатора](../docs/resonance-model.md) добавляет ACh (Plasticity — текучесть ткани при обучении) и GABA (Damping — демпфирование, жёсткость стенок стоячей волны отдельно от серотонинового гистерезиса). Общий баланс: `(Gain × Aperture × Plasticity) / (Hysteresis × Damping) ≈ 1.0`.
-
-**Когда делать:** только если через 2 мес данных видно что γ-формула систематически промахивается в предсказании состояний. Например:
-- Режим «изоляция / седация / закрытие» (GABA↑ Glutamate↓) не различим от обычной стабильности → 5-HT не ловит разницу между «устойчив» и «закрыт».
-- Режим «творческое исследование» (ACh↑ при умеренном DA) не отличается от обычного поиска → DA не ловит разницу между «хочу нового» и «готов перестраиваться».
-
-**Как делать** (если понадобится): добавить поля `acetylcholine` и `gaba` в Neurochem, питать их от специфических событий (ACh — от активности DMN/pump, GABA — от ProtectiveFreeze), расширить γ-формулу до полной балансовой. Это новые оси в metric registry (Правило 2) — 2 строки на каждую. Общая стоимость: ~3-4ч, low-risk.
-
-**Не делать** пока текущая 3-осевая γ работает на данных прайм-директивы в пределах разумного.
-
-### Агент-«контрволна» как отдельный mode
-
-Сейчас: контрволна как принцип уже воплощена в `sync_regime` (PROTECT/CONFESS), `ProtectiveFreeze`, `sync_seeking tone`. Не требует нового кода.
-
-Возможное будущее: явный UI-mode «Baddle работает на подавление деструктивной волны» — когда юзер в спирали / панике / руминации, система переключается в жёсткий режим «якорь»: короткие ответы, вопросы-перевёртыши, парадоксальные предписания, заземляющие микро-шаги.
-
-**Когда делать:** только если после реализации breathing_mode и action_memory-обучения видно что юзер **регулярно** впадает в спирали, и текущие механики (sync_seeking, ProtectiveFreeze) недостаточно его вытаскивают. Это content-work (промпты, UI-индикатор), не новая подсистема — вписывается в Правило 1 как ещё один режим Signal.
+Если пропускаем этот rigor — через год снова TODO на 80 пунктов.
 
 ---
 
 ## Связанные docs
 
-- [TODO.md](TODO.md) — сам список пунктов
-- [resonance-code-changes.md](resonance-code-changes.md), [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — подробные специки для Tier 2 фичей, делаются после consolidation
-- [docs/world-model.md](../docs/world-model.md) — каскад зеркал как рамка
-- [docs/resonance-model.md](../docs/resonance-model.md) — единый словарь
-- [docs/nand-architecture.md](../docs/nand-architecture.md) — `distinct` как единственный примитив (правило #4)
-- [docs/friston-loop.md](../docs/friston-loop.md) — PE как единственный драйвер (правило #5)
+- [TODO.md](TODO.md) — что осталось делать
+- [docs/neurochem-design.md § 5-axis](../docs/neurochem-design.md) — Правило 6 в коде после Phase D
+- [TODO.md § 🧹 Cleanup](TODO.md) — опциональный line-count cleanup (Phase E-I)
+- [rgk-spec.md](rgk-spec.md) — теоретическая модель РГК
+- [resonance-code-changes.md](resonance-code-changes.md), [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 specs
+- [docs/world-model.md](../docs/world-model.md), [docs/resonance-model.md](../docs/resonance-model.md), [docs/nand-architecture.md](../docs/nand-architecture.md), [docs/friston-loop.md](../docs/friston-loop.md) — теоретический каркас

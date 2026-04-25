@@ -394,7 +394,7 @@ class UserState:
 
     # ── Phase D: 5-axis chem (ACh + GABA доступны как property) ─────────────
     # Default 0.5 без feeders. Feeders подключены в cognitive_loop (Step 5c/d).
-    # См. planning/rgk-migration-plan.md §6 «User-side ACh + GABA feeders».
+    # См. docs/neurochem-design.md §6 «User-side ACh + GABA feeders».
 
     @property
     def acetylcholine(self) -> float:
@@ -800,7 +800,7 @@ class UserState:
         v1 ОГРАНИЧЕНИЕ: novelty считается через distinct() embedding-метрику
         cognitive_loop'а, callers ответственны за качество. Если distinct
         шумит — ACh шумит. Калибровка через 2 нед use, см. docs/world-model.md
-        и planning/rgk-migration-plan.md §6.
+        и docs/neurochem-design.md §6.
         """
         sig = max(0.0, min(1.0, float(novelty)))
         if boost:
@@ -818,7 +818,7 @@ class UserState:
 
         v1 ОГРАНИЧЕНИЕ: redirect existing focus_residue, не новый источник.
         Breathing detection (low NE + high HRV coh + slow input rate) пока
-        не реализована — см. planning/rgk-migration-plan.md §6 для opt-in
+        не реализована — см. docs/neurochem-design.md §6 для opt-in
         второго feeder.
         """
         sig = max(0.0, min(1.0, 1.0 - float(self.focus_residue)))

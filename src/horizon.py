@@ -464,6 +464,10 @@ class CognitiveState:
                 "dopamine":       neuro_dict["dopamine"],
                 "serotonin":      neuro_dict["serotonin"],
                 "norepinephrine": neuro_dict["norepinephrine"],
+                # Phase D: 5-axis chem + balance diagnostic
+                "acetylcholine":  neuro_dict.get("acetylcholine", 0.5),
+                "gaba":           neuro_dict.get("gaba", 0.5),
+                "balance":        neuro_dict.get("balance", 1.0),
                 # burnout = display_burnout: max(conflict_accumulator,
                 # silence_pressure, imbalance_pressure). Три feeder'а:
                 #   • conflict — графовые конфликты (единственный активирует freeze)

@@ -132,12 +132,12 @@ UI показывает максимум трёх. Усталость польз
 | Free Energy / surprise (Friston) | UserState.surprise + вектор surprise (3D) | [user_state.py::tick_expectation](../src/user_state.py), подробно → [friston-loop.md](friston-loop.md) | 3D PE-вектор + attribution |
 | Prediction Error (active inference) | 5 каналов PE → давление дисбаланса (imbalance_pressure) | [friston-loop.md § Анатомия](friston-loop.md) | user 3D + TOD + goal + HRV + self, max-агрегирование |
 | Valence-Arousal-Dominance (VAD, Russell+Mehrabian) | DA/S/NE + UserState.valence + UserState.agency | [neurochem.py](../src/neurochem.py) + [user_state.py](../src/user_state.py) | 3 оси арусала, valence отдельно, Dominance = agency (OQ #2 measurements) |
-| Belief space / state distribution | UserState.vector() (3D, 2026-04-23) | [user_state.py](../src/user_state.py) | Непрерывный, EMA-сглаженный, выгорание отдельным полем |
+| 5-axis резонансная нейрохимия (РГК) | DA/5HT/NE/ACh/GABA + balance() = (DA·NE·ACh)/(5HT·GABA) | [src/rgk.py](../src/rgk.py), facades в [user_state.py](../src/user_state.py) и [neurochem.py](../src/neurochem.py) | Полная 5-axis; balance() как diagnostic скаляр; ACh/GABA fed из cognitive_loop как proxy (см. [neurochem-design.md](neurochem-design.md)) |
+| Belief space / state distribution | UserState.vector() (3D DA/5HT/NE) | [user_state.py](../src/user_state.py) | Непрерывный, EMA-сглаженный, выгорание/agency отдельным полем |
 | Precision weighting | CognitiveState.precision, effective_precision | [horizon.py](../src/horizon.py) | Уже есть, гейтит policy weights |
-| Cost of control / регуляторное усилие | energy dual-pool + decisions_today × 6 + cascading tax | [user_state.py](../src/user_state.py), [assistant.py](../src/assistant.py) | Dynamic cost, не статический счётчик |
+| Cost of control / регуляторное усилие | 3-zone capacity (физио/эмо/когн контуры) + cognitive_load_today | [user_state.py](../src/user_state.py), [capacity-design.md](capacity-design.md) | Three-channel capacity gate, не статический счётчик; dual-pool legacy удалён в Phase C |
 | Allostatic load | ProtectiveFreeze (conflict + silence + imbalance feeders) | [neurochem.py](../src/neurochem.py) | Три feeder'а, один display_burnout, плюс совмещённое выгорание с user для множителя простоя |
 | Affective inertia / smoothing | EMA затухание (0.9–0.98) во всех апдейтах | везде | Даёт ту же плавность что explicit velocity, без второго поля |
-| Attractors in belief space | workspaces (пока — контейнеры; аттракторы в [OQ #5](../planning/TODO.md)) | [workspace.py](../src/workspace.py) | Открыто: аттракторы в neurochem-пространстве |
 | Soft context blending | sync_regime, derived из continuous sync_error | [user_state.py](../src/user_state.py) | Не if/else, derived-state |
 | Recovery / return-to-baseline | ProtectiveFreeze.THETA_RECOVERY + падение давления тишины | [neurochem.py](../src/neurochem.py) | Гистерезис, не жёсткий reset |
 | Pre-activation / anticipatory computation (зрачки, [ixbt 2026-04](https://www.ixbt.com/live/science/)) | UserState.expectation_by_tod (baseline по времени суток) + CognitiveState.precision | [user_state.py](../src/user_state.py), [friston-loop.md](friston-loop.md) | Ожидание контекстуально (morning/day/evening/night), не один глобальный baseline |
@@ -152,8 +152,8 @@ UI показывает максимум трёх. Усталость польз
 - Когда предлагается «UserModel параллельно CognitiveState» — у нас уже UserState симметричен Neurochem + sync_error как расстояние между ними.
 
 Открытые направления (не переоткрытия существующего):
-- **OQ #5 Workspace-аттракторы** — контексты как точки притяжения.
 - **OQ #2 Agency как 5-я ось** — в процессе измерений, подтверждается и SDT, и VAD-Dominance.
+- **OQ #6 ACh/GABA feeders quality** — реализованы как proxy от формы графа; калибровка по distribution `balance()` через 2 мес.
 
 ---
 

@@ -104,7 +104,7 @@ class Neurochem:
 
     # ── Phase D: 5-axis chem (ACh + GABA доступны как property) ─────────────
     # Без feeders default=0.5. Step 5 добавит источники signal в graph_logic /
-    # cognitive_loop. См. planning/rgk-migration-plan.md §6 «ACh+GABA feeders».
+    # cognitive_loop. См. docs/neurochem-design.md §6 «ACh+GABA feeders».
 
     @property
     def acetylcholine(self) -> float:
@@ -186,7 +186,7 @@ class Neurochem:
         — proxy. Граф может расти быстро, но ноды могут быть тривиальными
         copy-paste, не отражая «открытость новому». Bridge_quality ловит
         эту разницу частично (только бы значимые мосты находились).
-        Калибровка через 2 нед use, см. planning/rgk-migration-plan.md §6.
+        Калибровка через 2 нед use, см. docs/neurochem-design.md §6.
         """
         rate_norm = max(0.0, min(1.0, float(node_creation_rate)))
         self._rgk.system.plasticity.feed(rate_norm)

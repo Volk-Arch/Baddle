@@ -1730,6 +1730,32 @@ function _updateNeurochemPanel(metrics) {
   // Default 0.5 = нет данных (planned=0 → не обновлялось).
   setBar('user-agency-fill', 'user-agency-val', typeof user.agency === 'number' ? user.agency : 0.5);
 
+  // Phase D: balance() — резонансный скаляр (DA·NE·ACh)/(5HT·GABA).
+  // Corridor [0.5, 1.5] = green; [0.3, 0.5] | [1.5, 2.0] = yellow; иначе red.
+  const _balanceColor = (v) => {
+    if (v == null || isNaN(v)) return '';
+    if (v >= 0.5 && v <= 1.5) return 'green';
+    if ((v >= 0.3 && v < 0.5) || (v > 1.5 && v <= 2.0)) return 'yellow';
+    return 'red';
+  };
+  const _setBalanceCell = (valId, cellId, v) => {
+    const valEl = document.getElementById(valId);
+    const cellEl = document.getElementById(cellId);
+    if (!valEl || !cellEl) return;
+    if (typeof v !== 'number' || isNaN(v)) {
+      valEl.textContent = '—';
+      cellEl.classList.remove('green', 'yellow', 'red');
+      return;
+    }
+    valEl.textContent = v.toFixed(2);
+    cellEl.classList.remove('green', 'yellow', 'red');
+    cellEl.classList.add(_balanceColor(v));
+  };
+  _setBalanceCell('balance-user-val', 'balance-user',
+                   typeof user.balance === 'number' ? user.balance : null);
+  _setBalanceCell('balance-system-val', 'balance-system',
+                   typeof neuro.balance === 'number' ? neuro.balance : null);
+
   // Sync indicator (prime-directive в одном бейдже)
   const regime = metrics.sync_regime || 'flow';
   const syncErr = typeof metrics.sync_error === 'number' ? metrics.sync_error : 0;

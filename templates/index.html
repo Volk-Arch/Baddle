@@ -57,6 +57,18 @@
         </div>
       </div>
 
+      <!-- Phase D: balance() резонансный скаляр (DA·NE·ACh)/(5HT·GABA).
+           Корридор [0.3, 1.5] = резонанс. >1.5 → срыв; <0.3 → застой. -->
+      <div class="assist-balance" id="assist-balance"
+           title="🌊 Резонанс (Phase D): User × System balance. Формула (DA·NE·ACh)/(5HT·GABA). Зелёный [0.5–1.5] = резонанс, жёлтый [0.3–0.5] или [1.5–2.0] = пограничный, красный = срыв или застой.">
+        <span class="balance-icon">🌊</span>
+        <span class="balance-pair">
+          <span class="balance-cell" id="balance-user" title="User balance">U <span id="balance-user-val">—</span></span>
+          <span class="balance-sep">·</span>
+          <span class="balance-cell" id="balance-system" title="System balance">S <span id="balance-system-val">—</span></span>
+        </span>
+      </div>
+
       <!-- Live cognitive cone: precision → форма, state → цвет,
            thinking → pulse + dual cones для pump. Polls /assist/state. -->
       <div class="baddle-cone-wrap" title="Когнитивный конус: precision → раствор и длина, state → цвет. Пульсирует когда Baddle думает. Раздваивается на pump (ищет мост).">
