@@ -1,26 +1,24 @@
 """РГК — физическое ядро (Правило 6 в [docs/architecture-rules.md](../docs/architecture-rules.md)).
 
-Гипотеза: 6150 строк state+dynamics в Baddle = проекция одной модели.
-Этот файл — попытка коллапса. ~200 строк ядра + ~100 строк проекторов.
+Subsтрат всех state+dynamics Baddle. UserState/Neurochem/ProtectiveFreeze —
+thin facades с @property proxies (см. B0/B4 в memory snapshots).
 
 Структура:
   1. `Resonator` — один резонатор: 5-chem (gain/hyst/aperture/plasticity/damping)
      + R/C bit + balance() + vector(). 5 параметров — gain~DA, hyst~5HT,
-     aperture~NE, plasticity~ACh (новое), damping~GABA (новое).
+     aperture~NE, plasticity~ACh, damping~GABA.
   2. `РГК` — два связанных резонатора (user mirror + system mirror) +
      auxiliary state (valence/agency/burnout, predictive baselines, pressure
-     accumulators) + projectors → legacy snapshots для identity-сравнения.
+     accumulators, HRV/activity passthrough, day_summary, focus_residue,
+     timestamps) + projectors через `project(domain)`.
+  3. `get_global_rgk()` — singleton для production bootstrap (каскад зеркал
+     = ОДНА пара резонаторов).
 
 Запуск как скрипт:
     python -m src.rgk
 печатает diff vs EXPECTED из tests/test_metric_identity.py — semantic
-identity check. OK = совпало с TOL=1e-5, DIFF/MISS = диагностика
-«что РГК-ядро не закрывает».
-
-Назначение прототипа: НЕ замена production-кода, а **проверка модели**
-до реального коллапса в новой ветке. Если identity не получается на
-зафиксированном event sequence — РГК-spec неполна, нужна дополнительная
-структура.
+identity check для регрессий формул. OK = совпало с TOL=1e-5, DIFF/MISS =
+диагностика «что изменилось». Используется как CLI-debug, не как тест.
 """
 from __future__ import annotations
 
@@ -464,9 +462,11 @@ class РГК:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 3. Singleton — каскад зеркал = ОДНА пара резонаторов (D-5).
-# Tests НЕ используют global — создают independent РГК через UserState() /
-# Neurochem() / ProtectiveFreeze() без `rgk=` argument.
+# 3. Singleton — каскад зеркал = ОДНА пара резонаторов.
+# Production bootstrap (`get_user_state()` + `CognitiveState.__init__`)
+# использует `get_global_rgk()`, чтобы UserState/Neurochem/ProtectiveFreeze
+# делили один объект. Tests НЕ используют global — создают independent
+# РГК через UserState() / Neurochem() / ProtectiveFreeze() без `rgk=` arg.
 # ────────────────────────────────────────────────────────────────────────────
 
 _GLOBAL_RGK: "РГК | None" = None

@@ -1,4 +1,4 @@
-"""Signal dispatcher — Правило 1 из simplification-plan §4.
+"""Signal dispatcher — Правило 1 из docs/architecture-rules.md.
 
 «Любое событие к юзеру это `Signal(type, urgency, content, expires_at)`».
 Заменяет 13 bespoke alert-cascade'ов в `cognitive_loop.py` на:

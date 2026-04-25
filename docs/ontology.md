@@ -14,7 +14,6 @@ per-workspace в `graphs/<ws>/`, registry в `workspaces/index.json` —
 ```jsonc
 {
   "decisions_today": 12,
-  "daily_spent": 38.5,          // сколько energy потрачено сегодня
   "last_reset_date": "2026-04-18",
   "last_interaction": 1776528912.4,
   "total_decisions": 234,
@@ -25,16 +24,23 @@ per-workspace в `graphs/<ws>/`, registry в `workspaces/index.json` —
     "dopamine": 0.5,
     "serotonin": 0.5,
     "norepinephrine": 0.5,
+    "acetylcholine": 0.5,
+    "gaba": 0.5,
+    "balance": 1.0,
+    "mode": "R",                 // R/C bit (Counter-wave Правило 7)
     "burnout": 0.02,
     "valence": 0.1,
     "expectation": 0.5,
     "reality": 0.5,
     "surprise": 0.0,
     "imbalance": 0.0,
-    "long_reserve": 1500.0,
     "activity_magnitude": 0.0,
     "activity_zone": {"key":"recovery", "emoji":"🟢", "label":"..."},
     "named_state": {"key":"neutral", "label":"Нейтральное", "advice":"..."},
+    "frequency_regime": "mixed",   // long_wave/short_wave/mixed/flat
+    "focus_residue": 0.0,
+    "cognitive_load_today": 0.0,
+    "capacity_zone": "green",
     "hrv": {"coherence":0.7, "stress":0.3, "rmssd":42.0},
     "last_sleep_duration_h": 7.2   // выводится из activity log или check-in
   }
@@ -143,7 +149,7 @@ Replay выдаёт `{id → {..., completions:[...], skips:[...], status}}`.
 ```
 
 Derived: `surprise = reality - expected`. Кормит `UserState.surprise` и
-`long_reserve` через `apply_to_user_state(entry)`.
+chem axes (NE/serotonin/valence) через `apply_to_user_state(entry)`.
 
 ---
 

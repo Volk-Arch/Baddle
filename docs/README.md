@@ -132,16 +132,6 @@ imbalance_pressure без контекста.
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
 | [mockup.html](mockup.html) | Интерактивный мокап UI |
 
-## Deprecated
-
-| Doc | Что было | Почему убрано |
-|---|---|---|
-| [workspace-design.md](workspace-design.md) | Multi-graph: WorkspaceManager, переключение контекстов | Baddle — инструмент одного человека, один контекст; мульти-графы так и не получили живого use-case |
-| [cross-graph-design.md](cross-graph-design.md) | Continuity между сессиями через seed-ноды | Зависел от workspace-переключений; без них теряет смысл |
-
-Файлы оставлены как архив — если захочется восстановить функциональность.
-Детали удаления кода — [planning/TODO § Упразднить workspace](../planning/TODO.md).
-
 **Планирование** — [../planning/](../planning/):
 [TODO.md](../planning/TODO.md) (все задачи + открытые архитектурные вопросы),
 [cleanup-plan.md](../planning/cleanup-plan.md) (Track A + B оставшегося cleanup),

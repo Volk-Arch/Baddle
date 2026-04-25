@@ -195,12 +195,6 @@ class CognitiveLoop:
         "sync_seeking":            30 * 60,       # 30 мин
         "dmn_bridge":              24 * 3600,     # 24 часа (увидит утром?)
         "scout_bridge":            24 * 3600,
-        "suggestion_recurring":    7 * 86400,     # 7 дней на accept/reject
-        "suggestion_constraint":   7 * 86400,
-        "suggestion_generic":      7 * 86400,
-        "reminder_plan":           30 * 60,
-        "alert_low_energy":        60 * 60,
-        "morning_briefing":        4 * 3600,
     }
     ACTION_TIMEOUT_DEFAULT = 60 * 60              # 1 час если kind не в словаре
 
@@ -257,7 +251,6 @@ class CognitiveLoop:
         self._last_heartbeat = 0.0
         self._last_dmn_deep = 0.0  # таймер DMN autonomous deep-research
         self._last_dmn_converge = 0.0  # таймер server-side tick-autorun до STABLE
-        self._last_dmn_cross = 0.0  # таймер cross-graph bridge scan
         self._last_suggestions_check = 0.0  # таймер observation suggestions (compute throttle)
         self._last_agency_update = 0.0      # таймер agency EMA update
         self._last_cognitive_load_update = 0.0  # Phase C: cogload bookkeeping
@@ -394,9 +387,8 @@ class CognitiveLoop:
                     continue
                 if later_ts < recorded_ts or later_ts > now:
                     continue
-                # User-chat закрывает sync_seeking, reminder, briefing
-                if later_kind == "user_chat" and kind in ("sync_seeking", "reminder_plan",
-                                                            "morning_briefing", "alert_low_energy"):
+                # User-chat закрывает sync_seeking
+                if later_kind == "user_chat" and kind == "sync_seeking":
                     reaction = "chat"
                     reaction_ts = later_ts
                     break
@@ -1696,7 +1688,7 @@ class CognitiveLoop:
         UI рендерит как набор секций (см. mockup Thursday briefing). Порядок:
           1. Sleep      (из activity log)
           2. Recovery   (HRV energy_recovery + named_state)
-          3. Energy     (long_reserve %)
+          3. Capacity   (3-zone)
           4. Overnight  (Scout bridges найденные ночью)
           5. Activity   (вчера: N часов по категориям)
           6. Goals      (открытые + первая)
@@ -1795,7 +1787,7 @@ class CognitiveLoop:
                     kind = "warn"
             sections.append({"emoji": "⚡", "title": title, "subtitle": subtitle or "—", "kind": kind})
 
-        # 3. Capacity zone (Phase C: заменяет long_reserve %)
+        # 3. Capacity zone
         try:
             metrics = get_global_state().get_metrics()
             user = metrics.get("user_state") or {}
@@ -2371,9 +2363,9 @@ class CognitiveLoop:
         except Exception:
             pass
 
-        # Phase D prompt-routing: named_state (8-region РГК-карта по chem profile)
-        # имеет приоритет над frequency_regime. 5-axis chem точнее ловит режим
-        # чем 2-axis HRV-derived freq. См. docs/neurochem-design.md и rgk-spec §5.
+        # named_state (8-region РГК-карта по chem profile) имеет приоритет
+        # над frequency_regime. 5-axis chem точнее ловит режим чем 2-axis
+        # HRV-derived freq. См. docs/neurochem-design.md.
         # Mapping из РГК v1.0 §«Влияние на промпт-роутинг»:
         #   flow → ambient (поддержка потока, не мешать)
         #   stable → simple (нейтрально)
@@ -2568,16 +2560,9 @@ class CognitiveLoop:
 
     # ── Alerts queue ───────────────────────────────────────────────────
 
-    def _add_alert(self, alert: dict, dedupe: bool = False):
-        """Append alert в queue. Phase B: dispatcher already handles dedup
-        via dedup_key + window_s; legacy `dedupe=True` flag kept для backward
-        compat (для unit-test path и редких прямых вызовов вне dispatcher).
-        """
+    def _add_alert(self, alert: dict):
+        """Append alert в queue. Dedup делает Dispatcher через dedup_key + window_s."""
         with self._lock:
-            if dedupe:
-                for a in self._alerts_queue:
-                    if a.get("type") == alert.get("type"):
-                        return
             alert["ts"] = time.time()
             self._alerts_queue.append(alert)
             if len(self._alerts_queue) > 20:
@@ -2606,7 +2591,6 @@ class CognitiveLoop:
             "heartbeat_interval_s": self.HEARTBEAT_INTERVAL,
             "last_dmn_deep": self._last_dmn_deep,
             "last_dmn_converge": self._last_dmn_converge,
-            "last_dmn_cross": self._last_dmn_cross,
             "recent_bridges": list(self._recent_bridges or [])[-5:],
             "dmn": gate,
         }

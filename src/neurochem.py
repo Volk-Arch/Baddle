@@ -1,12 +1,13 @@
-"""Нейрохимия второго мозга — три скаляра, γ derived, burnout отдельно.
+"""Нейрохимия второго мозга — пять скаляров, γ derived, burnout отдельно.
 
-Все EMA-метрики живут в `self.metrics: MetricRegistry` (2026-04-24, Фаза A
-из docs/architecture-rules.md). Правило 2: «любая производная метрика
-это `EMA(source_event, decay)`». Обновления идут через `fire_event(type, **payload)`.
+EMA-метрики живут в `self._rgk` (общий резонатор, см. src/rgk.py). Правило 2
+из docs/architecture-rules.md: «любая производная метрика это
+`EMA(source_event, decay)`». Обновления — explicit `feed_*` методы +
+`s_graph` / `tick_s_pred` через _rgk.
 
 Максимально простой контракт. Каждая формула — одна строка EMA.
 
-Пример в духе пользовательского эскиза:
+Пример:
 
     chem = Neurochem()
     chem.update(d=0.42, w_change=[0.1, -0.02, 0.3], weights=[0.2, 0.3, 0.5])
@@ -54,10 +55,10 @@ class Neurochem:
     UserState.expectation_vec. Питается через `tick_expectation()`,
     вызывается из cognitive_loop._advance_tick параллельно с user EMA.
 
-    **Implementation note (2026-04-24):** все EMA живут в `self.metrics`
-    (MetricRegistry). Обновления через `fire_event("graph_update", ...)` /
-    `fire_event("tick", vector=...)`. Properties `.dopamine` / `.serotonin` /
-    `.norepinephrine` / `.expectation_vec` — backward-compat.
+    EMA живут в `self._rgk.system.*` (chem axes), `self._rgk.s_exp_vec`
+    (predictive baseline). Обновления через `update()` (graph delta) /
+    `tick_expectation()` (self-prediction baseline). Properties делегируют
+    к `_rgk` — единый источник истины.
     """
 
     RPE_WINDOW = 20    # скользящее окно для baseline Δconfidence

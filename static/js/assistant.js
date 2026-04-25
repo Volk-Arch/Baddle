@@ -156,8 +156,6 @@ async function debugAlertsCheck() {
   }
 }
 
-// resetEnergy() удалён в Phase C Шаг 6 — dual-pool energy заменена capacity
-// (auto-roll, без manual reset). Кнопка из HTML тоже убрана.
 
 async function reloadDemo() {
   const typed = prompt(

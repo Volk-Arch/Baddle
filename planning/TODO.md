@@ -35,6 +35,13 @@
 
 ---
 
+## ⚡ Cheap (validation / self-research)
+
+- [ ] **Outcome tracking dashboard** — UI viewer для validation работает ли система. Sync_error trends + balance() distribution + capacity zone time per zone + frequency_regime histogram. Данные уже пишутся в `data/prime_directive.jsonl` + state snapshots, нужен только chart endpoint + UI tab в /lab. Покажет работает ли система **на тебе** через месяц. **~3-4ч.**
+- [ ] **Insight bookmark** — Action Memory ловит actions/outcomes, episodic memory ловит nodes, но subjective marker «эта мысль повлияла» отсутствует. Простая ⭐ кнопка → нода `insight_bookmark` (type=insight, refs=[active_session_indices]) с context. Light feature, бесплатна для long-term self-research через год. **~1-2ч.**
+
+---
+
 ## 🌊 Tier 2 — фичи (большие, по очереди когда appetite)
 
 ### Резонансные

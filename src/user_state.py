@@ -69,24 +69,24 @@ self PE, одна метрика давления.
 Legacy `expectation` (scalar EMA state_level) и `surprise` (scalar)
 сохранены для backward-compat — UI их всё ещё потребляет.
 
-## Implementation note (2026-04-24, Фаза A)
+## Implementation note
 
-Все EMA-метрики живут в `self.metrics: MetricRegistry` — одна точка
-регистрации, обновления через `fire_event(type, **payload)`. Правило 2
-из docs/architecture-rules.md. События:
+EMA-метрики живут в `self._rgk` (см. src/rgk.py). UserState — thin facade
+над _rgk: 15 @property proxies (HRV/activity/day_summary/focus_residue/
+timestamps), 9 chem properties (DA/5HT/NE/ACh/GABA/valence/agency/burnout/
+expectation). Правило 2 + Правило 6 из docs/architecture-rules.md.
 
-  - `hrv_update` → serotonin, norepinephrine, hrv_baseline_by_tod_{tod}
-  - `engagement` → dopamine (default decay)
-  - `feedback` → dopamine, valence (override 0.9 для обоих)
-  - `chat_sentiment` → valence (default decay)
-  - `plan_completion` → agency (skip if planned=0)
-  - `energy` → burnout
-  - `tick` → expectation, expectation_by_tod_{tod}, expectation_vec
-    (с scalar_override/vec_override в payload для surprise-boost)
+Updates через explicit methods:
+  - `update_from_hrv` → serotonin, norepinephrine, hrv_baseline
+  - `update_from_engagement` / `update_from_feedback` → dopamine, valence
+  - `update_from_chat_sentiment` → valence
+  - `update_from_plan_completion` → agency
+  - `update_from_energy` → burnout
+  - `tick_expectation` → expectation_by_tod, expectation_vec
+  - `feed_acetylcholine` (на surprise) / `feed_gaba` (на focus_residue)
 
-Bespoke остаются: `_feedback_counts`, `_surprise_boost_remaining`,
-burnout-bump (+0.05 на reject), streak-bias valence, timestamps,
-`long_reserve`, `activity_magnitude`.
+Bespoke остаются: `_feedback_counts` (legacy duplicate с `_rgk._fb`,
+TODO cleanup), burnout-bump (+0.05 на reject), streak-bias valence.
 """
 import math
 import time

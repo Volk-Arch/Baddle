@@ -14,7 +14,6 @@
 Вычисляемое:
   • surprise = reality - expected    → feed в UserState.surprise
   • valence_hint = reality / 2       → feed в valence
-  • energy_est = energy / 100        → хинт для long_reserve scaling
 
 Файл: `checkins.jsonl` append-only.
 """

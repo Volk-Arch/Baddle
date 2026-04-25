@@ -1300,12 +1300,6 @@ def assist_prime_directive():
     return jsonify({"ok": True, **summary})
 
 
-# /assist/simulate-day endpoint удалён в Phase C Шаг 6 — dual-pool simulation
-# (daily_spent + long_reserve cascade) больше не работает. По плану TODO нужна
-# capacity-based симуляция (предсказать cognitive_load_today + zone от плана
-# активностей) — это отдельная задача после данных calibration window.
-
-
 @assistant_bp.route("/assist/named-states", methods=["GET"])
 def assist_named_states():
     """UI map: 10 регионов из MindBalance-Voronoi с координатами и advice."""
@@ -2034,10 +2028,10 @@ def plans_delete():
 
 @assistant_bp.route("/checkin", methods=["POST"])
 def checkin_add():
-    """Body: {energy?, focus?, stress?, expected?, reality?, note?}.
+    """Body: {focus?, stress?, expected?, reality?, note?}.
 
     Все поля опциональны. Записывает событие + корректирует UserState:
-    energy→long_reserve, stress→NE, focus→serotonin, reality→valence,
+    stress→NE, focus→serotonin, reality→valence,
     (reality−expected)→surprise. Replaces HRV-контур когда трекера нет.
     """
     from .checkins import add_checkin, apply_to_user_state
@@ -2387,12 +2381,6 @@ def assist_decompose():
 
 # ── Morning briefing ──────────────────────────────────────────────────
 
-# ── Energy reset (для демо/отладки) ────────────────────────────────────
-# Сбрасывает дневной счётчик + потраченную энергию обратно до 0. Как если
-# бы наступила новая дата. long_reserve НЕ трогаем (это недельный пул).
-# Единственный use-case — демонстрация UX или отладка: юзер хочет начать
-# день заново не ждя полуночи.
-
 # ── Sensor stream (polymorphic body sensors) ──────────────────────────
 # Unified поток от любого источника: simulator, Polar, Apple Watch,
 # manual check-in. UserState читает агрегат отсюда (не из конкретного
@@ -2459,7 +2447,6 @@ _HEAVY_CHECKS = {
     "_check_dmn_deep_research",     # full execute_deep pipeline
     "_check_dmn_converge",          # autorun loop
     "_check_dmn_continuous",        # pump-bridge LLM
-    "_check_dmn_cross_graph",       # cross-ws scan
 }
 
 
@@ -2533,10 +2520,6 @@ def debug_alerts_trigger_all():
         "include_heavy": include_heavy,
     }
     return jsonify({"summary": summary, "results": results})
-
-
-# /user_state/reset-energy endpoint удалён в Phase C Шаг 6 — dual-pool energy
-# заменена 3-zone capacity model (без manual reset, само считается).
 
 
 # ── Chat history (ранее жил в browser localStorage) ───────────────────
