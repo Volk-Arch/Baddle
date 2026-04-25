@@ -145,16 +145,10 @@ class CognitiveLoop:
     GRAPH_FLUSH_INTERVAL = 120        # каждые 2 мин — auto-save графа на диск
                                       # (nodes + embeddings) чтобы рестарт не терял данные
     LOW_ENERGY_THRESHOLD = 30         # ниже этого — тяжёлые решения предлагаем отложить
-    LOW_ENERGY_CHECK_INTERVAL = 30 * 60  # раз в 30 мин — не спамить
     HEAVY_MODES = ("dispute", "tournament", "bayes", "race", "builder", "cascade", "scales")
 
     # Plan reminders: push-alert за N min до planned events
     PLAN_REMINDER_MINUTES = 10        # за сколько минут до события пушить
-    PLAN_REMINDER_CHECK_INTERVAL = 60 # раз в минуту проверяем upcoming
-
-    # Recurring goals lag: для «вечных» целей (kind=recurring) проверяем
-    # отставание от расписания (expected_by_now vs done_today).
-    RECURRING_LAG_CHECK_INTERVAL = 30 * 60   # каждые 30 мин
     RECURRING_LAG_MIN = 1                    # alert когда отстаём ≥1 instance
 
     # Observation suggestions: раз в сутки собираем draft-карточки из
@@ -211,21 +205,9 @@ class CognitiveLoop:
     ACTION_TIMEOUT_DEFAULT = 60 * 60              # 1 час если kind не в словаре
 
     # Active sync-seeking (resonance protocol механика #3):
-    # Когда `freeze.silence_pressure` высокий И юзер давно не писал — Baddle
-    # пишет мягкое сообщение чтобы восстановить контакт. LLM генерирует
-    # текст с учётом контекста (время дня, recent topics, silence-уровень),
-    # чтобы каждый раз по-разному. Не nag — попытка резонанс зеркала.
-    SYNC_SEEKING_SILENCE_MIN = 0.3         # ниже — не пушим, тишина ещё мягкая
-    SYNC_SEEKING_IDLE_SECONDS = 2 * 3600   # физически давно не писал (2 часа)
-    SYNC_SEEKING_INTERVAL = 2 * 3600       # не чаще раза в 2 часа
-    SYNC_SEEKING_COUNTERFACTUAL_RATE = 0.10  # в 10% случаев когда все gate'ы
-                                             # прошли — намеренно промолчать и
-                                             # залогировать как counterfactual.
-                                             # Baseline для A/B измерения:
-                                             # двигает ли recovery само вмешательство
-                                             # Baddle vs юзер возвращается сам.
-    # Защита от шума: если любой proactive alert был недавно — пропускаем
-    SYNC_SEEKING_QUIET_AFTER_OTHER = 30 * 60   # 30 мин после последнего alert
+    # Sync-seeking, low-energy, plan reminders, recurring lag — Phase B
+    # вынесены в детекторы (см. src/detectors.py). Throttle/dedup делает
+    # Dispatcher; константы тут больше не нужны.
 
     # Adaptive idle (resonance protocol механики #2 + #4 together):
     # Multiplier = 1 + combined_burnout × (IDLE_MULTIPLIER_MAX - 1)
@@ -267,19 +249,16 @@ class CognitiveLoop:
         self._last_graph_flush = 0.0
         self._last_activity_tick = 0.0  # для activity → energy cost
         self._activity_cost_carry = 0.0  # остаток < 0.1 между тиками (не терять копейки)
-        self._last_low_energy_check = 0.0  # дроссель low_energy_heavy alerts
-        self._last_plan_reminder_check = 0.0
-        self._reminded_plan_keys: set = set()  # "plan_id:YYYY-MM-DD" dedup
-        self._last_evening_retro_date: str = ""  # YYYY-MM-DD последнего ретро
+        # Phase B: per-detector throttle полей _last_low_energy_check,
+        # _last_plan_reminder_check, _reminded_plan_keys, _last_recurring_check,
+        # _notified_lag, _last_sync_seeking, _last_proactive_alert_ts удалены
+        # — их роль берёт Dispatcher (budget + dedup_key + window_s).
+        self._last_evening_retro_date: str = ""  # YYYY-MM-DD последнего ретро (используется detector'ом)
         self._last_heartbeat = 0.0
         self._last_dmn_deep = 0.0  # таймер DMN autonomous deep-research
         self._last_dmn_converge = 0.0  # таймер server-side tick-autorun до STABLE
         self._last_dmn_cross = 0.0  # таймер cross-graph bridge scan
-        self._last_recurring_check = 0.0  # таймер recurring lag check
-        self._notified_lag: dict[str, float] = {}  # goal_id → ts последнего alert
-        self._last_suggestions_check = 0.0  # таймер observation suggestions
-        self._last_sync_seeking = 0.0       # таймер active sync-seeking
-        self._last_proactive_alert_ts = 0.0 # любой proactive alert (не sync-seek'им если недавно)
+        self._last_suggestions_check = 0.0  # таймер observation suggestions (compute throttle)
         self._last_agency_update = 0.0      # таймер agency EMA update
         self._last_action_outcomes_check = 0.0  # таймер closing action outcomes
         self._last_prime_directive = 0.0    # таймер hourly prime_directive.jsonl записи
@@ -310,7 +289,7 @@ class CognitiveLoop:
 
         # Signal dispatcher — Phase B (2026-04-25). 13 детекторов в DETECTORS
         # collect signals → dispatcher решает emit/drop по urgency+budget+dedup.
-        # См. planning/phase-b-signal-dispatcher.md.
+        # См. правило 1 в planning/simplification-plan.md.
         self._dispatcher = Dispatcher(
             budget_per_window=5,        # max 5 non-critical alerts/час
             window_s=3600.0,             # 1 час окно для budget + dedup
@@ -763,26 +742,6 @@ class CognitiveLoop:
         effective = base_interval_s * self._idle_multiplier()
         return self._throttled(attr, effective)
 
-    def _log_throttle_drop(self, check: str, **ctx):
-        """Записать что proactive check сработал по pre-conditions, но
-        throttle заблокировал. Данные для OQ «теряем ли ценное?»:
-        через 2 нед анализа увидим какие дропы high-urgency (silence=0.9,
-        lag=5, patterns=3) vs noise (silence=0.32, lag=1).
-
-        Вызывается ТОЛЬКО из alert-emitting check'ов в точке «я бы
-        выпустил alert сейчас, но throttle не даёт». Не инструментировать
-        bookkeeping-циклы (heartbeat / flush / hrv_push / consolidation).
-
-        Пишет в `data/throttle_drops.jsonl` append-only. Формат:
-            {"ts": 1234.5, "check": "sync_seeking", "ctx": {...}}
-        """
-        try:
-            from .paths import THROTTLE_DROPS_FILE
-            entry = {"ts": round(time.time(), 3), "check": check, "ctx": ctx}
-            with THROTTLE_DROPS_FILE.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception as e:
-            log.debug(f"[throttle_log] write failed: {e}")
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -1641,200 +1600,7 @@ class CognitiveLoop:
                 break
         return " | ".join(bits)
 
-    def _check_state_walk(self):
-        """DMN по state-графу: похожие моменты из прошлого → эпизодический alert.
-
-        1. Прогреваем embedding-кэш для хвоста (≤30 entries) — амортизация.
-        2. Берём embedding текущей сигнатуры.
-        3. query_similar(k=3), фильтруем < 1 час (тривиально-свежие).
-        4. Если топ-match достаточно близкий — surface as alert.
-        """
-        from .state_graph import get_state_graph
-        sg = get_state_graph()
-        if sg.count() < 10:
-            return  # слишком мало истории
-        if not self._throttled_idle("_last_state_walk", self.STATE_WALK_INTERVAL):
-            return
-
-        # Прогрев embedding-кэша для tail (<=30 последних)
-        try:
-            for entry in sg.tail(30):
-                sg.ensure_embedding(entry)
-        except Exception as e:
-            log.debug(f"[state_walk] warm embeddings failed: {e}")
-
-        # Embedding текущего момента
-        try:
-            from .api_backend import api_get_embedding
-            sig = self._build_current_state_signature()
-            query_emb = api_get_embedding(sig)
-            if not query_emb:
-                return
-        except Exception as e:
-            log.warning(f"[state_walk] query embedding failed: {e}")
-            return
-
-        try:
-            similar = sg.query_similar(query_emb, k=3, exclude_recent=3)
-        except Exception as e:
-            log.warning(f"[state_walk] query_similar failed: {e}")
-            return
-        if not similar:
-            return
-
-        # Фильтр: не всплывать если лучший match моложе часа (тривиально близко)
-        from datetime import datetime, timezone
-        now_utc = datetime.now(timezone.utc)
-        best = None
-        for entry in similar:
-            ts_iso = entry.get("timestamp")
-            if not ts_iso:
-                continue
-            try:
-                ts = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
-                if (now_utc - ts).total_seconds() < 3600:
-                    continue
-            except Exception:
-                pass
-            best = entry
-            break
-        if best is None:
-            return
-
-        ts_disp = str(best.get("timestamp", "?"))[:10]
-        action = best.get("action", "?")
-        reason = (best.get("reason") or "")[:100]
-        # Internal tick-reasons ("EMERGENT: 0/5 nodes. Need mass.") не лезут
-        # в UI. Вместо них — краткая человеческая формулировка что система
-        # делала в тот момент. Переводим action → глагол.
-        _ACTION_RU = {
-            "think_toward":    "генерировал новые идеи",
-            "elaborate":       "углублял важную мысль",
-            "elaborate_toward":"углублял в сторону цели",
-            "smartdc":         "проверял противоречия",
-            "doubt":           "ставил гипотезу под сомнение",
-            "expand":          "расширял линию мышления",
-            "collapse":        "сжимал похожие идеи",
-            "compare":         "сравнивал варианты",
-            "pump":            "искал мост между далёкими идеями",
-            "synthesize":      "собирал итог",
-            "ask":             "задавал вопрос",
-            "stable":          "отдыхал (достиг стабильности)",
-            "merge":           "объединял близкие идеи",
-            "walk":            "гулял по графу мыслей",
-        }
-        _ACTION_EN = {
-            "think_toward":    "generated new ideas",
-            "elaborate":       "deepened a key thought",
-            "elaborate_toward":"deepened toward a goal",
-            "smartdc":         "checked contradictions",
-            "doubt":           "doubted a hypothesis",
-            "expand":          "expanded a line of thinking",
-            "collapse":        "merged similar ideas",
-            "compare":         "compared options",
-            "pump":            "searched bridges between distant ideas",
-            "synthesize":      "synthesized",
-            "ask":             "asked a question",
-            "stable":          "rested (converged)",
-            "merge":           "merged close ideas",
-            "walk":            "walked the graph",
-        }
-        verb_ru = _ACTION_RU.get(action, action)
-        verb_en = _ACTION_EN.get(action, action)
-        self._add_alert({
-            "type": "state_walk",
-            "severity": "info",
-            "text": f"🕰 Похожий момент ({ts_disp}): тогда я {verb_ru}.",
-            "text_en": f"🕰 Similar moment ({ts_disp}): back then I {verb_en}.",
-            "match": {
-                "hash": best.get("hash"),
-                "action": action,
-                "reason": reason,        # internal — только в meta, не в text
-                "timestamp": best.get("timestamp"),
-            },
-        }, dedupe=True)
-        log.info(f"[state_walk] episodic recall: {ts_disp} {action} — {reason[:60]}")
-
     # ── Morning briefing push (once per day, after wake_hour) ───────────
-
-    def _check_daily_briefing(self):
-        """Push morning-briefing alert в очередь раз в сутки после wake_hour.
-
-        Условия:
-          • прошло >= BRIEFING_INTERVAL с прошлого briefing
-          • текущий локальный час >= wake_hour (из profile.context, default 7)
-        `_last_briefing` персистится в user_state.json — чтобы рестарт
-        процесса не приводил к повторному брифингу в тот же день.
-        """
-        import datetime as _dt
-        now = time.time()
-
-        # Lazy-load last_briefing_ts из state (первый вызов после рестарта)
-        if getattr(self, "_briefing_loaded_from_disk", False) is False:
-            try:
-                from .assistant import _load_state
-                persisted = float((_load_state().get("last_briefing_ts") or 0.0))
-                if persisted > self._last_briefing:
-                    self._last_briefing = persisted
-            except Exception:
-                pass
-            self._briefing_loaded_from_disk = True
-
-        if now - self._last_briefing < self.BRIEFING_INTERVAL:
-            return
-
-        try:
-            from .user_profile import load_profile
-            ctx = (load_profile().get("context") or {})
-            wake_hour = int(ctx.get("wake_hour", self.DEFAULT_WAKE_HOUR))
-        except Exception:
-            wake_hour = self.DEFAULT_WAKE_HOUR
-
-        local_hour = _dt.datetime.now().hour
-        if local_hour < wake_hour:
-            return
-
-        # Throttle check отдельно — потому что есть дополнительное условие
-        # wake_hour gate выше, которое может вернуть без обновления timestamp'а.
-        # _throttled пишет now только когда interval прошёл.
-        self._last_briefing = now
-        # Persist сразу — даже если briefing text упадёт, интервал уже
-        # зачитан и повторы не сработают.
-        try:
-            from .assistant import _load_state, _save_state
-            st = _load_state()
-            st["last_briefing_ts"] = now
-            _save_state(st)
-        except Exception as e:
-            log.debug(f"[cognitive_loop] briefing persist failed: {e}")
-        try:
-            text = self._build_morning_briefing_text()
-        except Exception as e:
-            log.warning(f"[cognitive_loop] briefing text failed: {e}")
-            return
-        # Structured sections — для rich-card рендеринга в UI (как в mockup).
-        # text остаётся как fallback / для logs.
-        try:
-            sections = self._build_morning_briefing_sections()
-        except Exception as e:
-            log.debug(f"[cognitive_loop] briefing sections failed: {e}")
-            sections = []
-
-        self._add_alert({
-            "type": "morning_briefing",
-            "severity": "info",
-            "text": text,
-            "text_en": text,
-            "hour": local_hour,
-            "sections": sections,
-        }, dedupe=True)
-        log.info(f"[cognitive_loop] morning briefing pushed @ {local_hour}:00")
-        # Action Memory: morning_briefing — action, outcome через 4ч
-        self._record_baddle_action(
-            "morning_briefing",
-            text=f"Morning briefing @ {local_hour}:00",
-            extras={"hour": local_hour, "sections_count": len(sections)},
-        )
 
     def _build_morning_briefing_sections(self) -> list:
         """Структурированный briefing — список карточек {emoji, title, subtitle, kind}.
@@ -2247,60 +2013,6 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[cognitive_loop] hrv push failed: {e}")
 
-    # ── Low-energy heavy-decision guard ─────────────────────────────────
-
-    def _check_low_energy_heavy(self):
-        """Проактивная защита: если daily_remaining < THRESHOLD И в open_goals
-        есть цель с тяжёлым mode — предлагаем перенести на утро.
-
-        Mockup: «Heavy decision 'change tech stack?' — move to tomorrow
-        morning?». Дроссель раз в 30 минут чтобы не спамить.
-        """
-        if not self._throttled("_last_low_energy_check", self.LOW_ENERGY_CHECK_INTERVAL):
-            return
-        try:
-            from .assistant import _get_context
-            from .goals_store import list_goals
-            ctx = _get_context(reset_daily=False)
-            energy = ctx.get("energy") or {}
-            daily = energy.get("energy", 100)
-            if daily >= self.LOW_ENERGY_THRESHOLD:
-                return
-            open_goals = list_goals(status="open", limit=20)
-            heavy = [g for g in open_goals if g.get("mode") in self.HEAVY_MODES]
-            if not heavy:
-                return
-            g0 = heavy[0]
-            txt = (g0.get("text") or "")[:80]
-            self._add_alert({
-                "type": "low_energy_heavy",
-                "severity": "warning",
-                "text": f"Энергия {int(daily)}/100. Тяжёлое решение «{txt}» — "
-                        f"перенести на утро?",
-                "text_en": f"Energy {int(daily)}/100. Heavy decision '{txt}' — "
-                           f"move to tomorrow morning?",
-                "goal_id": g0.get("id"),
-                "goal_text": txt,
-                "goal_mode": g0.get("mode"),
-                "energy": int(daily),
-                "actions": [
-                    {"label": "Перенести", "label_en": "Postpone",
-                     "action": "postpone_goal_tomorrow", "goal_id": g0.get("id")},
-                    {"label": "Нет, сейчас", "label_en": "No, now",
-                     "action": "dismiss"},
-                ],
-            }, dedupe=True)
-            log.info(f"[cognitive_loop] low_energy_heavy alert: energy={daily} goal={g0.get('id')}")
-            # Action Memory: низкая энергия → совет перенести. Outcome 1ч.
-            self._record_baddle_action(
-                "alert_low_energy",
-                text=f"Suggested to postpone heavy goal #{g0.get('id')}: {txt[:80]}",
-                extras={"energy": int(daily), "goal_id": g0.get("id"),
-                         "goal_mode": g0.get("mode")},
-            )
-        except Exception as e:
-            log.debug(f"[cognitive_loop] low_energy check failed: {e}")
-
     # ── Heartbeat: сводный снапшот всех стримов в state_graph ───────────
 
     def _check_heartbeat(self):
@@ -2447,121 +2159,6 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[cognitive_loop] heartbeat write failed: {e}")
 
-    # ── Plan reminders & evening retrospective ──────────────────────────
-
-    def _check_plan_reminders(self):
-        """За 10 минут до запланированного события пушим alert.
-
-        Dedup по (plan_id, for_date) чтобы не повторять. На новый день набор
-        сбрасывается.
-        """
-        if not self._throttled("_last_plan_reminder_check", self.PLAN_REMINDER_CHECK_INTERVAL):
-            return
-
-        import datetime as _dt
-        today_str = _dt.date.today().strftime("%Y-%m-%d")
-        # Reset set на новый день
-        if not any(k.endswith(today_str) for k in self._reminded_plan_keys):
-            # Отсеиваем старые записи — храним только сегодняшние
-            self._reminded_plan_keys = {k for k in self._reminded_plan_keys
-                                        if k.endswith(today_str)}
-
-        try:
-            from .plans import schedule_for_day
-            sched = schedule_for_day()
-            window_s = self.PLAN_REMINDER_MINUTES * 60
-            for it in sched:
-                if it.get("done") or it.get("skipped"):
-                    continue
-                planned = it.get("planned_ts")
-                if not planned:
-                    continue
-                delta = planned - now
-                if not (0 < delta <= window_s):
-                    continue
-                key = f"{it['id']}:{it.get('for_date') or today_str}"
-                if key in self._reminded_plan_keys:
-                    continue
-                self._reminded_plan_keys.add(key)
-                mins_left = max(1, int(delta / 60))
-                self._add_alert({
-                    "type": "plan_reminder",
-                    "severity": "info",
-                    "text": f"Через {mins_left} мин: {it.get('name', '')}"
-                            + (f" ({it.get('category')})" if it.get("category") else ""),
-                    "text_en": f"In {mins_left} min: {it.get('name', '')}",
-                    "plan_id": it["id"],
-                    "plan_name": it.get("name", ""),
-                    "plan_category": it.get("category"),
-                    "for_date": it.get("for_date"),
-                    "planned_ts": planned,
-                    "minutes_before": mins_left,
-                })
-                log.info(f"[cognitive_loop] plan_reminder: {it.get('name')} in {mins_left}min")
-                self._record_baddle_action(
-                    "reminder_plan",
-                    text=f"Reminder: {it.get('name', '')} in {mins_left}min",
-                    extras={"plan_id": it["id"], "minutes_before": mins_left,
-                             "plan_name": it.get("name", "")},
-                )
-        except Exception as e:
-            log.debug(f"[cognitive_loop] plan reminder failed: {e}")
-
-    def _check_recurring_lag(self):
-        """Recurring-цели с отставанием — push alert.
-
-        Для каждой recurring-цели у которой `lag ≥ RECURRING_LAG_MIN`,
-        отдаём alert. Dedup через `_notified_lag[goal_id]` — один alert
-        на goal за RECURRING_LAG_CHECK_INTERVAL, чтобы не спамить.
-        """
-        if not self._throttled("_last_recurring_check",
-                                self.RECURRING_LAG_CHECK_INTERVAL):
-            return
-        try:
-            from .recurring import list_lagging
-        except Exception:
-            return
-        try:
-            lagging = list_lagging(min_lag=self.RECURRING_LAG_MIN)
-        except Exception as e:
-            log.debug(f"[cognitive_loop] lag check failed: {e}")
-            return
-        if not lagging:
-            return
-        now = time.time()
-        for p in lagging:
-            gid = p.get("goal_id") or ""
-            # Dedup: не шлём чаще чем раз в 2×interval
-            last = self._notified_lag.get(gid, 0.0)
-            if now - last < self.RECURRING_LAG_CHECK_INTERVAL * 2:
-                # Цель реально отстаёт, но dedup блокирует — логируем
-                self._log_throttle_drop("recurring_lag",
-                    reason="dedup_per_goal",
-                    goal=(p.get("text") or "")[:60],
-                    lag=p.get("lag", 0),
-                    done_today=p.get("done_today", 0),
-                    times_per_day=p.get("times_per_day", 0),
-                    seconds_since_last=round(now - last, 0))
-                continue
-            self._notified_lag[gid] = now
-            lag = p.get("lag", 0)
-            done = p.get("done_today", 0)
-            tpd = p.get("times_per_day", 0)
-            text = (f"⏰ «{p.get('text','')}» — отставание {lag} "
-                    f"(сегодня {done}/{tpd}). Напомню через 30 мин если не отметишь.")
-            self._add_alert({
-                "type": "recurring_lag",
-                "severity": "info",
-                "text": text,
-                "text_en": (f"«{p.get('text','')}» lagging {lag} ({done}/{tpd} today)."),
-                "goal_id": gid,
-                "lag": lag,
-                "done_today": done,
-                "times_per_day": tpd,
-            })
-            log.info(f"[cognitive_loop] recurring_lag alert: {p.get('text','')[:40]} "
-                     f"lag={lag}")
-
     # ── Agency update (OQ #2, 5-я ось) ─────────────────────────────────
 
     def _check_agency_update(self):
@@ -2594,104 +2191,10 @@ class CognitiveLoop:
             log.debug(f"[cognitive_loop] agency update failed: {e}")
 
     # ── Active sync-seeking: Baddle пишет первым когда долго молчит ────
-
-    def _check_sync_seeking(self):
-        """Resonance protocol #3: когда тишина высокая И юзер давно не
-        писал — Baddle шлёт мягкое сообщение для восстановления контакта.
-
-        Gate'ы (все должны быть True):
-          1. `freeze.silence_pressure > SYNC_SEEKING_SILENCE_MIN` — тишина
-             накопилась, не пишем в активной сессии.
-          2. `time_since_last_input > SYNC_SEEKING_IDLE_SECONDS` — юзер
-             физически давно молчит. Защита от случая «silence накопилась
-             исторически, но юзер только что написал».
-          3. Throttle — не чаще раза в `SYNC_SEEKING_INTERVAL`.
-          4. После последнего proactive alert прошло ≥ `QUIET_AFTER_OTHER`.
-             Иначе получим briefing → через 30 мин seeking → нагромождение.
-        """
-        now = time.time()
-
-        # Gate #1: silence accumulated (проверяем до quiet_after_other —
-        # если silence низкая, это не «мы бы действовали», нечего логировать)
-        try:
-            silence = float(get_global_state().freeze.silence_pressure)
-        except Exception:
-            return
-        if silence < self.SYNC_SEEKING_SILENCE_MIN:
-            return
-
-        # Gate #2: юзер физически давно не писал
-        try:
-            last_input_ts = get_user_state()._last_input_ts or 0.0
-        except Exception:
-            last_input_ts = 0.0
-        idle_seconds = now - last_input_ts if last_input_ts else float("inf")
-        if idle_seconds < self.SYNC_SEEKING_IDLE_SECONDS:
-            return
-
-        # Начиная отсюда — «мы бы выпустили alert сейчас». Throttle-дропы
-        # ниже логируются для OQ «теряем ли ценное?».
-
-        # Gate #4: quiet после других proactive
-        if (self._last_proactive_alert_ts and
-                now - self._last_proactive_alert_ts < self.SYNC_SEEKING_QUIET_AFTER_OTHER):
-            self._log_throttle_drop("sync_seeking",
-                reason="quiet_after_other",
-                silence=round(silence, 3),
-                idle_hours=round(idle_seconds / 3600.0, 1),
-                seconds_since_other=round(now - self._last_proactive_alert_ts, 0))
-            return
-
-        # Gate #3: throttle (после этой проверки пишем timestamp → будущие
-        # тики skip)
-        if not self._throttled("_last_sync_seeking", self.SYNC_SEEKING_INTERVAL):
-            self._log_throttle_drop("sync_seeking",
-                reason="interval",
-                silence=round(silence, 3),
-                idle_hours=round(idle_seconds / 3600.0, 1),
-                seconds_since_last=round(now - (self._last_sync_seeking or 0), 0))
-            return
-
-        # Counterfactual honesty: в SYNC_SEEKING_COUNTERFACTUAL_RATE случаев
-        # намеренно молчим когда все gate'ы прошли. Это A/B baseline —
-        # через месяц сравнить recovery-time (время до следующего
-        # user_input) с вмешательством и без. Throttle уже записан выше,
-        # так что следующий check будет через стандартный интервал.
-        import random as _rnd
-        if _rnd.random() < self.SYNC_SEEKING_COUNTERFACTUAL_RATE:
-            log.info(f"[cognitive_loop] sync_seeking COUNTERFACTUAL skip: silence={silence:.2f} idle={idle_seconds/3600:.1f}h")
-            self._record_baddle_action(
-                "sync_seeking_counterfactual",
-                text=f"Counterfactual skip: silence={silence:.2f} idle={idle_seconds/3600:.1f}h",
-                extras={"silence_at_skip": round(silence, 3),
-                        "idle_hours": round(idle_seconds / 3600.0, 1)},
-            )
-            return
-
-        # Всё ок — генерируем сообщение
-        text, tone = self._generate_sync_seeking_message(
-            silence=silence, idle_hours=idle_seconds / 3600.0,
-        )
-        if not text:
-            return
-
-        log.info(f"[cognitive_loop] sync_seeking: silence={silence:.2f} idle={idle_seconds/3600:.1f}h → «{text[:60]}»")
-        self._add_alert({
-            "type": "sync_seeking",
-            "severity": "info",
-            "text": text,
-            "text_en": text,
-            "tone": tone,                 # caring|ambient|curious|reference|simple
-            "silence_level": round(silence, 3),
-            "idle_hours": round(idle_seconds / 3600.0, 1),
-        })
-        # Action Memory: запоминаем что мы сделали; outcome закроется в
-        # _check_action_outcomes через 30 мин или когда юзер ответит.
-        self._record_baddle_action(
-            "sync_seeking",
-            text=f"Baddle: «{text[:120]}»",
-            extras={"tone": tone, "silence_at_action": round(silence, 3)},
-        )
+    #
+    # Phase B (2026-04-25): сама logic переехала в `detect_sync_seeking`
+    # (src/detectors.py). Helper `_generate_sync_seeking_message` остаётся
+    # здесь — детектор вызывает его через `ctx.loop._generate_sync_seeking_message(...)`.
 
     def _generate_sync_seeking_message(self, silence: float, idle_hours: float) -> tuple[str, str]:
         """LLM-генерация мягкого сообщения для восстановления контакта.
@@ -2854,136 +2357,6 @@ class CognitiveLoop:
         }
         return random.choice(fallbacks_by_severity[severity]), "simple"
 
-    def _check_observation_suggestions(self):
-        """Раз в сутки: собрать draft-карточки из patterns / checkins /
-        stress-зон → положить в alerts. Юзер видит их в chat как
-        `intent_confirm` карточки с кнопками Да/Изменить/Нет.
-
-        Guard: если юзер **активен** (последний input < 10 мин) — skip
-        БЕЗ обновления throttle, чтобы при следующей паузе попробовать снова.
-        """
-        # Сначала проверка user-active — не долбим юзера предложениями
-        # во время работы над задачей. Throttle НЕ трогаем — чтобы при
-        # следующем тихом моменте попробовать снова в тот же день.
-        try:
-            last_ts = get_user_state()._last_input_ts
-            if last_ts and (time.time() - last_ts) < 600:  # 10 мин
-                return  # silent skip, throttle остаётся на прежнем ts
-        except Exception:
-            pass
-        if not self._throttled("_last_suggestions_check",
-                                self.SUGGESTIONS_CHECK_INTERVAL):
-            return
-        try:
-            from .suggestions import collect_suggestions, make_suggestion_card
-        except Exception as e:
-            log.debug(f"[cognitive_loop] suggestions import failed: {e}")
-            return
-        try:
-            items = collect_suggestions(lang="ru")
-        except Exception as e:
-            log.debug(f"[cognitive_loop] collect_suggestions failed: {e}")
-            return
-        if not items:
-            return
-        # Логируем дропы: если items > MAX_PER_DAY, отсекаем хвост —
-        # он может содержать важные паттерны.
-        if len(items) > self.SUGGESTIONS_MAX_PER_DAY:
-            for dropped in items[self.SUGGESTIONS_MAX_PER_DAY:]:
-                trig = (dropped.get("trigger") or {}).get("type", "")
-                self._log_throttle_drop("observation_suggestion",
-                    reason="daily_cap",
-                    trigger_type=trig,
-                    total_items=len(items),
-                    cap=self.SUGGESTIONS_MAX_PER_DAY)
-        # Ограничиваем количество карточек в день
-        for item in items[:self.SUGGESTIONS_MAX_PER_DAY]:
-            try:
-                card = make_suggestion_card(item, lang="ru")
-                # Guard: если LLM-draft получился слабым (пустой text, нет title),
-                # не пушим — иначе в чате висит «💡 Я заметил паттерн:» без тела.
-                draft_text = ((card.get("draft") or {}).get("text") or "").strip()
-                card_title = (card.get("title") or "").strip()
-                if len(draft_text) < 3 or not card_title:
-                    log.info(f"[cognitive_loop] suggestion skipped: empty draft/title "
-                             f"({(item.get('trigger') or {}).get('type', '?')})")
-                    continue
-                trigger = (item.get("trigger") or {}).get("type", "")
-                self._add_alert({
-                    "type": "observation_suggestion",
-                    "severity": "info",
-                    "text": f"💡 {card.get('title', 'Предложение')}",
-                    "text_en": card.get("title", "Suggestion"),
-                    "card": card,       # UI рендерит через card.type=intent_confirm
-                    "source": trigger,
-                })
-                log.info(f"[cognitive_loop] suggestion: {trigger} → {draft_text[:60]}")
-                # Action Memory: suggestion — долгий outcome (7 дней, ждём accept/reject).
-                # `action_kind` = kind.subkind для легкой фильтрации позже.
-                suggestion_kind = (card.get("draft") or {}).get("kind", "generic")
-                self._record_baddle_action(
-                    f"suggestion_{suggestion_kind}",
-                    text=f"Suggested: {card.get('title', '')} — {draft_text[:100]}",
-                    extras={"trigger": trigger, "draft_kind": suggestion_kind},
-                )
-            except Exception as e:
-                log.debug(f"[cognitive_loop] suggestion card build failed: {e}")
-
-    def _check_evening_retro(self):
-        """Вечернее ретро — раз в день, после wake_hour + 14h.
-
-        Alert содержит list невыполненных plans + hint на check-in модал.
-        """
-        import datetime as _dt
-        today_str = _dt.date.today().strftime("%Y-%m-%d")
-        if self._last_evening_retro_date == today_str:
-            return
-        # Считаем время наступления ретро: wake_hour + offset (14h)
-        try:
-            from .user_profile import load_profile
-            wake = int((load_profile().get("context") or {}).get("wake_hour",
-                                                                  self.DEFAULT_WAKE_HOUR))
-        except Exception:
-            wake = self.DEFAULT_WAKE_HOUR
-        retro_hour = min(23, wake + self.EVENING_RETRO_HOUR_OFFSET)
-        local_hour = _dt.datetime.now().hour
-        if local_hour < retro_hour:
-            return
-
-        # Собираем unfinished сегодняшние plans
-        try:
-            from .plans import schedule_for_day
-            sched = schedule_for_day()
-            unfinished = [
-                {"id": s["id"], "name": s.get("name", ""),
-                 "category": s.get("category"),
-                 "planned_ts": s.get("planned_ts"),
-                 "kind": s.get("kind")}
-                for s in sched
-                if not s.get("done") and not s.get("skipped")
-            ]
-        except Exception:
-            unfinished = []
-
-        self._last_evening_retro_date = today_str
-        n_un = len(unfinished)
-        text = (f"Ретро дня: {n_un} невыполнен{'о' if n_un == 1 else 'ы'}. "
-                f"Откроем check-in?") if n_un else "Ретро дня: всё по плану. Сделаем check-in?"
-        self._add_alert({
-            "type": "evening_retro",
-            "severity": "info",
-            "text": text,
-            "text_en": text,
-            "unfinished": unfinished,
-            "hour": local_hour,
-        })
-        log.info(f"[cognitive_loop] evening retro pushed @ {local_hour}:00 ({n_un} unfinished)")
-        self._record_baddle_action(
-            "evening_retro",
-            text=f"Evening retro: {n_un} unfinished",
-            extras={"unfinished_count": n_un, "hour": local_hour},
-        )
-
     # ── Activity → energy cost (category-based) ──────────────────────────
 
     def _check_activity_cost(self):
@@ -3056,36 +2429,13 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[cognitive_loop] graph flush failed: {e}")
 
-    # ── HRV alerts ─────────────────────────────────────────────────────
-
-    def _check_hrv_alerts(self):
-        mgr = get_hrv_manager()
-        if not mgr.is_running:
-            return
-        state = mgr.get_baddle_state()
-        coh = state.get("coherence")
-        if coh is None:
-            return
-        if coh < 0.25:
-            self._add_alert({
-                "type": "coherence_crit",
-                "severity": "warning",
-                "text": "Coherence очень низкая. Сделай паузу.",
-                "text_en": "Coherence very low. Take a break.",
-            }, dedupe=True)
-
     # ── Alerts queue ───────────────────────────────────────────────────
 
-    # Types of alerts которые считаются «мы пишем юзеру» — используются
-    # для gate sync-seeking (не долбим двумя проактивами подряд).
-    _PROACTIVE_ALERT_TYPES = frozenset([
-        "morning_briefing", "night_cycle", "dmn_bridge", "dmn_deep_research",
-        "dmn_converge", "dmn_cross_graph", "state_walk", "observation_suggestion",
-        "plan_reminder", "recurring_lag", "evening_retro", "low_energy_heavy",
-        "scout_bridge", "sync_seeking",
-    ])
-
     def _add_alert(self, alert: dict, dedupe: bool = False):
+        """Append alert в queue. Phase B: dispatcher already handles dedup
+        via dedup_key + window_s; legacy `dedupe=True` flag kept для backward
+        compat (для unit-test path и редких прямых вызовов вне dispatcher).
+        """
         with self._lock:
             if dedupe:
                 for a in self._alerts_queue:
@@ -3095,9 +2445,6 @@ class CognitiveLoop:
             self._alerts_queue.append(alert)
             if len(self._alerts_queue) > 20:
                 self._alerts_queue = self._alerts_queue[-20:]
-            # Помечаем время последнего «активного» обращения к юзеру
-            if alert.get("type") in self._PROACTIVE_ALERT_TYPES:
-                self._last_proactive_alert_ts = alert["ts"]
 
     def get_alerts(self, clear: bool = False) -> list:
         with self._lock:

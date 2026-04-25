@@ -15,7 +15,7 @@
      `data/throttle_drops.jsonl` (формат сохраняется backward-compatible
      со старым `_log_throttle_drop`).
 
-Спека: [planning/phase-b-signal-dispatcher.md](../planning/phase-b-signal-dispatcher.md).
+См. правило 1 в [planning/simplification-plan.md](../planning/simplification-plan.md).
 
 ## Использование
 

@@ -1,6 +1,6 @@
 # TODO
 
-> **⚠ Читать первым: [simplification-plan.md](simplification-plan.md).** Consolidation phase. **Фаза A завершена 2026-04-24** (metric registry + checkins/assistant consolidation). **Фаза B** (Signal dispatcher, 13 детекторов + attention budget) — в активной работе; спека: [phase-b-signal-dispatcher.md](phase-b-signal-dispatcher.md), имплементация следующая. 2-недельное ожидание данных throttle_drops — отменено (калибровка urgency через 2 нед реального use после merge). Большинство пунктов ниже **заморожены** до завершения Фазы B. Нарушение дисциплины = возврат к 20k строк.
+> **⚠ Читать первым: [simplification-plan.md](simplification-plan.md).** Consolidation Фазы A+B завершены (2026-04-24/25): MetricRegistry + Signal Dispatcher + 13 детекторов. Cognitive_loop сжат на ~600 строк, правила 1-2 из §4 реализованы. **Сейчас:** 2-недельное окно реального use → калибровка `compute_urgency` по `throttle_drops.jsonl`. **Следующее:** Capacity migration (тонкая через registry). Tier 2 фичи (резонансные, RAG, sensors) разморожены частично — берутся в очерёдности. Нарушение дисциплины = возврат к 20k строк.
 
 ## 🎯 Прайм-директива
 
@@ -19,7 +19,7 @@
 Единая точка входа для «как система ведёт себя прямо сейчас»:
 
 - **`GET /assist/prime-directive?window_days=30&daily=1`** — главный дашборд. Сейчас возвращает: `mean_ema_slow`, `trend_verdict` (improving/stable/worsening), `mean_pe_user / _self / _agency / _hrv`, daily breakdown.
-- **`data/throttle_drops.jsonl`** — append-only лог случаев когда proactive check детектил сигнал, но throttle заблокировал emission. Формат `{"ts", "check", "ctx": {reason, urgency-hints}}`. До Фазы B — из 3 check'ов (`sync_seeking`, `recurring_lag`, `observation_suggestion`); после Фазы B — из всех 13 детекторов через dispatcher natively. Через 2 нед после merge'а Фазы B калибруем `compute_urgency` формулы.
+- **`data/throttle_drops.jsonl`** — append-only лог дропов dispatcher'а. Формат `{"ts", "check", "ctx": {reason, urgency, dedup_key, expires_in_s, source}}`. Все 13 детекторов пишут natively через dispatcher (Phase B). Через 2 нед калибруем `compute_urgency` формулы по реальным паттернам drops (high-urgency теряем? low-urgency спамим?).
 
 Что планируется добавить туда же по мере появления механик:
 
@@ -33,21 +33,16 @@
 
 ---
 
-## 🚦 Фаза B — Signal dispatcher (активная)
+## 🚦 Calibration window (активное)
 
-Все proactive check'и сейчас режут по константным интервалам (`SYNC_SEEKING_INTERVAL=2h`, `RECURRING_LAG_CHECK_INTERVAL=30m`, `SUGGESTIONS_MAX_PER_DAY=2` и т.д.) — уровень сигнала не учитывается. Старые step'ы #1/#2/#3 объединены в одну миграцию.
+Phase B завершена — 13 детекторов + Dispatcher на месте. Сейчас собираем 2 нед реального use в `data/throttle_drops.jsonl` чтобы откалибровать `compute_urgency` формулы (заданы как эвристики в спеке Phase B, см. [simplification-plan.md §5](simplification-plan.md)).
 
-**Подробная спека:** [phase-b-signal-dispatcher.md](phase-b-signal-dispatcher.md) — 13 детекторов (pure functions) + Dispatcher (urgency sort + attention budget + dedup + expires_at) + `compute_urgency` эвристики.
+**Что смотреть через 2 нед:**
+- Доля `reason="budget"` дропов с urgency≥0.7 — теряем ли ценное?
+- Распределение urgency по типам — есть ли systematically низко-эмитящиеся (формула слишком жадная) или высоко-эмитящиеся (формула слишком щедрая)?
+- Soft outcomes из Action Memory: какие emitted alerts получили user-reaction vs ignored?
 
-**Шаги миграции (11-14ч):**
-1. `src/signals.py` (Signal + Dispatcher + unit-тесты) — 2ч
-2. DetectorContext + DETECTORS registry — 1ч
-3. 13 детекторов (easy→hard) — 4-5ч
-4. Переписать `_loop()` — 1-2ч
-5. Удалить мёртвый код (10+ `*_INTERVAL` + ~12 `_last_*` + старый `_log_throttle_drop`) — 1ч
-6. Integration + smoke — 2-3ч
-
-**После merge:** 2 нед реального use → калибровка `compute_urgency` по реальным дропам в `throttle_drops.jsonl`.
+**Корректировка (когда данные будут):** ~1-2ч на крутку коэффициентов. Не задача для отдельной сессии до накопления данных.
 
 ---
 
@@ -78,9 +73,9 @@ Docs описывают 3-контурную модель (физио / эмо /
 
 ### Фоновые check'и и endpoints
 
-- [ ] `_check_cognitive_load_update` в cognitive_loop — раз в 5 мин пересчитывает cognitive_load_today.
-- [ ] `_check_evening_retro` — расширить отчётом по 6 observable + progress дня.
-- [ ] `_check_daily_briefing` — включить текущее состояние capacity + causal explanation.
+- [ ] `_check_cognitive_load_update` в cognitive_loop (bookkeeping, не в DETECTORS) — раз в 5 мин пересчитывает cognitive_load_today.
+- [ ] `detect_evening_retro` — расширить content по 6 observable + progress дня.
+- [ ] `detect_morning_briefing` (через `_build_morning_briefing_sections`) — включить текущее состояние capacity + causal explanation.
 - [ ] `/assist/simulate-day` — переписать через прогноз capacity-зон (не через вычитание энергии).
 
 ### Удалить (dual-pool legacy)
@@ -134,7 +129,7 @@ OQ #1 (personal capacity prior) из архитектурных вопросов
 - [ ] **Предложение еды без tool-use** ([mockup.html](../docs/mockup.html)). Реактивное: «что поесть?» → 3 варианта из `profile.food.preferences + constraints` через LLM. Проактивное: pattern-detector видит «пропускаешь завтрак по четвергам → energy crash к 14:00» → секция «Завтрак» в morning briefing с обоснованием паттерна. Реализация: mode в `suggestions.py` + pattern в `patterns.py`. ~3ч.
 - [ ] **META-вопросы — ночная генерация «что ты не заметил»** ([mockup.html](../docs/mockup.html) строка 172). Когда два scout-моста обнаруживают общий абстрактный паттерн («single point of failure» в auth-модуле И в energy-понедельниках) — генерить вопрос: «какие ещё SPoF у тебя есть?». Отдельная секция в briefing. Зависит от того что scout реально находит мосты — граф должен быть нетривиальный. ~2-3ч.
 - [ ] **Специализированные card-рендеры для `fan` / `rhythm`.** Сейчас оба падают в `deep_research` card. `fan` (Мозговой штурм) = generate-list с ranging по новизне; `rhythm` (Привычка) = habit-tracker view с streak + next-occurrence. ~3ч.
-- [ ] **Расширение `score_action_candidates`** на другие proactive checks помимо `_check_sync_seeking` — когда через месяц станет видно где реальный разброс outcomes по action_kind. Сейчас только tone-selection в sync_seeking. Кандидаты: suggestion-tone в observation→suggestion, morning-briefing section prioritization, recurring-lag reminder timing.
+- [ ] **Расширение `score_action_candidates`** на другие детекторы помимо `detect_sync_seeking` — когда через месяц станет видно где реальный разброс outcomes по action_kind. Сейчас только tone-selection в sync_seeking. Кандидаты: suggestion-tone в observation→suggestion, morning-briefing section prioritization, recurring-lag reminder timing.
 - [ ] **Dialog pivot detection** в surprise detector. Резкое изменение темы через embedding distance между последовательными user-сообщениями: если `distinct(msg_prev, msg_curr) > τ_out` при коротком временном окне → candidate pivot-event. Третий канал OR рядом с HRV+text markers. Стоит только если false-positive rate низкий на реальных chat-логах. ~2ч.
 - [x] ~~**Counterfactual honesty для sync-seeking.**~~ Сделано 2026-04-23: random 10% skip когда все gate'ы прошли, пишется `action_kind=sync_seeking_counterfactual` в action-memory. Через месяц сравнить recovery-time в обеих ветках через action-outcome lag.
 

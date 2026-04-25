@@ -11,7 +11,7 @@
   - Возвращает Signal с urgency, expires_at, dedup_key — dispatcher решает
     что эмитить юзеру
 
-Спека: [planning/phase-b-signal-dispatcher.md § 4](../planning/phase-b-signal-dispatcher.md).
+См. правило 1 в [planning/simplification-plan.md](../planning/simplification-plan.md).
 
 ## Side-effect work (DMN, night cycle)
 
@@ -773,7 +773,7 @@ def detect_state_walk(ctx: DetectorContext) -> Optional[Signal]:
 # nodes, record actions). Их работа остаётся методами CognitiveLoop т.к. они
 # тесно связаны с её внутренним state (_graph, _recent_bridges, etc).
 #
-# Pattern (spec § 4 phase-b-signal-dispatcher.md):
+# Pattern (Phase B split, см. правило 1 в simplification-plan.md):
 #
 #   1. CognitiveLoop._run_X(ctx) -> Optional[Signal]
 #      — heavy work, side effects внутри, возвращает Signal или None

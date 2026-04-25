@@ -6,10 +6,10 @@
 
 ## Статус
 
-- **Фаза A (metric registry)** — ✅ **Завершена 2026-04-24.** `src/metrics.py` + 21 EMA мигрирована в три registries (UserState / Neurochem / ProtectiveFreeze). Identity-тесты bit-identical. Consolidation post-merge: `checkins.py` + `assistant.py:2028` (plan-difficulty feedback был silently broken) мигрированы на `fire_event` + shared helper `apply_subjective_surprise`. Правило 2 из §4 реализовано.
-- **Фаза B (Signal dispatcher)** — 🔨 **в активной работе.** Спека: [phase-b-signal-dispatcher.md](phase-b-signal-dispatcher.md). 2-недельное ожидание данных throttle_drops отменено — калибровка `compute_urgency` через 2 нед после merge'а, не до имплементации. Эвристики для первой версии формул заданы в спеке.
-- **Capacity migration** — 🔜 после Фазы B (будет тонкой через registry).
-- **Код-чистка (13 alert-emitting check → 13 детекторов, 10+ throttle-констант, ~12 `_last_*` timestamps)** — проходит **в Фазе B**, не раньше.
+- **Фаза A (metric registry)** — ✅ **Завершена 2026-04-24.** `src/metrics.py` + 21 EMA в три registries (UserState / Neurochem / ProtectiveFreeze). Identity-тесты bit-identical. Consolidation post-merge: `checkins.py` + `assistant.py:2028` (silently broken plan-difficulty feedback) → `apply_subjective_surprise` helper. Правило 2 из §4 реализовано.
+- **Фаза B (Signal dispatcher)** — ✅ **Завершена 2026-04-25.** `src/signals.py` (Signal + Dispatcher) + `src/detectors.py` (13 pure-function детекторов с urgency-эвристиками + dmn_eligible gate). 4 heavy `_check_*` → `_run_*(ctx) → Optional[Signal]`. `_loop()` переписан: build context → DETECTORS iteration → dispatch → emit. **Cleanup:** −819/+232 строк в cognitive_loop.py (3320→2534), удалены 9 dead `_check_*`, 8 `*_INTERVAL` констант, 7 `_last_*` полей, `_log_throttle_drop`, `_PROACTIVE_ALERT_TYPES`. Тесты: 175 passed (+24 dispatcher, +52 detector, +7 integration vs Phase A start). Правило 1 из §4 реализовано.
+- **Calibration window** — 🔄 ожидаем 2 нед реального use → анализ `data/throttle_drops.jsonl` → калибровка `compute_urgency` формул в детекторах.
+- **Capacity migration** — 🔜 следующая. Тонкая через registry (~5-7ч вместо 16-22ч bespoke).
 
 ---
 
@@ -219,54 +219,46 @@ nodes_near(embedding=query_vec, type="pattern", k=5)
 **Вписывается в Правило 1** (Signal dispatcher) как свойство urgency-computation: детектор с высоким urgency должен предлагать **контрволну**, не усиление. Если urgency растёт через «громче, чаще, жёстче» — это bespoke-костыль, а не Signal. Проверка при review: каждый proactive check должен явно отвечать, какой из трёх способов без-давления он реализует.
 
 **Где уже применяется в коде:**
-- `_check_observation_suggestions` silent skip при `last_input < 10min` — пауза (рассинхронизация)
-- `_check_sync_seeking tone` choice — смена несущей
+- `detect_observation_suggestions` silent skip при `last_input < 10min` — пауза (рассинхронизация)
+- `detect_sync_seeking tone` choice (через `_generate_sync_seeking_message`) — смена несущей
 - `ProtectiveFreeze` при конфликтах — прекращение обновлений, чтобы не давить на юзера ошибкой предсказания
 - `sync_regime` FLOW → PROTECT/CONFESS — явная инверсия тактики взаимодействия
 
 ---
 
-## 5. План consolidation: 25-30 часов инвестиции перед любыми новыми фичами
+## 5. История consolidation (Фазы A+B сделаны)
 
-### Фаза A — Metric registry (8-12ч, низкий риск)
+### Фаза A — Metric registry (✅ 2026-04-24, ~12ч)
 
-**Что делаем:**
-1. Создать `src/metrics.py`: class `EMA` с уточнённой сигнатурой (source_event, decay, bounds, initial), class `MetricRegistry` (dict name → EMA).
-2. Собрать все EMA из `user_state.py`, `neurochem.py`, `horizon.py` в один registry.
-3. Заменить `update_from_*` методы на `METRICS.fire_event(type, payload)`.
-4. Call-sites: `get_user_state().fire_event("user_message", {...})` вместо разрозненных `update_from_engagement()`, `update_from_message()`, etc.
-5. `vector()` становится `[METRICS.get(name).value for name in ["dopamine", ...]]`.
+`src/metrics.py` — `MetricRegistry` с `fire_event(type, **payload)` API. 21 EMA в трёх registries (UserState/Neurochem/ProtectiveFreeze). `update_from_*` → fire_event с extractor'ами. Identity-тесты bit-identical (10 тестов на фиксированных event-sequence). Bonus catch: `assistant.py:2028` plan-difficulty feedback был silently broken (surprise стал @property без setter, except глотал) — починен через shared `UserState.apply_subjective_surprise(s, blend)`.
 
-**Риск:** низкий. Рефакторинг без изменения semantics — те же EMA, тот же decay, просто в одном месте.
+### Фаза B — Signal dispatcher (✅ 2026-04-25, ~12ч)
 
-**Проверка:** `sync_error` и все derived метрики должны дать те же значения что и сейчас на том же event-ряду.
+`src/signals.py` — `Signal(type, urgency, content, expires_at, dedup_key, source)` + `Dispatcher` (budget=5/час, window=1ч, critical_threshold=0.9, urgency-sort + dedup + drop logging). `src/detectors.py` — 13 pure-function детекторов (4 simple + 5 medium + 4 heavy с work/envelope split). `_loop()` переписан под DETECTORS+dispatcher path; bookkeeping checks (action_outcomes, hrv_push, heartbeat, agency, activity_cost, graph_flush, user_surprise, prime_directive_record) остались методами CognitiveLoop.
 
-### Фаза B — Signal dispatcher (15-20ч, средний риск)
+**compute_urgency эвристики (для калибровки через 2 нед):**
+- `coherence_crit`: `1 - coherence` (0.75..1.0, critical bypass)
+- `low_energy_heavy`: `0.5 + 0.4·(1 - daily/30)` (critical при daily<5)
+- `plan_reminder`: `0.7 + 0.3·(1 - mins/10)` (critical при <2мин)
+- `morning_briefing`: 0.8 fixed; `evening_retro`: 0.7 fixed; `night_cycle`: 0.6 fixed; `dmn_converge`: 0.5
+- `sync_seeking`: `0.3 + 0.5·(silence-0.3)/0.7 + 0.2·hrv_surprise`
+- `recurring_lag`: `0.3 + 0.15·min(5, lag)`
+- `observation_suggestion`: `0.2 + 0.6·strength` (per-card)
+- `dmn_bridge`: `0.2 + 0.7·quality`
+- `dmn_deep_research`: `0.4 + 0.3·novelty`
+- `state_walk`: `0.3 + 0.5·similarity`
 
-**Что делаем:**
-1. Создать `src/signals.py`: `@dataclass Signal(type, urgency, content, expires_at, dedup_key)`, `class Dispatcher` с attention-budget и top-K sort.
-2. Преобразовать 21 check-функцию в 21 detector:
-   - Из каждой убрать preconditions → throttle cascade
-   - Вместо `_add_alert(...)` возвращать `Signal(urgency=compute_urgency(ctx), ...)`
-   - Detector вызывается каждый тик, возвращает None если нечего сигналить
-3. Dispatcher-цикл раз в минуту: собирает signals, фильтрует expired, сортирует по urgency, применяет attention-budget, emit'ит top-K.
-4. Удалить все `_last_*` timestamps — больше не нужны.
-5. Удалить все `*_INTERVAL` константы, перевести в `urgency` compute.
-6. `throttle_drops.jsonl` становится natural output — dispatcher пишет что не прошло budget.
-
-**Риск:** средний. Затрагивает все 21 check. Нужно аккуратно определить `compute_urgency` для каждого типа.
-
-**Проверка:** все текущие alerts должны продолжать срабатывать в аналогичных условиях, но с более честной приоритизацией.
+**Cleanup:** −819/+232 строк в cognitive_loop.py. Удалены 9 dead `_check_*`, 8 `*_INTERVAL` констант, 7 `_last_*` полей, `_log_throttle_drop`, `_PROACTIVE_ALERT_TYPES`. Helpers (`_generate_sync_seeking_message`, `_build_morning_briefing_*`, `_build_current_state_signature`) остались — детекторы вызывают через `ctx.loop.method()`.
 
 ### Фаза C — Graph-first (опционально, условно, ~многодневный рефакторинг)
 
-**НЕ делаем сейчас.** Оставляем как возможность после 1-2 мес. use. Если через `throttle_drops.jsonl` и observability увидим что параллельные хранилища действительно мешают — возвращаемся. Если нет — они остаются, это нормально.
+**НЕ делаем сейчас.** Оставляем как возможность после 1-2 мес use. Если через `throttle_drops.jsonl` и observability увидим что параллельные хранилища действительно мешают — возвращаемся. Если нет — они остаются, это нормально.
 
-### Порядок
+### Что дальше
 
-1. **Фаза A** (metric registry) — **первой**, потому что безопасная и дешёвая.
-2. **Фаза B** (dispatcher) — **второй**, после 2 нед данных из `throttle_drops.jsonl`. Данные покажут реальные urgency-паттерны, на которые калибровать `compute_urgency`.
-3. **Capacity миграция** — **после Фаз A + B**, тогда она превращается в ~5-7ч declarative работы вместо 16-22ч bespoke.
+1. **2 недели реального use** → анализ `data/throttle_drops.jsonl` → калибровка `compute_urgency` формул.
+2. **Capacity migration** — тонкая через registry (~5-7ч). 3-контурная модель из `docs/capacity-design.md` поверх `MetricRegistry`.
+3. После — Tier 2 фичи (RAG в execute_deep, breathing mode, Polar adapter, 2D Russell).
 
 ---
 
