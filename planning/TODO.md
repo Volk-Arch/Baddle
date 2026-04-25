@@ -6,7 +6,7 @@
 > - [docs/architecture-rules.md](../docs/architecture-rules.md) — 7 правил архитектуры + фильтр для новых фич.
 > - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
 > - [cleanup-plan.md](cleanup-plan.md) — Track A + B оставшегося cleanup.
-> - [breathing-mode.md](breathing-mode.md), [resonance-code-changes.md](resonance-code-changes.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
+> - [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---
 

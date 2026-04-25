@@ -143,9 +143,8 @@ imbalance_pressure без контекста.
 Детали удаления кода — [planning/TODO § Упразднить workspace](../planning/TODO.md).
 
 **Планирование** — [../planning/](../planning/):
-[TODO.md](../planning/TODO.md) (все задачи + открытые архитектурные вопросы + кристаллизация),
-[ui-split-plan.md](../planning/ui-split-plan.md) (UI split Baddle vs Graph Lab),
-[resonance-code-changes.md](../planning/resonance-code-changes.md) (3 код-изменения по резонансной рамке),
+[TODO.md](../planning/TODO.md) (все задачи + открытые архитектурные вопросы),
+[cleanup-plan.md](../planning/cleanup-plan.md) (Track A + B оставшегося cleanup),
 [breathing-mode.md](../planning/breathing-mode.md) (guided дыхательная сессия),
 [resonance-prompt-preset.md](../planning/resonance-prompt-preset.md) (chat UI 🔵/🔴 preset).
 

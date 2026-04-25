@@ -613,9 +613,9 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[advance_tick] phase_d feeders failed: {e}")
 
-        # Focus residue естественное затухание (resonance-code-changes.md §3).
-        # −0.05 за минуту покоя; rebuilt'ся через bump_focus_residue в
-        # record_action на user-event'ы.
+        # Focus residue естественное затухание: −0.05 за минуту покоя;
+        # rebuilt через bump_focus_residue в record_action на user-event'ы.
+        # См. docs/resonance-model.md.
         try:
             get_user_state().decay_focus_residue(dt_seconds=dt)
         except Exception:

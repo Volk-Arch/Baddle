@@ -603,7 +603,7 @@ def detect_observation_suggestions(ctx: DetectorContext) -> Iterable[Signal]:
             return []
 
         # Skip при высоком focus_residue — юзер в хаосе переключений, не
-        # добавляем новых сигналов (resonance-code-changes.md §3).
+        # добавляем новых сигналов (Counter-wave: пауза вместо давления).
         if getattr(ctx.user, "focus_residue", 0.0) > 0.5:
             return []
 

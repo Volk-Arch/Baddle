@@ -126,7 +126,7 @@ def get_aperture() -> float:
     Заменяет 3 несвязанных knob (`deep_response_format`,
     `deep_batched_synthesis`, `deep_mode_steps`) одним slider'ом по
     апертурному пределу из docs/cone-design.md (Охват × Дальность ×
-    Детализация = const). Spec: planning/resonance-code-changes.md.
+    Детализация = const). См. docs/cone-design.md § Апертурный предел.
 
     Mapping:
       0.0–0.2 игла/фокус       → brief, batched=False, depth_mult=0.5

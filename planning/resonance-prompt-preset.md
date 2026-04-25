@@ -217,8 +217,8 @@ elif user_state.frequency_regime == "long_wave":
 - [TODO.md](TODO.md) — ссылка.
 - [resonance-model.md](../docs/resonance-model.md) — теоретическая
   рамка.
-- [resonance-code-changes.md § frequency_regime](resonance-code-changes.md#2-frequency_regime-как-derived-field-в-userstate) —
-  auto-detect variant зависит от этого.
+- [docs/hrv-design.md § Frequency regime](../docs/hrv-design.md) —
+  auto-detect variant зависит от этой классификации.
 - [breathing-mode.md](breathing-mode.md) — parallel UX-фича,
   похожая семантика (оба помогают пользователю осознать
   резонанс).

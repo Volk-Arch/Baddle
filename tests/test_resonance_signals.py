@@ -1,5 +1,5 @@
-"""Unit tests для frequency_regime + focus_residue (cheap items session
-после Phase A+B). Spec: planning/resonance-code-changes.md §2-3.
+"""Unit tests для frequency_regime + focus_residue.
+См. docs/hrv-design.md § Frequency regime + docs/resonance-model.md.
 """
 import time
 from unittest.mock import patch

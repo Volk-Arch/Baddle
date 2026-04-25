@@ -332,7 +332,7 @@ class РГК:
     def frequency_regime(self) -> str:
         """Несущая частота: long_wave (coh>0.6 + rmssd>30 + ne<0.5) /
         short_wave (coh<0.4 OR ne>0.75) / mixed / flat (no HRV).
-        See planning/resonance-code-changes.md §2."""
+        См. docs/hrv-design.md § Frequency regime."""
         if self.hrv_coherence is None:
             return "flat"
         hrv = float(self.hrv_coherence)

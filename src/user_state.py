@@ -604,7 +604,7 @@ class UserState:
         """
         self._last_input_ts = now or time.time()
 
-    # ── Focus residue (resonance-code-changes.md §3) ──────────────────────
+    # ── Focus residue (см. docs/resonance-model.md) ───────────────────────
 
     def bump_focus_residue(self, mode_id: Optional[str], now: Optional[float] = None):
         """Учесть переключение/rapid input в focus_residue.
@@ -617,8 +617,7 @@ class UserState:
         `_last_focus_mode_id` отдельно от register_input'а — чтобы не было
         race conditions с порядком вызова.
 
-        Вызывается из `record_action` при `actor=user`. См.
-        planning/resonance-code-changes.md §3.
+        Вызывается из `record_action` при `actor=user`.
         """
         if now is None:
             now = time.time()
@@ -978,8 +977,8 @@ class UserState:
 
     @property
     def frequency_regime(self) -> str:
-        """Несущая частота: long_wave/short_wave/mixed/flat. B4 Wave 2: формула в РГК.
-        Spec: planning/resonance-code-changes.md §2."""
+        """Несущая частота: long_wave/short_wave/mixed/flat. Формула в РГК.
+        См. docs/hrv-design.md § Frequency regime."""
         return self._rgk.frequency_regime()
 
     # ── Capacity zone (Phase C, 3-зона) ───────────────────────────────────
