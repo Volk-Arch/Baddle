@@ -291,6 +291,9 @@ class UserState:
         # B0: optional shared RGK (production bootstrap передаёт singleton
         # через get_global_rgk() — каскад зеркал работает на одном объекте).
         # Default rgk=None → создаётся новый РГК (backward-compat для тестов).
+        # B4 Wave 2: bespoke user-side state (HRV/activity/day_summary/focus_residue/
+        # _last_*_ts) перемещён в РГК.__init__ — UserState теперь thin facade
+        # с @property proxies (см. ниже). Default values те же.
         self._rgk = rgk if rgk is not None else РГК()
         self._rgk.user.gain.value = dopamine
         self._rgk.user.hyst.value = serotonin
@@ -298,51 +301,9 @@ class UserState:
         self._rgk.burnout.value = burnout
         self._rgk.agency.value = agency
 
-        # HRV passthrough — UI читает отсюда
-        self.hrv_coherence: Optional[float] = None
-        self.hrv_stress: Optional[float] = None
-        self.hrv_rmssd: Optional[float] = None
-
-        # Activity magnitude (акселерометр Polar или симулятор-слайдер).
-        # 0 = покой, 0.5 = порог «активен», 1.0 = ходьба, 2+ = бег.
-        # `activity_zone` derived property: recovery / stress_rest / healthy_load / overload.
-        self.activity_magnitude: float = 0.0
-
-        # Surprise boost (OQ #7): counter, не EMA — декрементится в tick_expectation.
-        self._surprise_boost_remaining: int = 0
-        # Timestamp последнего surprise event — для debouncing и UI.
-        self._last_user_surprise_ts: Optional[float] = None
-
-        # Phase C: dual-pool `long_reserve` field удалён — energy теперь
-        # 3-zone capacity (capacity_zone). Активность списывается через
-        # activity_log → cognitive_load_today, не через manual debit.
-
-        # Sleep duration: восстанавливается при утреннем briefing через
-        # activity_log.estimate_last_sleep_hours() — либо явная задача «Сон»,
-        # либо idle-gap между последним stop вчера и первым start сегодня.
-        # None = ещё не оценили за этот день.
-        self.last_sleep_duration_h: Optional[float] = None
-
-        # Timestamp последнего user input (для UI / будущего sync-seeking)
-        self._last_input_ts: Optional[float] = None
+        # _feedback_counts остаётся в UserState (legacy duplicate с _rgk._fb).
+        # Не трогаем в этой волне — отдельный cleanup.
         self._feedback_counts = {"accepted": 0, "rejected": 0, "ignored": 0}
-
-        # Focus residue — мера накопленных переключений контекста
-        # (см. planning/resonance-code-changes.md §3). Растёт на mode-switch и
-        # rapid input, затухает 0.05/мин в _advance_tick. Используется как gate
-        # для observation_suggestions и sync_seeking — high residue = «юзер в
-        # хаосе переключений, не добавляем новых сигналов».
-        self.focus_residue: float = 0.0
-        self._last_focus_input_ts: Optional[float] = None
-        self._last_focus_mode_id: Optional[str] = None
-
-        # Capacity (Phase C, docs/capacity-design.md). 3-zone модель
-        # заменяет dual-pool. Live-полем — `cognitive_load_today`,
-        # обновляется bookkeeping check'ом каждые 5 мин.
-        # `day_summary[YYYY-MM-DD]` — agregate за дни (persist через rollover).
-        # `capacity_zone` / `capacity_reason` — derived properties (cheap).
-        self.day_summary: dict = {}
-        self.cognitive_load_today: float = 0.0
 
     # ── Neurochemical mirrors (read/write через _rgk) ──────────────────────
 
@@ -470,6 +431,116 @@ class UserState:
             ema = self._rgk.hrv_base_tod[tod]
             result[tod] = float(ema.value) if ema._seeded else None
         return result
+
+    # ── B4 Wave 2: user-side bespoke state (proxy на _rgk) ──────────────────
+    # Переехало из UserState fields в РГК.__init__. UserState facade — thin
+    # @property proxies. Сохранено backward-compat: read/write через те же
+    # имена (50+ callers не трогаются). Default values, init и сериализация
+    # работают через РГК.
+
+    @property
+    def hrv_coherence(self):
+        return self._rgk.hrv_coherence
+
+    @hrv_coherence.setter
+    def hrv_coherence(self, v):
+        self._rgk.hrv_coherence = v
+
+    @property
+    def hrv_stress(self):
+        return self._rgk.hrv_stress
+
+    @hrv_stress.setter
+    def hrv_stress(self, v):
+        self._rgk.hrv_stress = v
+
+    @property
+    def hrv_rmssd(self):
+        return self._rgk.hrv_rmssd
+
+    @hrv_rmssd.setter
+    def hrv_rmssd(self, v):
+        self._rgk.hrv_rmssd = v
+
+    @property
+    def activity_magnitude(self) -> float:
+        return self._rgk.activity_magnitude
+
+    @activity_magnitude.setter
+    def activity_magnitude(self, v):
+        self._rgk.activity_magnitude = float(v)
+
+    @property
+    def last_sleep_duration_h(self):
+        return self._rgk.last_sleep_duration_h
+
+    @last_sleep_duration_h.setter
+    def last_sleep_duration_h(self, v):
+        self._rgk.last_sleep_duration_h = v
+
+    @property
+    def cognitive_load_today(self) -> float:
+        return self._rgk.cognitive_load_today
+
+    @cognitive_load_today.setter
+    def cognitive_load_today(self, v):
+        self._rgk.cognitive_load_today = float(v)
+
+    @property
+    def day_summary(self) -> dict:
+        return self._rgk.day_summary
+
+    @day_summary.setter
+    def day_summary(self, v):
+        self._rgk.day_summary = v
+
+    @property
+    def focus_residue(self) -> float:
+        return self._rgk.focus_residue
+
+    @focus_residue.setter
+    def focus_residue(self, v):
+        self._rgk.focus_residue = float(v)
+
+    @property
+    def _last_focus_input_ts(self):
+        return self._rgk._last_focus_input_ts
+
+    @_last_focus_input_ts.setter
+    def _last_focus_input_ts(self, v):
+        self._rgk._last_focus_input_ts = v
+
+    @property
+    def _last_focus_mode_id(self):
+        return self._rgk._last_focus_mode_id
+
+    @_last_focus_mode_id.setter
+    def _last_focus_mode_id(self, v):
+        self._rgk._last_focus_mode_id = v
+
+    @property
+    def _last_input_ts(self):
+        return self._rgk._last_input_ts
+
+    @_last_input_ts.setter
+    def _last_input_ts(self, v):
+        self._rgk._last_input_ts = v
+
+    @property
+    def _surprise_boost_remaining(self) -> int:
+        return self._rgk._surprise_boost_remaining
+
+    @_surprise_boost_remaining.setter
+    def _surprise_boost_remaining(self, v):
+        self._rgk._surprise_boost_remaining = int(v)
+
+    @property
+    def _last_user_surprise_ts(self):
+        return self._rgk._last_user_surprise_ts
+
+    @_last_user_surprise_ts.setter
+    def _last_user_surprise_ts(self, v):
+        self._rgk._last_user_surprise_ts = v
 
     # ── HRV signal ─────────────────────────────────────────────────────────
 
@@ -873,89 +944,43 @@ class UserState:
         return float(np.linalg.norm(self.surprise_vec))
 
     # ── PE attribution (OQ #6) ─────────────────────────────────────────────
+    # B4 Wave 1: формулы переехали в РГК.project("user_state"). Properties —
+    # тонкие delegates (один dict за access; для UI/diagnostic нагрузки ОК).
 
     AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine")
 
     @property
     def attribution(self) -> str:
-        """Какая ось доминирует в surprise_vec — 'dopamine' | 'serotonin' |
-        'norepinephrine'. Для UI «в чём именно модель ошиблась».
-
-        Если все три близки к 0 (|vec| < 0.05) — возвращает 'none'.
-        """
-        vec = self.surprise_vec
-        mag = float(np.linalg.norm(vec))
-        if mag < 0.05:
-            return "none"
-        return self.AXIS_NAMES[int(np.argmax(np.abs(vec)))]
+        """Какая ось доминирует в surprise_vec — 'dopamine'/'serotonin'/
+        'norepinephrine' либо 'none' при |vec| < 0.05."""
+        return self._rgk.project("user_state")["attribution"]
 
     @property
     def attribution_magnitude(self) -> float:
-        """|max_axis_surprise| — насколько сильна ошибка по доминирующей оси."""
-        return float(np.max(np.abs(self.surprise_vec)))
+        return self._rgk.project("user_state")["attribution_magnitude"]
 
     @property
     def attribution_signed(self) -> float:
-        """Signed amount по доминирующей оси. Positive = reality выше ожиданий,
-        negative = ниже. Для UI-фразы «недооценил интерес» vs «переоценил стабильность».
-        """
-        vec = self.surprise_vec
-        if np.linalg.norm(vec) < 0.05:
-            return 0.0
-        idx = int(np.argmax(np.abs(vec)))
-        return float(vec[idx])
+        """Signed amount по доминирующей оси. Positive = reality выше ожиданий."""
+        return self._rgk.project("user_state")["attribution_signed"]
 
     @property
     def agency_gap(self) -> float:
-        """1 − agency. Gap между ожиданием что юзер выполнит план и реальностью.
-        Прямой goal-prediction-error (complementary к state_level PE).
-        """
-        return max(0.0, 1.0 - float(self.agency))
+        """1 − agency. Goal-prediction-error (complementary к state_level PE)."""
+        return self._rgk.project("user_state")["agency_gap"]
 
     @property
     def hrv_surprise(self) -> float:
-        """|hrv_coherence − hrv_baseline_by_tod[current]|. [0, 1].
-
-        Физический канал PE от реального тела. 0 если HRV не запущен или
-        baseline ещё не seeded за это TOD (first measurement).
-        """
-        if self.hrv_coherence is None:
-            return 0.0
-        tod = self._current_tod()
-        ref = self.hrv_baseline_by_tod.get(tod)
-        if ref is None:
-            return 0.0
-        return abs(float(self.hrv_coherence) - float(ref))
+        """|hrv_coherence − baseline[current_tod]|. B4 Wave 2: формула в РГК."""
+        return self._rgk.hrv_surprise()
 
     # ── Frequency regime (resonance несущая частота) ───────────────────────
 
     @property
     def frequency_regime(self) -> str:
-        """Несущая частота текущего состояния. Derived из HRV+нейрохимии.
-
-        - **long_wave** 🔵 — coherence>0.6 + RMSSD>30мс + NE<0.5.
-          Парасимпатика, длинная λ, ассоциативный режим.
-        - **short_wave** 🔴 — coherence<0.4 ИЛИ NE>0.75. Симпатика,
-          короткая λ, реактивный/фокус режим.
-        - **mixed** ⚪ — промежуточные значения. Переключение возможно.
-        - **flat** — нет HRV данных, не классифицируем.
-
-        Использование: detect_sync_seeking tone choice, execute_deep
-        aperture cap при short_wave, briefing format adaptation.
-
-        Spec: planning/resonance-code-changes.md §2. Пороги через 1-2 нед
-        реальных данных откалибруются.
-        """
-        if self.hrv_coherence is None:
-            return "flat"
-        hrv = float(self.hrv_coherence)
-        rmssd = float(self.hrv_rmssd or 0)
-        ne = float(self.norepinephrine)
-        if hrv > 0.6 and rmssd > 30 and ne < 0.5:
-            return "long_wave"
-        if hrv < 0.4 or ne > 0.75:
-            return "short_wave"
-        return "mixed"
+        """Несущая частота: long_wave/short_wave/mixed/flat. B4 Wave 2: формула в РГК.
+        Spec: planning/resonance-code-changes.md §2."""
+        return self._rgk.frequency_regime()
 
     # ── Capacity zone (Phase C, 3-зона) ───────────────────────────────────
 
@@ -1104,38 +1129,9 @@ class UserState:
 
     @property
     def activity_zone(self) -> dict:
-        """Derived 4-зонная классификация (HRV coherence × activity_magnitude).
-
-        Из прототипа HRV-Reader (Polar H10 + accelerometer). Даёт
-        **физический контекст** поверх чисто нейрохимического состояния:
-        одинаковая coherence значит разное, если юзер лежит vs бежит.
-
-          !active & hrv_ok     → recovery       🟢 здоровое восстановление
-          !active & !hrv_ok    → stress_rest    🟡 беспокойство в покое
-           active & hrv_ok     → healthy_load   🔵 здоровая нагрузка
-           active & !hrv_ok    → overload       🔴 перегрузка
-
-        Если HRV не запущен (coherence=None) → zone=None.
-        """
-        if self.hrv_coherence is None:
-            return {"key": None, "label": None, "advice": None}
-        active = self.activity_magnitude >= ACTIVITY_THRESHOLD
-        hrv_ok = self.hrv_coherence >= COHERENCE_HEALTHY
-        if not active and hrv_ok:
-            return {"key": ZONE_RECOVERY, "label": "Восстановление",
-                    "advice": "Хорошее время для отдыха / медитации.",
-                    "emoji": "🟢"}
-        if not active and not hrv_ok:
-            return {"key": ZONE_STRESS_REST, "label": "Стресс в покое",
-                    "advice": "Подыши минуту. Тело в напряжении без физической нагрузки.",
-                    "emoji": "🟡"}
-        if active and hrv_ok:
-            return {"key": ZONE_HEALTHY_LOAD, "label": "Здоровая нагрузка",
-                    "advice": "Ритм хороший. Используй для дела.",
-                    "emoji": "🔵"}
-        return {"key": ZONE_OVERLOAD, "label": "Перегрузка",
-                "advice": "Сильная активность + низкое HRV = риск overtraining. Снизь темп.",
-                "emoji": "🔴"}
+        """4-зонная classification (HRV coherence × activity_magnitude).
+        recovery/stress_rest/healthy_load/overload. B4 Wave 2: формула в РГК."""
+        return self._rgk.activity_zone()
 
     # ── Named state (8-region РГК-карта) ──────────────────────────────────
 

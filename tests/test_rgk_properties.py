@@ -711,3 +711,152 @@ class TestSingletonRGK:
         gs = get_global_state()
         assert u._rgk is gs.neuro._rgk
         assert u._rgk is gs.freeze._rgk
+
+
+# ── B4 Wave 1 — project() expansion ────────────────────────────────────────
+
+class TestProjectExpansion:
+    """B4 Wave 1: project() расширен chem-only derivations."""
+
+    def test_user_state_project_has_phase_d_chem(self):
+        from src.rgk import РГК
+        r = РГК()
+        p = r.project("user_state")
+        # Phase D 5-axis + B0 mode
+        assert "acetylcholine" in p
+        assert "gaba" in p
+        assert "balance" in p
+        assert "mode" in p
+        assert p["mode"] == "R"
+
+    def test_user_state_project_has_attribution(self):
+        from src.rgk import РГК
+        r = РГК()
+        # Сместим user vector чтобы attribution был не "none"
+        r.user.gain.value = 0.9    # dopamine high
+        r.user.hyst.value = 0.5
+        r.user.aperture.value = 0.5
+        p = r.project("user_state")
+        assert p["attribution"] == "dopamine"
+        assert p["attribution_signed"] > 0
+        assert p["attribution_magnitude"] > 0
+
+    def test_user_state_project_attribution_none_when_small(self):
+        from src.rgk import РГК
+        r = РГК()
+        # vector ≈ baseline → mag < 0.05 → "none"
+        p = r.project("user_state")
+        assert p["attribution"] == "none"
+        assert p["attribution_signed"] == 0.0
+
+    def test_user_state_agency_gap(self):
+        from src.rgk import РГК
+        r = РГК()
+        r.agency.value = 0.3
+        p = r.project("user_state")
+        assert p["agency_gap"] == pytest.approx(0.7, abs=1e-6)
+
+    def test_system_project_has_phase_d_chem(self):
+        from src.rgk import РГК
+        r = РГК()
+        p = r.project("system")
+        assert "acetylcholine" in p
+        assert "gaba" in p
+        assert "balance" in p
+        assert "mode" in p
+
+    def test_user_state_property_delegates_match_project(self):
+        """UserState properties и project() должны давать идентичные значения."""
+        from src.user_state import UserState
+        u = UserState()
+        u._rgk.user.gain.value = 0.8
+        p = u._rgk.project("user_state")
+        assert u.attribution == p["attribution"]
+        assert u.attribution_magnitude == p["attribution_magnitude"]
+        assert u.attribution_signed == p["attribution_signed"]
+        assert u.agency_gap == p["agency_gap"]
+
+
+# ── B4 Wave 2 — state move + non-chem projectors ───────────────────────────
+
+class TestStateMoveAndProjectors:
+    """B4 Wave 2: bespoke user-side state (HRV/activity/day_summary/focus_residue/
+    timestamps) перемещён из UserState в РГК. UserState facade — thin @property
+    proxies. Non-chem projectors (hrv_surprise/frequency_regime/activity_zone)
+    в РГК.
+    """
+
+    def test_user_state_hrv_proxy_writes_to_rgk(self):
+        """UserState.hrv_coherence теперь @property → читает/пишет _rgk."""
+        from src.user_state import UserState
+        u = UserState()
+        assert u.hrv_coherence is None
+        u.hrv_coherence = 0.7
+        assert u._rgk.hrv_coherence == 0.7
+        # Чтение — тоже через rgk.
+        u._rgk.hrv_coherence = 0.3
+        assert u.hrv_coherence == 0.3
+
+    def test_user_state_activity_proxy(self):
+        from src.user_state import UserState
+        u = UserState()
+        u.activity_magnitude = 0.8
+        assert u._rgk.activity_magnitude == 0.8
+
+    def test_user_state_day_summary_proxy(self):
+        from src.user_state import UserState
+        u = UserState()
+        u.day_summary["2026-04-25"] = {"tasks_started": 3}
+        assert u._rgk.day_summary["2026-04-25"]["tasks_started"] == 3
+
+    def test_frequency_regime_long_wave(self):
+        from src.rgk import РГК
+        r = РГК()
+        r.hrv_coherence = 0.7
+        r.hrv_rmssd = 35.0
+        r.user.aperture.value = 0.3   # NE low
+        assert r.frequency_regime() == "long_wave"
+        assert r.project("user_state")["frequency_regime"] == "long_wave"
+
+    def test_frequency_regime_short_wave_low_coh(self):
+        from src.rgk import РГК
+        r = РГК()
+        r.hrv_coherence = 0.3
+        r.hrv_rmssd = 20.0
+        assert r.frequency_regime() == "short_wave"
+
+    def test_frequency_regime_flat_no_hrv(self):
+        from src.rgk import РГК
+        r = РГК()
+        assert r.frequency_regime() == "flat"
+
+    def test_hrv_surprise_zero_when_no_baseline(self):
+        from src.rgk import РГК
+        r = РГК()
+        r.hrv_coherence = 0.7
+        # baseline не seeded → 0
+        assert r.hrv_surprise() == 0.0
+
+    def test_activity_zone_no_hrv(self):
+        from src.rgk import РГК
+        r = РГК()
+        z = r.activity_zone()
+        assert z["key"] is None
+
+    def test_activity_zone_recovery(self):
+        from src.rgk import РГК
+        r = РГК()
+        r.hrv_coherence = 0.7
+        r.activity_magnitude = 0.1   # not active
+        z = r.activity_zone()
+        assert z["key"] == "recovery"
+
+    def test_user_state_delegates_match_rgk(self):
+        """UserState.frequency_regime/hrv_surprise/activity_zone делегируют."""
+        from src.user_state import UserState
+        u = UserState()
+        u.hrv_coherence = 0.5
+        u.activity_magnitude = 0.6
+        assert u.frequency_regime == u._rgk.frequency_regime()
+        assert u.hrv_surprise == u._rgk.hrv_surprise()
+        assert u.activity_zone == u._rgk.activity_zone()

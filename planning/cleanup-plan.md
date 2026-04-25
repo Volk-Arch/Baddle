@@ -96,11 +96,18 @@
 
 **Estimated:** −100..−200 | **Время:** 1-2ч | **Risk:** low
 
-### B4. Bespoke в projectors (semantic move)
+### B4. Bespoke в projectors (semantic move) ✅ done 2026-04-25
 
-**Scope:** `compute_capacity_*` / `nearest_named_state` / `frequency_regime` derived / `focus_residue` логика — переехать из UserState в `rgk.project()`. Сейчас ~250 LOC bespoke в user_state.py; в projectors ~100 LOC, single ownership.
+**Wave 1:** `RGK.project("user_state")` расширен chem-only derivations: ACh/GABA/balance/mode (Phase D + B0) + attribution/attribution_magnitude/attribution_signed + agency_gap + surprise_vec. UserState attribution/agency_gap properties + Neurochem self_imbalance/gamma переведены на delegation к project(). 6 smoke tests.
 
-**Estimated:** −150 (semantic move, не deletion) | **Время:** 3-4ч | **Risk:** medium
+**Wave 2:** state move + non-chem projectors. HRV state (3 fields) + activity_magnitude + day_summary + cognitive_load_today + last_sleep_duration_h + focus_residue + 4 timestamps (`_last_focus_input_ts`/`_last_focus_mode_id`/`_last_input_ts`/`_last_user_surprise_ts`) + `_surprise_boost_remaining` перемещены из UserState в РГК. UserState — thin facade с 15 @property proxies. Non-chem projectors добавлены: `hrv_surprise()`, `frequency_regime()`, `activity_zone()` + `_current_tod()` helper. UserState frequency_regime/hrv_surprise/activity_zone делегируют. 10 smoke tests. **414 passed, 0 regressions.**
+
+**Net result:** ~150 LOC грубо, как audit estimated. user_state.py: +13 LOC (15 proxy properties − removed inline derivations и __init__ assignments). rgk.py: +147 LOC. Net repo growth ~150 LOC. **LOC win не материализуется до B5** — proxy properties исчезнут когда facades удалены. B4 — groundwork для B5.
+
+**Что ещё в Wave 2 НЕ сделано (можно отдельной сессией):**
+- `capacity_zone` / `capacity_reason` / `capacity_indicators` — `compute_capacity_*` функции остаются в user_state.py module-level. Они читают `self.hrv_coherence`/`self.serotonin`/etc. через UserState, но эта логика не унесена в РГК. Зависит от cognitive_load_today + day_summary + activity_log.
+- `named_state` — UserState.named_state property делегирует к `user_state_map.nearest_named_state` с chem args. Может быть projector в РГК.
+- `_feedback_counts` — duplicate с `_rgk._fb`. Cleanup.
 
 ### B5. Удалить facades (UserState/Neurochem/ProtectiveFreeze)
 

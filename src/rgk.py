@@ -163,6 +163,24 @@ class РГК:
         self._fb = {"accepted": 0, "rejected": 0, "ignored": 0}
         self._tod = "day"
 
+        # B4 Wave 2: user-side bespoke state (sensor passthrough + aggregates).
+        # Перемещено из UserState чтобы projectors имели полный access к
+        # источникам — frequency_regime/hrv_surprise/activity_zone требуют
+        # эти поля. UserState facade переиспользует через @property proxies.
+        self.hrv_coherence = None        # type: float | None
+        self.hrv_stress = None           # type: float | None
+        self.hrv_rmssd = None            # type: float | None
+        self.activity_magnitude: float = 0.0
+        self.last_sleep_duration_h = None  # type: float | None
+        self.cognitive_load_today: float = 0.0
+        self.day_summary: dict = {}
+        self.focus_residue: float = 0.0
+        self._last_focus_input_ts = None   # type: float | None
+        self._last_focus_mode_id = None    # type: str | None
+        self._last_input_ts = None         # type: float | None
+        self._surprise_boost_remaining: int = 0
+        self._last_user_surprise_ts = None # type: float | None
+
     # ── User feeds ────────────────────────────────────────────────────────
 
     def u_hrv(self, coherence=None, stress=None, rmssd=None):
@@ -284,21 +302,108 @@ class РГК:
         s  = float(self.system.hyst.value)
         return 2.0 + 3.0 * ne * (1.0 - s)
 
+    _AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine")
+
+    # ── B4 Wave 2: non-chem derivations (HRV / activity bespoke в проекторах)
+
+    def _current_tod(self) -> str:
+        """Time-of-day для TOD-scoped baselines. Mirror UserState._current_tod."""
+        import datetime as _dt
+        h = _dt.datetime.now().hour
+        if 5 <= h < 12:
+            return "morning"
+        if 12 <= h < 18:
+            return "day"
+        if 18 <= h < 23:
+            return "evening"
+        return "night"
+
+    def hrv_surprise(self) -> float:
+        """|hrv_coherence − baseline[current_tod]|. Физический PE от тела.
+        0 если HRV не запущен или baseline не seeded."""
+        if self.hrv_coherence is None:
+            return 0.0
+        tod = self._current_tod()
+        ema = self.hrv_base_tod[tod]
+        if not ema._seeded:
+            return 0.0
+        return abs(float(self.hrv_coherence) - float(ema.value))
+
+    def frequency_regime(self) -> str:
+        """Несущая частота: long_wave (coh>0.6 + rmssd>30 + ne<0.5) /
+        short_wave (coh<0.4 OR ne>0.75) / mixed / flat (no HRV).
+        See planning/resonance-code-changes.md §2."""
+        if self.hrv_coherence is None:
+            return "flat"
+        hrv = float(self.hrv_coherence)
+        rmssd = float(self.hrv_rmssd or 0)
+        ne = float(self.user.aperture.value)
+        if hrv > 0.6 and rmssd > 30 and ne < 0.5:
+            return "long_wave"
+        if hrv < 0.4 or ne > 0.75:
+            return "short_wave"
+        return "mixed"
+
+    def activity_zone(self) -> dict:
+        """4-зонная classification (HRV coherence × activity_magnitude).
+        recovery / stress_rest / healthy_load / overload (или None если HRV пуст)."""
+        if self.hrv_coherence is None:
+            return {"key": None, "label": None, "advice": None}
+        # Constants mirror UserState — single source of truth in projector.
+        ACTIVITY_THRESHOLD = 0.5
+        COHERENCE_HEALTHY = 0.5
+        active = self.activity_magnitude >= ACTIVITY_THRESHOLD
+        hrv_ok = self.hrv_coherence >= COHERENCE_HEALTHY
+        if not active and hrv_ok:
+            return {"key": "recovery", "label": "Восстановление",
+                    "advice": "Хорошее время для отдыха / медитации.",
+                    "emoji": "🟢"}
+        if not active and not hrv_ok:
+            return {"key": "stress_rest", "label": "Стресс в покое",
+                    "advice": "Подыши минуту. Тело в напряжении без физической нагрузки.",
+                    "emoji": "🟡"}
+        if active and hrv_ok:
+            return {"key": "healthy_load", "label": "Здоровая нагрузка",
+                    "advice": "Ритм хороший. Используй для дела.",
+                    "emoji": "🔵"}
+        return {"key": "overload", "label": "Перегрузка",
+                "advice": "Сильная активность + низкое HRV = риск overtraining. Снизь темп.",
+                "emoji": "🔴"}
+
     def project(self, domain: str) -> dict:
-        """Spec §7: «все 13 detectors + capacity + regime + UI → projections»."""
+        """Spec §7: «все 13 detectors + capacity + regime + UI → projections».
+
+        B4 Wave 1 (2026-04-25): extended user_state с chem-only derivations,
+        которые уже live в РГК (Phase D + B0): acetylcholine/gaba/balance/mode +
+        attribution/attribution_magnitude/attribution_signed + agency_gap.
+        """
         if domain == "user_state":
             ev = self.u_exp_vec.value
             cur_tod = self.u_exp_tod[self._tod].value
             ref = cur_tod if abs(cur_tod - 0.5) > 1e-9 else self.u_exp.value
             sl = (self.user.gain.value + self.user.hyst.value) / 2.0
             vec = self.user.vector()
+            surprise_vec = vec - ev
+            mag = float(np.linalg.norm(surprise_vec))
+            if mag < 0.05:
+                attribution = "none"
+                attribution_signed = 0.0
+            else:
+                idx = int(np.argmax(np.abs(surprise_vec)))
+                attribution = self._AXIS_NAMES[idx]
+                attribution_signed = float(surprise_vec[idx])
             return {
                 "dopamine":       float(self.user.gain.value),
                 "serotonin":      float(self.user.hyst.value),
                 "norepinephrine": float(self.user.aperture.value),
+                "acetylcholine":  float(self.user.plasticity.value),
+                "gaba":           float(self.user.damping.value),
+                "balance":        self.user.balance(),
+                "mode":           self.user.mode,
                 "valence":        float(self.valence.value),
                 "burnout":        float(self.burnout.value),
                 "agency":         float(self.agency.value),
+                "agency_gap":     max(0.0, 1.0 - float(self.agency.value)),
                 "expectation":    float(self.u_exp.value),
                 "expectation_by_tod": {t: float(self.u_exp_tod[t].value) for t in _TOD},
                 "expectation_vec":    [float(x) for x in ev.tolist()],
@@ -307,7 +412,18 @@ class РГК:
                                         for t in _TOD},
                 "vector":    [float(x) for x in vec.tolist()],
                 "surprise":  float(sl - ref),
-                "imbalance": float(np.linalg.norm(vec - ev)),
+                "surprise_vec": [float(x) for x in surprise_vec.tolist()],
+                "imbalance": mag,
+                "attribution":            attribution,
+                "attribution_magnitude":  float(np.max(np.abs(surprise_vec))) if mag >= 0.05 else 0.0,
+                "attribution_signed":     attribution_signed,
+                # B4 Wave 2: non-chem derivations
+                "hrv_surprise":           self.hrv_surprise(),
+                "frequency_regime":       self.frequency_regime(),
+                "activity_zone":          self.activity_zone(),
+                "activity_magnitude":     float(self.activity_magnitude),
+                "focus_residue":          float(self.focus_residue),
+                "cognitive_load_today":   float(self.cognitive_load_today),
             }
         if domain == "system":
             sv = self.system.vector()
@@ -315,6 +431,10 @@ class РГК:
                 "dopamine":       float(self.system.gain.value),
                 "serotonin":      float(self.system.hyst.value),
                 "norepinephrine": float(self.system.aperture.value),
+                "acetylcholine":  float(self.system.plasticity.value),
+                "gaba":           float(self.system.damping.value),
+                "balance":        self.system.balance(),
+                "mode":           self.system.mode,
                 "expectation_vec": [float(x) for x in self.s_exp_vec.value.tolist()],
                 "gamma":           self.gamma(),
                 "recent_rpe":      float(self.recent_rpe),

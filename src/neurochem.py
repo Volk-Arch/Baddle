@@ -237,16 +237,16 @@ class Neurochem:
     @property
     def self_imbalance(self) -> float:
         """‖self_surprise_vec‖. Magnitude of self-prediction-error.
-        Высокая = собственная нейрохимия уехала от привычного baseline.
-        """
-        return float(np.linalg.norm(self.self_surprise_vec))
+        B4 Wave 1: формула в РГК.project("system")."""
+        return self._rgk.project("system")["self_imbalance"]
 
     # ── Derived ─────────────────────────────────────────────────────────
 
     @property
     def gamma(self) -> float:
-        """γ = 2.0 + 3.0 · NE · (1 − S). Напряжение + нестабильность → чувствительность."""
-        return 2.0 + 3.0 * self.norepinephrine * (1.0 - self.serotonin)
+        """γ = 2.0 + 3.0 · NE · (1 − S). Напряжение + нестабильность → чувствительность.
+        B4 Wave 1: формула в РГК.gamma()."""
+        return self._rgk.gamma()
 
     # ── RPE: автономный dopamine drift без юзера ────────────────────────
 
