@@ -32,6 +32,7 @@ from .graph_logic import _graph
 from .hrv_manager import get_manager as get_hrv_manager
 from .horizon import get_global_state, PROTECTIVE_FREEZE
 from .user_state import get_user_state
+from .signals import Signal, Dispatcher
 
 log = logging.getLogger(__name__)
 
@@ -306,6 +307,15 @@ class CognitiveLoop:
         # horizon.get_global_state().freeze). Здесь только timestamp
         # последнего loop tick чтобы считать dt для `_advance_tick`.
         self._last_loop_tick_ts = 0.0
+
+        # Signal dispatcher — Phase B (2026-04-25). 13 детекторов в DETECTORS
+        # collect signals → dispatcher решает emit/drop по urgency+budget+dedup.
+        # См. planning/phase-b-signal-dispatcher.md.
+        self._dispatcher = Dispatcher(
+            budget_per_window=5,        # max 5 non-critical alerts/час
+            window_s=3600.0,             # 1 час окно для budget + dedup
+            critical_threshold=0.9,      # urgency≥0.9 bypass budget
+        )
 
     def set_thinking(self, kind: str, detail: Optional[dict] = None):
         """Отметить текущее тяжёлое действие (pump / elaborate / ...).
@@ -826,71 +836,81 @@ class CognitiveLoop:
     # ── Background loop ────────────────────────────────────────────────
 
     def _loop(self):
-        """Main loop body. Каждая итерация:
+        """Main loop body. Phase B (2026-04-25):
 
-        1. NE decay в сторону baseline (бездействие успокаивает)
-        2. Гейт: не FREEZE + NE < 0.55 + последний foreground > cooldown
-        3. Если прошёл интервал Scout / DMN — запустить pump
-        4. HRV alerts всегда
-        5. Сон tick_interval (масштабируется NE)
+        1. Feeders (advance_tick, NE homeostasis)
+        2. Build DetectorContext, iterate DETECTORS, collect Signals
+        3. Dispatcher.dispatch() → emitted alerts
+        4. _add_alert(sig.content) для каждого emitted
+        5. Bookkeeping checks (action_outcomes, hrv_push, heartbeat,
+           agency_update, activity_cost, graph_flush, user_surprise,
+           prime_directive_record) — НЕ alert-emitting, остаются методами
+        6. Adaptive sleep по NE
+
+        DMN gate (frozen/ne_quiet/idle_enough) считается в build_detector_context
+        и попадает в `ctx.dmn_eligible`. DMN-эвристические детекторы
+        (dmn_bridge, dmn_deep, dmn_converge, state_walk, night_cycle) сами
+        проверяют ctx.dmn_eligible в первой строке.
         """
+        from .detectors import DETECTORS, build_detector_context
 
         while self.is_running and not self._stop_event.is_set():
             try:
                 state = get_global_state()
+                now = time.time()
 
                 # 0. Adaptive idle + prime-directive feeders. Один проход
-                # обновляет silence_pressure (таймер), imbalance_pressure
-                # (EMA |PE|) и sync_error_ema_{fast,slow}. User-events через
-                # signal_user_input()/tick_foreground снижают silence отдельно.
+                # обновляет silence_pressure, imbalance_pressure (EMA |PE|),
+                # sync_error_ema_{fast,slow}.
                 self._advance_tick()
 
-                # 1. NE homeostasis
+                # 1. NE homeostasis (decay в сторону baseline)
                 ne = state.neuro.norepinephrine
                 state.neuro.norepinephrine = (
                     ne * (1 - self.NE_DECAY_PER_TICK)
                     + self.NE_BASELINE * self.NE_DECAY_PER_TICK
                 )
 
-                # 2. Gate
-                idle_enough = time.time() - self._last_foreground_tick >= self.FOREGROUND_COOLDOWN
-                ne_quiet = state.neuro.norepinephrine < self.NE_HIGH_GATE
-                not_frozen = state.state != PROTECTIVE_FREEZE
+                # 2. Build context once, iterate detectors
+                ctx = build_detector_context(self, now)
+                candidates: list[Signal] = []
+                for detector in DETECTORS:
+                    try:
+                        result = detector(ctx)
+                    except Exception as e:
+                        log.warning(f"[detector] {detector.__name__} failed: {e}")
+                        continue
+                    if result is None:
+                        continue
+                    if isinstance(result, Signal):
+                        candidates.append(result)
+                    else:
+                        # Iterable[Signal] — observation_suggestions returns batch
+                        try:
+                            candidates.extend(result)
+                        except TypeError:
+                            log.warning(f"[detector] {detector.__name__} returned "
+                                        f"non-iterable non-Signal: {type(result)}")
 
-                if not_frozen and ne_quiet and idle_enough:
-                    self._check_dmn_continuous()
-                    self._check_dmn_deep_research()
-                    self._check_dmn_converge()
-                    self._check_state_walk()
-                    self._check_night_cycle()
+                # 3. Dispatch — urgency sort + budget gate + dedup + drop logging
+                emitted = self._dispatcher.dispatch(candidates, now)
+                for sig in emitted:
+                    self._add_alert(sig.content)
 
-                # 3. HRV alerts + morning briefing + hrv→UserState push всегда
-                # (briefing проактивный, срабатывает когда юзер проснулся;
-                # hrv_push гарантирует что UserState.hrv_* не устаревает
-                # между вызовами /hrv/metrics endpoint — критично для
-                # activity_zone, sync_regime, named_state).
-                self._check_hrv_alerts()
-                self._check_daily_briefing()
-                self._check_hrv_push()
-                self._check_graph_flush()
-                self._check_activity_cost()
-                self._check_low_energy_heavy()
-                self._check_plan_reminders()
-                self._check_evening_retro()
-                self._check_heartbeat()
-                self._check_recurring_lag()
-                self._check_observation_suggestions()
-                self._check_sync_seeking()
-                self._check_agency_update()
-                self._check_action_outcomes()
-                self._check_prime_directive_record()
-                self._check_user_surprise()
+                # 4. Bookkeeping (НЕ alert-emitting — не идут через dispatcher)
+                self._check_hrv_push()             # HRV → UserState sync (15s)
+                self._check_graph_flush()           # auto-save (2 min)
+                self._check_activity_cost()         # energy debit per category
+                self._check_heartbeat()             # state_graph pulse (5 min)
+                self._check_agency_update()         # plan completion EMA (1h)
+                self._check_action_outcomes()       # close action-memory entries
+                self._check_prime_directive_record()  # sync_error snapshot (1h)
+                self._check_user_surprise()         # HRV spike + text markers
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
-            # 4. Adaptive sleep. Верхний bound = TICK_INTERVAL (60s) для
-            # scout/dmn/night проверок; но HRV push хочет каждые 15с —
-            # cap на HRV_PUSH_INTERVAL чтобы physical state не устаревал.
+            # 5. Adaptive sleep. Cap на HRV_PUSH_INTERVAL чтобы physical
+            # state не устаревал.
             try:
                 ne = get_global_state().neuro.norepinephrine
                 scaled = self.TICK_INTERVAL * max(0.5, 1.2 - ne)
@@ -901,19 +921,18 @@ class CognitiveLoop:
 
     # ── Night cycle: Scout + REM emotional + REM creative + Consolidation ──
 
-    def _check_night_cycle(self):
-        """Единый 24ч ночной цикл. Заменяет три параллельных механизма.
+    def _run_night_cycle(self, ctx) -> Optional[Signal]:
+        """24ч ночной цикл — Scout + REM emotional + REM creative + Consolidation.
 
-        Последовательность (slow-wave → REM → cleanup):
-          1. Scout pump+save (был SCOUT_INTERVAL=3h, теперь раз в сутки)
-          2. REM emotional — state_nodes с |recent_rpe| > threshold
-             прогоняются через Pump между парами content_touched
-          3. REM creative — content-пары близкие в embedding + далёкие
-             в path-графе получают manual_link (парадоксальные связи)
-          4. Consolidation — прунинг слабых + архив state_graph (было 24h)
+        5 phases: scout pump+save, REM emotional pump, REM creative merge,
+        consolidation (decay/prune/archive), patterns detect, goals rotation.
+
+        Side effects: _last_night_summary, _recent_bridges.
+        Phase B (2026-04-25): экстрагировано из _check_night_cycle.
+        Returns: Signal с urgency=0.6 (fixed daily) или None.
         """
         if not self._throttled_idle("_last_night_cycle", self.NIGHT_CYCLE_INTERVAL):
-            return
+            return None
         log.info("[cognitive_loop] night cycle starting")
         self.set_thinking("scout", {"phase": "night"})
 
@@ -981,12 +1000,9 @@ class CognitiveLoop:
             f"прунинг {cs.get('pruned', 0)} / "
             f"архив {cs.get('archived', 0)}"
         )
-        self._add_alert({
-            "type": "night_cycle", "severity": "info",
-            "text": text, "text_en": text,
-            "summary": summary,
-        }, dedupe=True)
-        # Persist за пределами очереди alerts — briefing читает напрямую
+        # Side effects (preserved): persist summary outside alerts queue —
+        # briefing reads _last_night_summary directly. Bridge from scout
+        # phase goes to _recent_bridges for morning briefing.
         self._last_night_summary = dict(summary)
         bt = (s.get("scout") or {}).get("bridge_text")
         if bt:
@@ -998,6 +1014,23 @@ class CognitiveLoop:
             self._recent_bridges = self._recent_bridges[-10:]
         log.info(f"[cognitive_loop] night cycle done: {text}")
         self.clear_thinking()
+
+        import datetime as _dt
+        today_str = _dt.date.today().strftime("%Y-%m-%d")
+        return Signal(
+            type="night_cycle",
+            urgency=0.6,
+            content={
+                "type": "night_cycle",
+                "severity": "info",
+                "text": text,
+                "text_en": text,
+                "summary": summary,
+            },
+            expires_at=ctx.now + 43200,   # 12h — overnight summary stays fresh
+            dedup_key=f"night_cycle:{today_str}",
+            source="detect_night_cycle",
+        )
 
     # ── REM emotional: прогон эпизодов с высоким |rpe| через Pump ──
 
@@ -1158,35 +1191,32 @@ class CognitiveLoop:
 
     # ── DMN continuous (10 min: pump attempt, don't save) ───────────────
 
-    def _check_dmn_deep_research(self):
-        """DMN autonomous deep-research: раз в 30 мин (если idle + NE low)
-        запускает реальный 3-step pipeline (execute_deep) на одной open-goal.
+    def _run_dmn_deep_research(self, ctx) -> Optional[Signal]:
+        """DMN autonomous deep-research: 3-step execute_deep на open-goal.
 
-        Это отличается от `_check_dmn_continuous` (single pump-bridge) —
-        делает полноценное исследование силами того же engine что и chat.
-        Результат → alert «DMN_deep_research: сгенерил N нод + синтез».
+        Отличается от `_run_dmn_continuous` — полноценное исследование
+        engine'ом chat'а на одной цели. Возвращает Signal с novelty-based
+        urgency или None.
 
-        Guard: только если есть хотя бы 1 open-goal + в графе меньше 30 нод
-        (иначе не спамим). Лимит: один deep run в 30 мин.
+        Guards: ≥ 1 open goal, граф < 30 нод. Side effects: _recent_bridges.
+        Phase B (2026-04-25): экстрагировано из _check_dmn_deep_research.
         """
         # Adaptive idle: интервал масштабируется _idle_multiplier'ом (silence + PE)
         if not self._throttled_idle("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
-            return
-        # Хотя бы 1 open goal и не слишком раздутый граф
+            return None
         try:
             from .goals_store import list_goals
             open_goals = list_goals(status="open", limit=5)
         except Exception:
-            return
+            return None
         if not open_goals:
-            return
+            return None
         if len(_graph.get("nodes", [])) > 30:
-            return
-        # Берём первую open goal (по порядку создания)
+            return None
         goal = open_goals[0]
         goal_text = (goal.get("text") or "")[:200]
         if not goal_text:
-            return
+            return None
 
         log.info(f"[cognitive_loop] DMN deep-research starting on goal: {goal_text[:60]}")
         self.set_thinking("synthesize", {"goal": goal_text[:60]})
@@ -1197,34 +1227,14 @@ class CognitiveLoop:
         except Exception as e:
             log.warning(f"[cognitive_loop] DMN deep failed: {e}")
             self.clear_thinking()
-            return
-        finally:
-            # clear в конце функции ниже, но guard здесь для раннего exit
-            pass
+            return None
 
         card = (result.get("cards") or [{}])[0]
         synthesis = (card.get("synthesis") or "")[:150]
         nodes_created = card.get("nodes_created") or 0
         trace_len = len(card.get("trace") or [])
 
-        # Alert
-        self._add_alert({
-            "type": "dmn_deep_research",
-            "severity": "info",
-            "text": f"🧠 DMN автономно исследовала цель «{goal_text[:50]}»: "
-                    f"{nodes_created} нод, {trace_len} шагов."
-                    + (f" Синтез: {synthesis[:100]}" if synthesis else ""),
-            "text_en": f"DMN autonomous research on '{goal_text[:50]}': "
-                       f"{nodes_created} nodes, {trace_len} steps. "
-                       f"{synthesis[:100]}",
-            "goal_id": goal.get("id"),
-            "goal_text": goal_text,
-            "nodes_created": nodes_created,
-            "trace_len": trace_len,
-            "synthesis": synthesis,
-            "card": card,  # полная карточка для UI
-        })
-        # Регистрируем как bridge (чтобы morning briefing включил)
+        # Side effect: register bridge для morning_briefing
         if synthesis:
             self._recent_bridges.append({
                 "ts": time.time(),
@@ -1236,22 +1246,48 @@ class CognitiveLoop:
         log.info(f"[cognitive_loop] DMN deep done: {nodes_created} nodes, synthesis={synthesis[:60]}")
         self.clear_thinking()
 
-    def _check_dmn_converge(self):
-        """DMN server-side autorun loop до STABLE — аналог graph-tab Run button.
+        # urgency: novelty proxy = nodes_created (clamped 0..1 на 10 нод max)
+        novelty = min(1.0, max(0.0, nodes_created / 10.0))
+        return Signal(
+            type="dmn_deep_research",
+            urgency=0.4 + 0.3 * novelty,
+            content={
+                "type": "dmn_deep_research",
+                "severity": "info",
+                "text": f"🧠 DMN автономно исследовала цель «{goal_text[:50]}»: "
+                        f"{nodes_created} нод, {trace_len} шагов."
+                        + (f" Синтез: {synthesis[:100]}" if synthesis else ""),
+                "text_en": f"DMN autonomous research on '{goal_text[:50]}': "
+                           f"{nodes_created} nodes, {trace_len} steps. "
+                           f"{synthesis[:100]}",
+                "goal_id": goal.get("id"),
+                "goal_text": goal_text,
+                "nodes_created": nodes_created,
+                "trace_len": trace_len,
+                "synthesis": synthesis,
+                "card": card,
+            },
+            expires_at=ctx.now + 7200,   # 2h — research insights stay relevant
+            dedup_key=f"dmn_deep:{goal.get('id')}",
+            source="detect_dmn_deep_research",
+        )
 
-        Раз в час (когда юзер idle + NE low), запускает tick→execute→tick-loop
-        на текущем workspace графе, максимум DMN_CONVERGE_MAX_STEPS шагов или
-        пока `action=stable`. Каждый action → вызов соответствующего
-        endpoint/функции server-side (без HTTP round-trip).
+    def _run_dmn_converge(self, ctx) -> Optional[Signal]:
+        """DMN server-side autorun loop до STABLE — аналог graph-tab Run.
 
-        Результат: alert + entry в `_recent_bridges` → morning briefing.
+        Раз в час (когда юзер idle + NE low) tick→execute→tick-loop на
+        текущем workspace графе. Заканчивается converged/wall_time/stalled/
+        max_steps. Forced synthesis at end.
+
+        Side effects: _recent_bridges.append (per pump + final synthesis).
+        Phase B (2026-04-25): экстрагировано из _check_dmn_converge.
+        Returns: Signal с urgency=0.5 (fixed) или None.
         """
         if not self._throttled_idle("_last_dmn_converge", self.DMN_CONVERGE_INTERVAL):
-            return
+            return None
         nodes_n = len(_graph.get("nodes", []))
         if nodes_n < 5 or nodes_n > 40:
-            # Слишком пусто или слишком большой граф — не запускаем
-            return
+            return None
         # Depth config из settings — юзер может override class-level дефолты
         max_steps = self.DMN_CONVERGE_MAX_STEPS
         stall_window = self.DMN_CONVERGE_STALL_WINDOW
@@ -1420,62 +1456,92 @@ class CognitiveLoop:
                        f"Актов: {dict(actions_count)}. Нод стало: {final_nodes}.")
         if forced_synthesis:
             summary_txt += f"\n💡 Синтез (conf {forced_confidence}): {forced_synthesis[:150]}"
-        self._add_alert({
-            "type": "dmn_converge",
-            "severity": "info",
-            "text": summary_txt,
-            "text_en": summary_txt,
-            "steps_taken": steps_taken,
-            "final_action": final_action,
-            "exit_reason": exit_reason,
-            "wall_s": wall_s,
-            "actions_count": dict(actions_count),
-            "final_node_count": final_nodes,
-            "synthesis": forced_synthesis,
-            "synthesis_confidence": forced_confidence,
-        })
-        log.info(f"[cognitive_loop] DMN converge done: {summary_txt}")
 
-    def _check_dmn_continuous(self):
+        log.info(f"[cognitive_loop] DMN converge done: {summary_txt}")
+        return Signal(
+            type="dmn_converge",
+            urgency=0.5,
+            content={
+                "type": "dmn_converge",
+                "severity": "info",
+                "text": summary_txt,
+                "text_en": summary_txt,
+                "steps_taken": steps_taken,
+                "final_action": final_action,
+                "exit_reason": exit_reason,
+                "wall_s": wall_s,
+                "actions_count": dict(actions_count),
+                "final_node_count": final_nodes,
+                "synthesis": forced_synthesis,
+                "synthesis_confidence": forced_confidence,
+            },
+            expires_at=ctx.now + 7200,   # 2h
+            dedup_key="dmn_converge",
+            source="detect_dmn_converge",
+        )
+
+    def _run_dmn_continuous(self, ctx) -> Optional[Signal]:
+        """DMN pump-bridge между двумя удалёнными нодами графа.
+
+        Side effects (preserved): _recent_bridges.append, _record_baddle_action.
+        Filter: quality > 0.5 AND len(text) >= 10 — пустой LLM-output не emit.
+
+        Returns: Signal с urgency = 0.2 + 0.7 × quality, или None.
+        Phase B (2026-04-25): экстрагировано из _check_dmn_continuous,
+        _add_alert убран — dispatcher эмитит через _loop().
+        """
         if len(_graph.get("nodes", [])) < 4:
-            return  # pre-check дёшево, throttle дороже (timestamp write)
+            return None
         # Adaptive idle: интервал растягивается _idle_multiplier'ом — чем
         # выше combined_burnout тем реже pump. При burnout=0 — стандартные
         # 10 мин, при burnout=1 — 100 мин. Без бинарных порогов.
         if not self._throttled_idle("_last_dmn", self.DMN_INTERVAL):
-            return
+            return None
 
         self.set_thinking("pump", {"source": "dmn"})
         try:
             bridge = self._run_pump_bridge(max_iterations=1, save=False)
         finally:
             self.clear_thinking()
+
         # Guard: пустой/слишком короткий текст моста = LLM-generation failed,
-        # alert без тела выглядит как пустой «🔗 DMN-инсайт:» в чате. Лучше
-        # не пушить и попробовать на следующей итерации.
-        bridge_text = (bridge or {}).get("text", "").strip() if bridge else ""
-        if bridge and bridge.get("quality", 0) > 0.5 and len(bridge_text) >= 10:
-            self._add_alert({
+        # alert без тела был бы как пустой «🔗 DMN-инсайт:» — skip.
+        if not bridge:
+            return None
+        quality = bridge.get("quality", 0)
+        bridge_text = (bridge.get("text") or "").strip()
+        if quality <= 0.5 or len(bridge_text) < 10:
+            return None
+
+        # Side effects (произошли — bridge production реален независимо от
+        # dispatcher decision)
+        self._recent_bridges.append({
+            "ts": time.time(),
+            "text": (bridge.get("text") or "")[:100],
+            "quality": quality,
+            "source": "dmn",
+        })
+        self._recent_bridges = self._recent_bridges[-10:]
+        self._record_baddle_action(
+            "dmn_bridge",
+            text=f"DMN bridge: {bridge_text[:120]}",
+            extras={"quality": round(quality, 3)},
+        )
+
+        return Signal(
+            type="dmn_bridge",
+            urgency=min(1.0, 0.2 + 0.7 * quality),
+            content={
                 "type": "dmn_bridge",
                 "severity": "info",
-                "text": f"DMN-инсайт: {bridge_text[:80]} (quality {bridge.get('quality', 0):.0%})",
-                "text_en": f"DMN insight: {bridge_text[:80]} (quality {bridge.get('quality', 0):.0%})",
+                "text": f"DMN-инсайт: {bridge_text[:80]} (quality {quality:.0%})",
+                "text_en": f"DMN insight: {bridge_text[:80]} (quality {quality:.0%})",
                 "bridge": bridge,
-            }, dedupe=True)
-            self._recent_bridges.append({
-                "ts": time.time(),
-                "text": (bridge.get("text") or "")[:100],
-                "quality": bridge.get("quality", 0),
-                "source": "dmn",
-            })
-            self._recent_bridges = self._recent_bridges[-10:]
-            # Action Memory: успешный DMN мост = action. Outcome закроется по
-            # timeout (24ч) или раньше если юзер прореагирует.
-            self._record_baddle_action(
-                "dmn_bridge",
-                text=f"DMN bridge: {bridge_text[:120]}",
-                extras={"quality": round(bridge.get("quality", 0), 3)},
-            )
+            },
+            expires_at=ctx.now + 1800,   # 30 мин — bridge stale fast
+            dedup_key="dmn_bridge",
+            source="detect_dmn_bridge",
+        )
 
     def _run_pump_bridge(self, max_iterations: int = 2, save: bool = False) -> Optional[dict]:
         """Call pump between two most distant nodes. Optionally persist bridge.

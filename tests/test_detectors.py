@@ -25,7 +25,12 @@ from src.detectors import (
     detect_morning_briefing,
     detect_observation_suggestions,
     detect_state_walk,
+    detect_dmn_bridge,
+    detect_dmn_deep_research,
+    detect_dmn_converge,
+    detect_night_cycle,
 )
+from src.signals import Signal
 
 
 # ── Fixtures: stub context ─────────────────────────────────────────────────
@@ -552,6 +557,55 @@ def test_state_walk_filters_recent_matches(ctx):
         sg.query_similar.return_value = similar
         mock_get_sg.return_value = sg
         assert detect_state_walk(ctx) is None
+
+
+# ── Heavy-work detectors (delegate to loop._run_*) ────────────────────────
+
+@pytest.mark.parametrize("detector,method_name", [
+    (detect_dmn_bridge, "_run_dmn_continuous"),
+    (detect_dmn_deep_research, "_run_dmn_deep_research"),
+    (detect_dmn_converge, "_run_dmn_converge"),
+    (detect_night_cycle, "_run_night_cycle"),
+])
+def test_heavy_detector_returns_none_when_method_missing(ctx, detector, method_name):
+    """Step 3c: методы _run_* пока не существуют → детектор возвращает None
+    gracefully (Step 4 экстрагирует методы из _check_*)."""
+    # stub_loop фикстура не имеет _run_* методов
+    assert not hasattr(ctx.loop, method_name)
+    assert detector(ctx) is None
+
+
+@pytest.mark.parametrize("detector,method_name", [
+    (detect_dmn_bridge, "_run_dmn_continuous"),
+    (detect_dmn_deep_research, "_run_dmn_deep_research"),
+    (detect_dmn_converge, "_run_dmn_converge"),
+    (detect_night_cycle, "_run_night_cycle"),
+])
+def test_heavy_detector_delegates_to_loop_method(ctx, detector, method_name):
+    expected = Signal(type=method_name.replace("_run_", "").replace("_", "_"),
+                       urgency=0.7, content={}, expires_at=ctx.now + 100)
+    setattr(ctx.loop, method_name, MagicMock(return_value=expected))
+    result = detector(ctx)
+    assert result is expected
+    getattr(ctx.loop, method_name).assert_called_once_with(ctx)
+
+
+@pytest.mark.parametrize("detector,method_name", [
+    (detect_dmn_bridge, "_run_dmn_continuous"),
+    (detect_dmn_deep_research, "_run_dmn_deep_research"),
+    (detect_dmn_converge, "_run_dmn_converge"),
+    (detect_night_cycle, "_run_night_cycle"),
+])
+def test_heavy_detector_swallows_exception(ctx, detector, method_name):
+    """Если loop._run_* падает — детектор возвращает None, не пробрасывает."""
+    setattr(ctx.loop, method_name, MagicMock(side_effect=RuntimeError("boom")))
+    assert detector(ctx) is None
+
+
+def test_all_13_detectors_registered():
+    """Sanity check: DETECTORS has all 13 (4 simple + 5 medium + 4 heavy)."""
+    from src.detectors import DETECTORS
+    assert len(DETECTORS) == 13
 
 
 # ── Common contract ───────────────────────────────────────────────────────

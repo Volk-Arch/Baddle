@@ -60,6 +60,16 @@ class DetectorContext:
         save graph) идёт в caller'е после dispatch.
       - Никаких side-effects при чтении (loop.method() допустимо если
         method() pure).
+
+    Поля:
+        now: unix ts текущего tick
+        user/neuro/freeze: per-class ссылки на state объекты
+        loop: CognitiveLoop для доступа к graph/_recent_bridges/etc
+        dmn_eligible: gate из _loop — True если `not_frozen AND ne_quiet
+            AND idle_enough`. DMN-эвристические детекторы (dmn_bridge,
+            dmn_deep, dmn_converge, state_walk, night_cycle) проверяют это
+            в первой строке и возвращают None если False — heavy work не
+            запускается во время foreground / freeze / high-NE.
     """
 
     now: float
@@ -67,23 +77,40 @@ class DetectorContext:
     neuro: "Neurochem"
     freeze: "ProtectiveFreeze"
     loop: "CognitiveLoop"   # для доступа к graph, activity_log, plans, etc.
+    dmn_eligible: bool = True
 
 
 def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext:
     """Собрать DetectorContext из текущего state. Вызывается раз за tick.
 
+    DMN gate (`not_frozen AND ne_quiet AND idle_enough`) считается здесь —
+    DMN-эвристические детекторы проверяют `ctx.dmn_eligible` для skip
+    heavy work во время freeze/foreground/high-NE.
+
     Lazy-import объектов state — не тащим их в module-level чтобы избежать
     circular import (cognitive_loop ← signals ← detectors ← cognitive_loop).
     """
     from .user_state import get_user_state
-    from .horizon import get_global_state
+    from .horizon import get_global_state, PROTECTIVE_FREEZE
 
     user = get_user_state()
     gs = get_global_state()
     neuro = gs.neuro
     freeze = loop._get_freeze()
+
+    # DMN gate
+    try:
+        idle_enough = (now - loop._last_foreground_tick) >= loop.FOREGROUND_COOLDOWN
+        ne_quiet = neuro.norepinephrine < loop.NE_HIGH_GATE
+        not_frozen = gs.state != PROTECTIVE_FREEZE
+        dmn_eligible = not_frozen and ne_quiet and idle_enough
+    except Exception:
+        dmn_eligible = False
+
     return DetectorContext(
-        now=now, user=user, neuro=neuro, freeze=freeze, loop=loop)
+        now=now, user=user, neuro=neuro, freeze=freeze, loop=loop,
+        dmn_eligible=dmn_eligible,
+    )
 
 
 # ── DETECTORS registry ─────────────────────────────────────────────────────
@@ -621,7 +648,11 @@ def detect_state_walk(ctx: DetectorContext) -> Optional[Signal]:
     Compute-throttle (embedding query expensive):
     `loop._last_state_walk × idle_multiplier` (20 мин base, растягивается
     по burnout). State_graph count >= 10 — иначе нет истории.
+
+    DMN-eligible: skip если frozen / high-NE / foreground (heavy compute).
     """
+    if not ctx.dmn_eligible:
+        return None
     try:
         from .state_graph import get_state_graph
         sg = get_state_graph()
@@ -736,16 +767,116 @@ def detect_state_walk(ctx: DetectorContext) -> Optional[Signal]:
         return None
 
 
-# ── DETECTORS registry (filled incrementally) ─────────────────────────────
+# ── Heavy-work detectors (delegate to CognitiveLoop._run_*) ───────────────
+#
+# DMN и night_cycle делают heavy graph ops + side effects (save graph, mutate
+# nodes, record actions). Их работа остаётся методами CognitiveLoop т.к. они
+# тесно связаны с её внутренним state (_graph, _recent_bridges, etc).
+#
+# Pattern (spec § 4 phase-b-signal-dispatcher.md):
+#
+#   1. CognitiveLoop._run_X(ctx) -> Optional[Signal]
+#      — heavy work, side effects внутри, возвращает Signal или None
+#   2. detectors.detect_X(ctx)
+#      — тонкий wrapper, делегирует в loop._run_X(ctx)
+#
+# Step 3c добавляет wrappers (методы _run_* пока не существуют → return None).
+# Step 4 экстрагирует _run_* из _check_* и переписывает _loop() на DETECTORS.
+
+
+def _delegate_heavy(ctx: DetectorContext, method_name: str,
+                     detector_name: str) -> Optional[Signal]:
+    """Common wrapper: вызвать loop.method_name(ctx) если существует."""
+    run_method = getattr(ctx.loop, method_name, None)
+    if run_method is None:
+        return None
+    try:
+        return run_method(ctx)
+    except Exception as e:
+        log.debug(f"[{detector_name}] failed: {e}")
+        return None
+
+
+def detect_dmn_bridge(ctx: DetectorContext) -> Optional[Signal]:
+    """DMN pump-bridge между двумя удалёнными нодами графа.
+
+    Heavy work in `CognitiveLoop._run_dmn_continuous(ctx)`:
+      - Граф ≥ 4 ноды
+      - Throttle: DMN_INTERVAL × idle_multiplier (10 мин base)
+      - Gate: not frozen, ne < NE_HIGH_GATE, idle ≥ FOREGROUND_COOLDOWN
+      - Side effects: _recent_bridges.append, _record_baddle_action
+      - Filter: quality > 0.5 AND len(text) >= 10
+
+    urgency = 0.2 + 0.7 × bridge.quality (0.55..0.9 при quality≥0.5).
+    """
+    if not ctx.dmn_eligible:
+        return None
+    return _delegate_heavy(ctx, "_run_dmn_continuous", "detect_dmn_bridge")
+
+
+def detect_dmn_deep_research(ctx: DetectorContext) -> Optional[Signal]:
+    """3-step autonomous research на одной open-goal.
+
+    Heavy work in `CognitiveLoop._run_dmn_deep_research(ctx)`:
+      - Throttle: DMN_DEEP_INTERVAL × idle_multiplier (30 мин base)
+      - ≥ 1 open goal, граф < 30 нод
+      - Side effects: _recent_bridges, _record_baddle_action
+
+    urgency = 0.4 + 0.3 × novelty (0.4..0.7).
+    """
+    if not ctx.dmn_eligible:
+        return None
+    return _delegate_heavy(ctx, "_run_dmn_deep_research", "detect_dmn_deep_research")
+
+
+def detect_dmn_converge(ctx: DetectorContext) -> Optional[Signal]:
+    """Server-side autorun loop до STABLE state.
+
+    Heavy work in `CognitiveLoop._run_dmn_converge(ctx)`:
+      - Throttle: DMN_CONVERGE_INTERVAL × idle_multiplier (1 ч base)
+      - Граф 5..40 нод
+      - Loop guards: max_steps=100, wall_time<15 мин, stall_window=12
+
+    urgency = 0.5 fixed (редкий, средняя важность).
+    """
+    if not ctx.dmn_eligible:
+        return None
+    return _delegate_heavy(ctx, "_run_dmn_converge", "detect_dmn_converge")
+
+
+def detect_night_cycle(ctx: DetectorContext) -> Optional[Signal]:
+    """24h ночной цикл — Scout + REM emotional + REM creative + Consolidation.
+
+    Heavy work in `CognitiveLoop._run_night_cycle(ctx)`:
+      - Throttle: NIGHT_CYCLE_INTERVAL × idle_multiplier (24 ч base)
+      - 5 phases: Scout pump, REM emotional, REM creative, consolidation, patterns
+      - Side effects: _last_night_summary, _recent_bridges, archive rotation
+
+    urgency = 0.6 fixed (ежедневный summary).
+    """
+    if not ctx.dmn_eligible:
+        return None
+    return _delegate_heavy(ctx, "_run_night_cycle", "detect_night_cycle")
+
+
+# ── DETECTORS registry — все 13 ────────────────────────────────────────────
 
 DETECTORS: list[Callable[[DetectorContext], DetectorReturn]] = [
+    # Simple — ~30 строк каждая, pure compute
     detect_coherence_crit,
     detect_low_energy,
     detect_plan_reminder,
     detect_recurring_lag,
+    # Medium — compute-throttle для дорогих работ (state_walk embedding,
+    # morning_briefing build, observation LLM)
     detect_sync_seeking,
     detect_evening_retro,
     detect_morning_briefing,
     detect_observation_suggestions,
     detect_state_walk,
+    # Heavy — delegate в CognitiveLoop._run_* (Step 4 экстрагирует)
+    detect_dmn_bridge,
+    detect_dmn_deep_research,
+    detect_dmn_converge,
+    detect_night_cycle,
 ]
