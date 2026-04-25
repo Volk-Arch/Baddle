@@ -100,7 +100,7 @@
 
 ## Где что живёт
 
-**Статика:** [user_profile.py](../src/user_profile.py), [goals_store.py](../src/goals_store.py), [solved_archive.py](../src/solved_archive.py) → [static-storage-design.md](static-storage-design.md).
+**Статика:** [user_profile.py](../src/user_profile.py), [goals_store.py](../src/goals_store.py), [solved_archive.py](../src/solved_archive.py) → [storage.md](storage.md).
 
 **Динамическое состояние:** [user_state.py](../src/user_state.py) + [neurochem.py](../src/neurochem.py) + [horizon.py](../src/horizon.py) → [symbiosis-design.md](symbiosis-design.md), [friston-loop.md](friston-loop.md).
 
@@ -116,4 +116,4 @@ Schemas всех data-файлов — [ontology.md](ontology.md).
 
 ---
 
-**Навигация:** [← Life Assistant](life-assistant-design.md) · [Индекс](README.md) · [Следующее: NAND архитектура →](nand-architecture.md)
+**Навигация:** [← Foundation](foundation.md) · [Индекс](README.md) · [Следующее: NAND архитектура →](nand-architecture.md)

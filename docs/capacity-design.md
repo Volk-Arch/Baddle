@@ -123,18 +123,20 @@ Capacity — не шкала 0..2000, а **функция** от трёх кон
 
 ```
 cognitive_load_day =
-    0.20 · normalize(tasks_started, cap=8)
+    0.20 · normalize(tasks_started,    cap=8)
   + 0.30 · normalize(context_switches, cap=10)
-  + 0.30 · normalize(complexity_sum, cap=3.0)
-  − 0.25 · normalize(completions_weighted, cap=5)
-  − 0.25 · max(0, progress_delta)    # положительный прогресс снижает нагрузку
+  + 0.30 · normalize(complexity_sum,   cap=3.0)
+  − 0.25 · normalize(tasks_completed,  cap=5)
+  − 0.25 · max(0, −progress_delta)     # улучшение sync (delta<0) снижает нагрузку
 ```
 
 Коэффициенты калибруются по 2-недельному окну данных.
 
 **Сложность per task** (`complexity_per_task`) снимается в момент запуска задачи: это текущий модуль вектора surprise из UserState в момент `activity.start`. Persist'ится в `activity_log` как поле `surprise_at_start`.
 
-**Прогресс** (`progress_delta`) = sync_error_slow в 23:59 минус sync_error_slow в 00:01 того же дня.
+**Прогресс** (`progress_delta`) = `sync_error_slow в момент N − sync_error_slow в начале дня`. Знак:
+- `delta > 0` → sync_error вырос → день получился рассинхронным (нагрузка не снижается)
+- `delta < 0` → sync_error упал → резонанс улучшился → нагрузка снижается на `0.25 · |delta|`
 
 ### Capacity-зона
 

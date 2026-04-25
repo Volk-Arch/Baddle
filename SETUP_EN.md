@@ -126,7 +126,7 @@ baddle/
 **On first run** `data/` and `workspaces/` are created automatically.
 `roles.json` + `templates.json` get seeded from defaults in
 `src/defaults.py` — feel free to edit them, they won't be overwritten.
-Full layout → [docs/storage-layout.md](docs/storage-layout.md).
+Full layout → [docs/storage.md](docs/storage.md).
 
 ---
 

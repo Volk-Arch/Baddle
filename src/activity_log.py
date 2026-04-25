@@ -123,6 +123,10 @@ def _replay() -> dict[str, dict]:
                 "duration_s": None,
                 "status": "active",
                 "stop_reason": None,
+                # Phase C: surprise tracking для cognitive_load complexity
+                "surprise_at_start": float(e.get("surprise_at_start") or 0.0),
+                "surprise_at_stop": None,
+                "surprise_delta": None,
             }
         elif aid in state:
             rec = state[aid]
@@ -132,6 +136,15 @@ def _replay() -> dict[str, dict]:
                 rec["stop_reason"] = e.get("reason") or "manual"
                 if rec.get("started_at"):
                     rec["duration_s"] = float(rec["stopped_at"]) - float(rec["started_at"])
+                # Phase C: surprise_delta = stop - start
+                if "surprise_at_stop" in e:
+                    try:
+                        stop_v = float(e.get("surprise_at_stop") or 0.0)
+                        rec["surprise_at_stop"] = stop_v
+                        rec["surprise_delta"] = round(
+                            stop_v - rec.get("surprise_at_start", 0.0), 4)
+                    except (TypeError, ValueError):
+                        pass
             elif act == "update":
                 for k, v in (e.get("fields") or {}).items():
                     if k in {"name", "category", "node_index"}:
@@ -164,16 +177,34 @@ def start_activity(name: str,
     """Начать новую задачу. Если уже есть активная — автоматически стопает её
     со `stop_reason='switch'` (поведение кнопки «Следующая»).
 
+    Side effect (Phase C): фиксирует `surprise_at_start` — модуль вектора
+    UserState.surprise на момент запуска. Используется для `complexity_sum`
+    в cognitive_load формуле (см. docs/capacity-design.md §Дневная метрика).
+
+    Stop'ает auto-switch предыдущей задачи также с `surprise_at_stop` —
+    чтобы посчитать `surprise_delta` (как изменилась модель за время
+    задачи).
+
     Возвращает id новой активной задачи.
     """
     name = (name or "").strip()[:200]
     if not name:
         raise ValueError("name_required")
 
-    # Автостоп текущей
+    # Snapshot surprise (модуль UserState.imbalance) — для complexity tracking
+    surprise_at_start = 0.0
+    try:
+        from .user_state import get_user_state
+        surprise_at_start = float(get_user_state().imbalance)
+    except Exception:
+        pass
+
+    # Автостоп текущей со snapshot surprise_delta
     cur = get_active()
     if cur:
-        _append({"action": "stop", "id": cur["id"], "reason": "switch"})
+        stop_event = {"action": "stop", "id": cur["id"], "reason": "switch",
+                       "surprise_at_stop": surprise_at_start}
+        _append(stop_event)
 
     cat = category or detect_category(name)
     aid = uuid.uuid4().hex[:12]
@@ -183,6 +214,7 @@ def start_activity(name: str,
         "name": name,
         "category": cat,
         "node_index": node_index,
+        "surprise_at_start": round(surprise_at_start, 4),
     })
     return aid
 
@@ -266,12 +298,28 @@ def try_detect_constraint_violation(activity_name: str,
 
 
 def stop_activity(reason: str = "manual") -> Optional[dict]:
-    """Остановить текущую активную задачу. Возвращает завершённую запись или None."""
+    """Остановить текущую активную задачу. Возвращает завершённую запись или None.
+
+    Side effect (Phase C): фиксирует `surprise_at_stop` для расчёта
+    `surprise_delta = stop - start` в `_replay()`. Sign:
+        delta > 0 — surprise вырос за время задачи (перемоделирование)
+        delta < 0 — surprise упал (модель стабилизировалась)
+    """
     cur = get_active()
     if not cur:
         return None
-    _append({"action": "stop", "id": cur["id"], "reason": reason or "manual"})
-    # Перечитаем — получим вычисленный duration_s
+    surprise_at_stop = 0.0
+    try:
+        from .user_state import get_user_state
+        surprise_at_stop = float(get_user_state().imbalance)
+    except Exception:
+        pass
+    _append({
+        "action": "stop", "id": cur["id"],
+        "reason": reason or "manual",
+        "surprise_at_stop": round(surprise_at_stop, 4),
+    })
+    # Перечитаем — получим вычисленный duration_s + surprise_delta
     return _replay().get(cur["id"])
 
 

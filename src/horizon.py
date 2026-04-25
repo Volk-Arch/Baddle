@@ -92,9 +92,13 @@ class CognitiveState:
 
         # ── Neurochem layer (composition — проще старой монолитной модели) ──
         # Три скаляра + отдельный защитный режим. См. src/neurochem.py.
+        # B0: shared singleton РГК — каскад зеркал (UserState/Neurochem/
+        # ProtectiveFreeze) работает на одном объекте.
         from .neurochem import Neurochem, ProtectiveFreeze
-        self.neuro = Neurochem()
-        self.freeze = ProtectiveFreeze()
+        from .rgk import get_global_rgk
+        rgk = get_global_rgk()
+        self.neuro = Neurochem(rgk=rgk)
+        self.freeze = ProtectiveFreeze(rgk=rgk)
         self._burnout_trip_count = 0  # kept for metrics
 
         # ── Mode flags ──────────────────────────────────────────────────
@@ -464,6 +468,10 @@ class CognitiveState:
                 "dopamine":       neuro_dict["dopamine"],
                 "serotonin":      neuro_dict["serotonin"],
                 "norepinephrine": neuro_dict["norepinephrine"],
+                # Phase D: 5-axis chem + balance diagnostic
+                "acetylcholine":  neuro_dict.get("acetylcholine", 0.5),
+                "gaba":           neuro_dict.get("gaba", 0.5),
+                "balance":        neuro_dict.get("balance", 1.0),
                 # burnout = display_burnout: max(conflict_accumulator,
                 # silence_pressure, imbalance_pressure). Три feeder'а:
                 #   • conflict — графовые конфликты (единственный активирует freeze)

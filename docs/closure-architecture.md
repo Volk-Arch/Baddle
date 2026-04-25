@@ -226,4 +226,4 @@ similarity по goal-text embedding'у, возвращает
 
 ---
 
-**Навигация:** [← Storage layout](storage-layout.md) · [Индекс](README.md) · Конец пути ✓
+**Навигация:** [← DMN / Scout](dmn-scout-design.md) · [Индекс](README.md) · Конец пути ✓

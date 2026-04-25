@@ -112,16 +112,17 @@ def _card_status(lang: str = "ru") -> dict:
     neuro = m.get("neurochem") or {}
 
     sections = []
-    # Energy / reserve — to_dict() не включает long_reserve_pct,
-    # считаем локально из абсолютного значения.
-    lr = user.get("long_reserve")
-    LONG_MAX = 2000.0
-    lr_pct = (float(lr) / LONG_MAX) if lr is not None else None
-    if lr is not None:
+    # Phase C: 3-zone capacity вместо long_reserve bar
+    cap_zone = user.get("capacity_zone")
+    if cap_zone:
+        emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(cap_zone, "⚪")
+        reasons = user.get("capacity_reason") or []
+        kind = "info" if cap_zone == "green" else (
+            "warn" if cap_zone == "yellow" else "alert")
+        subtitle = ", ".join(reasons) if reasons else "все три контура ok"
         sections.append({
-            "emoji": "🔋", "title": f"Резерв {int((lr_pct or 0)*100)}%",
-            "subtitle": f"{int(lr)}/{int(LONG_MAX)}",
-            "kind": "info" if (lr_pct or 0) > 0.6 else "warn",
+            "emoji": emoji, "title": f"Capacity {cap_zone}",
+            "subtitle": subtitle, "kind": kind,
         })
     # Named state
     ns = user.get("named_state") or {}

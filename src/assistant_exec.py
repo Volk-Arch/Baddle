@@ -730,6 +730,21 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             "\nУчитывай эти предпочтения и ограничения."
             if lang == "ru" else "\nTake constraints into account.")
 
+    # Phase D prompt-routing: добавляем chem-state hint в system prompt.
+    # 8-region РГК-карта (named_state) определяет когнитивный режим юзера,
+    # из РГК v1.0 §«Влияние на промпт-роутинг». Тонкий hint, не override.
+    try:
+        from .user_state import get_user_state
+        ns = (get_user_state().named_state or {})
+        ns_key = ns.get("key")
+        if ns_key:
+            from .prompts import _p
+            chem_hint = _p(lang, f"ns_hint_{ns_key}")
+            if chem_hint:
+                system += chem_hint
+    except Exception as e:
+        log.debug(f"[execute_deep] chem hint failed: {e}")
+
     try:
         mode_cfg = get_mode(mode_id) or {}
     except Exception:

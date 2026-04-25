@@ -68,6 +68,25 @@ self PE, одна метрика давления.
 
 Legacy `expectation` (scalar EMA state_level) и `surprise` (scalar)
 сохранены для backward-compat — UI их всё ещё потребляет.
+
+## Implementation note
+
+EMA-метрики живут в `self._rgk` (см. src/rgk.py). UserState — thin facade
+над _rgk: 15 @property proxies (HRV/activity/day_summary/focus_residue/
+timestamps), 9 chem properties (DA/5HT/NE/ACh/GABA/valence/agency/burnout/
+expectation). Правило 2 + Правило 6 из docs/architecture-rules.md.
+
+Updates через explicit methods:
+  - `update_from_hrv` → serotonin, norepinephrine, hrv_baseline
+  - `update_from_engagement` / `update_from_feedback` → dopamine, valence
+  - `update_from_chat_sentiment` → valence
+  - `update_from_plan_completion` → agency
+  - `update_from_energy` → burnout
+  - `tick_expectation` → expectation_by_tod, expectation_vec
+  - `feed_acetylcholine` (на surprise) / `feed_gaba` (на focus_residue)
+
+Bespoke остаются: `_feedback_counts` (legacy duplicate с `_rgk._fb`,
+TODO cleanup), burnout-bump (+0.05 на reject), streak-bias valence.
 """
 import math
 import time
@@ -75,7 +94,8 @@ from typing import Optional
 
 import numpy as np
 
-from .ema import EMA, VectorEMA, Decays
+from .ema import Decays
+from .rgk import РГК
 
 
 # ── Sync regime constants ───────────────────────────────────────────────────
@@ -101,10 +121,8 @@ EXPECTATION_VEC_DECAY_FAST = Decays.EXPECTATION_VEC_FAST  # 0.80
 # Surprise boost: когда юзер detect'ится как удивлённый (OQ #7), ускоряем
 # EMA decay на N tick'ов — его модель мира изменилась.
 SURPRISE_BOOST_DEFAULT_TICKS = 3
-LONG_RESERVE_MAX = 2000        # общий резерв (как в MindBalance v2)
-LONG_RESERVE_DEFAULT = 1500    # стартовое значение (можно восстановить от hrv)
-DAILY_ENERGY_MAX = 100
-LONG_RESERVE_TAP_THRESHOLD = 20  # ниже daily → начинаем тратить long reserve
+# Phase C Шаг 6: dual-pool константы (LONG_RESERVE_MAX/DEFAULT/TAP_THRESHOLD,
+# DAILY_ENERGY_MAX) удалены — заменены 3-zone capacity model.
 
 # Activity zone параметры (из прототипа HRV × акселерометр)
 ACTIVITY_THRESHOLD = 0.5       # magnitude выше которого юзер считается «активным»
@@ -115,6 +133,149 @@ ZONE_STRESS_REST = "stress_rest"   # !active + !hrv_ok   → 🟡 беспоко
 ZONE_HEALTHY_LOAD = "healthy_load" #  active + hrv_ok    → 🔵 здоровая нагрузка
 ZONE_OVERLOAD = "overload"         #  active + !hrv_ok   → 🔴 перегрузка / overtraining
 
+_TOD_NAMES = ("morning", "day", "evening", "night")
+
+
+# ── Capacity helpers (Phase C) ─────────────────────────────────────────────
+#
+# 3-zone capacity model — из docs/capacity-design.md. Заменяет dual-pool
+# `daily_spent + long_reserve` на 3 параллельных контура (физио / эмо /
+# когнитивный) с явными зонами green/yellow/red.
+
+# Capacity thresholds (per docs/capacity-design.md §Формулы)
+CAPACITY_PHYS_COHERENCE_MIN = 0.5
+CAPACITY_PHYS_BURNOUT_MAX = 0.3
+CAPACITY_AFFECT_SEROTONIN_MIN = 0.4
+CAPACITY_AFFECT_DOPAMINE_MIN = 0.35
+CAPACITY_COGLOAD_MAX = 0.6
+
+
+def _normalize(value, cap):
+    """Нормализация v/cap в [0, 1]."""
+    if cap is None or cap <= 0:
+        return 0.0
+    try:
+        return min(1.0, max(0.0, float(value) / float(cap)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def compute_cognitive_load(day_summary_today: dict, progress_delta: float) -> float:
+    """Дневная когнитивная нагрузка [0, 1] из 6 observable.
+
+    Formula per docs/capacity-design.md §Формулы:
+        + 0.20 · normalize(tasks_started, cap=8)
+        + 0.30 · normalize(context_switches, cap=10)
+        + 0.30 · normalize(complexity_sum, cap=3.0)
+        − 0.25 · normalize(tasks_completed, cap=5)
+        − 0.25 · max(0, -progress_delta)        # good day reduces load
+
+    NOTE: progress_delta = sync_error_now − sync_error_at_dawn.
+    Negative = improvement (resonance улучшился) → "good progress"
+    → reduces cognitive_load. Docs literal `max(0, progress_delta)`
+    inconsistent with comment «положительный прогресс снижает» —
+    implementing semantic interpretation.
+
+    Коэффициенты калибруются по 2-недельному окну данных (через 2 нед
+    after merge сравнить cognitive_load распределение с реальным состоянием).
+
+    Args:
+        day_summary_today: dict с ключами `tasks_started`, `tasks_completed`,
+            `context_switches`, `complexity_sum` (defaults 0).
+        progress_delta: float, sync_error change за день (negative = improved).
+
+    Returns: float в [0, 1].
+    """
+    s = day_summary_today or {}
+    load = (
+        0.20 * _normalize(s.get("tasks_started", 0), cap=8)
+        + 0.30 * _normalize(s.get("context_switches", 0), cap=10)
+        + 0.30 * _normalize(s.get("complexity_sum", 0.0), cap=3.0)
+        - 0.25 * _normalize(s.get("tasks_completed", 0), cap=5)
+        - 0.25 * max(0.0, -float(progress_delta or 0.0))
+    )
+    return max(0.0, min(1.0, load))
+
+
+def compute_capacity_indicators(user) -> dict:
+    """3 boolean-индикатора + причины fail'ов.
+
+    Reads existing UserState fields/EMAs (Phase A registry):
+    - phys_ok: HRV coherence + low burnout (raw HRV или burnout-only fallback)
+    - affect_ok: serotonin + dopamine
+    - cogload_ok: cognitive_load_today
+
+    Returns:
+        {phys_ok, affect_ok, cogload_ok, reasons[]} — booleans + list of
+        failed-condition tags для capacity_reason property.
+    """
+    serotonin = float(user.serotonin)
+    burnout = float(user.burnout)
+    dopamine = float(user.dopamine)
+    cogload = float(getattr(user, "cognitive_load_today", 0.0))
+    coh = user.hrv_coherence
+
+    reasons: list[str] = []
+
+    # phys_ok: если HRV доступен — обе проверки; иначе fallback только на burnout
+    if coh is not None:
+        coh_ok = float(coh) > CAPACITY_PHYS_COHERENCE_MIN
+        burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
+        phys_ok = coh_ok and burnout_ok
+        if not coh_ok:
+            reasons.append("hrv_coherence_low")
+        if not burnout_ok:
+            reasons.append("burnout_high")
+    else:
+        burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
+        phys_ok = burnout_ok
+        if not burnout_ok:
+            reasons.append("burnout_high")
+
+    # affect_ok
+    sero_ok = serotonin > CAPACITY_AFFECT_SEROTONIN_MIN
+    da_ok = dopamine > CAPACITY_AFFECT_DOPAMINE_MIN
+    affect_ok = sero_ok and da_ok
+    if not sero_ok:
+        reasons.append("serotonin_low")
+    if not da_ok:
+        reasons.append("dopamine_low")
+
+    # cogload_ok
+    cogload_ok = cogload < CAPACITY_COGLOAD_MAX
+    if not cogload_ok:
+        reasons.append("cogload_high")
+
+    return {
+        "phys_ok": phys_ok,
+        "affect_ok": affect_ok,
+        "cogload_ok": cogload_ok,
+        "reasons": reasons,
+    }
+
+
+def compute_capacity_zone(indicators: dict) -> str:
+    """3-zone derived из 3 ok-индикаторов.
+
+    Returns: "green" (все 3 ok), "yellow" (один fail), "red" (≥2 fail).
+    """
+    n_ok = sum([
+        bool(indicators.get("phys_ok")),
+        bool(indicators.get("affect_ok")),
+        bool(indicators.get("cogload_ok")),
+    ])
+    if n_ok == 3:
+        return "green"
+    if n_ok == 2:
+        return "yellow"
+    return "red"
+
+
+# Phase D Step 3c: extractors + _build_user_registry удалены.
+# Все EMA UserState'а живут в self._rgk (см. src/rgk.py); fire_event
+# абстракция заменена прямыми вызовами в update_from_*/apply_checkin/
+# tick_expectation/apply_subjective_surprise.
+
 
 class UserState:
     """Зеркало Neurochem для пользователя. Питается наблюдаемыми сигналами."""
@@ -124,117 +285,262 @@ class UserState:
                  serotonin: float = 0.5,
                  norepinephrine: float = 0.5,
                  burnout: float = 0.0,
-                 agency: float = 0.5):
-        self.dopamine = dopamine
-        self.serotonin = serotonin
-        self.norepinephrine = norepinephrine
-        self.burnout = burnout
-        # Agency — 5-я ось (OQ #2). «Могу / не могу влиять на день».
-        # Derived из completed/planned ratio через `update_from_plan_completion`.
-        # Пока НЕ входит в `vector()` / `sync_error` — собираем данные, через
-        # 2-3 недели решаем включать или нет (см. planning/TODO.md).
-        # Default 0.5 = нейтральный baseline пока ничего не измерили.
-        self.agency = agency
+                 agency: float = 0.5,
+                 *,
+                 rgk: "Optional[РГК]" = None):
+        # B0: optional shared RGK (production bootstrap передаёт singleton
+        # через get_global_rgk() — каскад зеркал работает на одном объекте).
+        # Default rgk=None → создаётся новый РГК (backward-compat для тестов).
+        # B4 Wave 2: bespoke user-side state (HRV/activity/day_summary/focus_residue/
+        # _last_*_ts) перемещён в РГК.__init__ — UserState теперь thin facade
+        # с @property proxies (см. ниже). Default values те же.
+        self._rgk = rgk if rgk is not None else РГК()
+        self._rgk.user.gain.value = dopamine
+        self._rgk.user.hyst.value = serotonin
+        self._rgk.user.aperture.value = norepinephrine
+        self._rgk.burnout.value = burnout
+        self._rgk.agency.value = agency
 
-        # HRV passthrough — UI читает отсюда
-        self.hrv_coherence: Optional[float] = None
-        self.hrv_stress: Optional[float] = None
-        self.hrv_rmssd: Optional[float] = None
-
-        # Activity magnitude (акселерометр Polar или симулятор-слайдер).
-        # 0 = покой, 0.5 = порог «активен», 1.0 = ходьба, 2+ = бег.
-        # `activity_zone` derived property: recovery / stress_rest / healthy_load / overload.
-        self.activity_magnitude: float = 0.0
-
-        # Валентность: приятно/неприятно ∈ [−1, 1]. Отдельный канал от arousal.
-        # HRV/dopamine ловят возбуждение, но не знак переживания. Собирается
-        # EMA из feedback (accept/reject), timing (engagement/silence) и
-        # стрик отказов (накопительный negative bias). См. tick_valence.
-        self.valence: float = 0.0
-
-        # Predictive layer (Friston loop, 2026-04-23 — см. docs/friston-loop.md).
-        # Все baseline'ы — EMA/VectorEMA из src/ema.py. Decays в Decays.* .
-
-        # Legacy global scalar expectation (UI-compat)
-        self._expectation = EMA(
-            0.5, decay=Decays.EXPECTATION, bounds=(0.0, 1.0)
-        )
-        # TOD-scoped scalar: 4 EMA, обновляется только активное окно.
-        # Без scoping утренняя и вечерняя apathy сливаются в averaged baseline.
-        self._expectation_by_tod: dict = {
-            tod: EMA(0.5, decay=Decays.EXPECTATION, bounds=(0.0, 1.0))
-            for tod in ("morning", "day", "evening", "night")
-        }
-        # 3D vector expectation (зеркально vector()). По-осевой PE
-        # информативнее скаляра при разнонаправленном drift'е осей.
-        self._expectation_vec = VectorEMA(
-            [0.5, 0.5, 0.5],
-            decay=Decays.EXPECTATION_VEC,
-            bounds=(0.0, 1.0),
-        )
-        # HRV baseline по 4-м TOD — физический PE канал (2026-04-23).
-        # seed_on_first: первый замер за окно становится baseline, далее EMA.
-        self._hrv_baseline_by_tod: dict = {
-            tod: EMA(0.0, decay=Decays.HRV_BASELINE,
-                      bounds=(0.0, 1.0), seed_on_first=True)
-            for tod in ("morning", "day", "evening", "night")
-        }
-
-        # Surprise boost (OQ #7): когда юзер detect'ится как удивлённый
-        # (text markers или HRV spike), на N последующих tick'ов expectation
-        # EMA идёт быстрее — модель быстро адаптируется к новой реальности.
-        # Decrement на каждый `tick_expectation`. 0 = нормальный режим.
-        self._surprise_boost_remaining: int = 0
-        # Timestamp последнего surprise event — для debouncing и UI.
-        self._last_user_surprise_ts: Optional[float] = None
-
-        # Dual-pool energy (MindBalance v2): daily + долгосрочный резерв
-        self.long_reserve: float = LONG_RESERVE_DEFAULT
-
-        # Sleep duration: восстанавливается при утреннем briefing через
-        # activity_log.estimate_last_sleep_hours() — либо явная задача «Сон»,
-        # либо idle-gap между последним stop вчера и первым start сегодня.
-        # None = ещё не оценили за этот день.
-        self.last_sleep_duration_h: Optional[float] = None
-
-        # Timestamp последнего user input (для UI / будущего sync-seeking)
-        self._last_input_ts: Optional[float] = None
+        # _feedback_counts остаётся в UserState (legacy duplicate с _rgk._fb).
+        # Не трогаем в этой волне — отдельный cleanup.
         self._feedback_counts = {"accepted": 0, "rejected": 0, "ignored": 0}
 
-    # ── Backward-compat accessors для predictive layer ─────────────────────
+    # ── Neurochemical mirrors (read/write через _rgk) ──────────────────────
+
+    @property
+    def dopamine(self) -> float:
+        return float(self._rgk.user.gain.value)
+
+    @dopamine.setter
+    def dopamine(self, v: float):
+        self._rgk.user.gain.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def serotonin(self) -> float:
+        return float(self._rgk.user.hyst.value)
+
+    @serotonin.setter
+    def serotonin(self, v: float):
+        self._rgk.user.hyst.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def norepinephrine(self) -> float:
+        return float(self._rgk.user.aperture.value)
+
+    @norepinephrine.setter
+    def norepinephrine(self, v: float):
+        self._rgk.user.aperture.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def valence(self) -> float:
+        return float(self._rgk.valence.value)
+
+    @valence.setter
+    def valence(self, v: float):
+        self._rgk.valence.value = max(-1.0, min(1.0, float(v)))
+
+    @property
+    def burnout(self) -> float:
+        return float(self._rgk.burnout.value)
+
+    @burnout.setter
+    def burnout(self, v: float):
+        self._rgk.burnout.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def agency(self) -> float:
+        return float(self._rgk.agency.value)
+
+    @agency.setter
+    def agency(self, v: float):
+        self._rgk.agency.value = max(0.0, min(1.0, float(v)))
+
+    # ── Phase D: 5-axis chem (ACh + GABA доступны как property) ─────────────
+    # Default 0.5 без feeders. Feeders подключены в cognitive_loop (Step 5c/d).
+    # См. docs/neurochem-design.md §6 «User-side ACh + GABA feeders».
+
+    @property
+    def acetylcholine(self) -> float:
+        """Plasticity (текучесть ткани, открытость новому).
+        Fed by feed_acetylcholine(novelty, boost) — message novelty + surprise."""
+        return float(self._rgk.user.plasticity.value)
+
+    @acetylcholine.setter
+    def acetylcholine(self, v: float):
+        self._rgk.user.plasticity.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def gaba(self) -> float:
+        """Damping (стенки стоячей волны, чёткость границ).
+        Fed by feed_gaba() — производная от focus_residue (existing field)."""
+        return float(self._rgk.user.damping.value)
+
+    @gaba.setter
+    def gaba(self, v: float):
+        self._rgk.user.damping.value = max(0.0, min(1.0, float(v)))
+
+    def balance(self) -> float:
+        """5-axis резонансный баланс юзера: (DA·NE·ACh) / (5HT·GABA).
+        ≈1.0 = резонанс; >1.5 гиперрезонанс; <0.5 гипостабильность.
+        До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/5HT.
+        См. docs/neurochem-design.md § Балансовая формула."""
+        return self._rgk.user.balance()
+
+    @property
+    def mode(self) -> str:
+        """R/C bit (Правило 7 — Counter-wave). 'R' = passive resonance,
+        'C' = counter-wave generation. Updated by cognitive_loop._advance_tick
+        from sync_error через гистерезис ACT=0.15 / REC=0.08."""
+        return self._rgk.user.mode
+
+    def update_mode(self, perturbation: float) -> str:
+        """Update R/C mode by current perturbation (sync_error). Hysteresis."""
+        return self._rgk.user.update_mode(float(perturbation))
+
+    # ── Predictive layer accessors ─────────────────────────────────────────
 
     @property
     def expectation(self) -> float:
-        return self._expectation.value
+        return float(self._rgk.u_exp.value)
 
     @expectation.setter
     def expectation(self, v: float):
-        self._expectation.value = max(0.0, min(1.0, float(v)))
+        self._rgk.u_exp.value = max(0.0, min(1.0, float(v)))
 
     @property
     def expectation_by_tod(self) -> dict:
-        """Snapshot-копия dict of 4 TOD-baselines. Мутировать извне
-        бесполезно — изменения не попадут в EMA objects. Для изменения
-        используйте `tick_expectation()` или from_dict."""
-        return {tod: ema.value for tod, ema in self._expectation_by_tod.items()}
+        """Snapshot-копия 4 TOD-baselines. Для мутации — через tick_expectation()."""
+        return {tod: float(self._rgk.u_exp_tod[tod].value) for tod in _TOD_NAMES}
 
     @property
     def expectation_vec(self) -> np.ndarray:
-        return self._expectation_vec.value
+        return self._rgk.u_exp_vec.value
 
     @expectation_vec.setter
     def expectation_vec(self, v):
         arr = np.asarray(v, dtype=np.float32)
-        if arr.shape == self._expectation_vec.value.shape:
-            self._expectation_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
+        ema = self._rgk.u_exp_vec
+        if arr.shape == ema.value.shape:
+            ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
 
     @property
     def hrv_baseline_by_tod(self) -> dict:
         """Snapshot-копия. None за TOD где baseline ещё не seeded."""
-        return {
-            tod: (ema.value if ema._seeded else None)
-            for tod, ema in self._hrv_baseline_by_tod.items()
-        }
+        result = {}
+        for tod in _TOD_NAMES:
+            ema = self._rgk.hrv_base_tod[tod]
+            result[tod] = float(ema.value) if ema._seeded else None
+        return result
+
+    # ── B4 Wave 2: user-side bespoke state (proxy на _rgk) ──────────────────
+    # Переехало из UserState fields в РГК.__init__. UserState facade — thin
+    # @property proxies. Сохранено backward-compat: read/write через те же
+    # имена (50+ callers не трогаются). Default values, init и сериализация
+    # работают через РГК.
+
+    @property
+    def hrv_coherence(self):
+        return self._rgk.hrv_coherence
+
+    @hrv_coherence.setter
+    def hrv_coherence(self, v):
+        self._rgk.hrv_coherence = v
+
+    @property
+    def hrv_stress(self):
+        return self._rgk.hrv_stress
+
+    @hrv_stress.setter
+    def hrv_stress(self, v):
+        self._rgk.hrv_stress = v
+
+    @property
+    def hrv_rmssd(self):
+        return self._rgk.hrv_rmssd
+
+    @hrv_rmssd.setter
+    def hrv_rmssd(self, v):
+        self._rgk.hrv_rmssd = v
+
+    @property
+    def activity_magnitude(self) -> float:
+        return self._rgk.activity_magnitude
+
+    @activity_magnitude.setter
+    def activity_magnitude(self, v):
+        self._rgk.activity_magnitude = float(v)
+
+    @property
+    def last_sleep_duration_h(self):
+        return self._rgk.last_sleep_duration_h
+
+    @last_sleep_duration_h.setter
+    def last_sleep_duration_h(self, v):
+        self._rgk.last_sleep_duration_h = v
+
+    @property
+    def cognitive_load_today(self) -> float:
+        return self._rgk.cognitive_load_today
+
+    @cognitive_load_today.setter
+    def cognitive_load_today(self, v):
+        self._rgk.cognitive_load_today = float(v)
+
+    @property
+    def day_summary(self) -> dict:
+        return self._rgk.day_summary
+
+    @day_summary.setter
+    def day_summary(self, v):
+        self._rgk.day_summary = v
+
+    @property
+    def focus_residue(self) -> float:
+        return self._rgk.focus_residue
+
+    @focus_residue.setter
+    def focus_residue(self, v):
+        self._rgk.focus_residue = float(v)
+
+    @property
+    def _last_focus_input_ts(self):
+        return self._rgk._last_focus_input_ts
+
+    @_last_focus_input_ts.setter
+    def _last_focus_input_ts(self, v):
+        self._rgk._last_focus_input_ts = v
+
+    @property
+    def _last_focus_mode_id(self):
+        return self._rgk._last_focus_mode_id
+
+    @_last_focus_mode_id.setter
+    def _last_focus_mode_id(self, v):
+        self._rgk._last_focus_mode_id = v
+
+    @property
+    def _last_input_ts(self):
+        return self._rgk._last_input_ts
+
+    @_last_input_ts.setter
+    def _last_input_ts(self, v):
+        self._rgk._last_input_ts = v
+
+    @property
+    def _surprise_boost_remaining(self) -> int:
+        return self._rgk._surprise_boost_remaining
+
+    @_surprise_boost_remaining.setter
+    def _surprise_boost_remaining(self, v):
+        self._rgk._surprise_boost_remaining = int(v)
+
+    @property
+    def _last_user_surprise_ts(self):
+        return self._rgk._last_user_surprise_ts
+
+    @_last_user_surprise_ts.setter
+    def _last_user_surprise_ts(self, v):
+        self._rgk._last_user_surprise_ts = v
 
     # ── HRV signal ─────────────────────────────────────────────────────────
 
@@ -254,24 +560,24 @@ class UserState:
         Side-effect: если coherence не None, обновляет
         `hrv_baseline_by_tod[current_tod]` — per-TOD HRV baseline для PE.
         """
-        if coherence is not None:
-            self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
-            self.serotonin = (Decays.USER_SEROTONIN_HRV * self.serotonin
-                              + (1 - Decays.USER_SEROTONIN_HRV) * self.hrv_coherence)
-            # TOD-scoped HRV baseline — seed-on-first, далее EMA (см. src/ema.py).
-            tod = self._current_tod()
-            self._hrv_baseline_by_tod[tod].feed(self.hrv_coherence)
+        # Derive stress from rmssd if needed
         if rmssd is not None:
             self.hrv_rmssd = float(rmssd)
             if stress is None:
                 stress = max(0.0, min(1.0, 1.0 - (self.hrv_rmssd / 80.0)))
+
+        if coherence is not None:
+            self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
+            self._rgk.user.hyst.feed(self.hrv_coherence)
+            self._rgk.hrv_base_tod[self._current_tod()].feed(self.hrv_coherence)
+
         if stress is not None:
             self.hrv_stress = max(0.0, min(1.0, float(stress)))
-            self.norepinephrine = (Decays.USER_NOREPINEPHRINE_HRV * self.norepinephrine
-                                     + (1 - Decays.USER_NOREPINEPHRINE_HRV) * self.hrv_stress)
+            self._rgk.user.aperture.feed(self.hrv_stress)
+
         if activity is not None:
             self.activity_magnitude = max(0.0, min(5.0, float(activity)))
-        self._clamp()
+
         self.tick_expectation()
 
     @staticmethod
@@ -298,6 +604,45 @@ class UserState:
         """
         self._last_input_ts = now or time.time()
 
+    # ── Focus residue (см. docs/resonance-model.md) ───────────────────────
+
+    def bump_focus_residue(self, mode_id: Optional[str], now: Optional[float] = None):
+        """Учесть переключение/rapid input в focus_residue.
+
+        Источники приращения:
+          • +0.05 если предыдущий user input был < 30 сек назад (rapid input)
+          • +0.15 если mode_id отличается от предыдущего (mode switch)
+
+        Тимer и mode tracking хранятся в `_last_focus_input_ts` и
+        `_last_focus_mode_id` отдельно от register_input'а — чтобы не было
+        race conditions с порядком вызова.
+
+        Вызывается из `record_action` при `actor=user`.
+        """
+        if now is None:
+            now = time.time()
+        # Rapid input bump
+        if (self._last_focus_input_ts is not None
+                and (now - self._last_focus_input_ts) < 30):
+            self.focus_residue = min(1.0, self.focus_residue + 0.05)
+        # Mode switch bump
+        if (mode_id and self._last_focus_mode_id
+                and mode_id != self._last_focus_mode_id):
+            self.focus_residue = min(1.0, self.focus_residue + 0.15)
+        self._last_focus_mode_id = mode_id or self._last_focus_mode_id
+        self._last_focus_input_ts = now
+
+    def decay_focus_residue(self, dt_seconds: float):
+        """Естественное затухание focus_residue по времени.
+
+        −0.05 за минуту покоя. Вызывается из cognitive_loop._advance_tick
+        с реальным `dt` между tick'ами.
+        """
+        if dt_seconds <= 0:
+            return
+        self.focus_residue = max(0.0,
+            self.focus_residue - 0.05 * (dt_seconds / 60.0))
+
     def update_from_engagement(self, signal: float = 0.65):
         """Мягкий EMA-вклад в dopamine от факта вовлечённости юзера
         (он написал / нажал кнопку / создал цель).
@@ -311,13 +656,8 @@ class UserState:
         Вызывается рядом с `register_input()` в /assist и других user-initiated
         endpoint'ах. Парный feeder для `update_from_chat_sentiment` (valence).
         """
-        try:
-            s = max(0.0, min(1.0, float(signal)))
-        except Exception:
-            return
-        self.dopamine = (Decays.USER_DOPAMINE_ENGAGEMENT * self.dopamine
-                         + (1 - Decays.USER_DOPAMINE_ENGAGEMENT) * s)
-        self._clamp()
+        sig = max(0.0, min(1.0, float(signal)))
+        self._rgk.user.gain.feed(sig)
 
     # ── Feedback → dopamine + burnout ──────────────────────────────────────
 
@@ -327,25 +667,34 @@ class UserState:
         Valence — основной канал сюда: feedback юзера явно даёт знак переживания.
         Плюс: streak of rejects накапливает negative bias (3 reject подряд →
         ощутимый спад valence).
+
+        EMA feeds идут через registry (decay_override=0.9 для dopamine+valence).
+        Burnout additive (+0.05 на reject) и streak-bias остаются bespoke —
+        это дискретные bumps, не baseline EMA.
         """
         if kind not in self._feedback_counts:
             return
         self._feedback_counts[kind] = self._feedback_counts[kind] + 1
-        df = Decays.USER_DOPAMINE_FEEDBACK
-        vf = Decays.USER_VALENCE_FEEDBACK
+
+        ov = Decays.USER_DOPAMINE_FEEDBACK
         if kind == "accepted":
-            self.dopamine = df * self.dopamine + (1 - df) * 0.9
-            self.valence = vf * self.valence + (1 - vf) * 0.7
+            self._rgk.user.gain.feed(0.9, decay_override=ov)
+            self._rgk.valence.feed(0.7, decay_override=ov)
         elif kind == "rejected":
-            self.dopamine = df * self.dopamine + (1 - df) * 0.2
-            self.burnout = min(1.0, self.burnout + 0.05)
-            self.valence = vf * self.valence + (1 - vf) * (-0.7)
-            # Streak bias: чем больше подряд rejects, тем жёстче спад
+            self._rgk.user.gain.feed(0.2, decay_override=ov)
+            self._rgk.valence.feed(-0.7, decay_override=ov)
+            # Bespoke additive: burnout bump (не EMA — discrete step)
+            bn = self._rgk.burnout
+            bn.value = max(0.0, min(1.0, bn.value + 0.05))
+            # Streak bias: чем больше подряд rejects, тем жёстче спад valence
             recent_rejects = self._feedback_counts.get("rejected", 0)
             recent_accepts = self._feedback_counts.get("accepted", 0)
             if recent_rejects - recent_accepts >= 3:
-                self.valence -= 0.05 * min(5, recent_rejects - recent_accepts - 2)
-        self._clamp()
+                val = self._rgk.valence
+                val.value = max(-1.0, min(1.0,
+                    val.value - 0.05 * min(5, recent_rejects - recent_accepts - 2)))
+        # "ignored" — только counter, EMA не трогаем
+
         self.tick_expectation()
 
     # ── Chat sentiment feeder (Action Memory этап 4) ───────────────────────
@@ -360,13 +709,7 @@ class UserState:
 
         Sentiment ∈ [−1, 1] — см. `src/sentiment.py` `classify_message_sentiment`.
         """
-        try:
-            s = max(-1.0, min(1.0, float(sentiment)))
-        except Exception:
-            return
-        self.valence = (Decays.USER_VALENCE_SENTIMENT * self.valence
-                        + (1 - Decays.USER_VALENCE_SENTIMENT) * s)
-        self._clamp()
+        self._rgk.valence.feed(max(-1.0, min(1.0, float(sentiment))))
 
     # ── Agency (5-я ось, OQ #2) ────────────────────────────────────────────
 
@@ -389,14 +732,10 @@ class UserState:
             planned: сколько было запланировано (recurring + oneshot).
                      Если 0 — метрика не обновляется (нет данных).
         """
-        if planned <= 0:
-            # Нет плана → нет сигнала. Не перезаписываем baseline шумом.
+        if planned is None or planned <= 0:
             return
-        raw = max(0.0, min(1.0, completed / float(planned)))
-        self.agency = (Decays.USER_AGENCY * self.agency
-                       + (1 - Decays.USER_AGENCY) * raw)
-        self._clamp()
-        # tick_expectation() не вызываем — agency пока не в state_level
+        ratio = max(0.0, min(1.0, float(completed or 0) / float(planned)))
+        self._rgk.agency.feed(ratio)
 
     # ── Energy → burnout ───────────────────────────────────────────────────
 
@@ -407,29 +746,21 @@ class UserState:
         Burnout накапливается монотонно за день: decisions * 6 / max_budget.
         Сбрасывается в полночь через _ensure_daily_reset.
         """
-        usage = min(1.0, max(0.0, decisions_today * 6.0 / max_budget))
-        self.burnout = (Decays.USER_BURNOUT_ENERGY * self.burnout
-                        + (1 - Decays.USER_BURNOUT_ENERGY) * usage)
-        self._clamp()
+        sig = min(1.0, max(0.0,
+            float(decisions_today) * 6.0 / float(max_budget or 100.0)))
+        self._rgk.burnout.feed(sig)
         self.tick_expectation()
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
     def _clamp(self):
-        self.dopamine = max(0.0, min(1.0, self.dopamine))
-        self.serotonin = max(0.0, min(1.0, self.serotonin))
-        self.norepinephrine = max(0.0, min(1.0, self.norepinephrine))
-        self.burnout = max(0.0, min(1.0, self.burnout))
-        self.agency = max(0.0, min(1.0, self.agency))
-        self.expectation = max(0.0, min(1.0, self.expectation))
-        self.long_reserve = max(0.0, min(float(LONG_RESERVE_MAX), self.long_reserve))
-        self.valence = max(-1.0, min(1.0, self.valence))
+        """Safety net: EMA уже clamp'ит через bounds при feed, но дискретные
+        мутации `activity_magnitude = ...` не идут через EMA и требуют явного clamp."""
         self.activity_magnitude = max(0.0, min(5.0, self.activity_magnitude))
 
     def vector(self) -> np.ndarray:
         """3D точка состояния для sync-метрики. Burnout отдельно (см. module doc)."""
-        return np.array([self.dopamine, self.serotonin, self.norepinephrine],
-                        dtype=np.float32)
+        return self._rgk.user.vector()
 
     def state_level(self) -> float:
         """Агрегированный «уровень» юзера — mean(dopamine, serotonin).
@@ -445,15 +776,14 @@ class UserState:
 
         Вызывается автоматически после каждого `update_from_*` сигнала.
         Три EMA параллельны, но дают разные срезы PE:
-          • `_expectation` — legacy averaged baseline (UI-compat)
-          • `_expectation_by_tod[cur]` — для surprise specific к времени суток
-          • `_expectation_vec` — по-осевой (для `surprise_vec` и 3D imbalance)
+          • `expectation` — legacy averaged baseline (UI-compat)
+          • `expectation_by_tod[cur]` — для surprise specific к времени суток
+          • `expectation_vec` — по-осевой (для `surprise_vec` и 3D imbalance)
 
         Decay 0.97–0.98 → baseline переживает ~50 обновлений, дни а не минуты.
         Если `_surprise_boost_remaining > 0` — используем fast-decay override
         (0.85 / 0.80). Счётчик декрементится.
         """
-        # Определяем override decay (surprise boost mode)
         if self._surprise_boost_remaining > 0:
             scalar_override = Decays.EXPECTATION_FAST
             vec_override = Decays.EXPECTATION_VEC_FAST
@@ -462,12 +792,65 @@ class UserState:
             scalar_override = None
             vec_override = None
 
-        reality = self.state_level()
+        sl = self.state_level()
         tod = self._current_tod()
+        v = self.vector()
 
-        self._expectation.feed(reality, decay_override=scalar_override)
-        self._expectation_by_tod[tod].feed(reality, decay_override=scalar_override)
-        self._expectation_vec.feed(self.vector(), decay_override=vec_override)
+        if scalar_override is None:
+            self._rgk.u_exp.feed(sl)
+            self._rgk.u_exp_tod[tod].feed(sl)
+            self._rgk.u_exp_vec.feed(v)
+        else:
+            self._rgk.u_exp.feed(sl, decay_override=scalar_override)
+            self._rgk.u_exp_tod[tod].feed(sl, decay_override=scalar_override)
+            self._rgk.u_exp_vec.feed(v, decay_override=vec_override)
+
+    def apply_subjective_surprise(self,
+                                    signed_surprise: float,
+                                    blend: float = 0.4):
+        """Nudge `expectation` baseline из субъективного наблюдения surprise.
+
+        Используется когда у нас есть явный user-ввод вроде «ожидал лёгкий
+        день, вышел сложный» (checkin) или «plan_expected_difficulty vs
+        actual_difficulty» (plan complete) — semantic-preserving fix от
+        старого `user.surprise = blend * user.surprise + (1-blend) * s`
+        (broken после того как surprise стал derived @property).
+
+        Алгебра: хотим чтобы next-step `surprise = reality - expectation`
+        трендил к signed_surprise. Значит `new_expectation = reality -
+        signed_surprise`, feed expectation EMA с decay override = 1 - blend.
+
+        Args:
+            signed_surprise: нормированный сигнал в [-1, 1]. Positive →
+                реальность лучше ожиданий; negative → хуже.
+            blend: сколько веса у наблюдения (0..1). 0.4 = 40% влияния.
+        """
+        target = max(0.0, min(1.0,
+            self.state_level() - float(signed_surprise)))
+        override = max(0.001, min(0.999, 1.0 - float(blend)))
+        self._rgk.u_exp.feed(target, decay_override=override)
+        tod = self._current_tod()
+        self._rgk.u_exp_tod[tod].feed(target, decay_override=override)
+
+    def apply_checkin(self,
+                       stress: Optional[float] = None,
+                       focus: Optional[float] = None,
+                       reality: Optional[float] = None):
+        """Process a manual check-in: stress (0-100) → NE, focus (0-100) → 5HT,
+        reality (-2..+2) → valence. Aggressive decay overrides из Decays.CHECKIN_*.
+
+        Заменяет legacy `metrics.fire_event("checkin", ...)` после Phase D
+        Step 3c. Identity сохраняется — те же EMAs, тот же decay, тот же signal.
+        """
+        if stress is not None:
+            self._rgk.user.aperture.feed(float(stress) / 100.0,
+                                          decay_override=Decays.CHECKIN_STRESS)
+        if focus is not None:
+            self._rgk.user.hyst.feed(float(focus) / 100.0,
+                                      decay_override=Decays.CHECKIN_FOCUS)
+        if reality is not None:
+            self._rgk.valence.feed(float(reality) / 2.0,
+                                    decay_override=Decays.CHECKIN_VALENCE)
 
     def apply_surprise_boost(self, n_ticks: int = SURPRISE_BOOST_DEFAULT_TICKS):
         """Сигнал «юзер только что удивился чему-то» (OQ #7).
@@ -485,6 +868,45 @@ class UserState:
             self._surprise_boost_remaining = n
         self._last_user_surprise_ts = time.time()
 
+    # ── Phase D Step 5: ACh + GABA feeders ─────────────────────────────────
+
+    def feed_acetylcholine(self, novelty: float, boost: bool = False):
+        """Plasticity feeder — открытость новому.
+
+        novelty ∈ [0, 1] — обычно `distinct(latest_msg, recent_5)` от
+        cognitive_loop. Высокая = темы юзера прыгают / новый паттерн →
+        ACh растёт → ткань становится более пластичной.
+
+        boost=True — детект user-side surprise (apply_surprise_boost
+        triggered) → принудительный bump до 0.85 с быстрым decay.
+
+        v1 ОГРАНИЧЕНИЕ: novelty считается через distinct() embedding-метрику
+        cognitive_loop'а, callers ответственны за качество. Если distinct
+        шумит — ACh шумит. Калибровка через 2 нед use, см. docs/world-model.md
+        и docs/neurochem-design.md §6.
+        """
+        sig = max(0.0, min(1.0, float(novelty)))
+        if boost:
+            self._rgk.user.plasticity.feed(max(sig, 0.85), decay_override=0.85)
+        else:
+            self._rgk.user.plasticity.feed(sig)
+
+    def feed_gaba(self):
+        """Damping feeder — derived из focus_residue (existing field).
+
+        Высокий focus_residue = много переключений / rapid input →
+        низкий GABA (волна расползается).
+        Низкий focus_residue = стабильная работа → высокий GABA
+        (узкая чистая волна).
+
+        v1 ОГРАНИЧЕНИЕ: redirect existing focus_residue, не новый источник.
+        Breathing detection (low NE + high HRV coh + slow input rate) пока
+        не реализована — см. docs/neurochem-design.md §6 для opt-in
+        второго feeder.
+        """
+        sig = max(0.0, min(1.0, 1.0 - float(self.focus_residue)))
+        self._rgk.user.damping.feed(sig)
+
     @property
     def reality(self) -> float:
         """Current observed state_level (для симметрии с MindBalance ID/IP)."""
@@ -500,11 +922,10 @@ class UserState:
         ещё в default (0.5) — fallback на global expectation.
         """
         tod = self._current_tod()
-        ref_ema = self._expectation_by_tod.get(tod)
-        ref = ref_ema.value if ref_ema is not None else 0.5
+        ref = float(self._rgk.u_exp_tod[tod].value)
         if ref == 0.5:
-            ref = self._expectation.value   # fallback на global
-        return float(self.reality - float(ref))
+            ref = float(self._rgk.u_exp.value)
+        return float(self.reality - ref)
 
     @property
     def surprise_vec(self) -> np.ndarray:
@@ -521,173 +942,221 @@ class UserState:
         """
         return float(np.linalg.norm(self.surprise_vec))
 
-    # ── PE attribution (OQ #6) ─────────────────────────────────────────────
+    # ── PE attribution ────────────────────────────────────────────────────
+    # B4 Wave 1: формулы переехали в РГК.project("user_state"). Properties —
+    # тонкие delegates (один dict за access; для UI/diagnostic нагрузки ОК).
 
     AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine")
 
     @property
     def attribution(self) -> str:
-        """Какая ось доминирует в surprise_vec — 'dopamine' | 'serotonin' |
-        'norepinephrine'. Для UI «в чём именно модель ошиблась».
-
-        Если все три близки к 0 (|vec| < 0.05) — возвращает 'none'.
-        """
-        vec = self.surprise_vec
-        mag = float(np.linalg.norm(vec))
-        if mag < 0.05:
-            return "none"
-        return self.AXIS_NAMES[int(np.argmax(np.abs(vec)))]
+        """Какая ось доминирует в surprise_vec — 'dopamine'/'serotonin'/
+        'norepinephrine' либо 'none' при |vec| < 0.05."""
+        return self._rgk.project("user_state")["attribution"]
 
     @property
     def attribution_magnitude(self) -> float:
-        """|max_axis_surprise| — насколько сильна ошибка по доминирующей оси."""
-        return float(np.max(np.abs(self.surprise_vec)))
+        return self._rgk.project("user_state")["attribution_magnitude"]
 
     @property
     def attribution_signed(self) -> float:
-        """Signed amount по доминирующей оси. Positive = reality выше ожиданий,
-        negative = ниже. Для UI-фразы «недооценил интерес» vs «переоценил стабильность».
-        """
-        vec = self.surprise_vec
-        if np.linalg.norm(vec) < 0.05:
-            return 0.0
-        idx = int(np.argmax(np.abs(vec)))
-        return float(vec[idx])
+        """Signed amount по доминирующей оси. Positive = reality выше ожиданий."""
+        return self._rgk.project("user_state")["attribution_signed"]
 
     @property
     def agency_gap(self) -> float:
-        """1 − agency. Gap между ожиданием что юзер выполнит план и реальностью.
-        Прямой goal-prediction-error (complementary к state_level PE).
-        """
-        return max(0.0, 1.0 - float(self.agency))
+        """1 − agency. Goal-prediction-error (complementary к state_level PE)."""
+        return self._rgk.project("user_state")["agency_gap"]
 
     @property
     def hrv_surprise(self) -> float:
-        """|hrv_coherence − hrv_baseline_by_tod[current]|. [0, 1].
+        """|hrv_coherence − baseline[current_tod]|. B4 Wave 2: формула в РГК."""
+        return self._rgk.hrv_surprise()
 
-        Физический канал PE от реального тела. 0 если HRV не запущен или
-        baseline ещё не seeded за это TOD (first measurement).
+    # ── Frequency regime (resonance несущая частота) ───────────────────────
+
+    @property
+    def frequency_regime(self) -> str:
+        """Несущая частота: long_wave/short_wave/mixed/flat. Формула в РГК.
+        См. docs/hrv-design.md § Frequency regime."""
+        return self._rgk.frequency_regime()
+
+    # ── Capacity zone (Phase C, 3-зона) ───────────────────────────────────
+
+    @property
+    def capacity_zone(self) -> str:
+        """green/yellow/red зона из 3 индикаторов (физио / эмо / когнитивный).
+
+        Заменяет dual-pool «энергия 0..100». Decision gate в assistant.py
+        читает эту property + capacity_reason для explanation при отказе.
+
+        Spec: docs/capacity-design.md §Capacity-зона.
         """
-        if self.hrv_coherence is None:
-            return 0.0
-        tod = self._current_tod()
-        ref = self.hrv_baseline_by_tod.get(tod)
-        if ref is None:
-            return 0.0
-        return abs(float(self.hrv_coherence) - float(ref))
+        return compute_capacity_zone(compute_capacity_indicators(self))
+
+    @property
+    def capacity_reason(self) -> list[str]:
+        """Причины не-зелёной зоны (tags для UI и decision gate explanation).
+
+        Возможные tags: "hrv_coherence_low", "burnout_high",
+        "serotonin_low", "dopamine_low", "cogload_high".
+        Пустой list когда все 3 ok (зона green).
+        """
+        return compute_capacity_indicators(self)["reasons"]
+
+    @property
+    def capacity_indicators(self) -> dict:
+        """Полный snapshot для UI: 3 boolean + reasons."""
+        return compute_capacity_indicators(self)
+
+    def update_cognitive_load(self) -> None:
+        """Pull today's activity log + sync_error → recompute cognitive_load_today.
+
+        Aggregates 4 observable из activity_log:
+            tasks_started     — count(start events today)
+            tasks_completed   — count(done activities today)
+            context_switches  — count(stop_reason="switch")
+            complexity_sum    — sum(surprise_at_start over today's activities)
+
+        Plus 1 derived:
+            progress_delta    — sync_error_slow_now − sync_error_at_dawn
+
+        Saves в `day_summary[today_str]` + recomputes `cognitive_load_today`
+        через `compute_cognitive_load` helper.
+
+        Вызывается из cognitive_loop._check_cognitive_load_update раз в 5 мин.
+        """
+        import datetime as _dt
+        today = _dt.date.today()
+        today_str = today.strftime("%Y-%m-%d")
+
+        # Pull today's activities from activity_log
+        tasks_started = 0
+        tasks_completed = 0
+        context_switches = 0
+        complexity_sum = 0.0
+        try:
+            from .activity_log import _replay
+            start_of_day = _dt.datetime.combine(
+                today, _dt.time.min).timestamp()
+            for act in _replay().values():
+                started = act.get("started_at") or 0
+                if started < start_of_day:
+                    continue
+                tasks_started += 1
+                if act.get("status") == "done":
+                    tasks_completed += 1
+                if act.get("stop_reason") == "switch":
+                    context_switches += 1
+                complexity_sum += float(act.get("surprise_at_start") or 0.0)
+        except Exception:
+            pass
+
+        # sync_error progress: now − at_dawn (snapshot в day_summary)
+        today_summary = self.day_summary.setdefault(today_str, {})
+        sync_at_dawn = today_summary.get("sync_error_at_dawn")
+        sync_now = sync_at_dawn or 0.0
+        try:
+            from .horizon import get_global_state
+            sync_now = float(get_global_state().freeze.sync_error_ema_slow)
+            if sync_at_dawn is None:
+                # Первый update в день — фиксируем dawn как текущий sync_error
+                sync_at_dawn = sync_now
+                today_summary["sync_error_at_dawn"] = round(sync_at_dawn, 6)
+        except Exception:
+            sync_at_dawn = sync_at_dawn or 0.0
+        progress_delta = sync_now - (sync_at_dawn or 0.0)
+
+        # Update today's aggregate
+        today_summary.update({
+            "tasks_started": tasks_started,
+            "tasks_completed": tasks_completed,
+            "context_switches": context_switches,
+            "complexity_sum": round(complexity_sum, 4),
+            "progress_delta": round(progress_delta, 6),
+        })
+
+        # Recompute load
+        self.cognitive_load_today = compute_cognitive_load(
+            today_summary, progress_delta)
+
+    def rollover_day(self, hrv_recovery: Optional[float] = None) -> None:
+        """Полуночный reset: persist yesterday в day_summary, обнулить load.
+
+        Ровно один раз в день (вызов идемпотентен через date check). Saves:
+            - cognitive_load_today as final cognitive_load в day_summary[yesterday]
+            - sync_error_at_dawn для следующего дня (snapshot для progress_delta)
+        Resets:
+            - cognitive_load_today = 0.0
+
+        hrv_recovery — параметр сохранён для backward-compat call signature
+        (Phase A/B вызывали с recovery), сейчас не используется (после Шага 6
+        long_reserve recovery удалён).
+
+        Spec: docs/capacity-design.md §Поля UserState.
+        """
+        import datetime as _dt
+        today = _dt.date.today()
+        yesterday_str = (today - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+        today_str = today.strftime("%Y-%m-%d")
+
+        # Save yesterday's final load
+        if yesterday_str in self.day_summary:
+            self.day_summary[yesterday_str]["cognitive_load"] = round(
+                self.cognitive_load_today, 4)
+
+        # Snapshot sync_error для today (нужен для progress_delta)
+        try:
+            from .horizon import get_global_state
+            sync_at_dawn = float(
+                get_global_state().freeze.sync_error_ema_slow)
+        except Exception:
+            sync_at_dawn = 0.0
+        self.day_summary.setdefault(today_str, {})
+        self.day_summary[today_str]["sync_error_at_dawn"] = round(sync_at_dawn, 6)
+
+        # Reset live field
+        self.cognitive_load_today = 0.0
+
+        # Trim history: keep only last 30 days
+        if len(self.day_summary) > 30:
+            cutoff = sorted(self.day_summary.keys())[:-30]
+            for k in cutoff:
+                self.day_summary.pop(k, None)
 
     # ── Activity zone (4 региона HRV × акселерометр) ───────────────────────
 
     @property
     def activity_zone(self) -> dict:
-        """Derived 4-зонная классификация (HRV coherence × activity_magnitude).
+        """4-зонная classification (HRV coherence × activity_magnitude).
+        recovery/stress_rest/healthy_load/overload. B4 Wave 2: формула в РГК."""
+        return self._rgk.activity_zone()
 
-        Из прототипа HRV-Reader (Polar H10 + accelerometer). Даёт
-        **физический контекст** поверх чисто нейрохимического состояния:
-        одинаковая coherence значит разное, если юзер лежит vs бежит.
-
-          !active & hrv_ok     → recovery       🟢 здоровое восстановление
-          !active & !hrv_ok    → stress_rest    🟡 беспокойство в покое
-           active & hrv_ok     → healthy_load   🔵 здоровая нагрузка
-           active & !hrv_ok    → overload       🔴 перегрузка
-
-        Если HRV не запущен (coherence=None) → zone=None.
-        """
-        if self.hrv_coherence is None:
-            return {"key": None, "label": None, "advice": None}
-        active = self.activity_magnitude >= ACTIVITY_THRESHOLD
-        hrv_ok = self.hrv_coherence >= COHERENCE_HEALTHY
-        if not active and hrv_ok:
-            return {"key": ZONE_RECOVERY, "label": "Восстановление",
-                    "advice": "Хорошее время для отдыха / медитации.",
-                    "emoji": "🟢"}
-        if not active and not hrv_ok:
-            return {"key": ZONE_STRESS_REST, "label": "Стресс в покое",
-                    "advice": "Подыши минуту. Тело в напряжении без физической нагрузки.",
-                    "emoji": "🟡"}
-        if active and hrv_ok:
-            return {"key": ZONE_HEALTHY_LOAD, "label": "Здоровая нагрузка",
-                    "advice": "Ритм хороший. Используй для дела.",
-                    "emoji": "🔵"}
-        return {"key": ZONE_OVERLOAD, "label": "Перегрузка",
-                "advice": "Сильная активность + низкое HRV = риск overtraining. Снизь темп.",
-                "emoji": "🔴"}
-
-    # ── Named state (Voronoi) ──────────────────────────────────────────────
+    # ── Named state (8-region РГК-карта) ──────────────────────────────────
 
     @property
     def named_state(self) -> dict:
-        """Ближайший именованный регион в (T, A) пространстве.
+        """Ближайший регион РГК-карты по химическому профилю (5D).
 
-        T (emotional tone) = serotonin (стабильность, валентность)
-        A (activation) = weighted mean(DA, NE) + activity_contribution
-          — до этого A было чисто когнитивным arousal;
-          теперь physical activity_magnitude даёт дополнительный вклад
-          (клампом в [0, 1]) с весом 0.3. Бегущий юзер не может быть в
-          «медитации» по когнитивным скалярам.
+        8 регионов: Поток / Устойчивость / Фокус-Тревога / Исследование /
+        Перегруз / Застой / Выгорание / Инсайт. Match по L2 в нормированном
+        (DA, 5HT, NE, ACh, GABA) пространстве — см. [user_state_map.py](user_state_map.py).
 
-        Возвращает {key, label, advice, distance, coord}. 10 регионов
-        из MindBalance v4 (flow / stress / burnout / curiosity / ...).
+        Возвращает {key, label, advice, emoji, distance, coord}. emoji даёт
+        визуальную метку для UI (🔵🟢🟠🟡🔴⚫⚪✨).
         """
         from .user_state_map import nearest_named_state
-        t = self.serotonin
-        cog_arousal = (self.dopamine + self.norepinephrine) / 2.0
-        phys_arousal = min(1.0, self.activity_magnitude / 2.0)  # 2+ = max
-        a = 0.7 * cog_arousal + 0.3 * phys_arousal
-        return nearest_named_state(t, max(0.0, min(1.0, a)))
+        return nearest_named_state(
+            da=self.dopamine,
+            s=self.serotonin,
+            ne=self.norepinephrine,
+            ach=self.acetylcholine,
+            gaba=self.gaba,
+        )
 
-    # ── Dual-pool energy ───────────────────────────────────────────────────
-
-    def energy_snapshot(self, decisions_today: int) -> dict:
-        """Мгновенный срез дуальной энергетики.
-
-        daily_energy   = max − decisions_today · avg_cost (рассчитывается в assistant.py)
-        long_reserve   = self.long_reserve (медленный пул)
-        burnout_risk   = 1 − long_reserve/LONG_RESERVE_MAX
-        Возвращает dict для API + UI.
-        """
-        long_pct = self.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX > 0 else 0.0
-        return {
-            "decisions_today": decisions_today,
-            "long_reserve": round(self.long_reserve, 1),
-            "long_reserve_max": LONG_RESERVE_MAX,
-            "long_reserve_pct": round(long_pct, 3),
-            "burnout_risk": round(1.0 - long_pct, 3),
-        }
-
-    def debit_energy(self, cost: float, daily_remaining: float) -> dict:
-        """Списание cost из дневной энергии. Если daily < 20 → часть уходит в long.
-
-        cost: стоимость решения (определяется mode в assistant.py)
-        daily_remaining: сколько осталось daily перед этим решением
-        Возвращает {daily_used, long_used} — что реально списалось откуда.
-        """
-        daily_used = min(cost, max(0.0, daily_remaining))
-        overflow = cost - daily_used
-        long_used = 0.0
-        if overflow > 0 or daily_remaining < LONG_RESERVE_TAP_THRESHOLD:
-            # cascading: если daily был мал, часть уходит из long
-            # + full overflow идёт из long
-            extra = overflow
-            if daily_remaining < LONG_RESERVE_TAP_THRESHOLD and cost > 0:
-                # Дополнительный tax: при low daily расход дороже
-                extra += cost * 0.3
-            long_used = min(extra, self.long_reserve)
-            self.long_reserve -= long_used
-        self._clamp()
-        return {"daily_used": daily_used, "long_used": long_used}
-
-    def recover_long_reserve(self, hrv_recovery: Optional[float] = None):
-        """Ночное восстановление long_reserve (вызывается консолидацией).
-
-        hrv_recovery ∈ [0, 1] (из energy_recovery HRV) — скейлит amount.
-        Без HRV — консервативно восстанавливаем как при среднем сне (0.7).
-        """
-        recovery = hrv_recovery if hrv_recovery is not None else 0.7
-        # MindBalance v2 defaults: sleep_recovery=90, rest_bonus=20
-        amount = 90.0 * recovery + 20.0 * recovery
-        self.long_reserve = min(float(LONG_RESERVE_MAX), self.long_reserve + amount)
-        self._clamp()
+    # Phase C Шаг 6: dual-pool energy methods (energy_snapshot,
+    # debit_energy, recover_long_reserve) удалены — заменены 3-zone capacity
+    # model. capacity_zone / capacity_indicators properties выше.
 
     def to_dict(self) -> dict:
         ns = self.named_state
@@ -696,6 +1165,11 @@ class UserState:
             "dopamine": round(self.dopamine, 3),
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
+            # Phase D: 5-axis chem + balance diagnostic
+            "acetylcholine": round(self.acetylcholine, 3),
+            "gaba": round(self.gaba, 3),
+            "balance": round(self.balance(), 3),
+            "mode": self.mode,
             "burnout": round(self.burnout, 3),
             "agency": round(self.agency, 3),
             "valence": round(self.valence, 3),
@@ -713,11 +1187,17 @@ class UserState:
             "attribution_signed": round(self.attribution_signed, 3),
             "agency_gap": round(self.agency_gap, 3),
             "hrv_surprise": round(self.hrv_surprise, 3),
-            "long_reserve": round(self.long_reserve, 1),
             "activity_magnitude": round(self.activity_magnitude, 3),
             "activity_zone": az,
             "named_state": {"key": ns["key"], "label": ns["label"],
-                            "advice": ns["advice"]},
+                            "advice": ns["advice"],
+                            "emoji": ns.get("emoji", "")},
+            "frequency_regime": self.frequency_regime,
+            "focus_residue": round(self.focus_residue, 3),
+            "cognitive_load_today": round(self.cognitive_load_today, 3),
+            "capacity_zone": self.capacity_zone,
+            "capacity_reason": self.capacity_reason,
+            "day_summary": self.day_summary,
             "hrv": {
                 "coherence": self.hrv_coherence,
                 "stress": self.hrv_stress,
@@ -734,20 +1214,30 @@ class UserState:
             burnout=d.get("burnout", 0.0),
             agency=d.get("agency", 0.5),
         )
+        # Phase D: 5-axis ACh+GABA. Default 0.5 если поле отсутствует
+        # (backward-compat для legacy state.json до Phase D).
+        u.acetylcholine = float(d.get("acetylcholine", 0.5))
+        u.gaba = float(d.get("gaba", 0.5))
         u.expectation = float(d.get("expectation", 0.5))
-        u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
         u.valence = float(d.get("valence", 0.0))
         u.activity_magnitude = float(d.get("activity_magnitude", 0.0))
+        u.focus_residue = max(0.0, min(1.0,
+            float(d.get("focus_residue", 0.0))))
+        u.cognitive_load_today = max(0.0, min(1.0,
+            float(d.get("cognitive_load_today", 0.0))))
+        ds = d.get("day_summary")
+        if isinstance(ds, dict):
+            u.day_summary = {str(k): dict(v) for k, v in ds.items()
+                              if isinstance(v, dict)}
         # Predictive layer (TOD scalar + vector + HRV baseline). Все
         # optional — если legacy dump не имеет их, defaults из __init__.
-        # Записываем напрямую в EMA objects (publica property возвращает snapshot,
-        # мутация snapshot'а бесполезна).
         tod_map = d.get("expectation_by_tod") or {}
         if isinstance(tod_map, dict):
-            for k in ("morning", "day", "evening", "night"):
+            for k in _TOD_NAMES:
                 if k in tod_map:
                     try:
-                        u._expectation_by_tod[k].value = max(0.0, min(1.0, float(tod_map[k])))
+                        ema = u._rgk.u_exp_tod[k]
+                        ema.value = max(0.0, min(1.0, float(tod_map[k])))
                     except Exception:
                         pass
         vec = d.get("expectation_vec")
@@ -755,11 +1245,11 @@ class UserState:
             u.expectation_vec = np.array([float(x) for x in vec], dtype=np.float32)
         hrv_base = d.get("hrv_baseline_by_tod") or {}
         if isinstance(hrv_base, dict):
-            for k in ("morning", "day", "evening", "night"):
+            for k in _TOD_NAMES:
                 if k not in hrv_base:
                     continue
                 v = hrv_base[k]
-                ema = u._hrv_baseline_by_tod[k]
+                ema = u._rgk.hrv_base_tod[k]
                 if v is None:
                     ema.value = 0.0
                     ema._seeded = False
@@ -848,10 +1338,13 @@ _global_user: Optional[UserState] = None
 
 
 def get_user_state() -> UserState:
-    """Глобальный UserState — один на человека, shared across workspaces."""
+    """Глобальный UserState — один на человека, shared across workspaces.
+    B0: использует singleton РГК, чтобы каскад зеркал (UserState/Neurochem/
+    ProtectiveFreeze) работал на одном объекте."""
     global _global_user
     if _global_user is None:
-        _global_user = UserState()
+        from .rgk import get_global_rgk
+        _global_user = UserState(rgk=get_global_rgk())
     return _global_user
 
 

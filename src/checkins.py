@@ -14,7 +14,6 @@
 Вычисляемое:
   • surprise = reality - expected    → feed в UserState.surprise
   • valence_hint = reality / 2       → feed в valence
-  • energy_est = energy / 100        → хинт для long_reserve scaling
 
 Файл: `checkins.jsonl` append-only.
 """
@@ -160,55 +159,38 @@ def rolling_averages(days: int = 7) -> dict:
 def apply_to_user_state(entry: dict):
     """Спроецировать check-in в UserState — заменяет роль HRV когда HRV off.
 
-    - energy (0-100) → long_reserve bump/pull
     - stress (0-100) → NE EMA bump
     - focus  (0-100) → serotonin EMA bump
     - reality (-2..+2) → valence + subjective_surprise (если есть expected)
     - expected (-2..+2) → используется вместе с reality для nudge expectation
+
+    Phase C: `energy` поле checkin'а больше не пишется (long_reserve удалён в
+    Шаге 6). Если юзер пишет energy — игнорируется. Когнитивная нагрузка
+    теперь считается через `cognitive_load_today` из activity_log.
 
     Decay constants — см. `src/ema.py::Decays.CHECKIN_*`. Checkin decays
     агрессивнее обычных (0.6-0.85 vs 0.9-0.98) — явный user input должен
     корректировать модель сильнее чем автоматические feeders.
     """
     try:
-        from .user_state import get_user_state, LONG_RESERVE_MAX
-        from .ema import Decays
+        from .user_state import get_user_state
         user = get_user_state()
-        # Energy: corrective — если юзер пишет 30 а мы думаем 80, притянуть
-        if entry.get("energy") is not None:
-            target_pct = entry["energy"] / 100.0
-            cur_pct = user.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX else 0.5
-            de = Decays.CHECKIN_ENERGY
-            new_pct = de * cur_pct + (1 - de) * target_pct
-            user.long_reserve = new_pct * LONG_RESERVE_MAX
-        # Stress → NE
-        if entry.get("stress") is not None:
-            target_ne = entry["stress"] / 100.0
-            ds = Decays.CHECKIN_STRESS
-            user.norepinephrine = ds * user.norepinephrine + (1 - ds) * target_ne
-        # Focus → serotonin
-        if entry.get("focus") is not None:
-            target_s = entry["focus"] / 100.0
-            df = Decays.CHECKIN_FOCUS
-            user.serotonin = df * user.serotonin + (1 - df) * target_s
-        # Reality rating → valence
-        if entry.get("reality") is not None:
-            dv = Decays.CHECKIN_VALENCE
-            user.valence = dv * user.valence + (1 - dv) * (entry["reality"] / 2.0)
-        # Subjective surprise → nudge expectation (2026-04-23: было broken —
-        # раньше `user.surprise = ...`, но surprise теперь derived @property).
-        # Правильный fix: корректируем baseline так, чтобы будущий observed
-        # surprise сошёлся с subjective. Алгебра: `new_expectation =
-        # reality_now − subjective_surprise`.
+
+        # Stress/focus/reality → NE/serotonin/valence через explicit apply_checkin
+        # (Phase D Step 3c). Каждая метрика получает per-event decay_override
+        # из Decays.CHECKIN_* — реализация в UserState.apply_checkin.
+        user.apply_checkin(
+            stress=entry.get("stress"),
+            focus=entry.get("focus"),
+            reality=entry.get("reality"),
+        )
+
+        # Subjective surprise → nudge expectation (bridge от старого сломанного
+        # `user.surprise = ...` к правильному baseline-nudge).
         if entry.get("expected") is not None and entry.get("reality") is not None:
             subjective_surprise = (float(entry["reality"]) - float(entry["expected"])) / 4.0
-            target_expectation = max(0.0, min(1.0,
-                user.state_level() - subjective_surprise
-            ))
-            # Moderate nudge (decay 0.6 = 40% влияния) через EMA override
-            user._expectation.feed(target_expectation, decay_override=0.6)
-            tod = user._current_tod()
-            user._expectation_by_tod[tod].feed(target_expectation, decay_override=0.6)
+            user.apply_subjective_surprise(subjective_surprise, blend=0.4)
+
         user._clamp()
     except Exception as e:
         log.warning(f"[checkins] apply_to_user_state failed: {e}")

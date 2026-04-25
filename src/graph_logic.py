@@ -450,7 +450,18 @@ def record_action(actor: str, action_kind: str, text: str,
         nodes.append(node)
         _graph.pop("_tick_tried", None)
         log.debug(f"[action-memory] record_action #{new_id}: {actor}/{action_kind} — {text[:60]!r}")
-        return new_id
+
+    # Focus residue bump для user-action'ов (rapid input + mode switch).
+    # Вне graph_lock — bump_focus_residue сама thread-safe (atomic float ops).
+    if str(actor or "") == "user":
+        try:
+            from .user_state import get_user_state
+            mode_id = (extras or {}).get("mode_id") if extras else None
+            get_user_state().bump_focus_residue(mode_id)
+        except Exception as e:
+            log.debug(f"[focus_residue] bump failed: {e}")
+
+    return new_id
 
 
 def close_action(action_idx: int, delta_sync_error: float,
@@ -1169,6 +1180,33 @@ def _fresh_graph():
 
 _graph = _fresh_graph()
 graph_lock = threading.Lock()
+
+
+def nodes_created_within(seconds: float) -> int:
+    """Count nodes created within last `seconds`. Phase D Step 5b feeder.
+
+    Used as proxy для `acetylcholine` (Plasticity) feeder в Neurochem:
+    высокий rate = граф растёт быстро = ткань пластична.
+
+    v1 ОГРАНИЧЕНИЕ: считает append-rate, не семантическую новизну.
+    Если юзер копирует одно и то же — rate высокий, но настоящая
+    plasticity нулевая. Калибровка через 2 нед use.
+    """
+    import datetime as _dt
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=float(seconds))
+    count = 0
+    with graph_lock:
+        for n in _graph.get("nodes", []):
+            ca_str = n.get("created_at")
+            if not ca_str:
+                continue
+            try:
+                ca = _dt.datetime.fromisoformat(str(ca_str).replace("Z", "+00:00"))
+                if ca > cutoff:
+                    count += 1
+            except (ValueError, TypeError):
+                continue
+    return count
 
 
 def reset_graph():

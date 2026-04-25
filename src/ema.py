@@ -100,7 +100,6 @@ class Decays:
     EXPECTATION_VEC_FAST = 0.80    # user is detected as surprised
 
     # ── Checkins (user-provided manual input, agressive corrections) ────────
-    CHECKIN_ENERGY = 0.85          # long_reserve correction from stated energy
     CHECKIN_STRESS = 0.7           # stress 0-100 → norepinephrine
     CHECKIN_FOCUS = 0.7            # focus 0-100 → serotonin
     CHECKIN_VALENCE = 0.6          # reality rating → valence
