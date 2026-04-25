@@ -83,6 +83,12 @@ UI poll'ит `GET /assist/alerts` примерно раз в 30 секунд. Р
 
 ---
 
+## Auto-abandon повторяющихся patterns
+
+Pattern-detector ([src/patterns.py](../src/patterns.py)) находит еженедельные аномалии (skipped_category, heavy_work_day, habit_anomaly) и пишет в `data/patterns.jsonl`. Из них рождаются suggestions через `suggest_from_pattern`. Если pattern с одной signature (kind/category/weekday/window) детектится ≥5 раз за 14 дней — `is_pattern_abandoned()` помечает его как игнорируемый, и suggestion не предлагается. Это time-based proxy для real reaction tracking: юзер показывает молчанием, что не интересуется. Без auto-abandon один и тот же неактуальный pattern будет торчать в morning briefing неделями.
+
+Реальное reaction-tracking (через action_memory: было ли accepted/rejected per pattern) — Tier 2 в TODO.
+
 ## Action Memory — типы нод
 
 Не alerts, но часть единого графа. Все проактивные действия + пользовательские действия записываются как `type=action`. Через 30 мин / 24 ч / 7 дней (зависит от вида) закрываются `type=outcome` + ребро `caused_by`. UI Graph Lab отрисовывает их оранжевым (action) и зелёным/красным (outcome — по знаку изменения рассогласования). Детали — [action-memory-design.md](action-memory-design.md).

@@ -120,6 +120,39 @@ def get_depth_defaults() -> dict:
     }
 
 
+def get_aperture() -> float:
+    """Phase D: единый scalar [0, 1] для depth engine.
+
+    Заменяет 3 несвязанных knob (`deep_response_format`,
+    `deep_batched_synthesis`, `deep_mode_steps`) одним slider'ом по
+    апертурному пределу из docs/cone-design.md (Охват × Дальность ×
+    Детализация = const). Spec: planning/resonance-code-changes.md.
+
+    Mapping:
+      0.0–0.2 игла/фокус       → brief, batched=False, depth_mult=0.5
+      0.2–0.4 узкий луч        → essay, batched=False, depth_mult=0.7
+      0.4–0.7 сбалансированный → essay, batched=True,  depth_mult=1.0
+      0.7–0.9 широкий обзор    → article, batched=True, depth_mult=1.5
+      0.9–1.0 панорамный       → article, batched=True, depth_mult=2.0
+
+    Default 0.5 (сбалансированный). Single-user — нет fallback из legacy
+    `deep_response_format` ключей, новая система.
+    """
+    try:
+        return max(0.0, min(1.0, float(_settings.get("deep_aperture", 0.5))))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _aperture_depth_mult(aperture: float) -> float:
+    """0.5/0.7/1.0/1.5/2.0 → multiplier для get_mode_depth(mode_id)."""
+    if aperture < 0.2: return 0.5
+    if aperture < 0.4: return 0.7
+    if aperture < 0.7: return 1.0
+    if aperture < 0.9: return 1.5
+    return 2.0
+
+
 def get_mode_depth(mode_id: str) -> int:
     """Число thinking iterations (collapse_at) для конкретного mode.
 
@@ -129,16 +162,20 @@ def get_mode_depth(mode_id: str) -> int:
       • `deep_chat_infinite = False` → loop доходит до collapse_at, потом
         принудительный финальный collapse
 
-    Per-mode через `deep_mode_steps` dict в settings.json. Cap [1, 200].
+    Per-mode через `deep_mode_steps` dict в settings.json (base profile).
+    Phase D: aperture мультиплицирует base — узкая апертура сужает глубину,
+    панорамная удваивает. Cap [1, 200].
     """
     mode_steps = _settings.get("deep_mode_steps") or {}
     if isinstance(mode_steps, dict) and mode_id in mode_steps:
         try:
-            val = int(mode_steps[mode_id])
-            return max(1, min(200, val))
+            base = int(mode_steps[mode_id])
         except (TypeError, ValueError):
-            pass
-    return max(1, min(200, int(_settings.get("deep_chat_steps", 15))))
+            base = int(_settings.get("deep_chat_steps", 15))
+    else:
+        base = int(_settings.get("deep_chat_steps", 15))
+    mult = _aperture_depth_mult(get_aperture())
+    return max(1, min(200, int(base * mult)))
 
 
 def is_deep_infinite() -> bool:
@@ -150,22 +187,22 @@ def is_deep_infinite() -> bool:
 
 
 def get_deep_response_format() -> str:
-    """Формат финального synthesis в chat: brief | essay | article | list.
-    Default: essay. Управляется через settings → Advanced → Deep format.
+    """Формат финального synthesis: brief | essay | article. Derived из aperture.
+      aperture < 0.25 → brief
+      aperture < 0.7  → essay
+      aperture ≥ 0.7  → article
     """
-    fmt = _settings.get("deep_response_format", "essay")
-    if fmt not in ("brief", "essay", "article", "list"):
-        fmt = "essay"
-    return fmt
+    aperture = get_aperture()
+    if aperture < 0.25: return "brief"
+    if aperture < 0.7:  return "essay"
+    return "article"
 
 
 def is_deep_batched() -> bool:
-    """True — использовать pyramidal batched collapse для надёжности на
-    локальных LLM (sections из batch'ей → финал из sections). False —
-    один LLM call на все ноды сразу (быстрее, но context limit).
-    Default: True.
+    """Pyramidal batched collapse. Узкая апертура → один call хватит (False);
+    широкая → pyramidal (True). Derived из aperture.
     """
-    return bool(_settings.get("deep_batched_synthesis", True))
+    return get_aperture() >= 0.4
 
 
 def update_settings(new: dict):
@@ -174,7 +211,7 @@ def update_settings(new: dict):
               "neural_threshold", "neural_temp", "neural_top_k",
               "neural_seed", "neural_novelty", "neural_max_tokens",
               "deep_chat_steps", "deep_mode_steps", "deep_diversity_min",
-              "deep_chat_infinite", "deep_response_format", "deep_batched_synthesis",
+              "deep_chat_infinite", "deep_aperture",
               "dmn_converge_max_steps",
               "dmn_converge_stall_window", "dmn_converge_max_wall_s"):
         if k in new:

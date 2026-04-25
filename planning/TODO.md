@@ -38,13 +38,7 @@
 
 ## ⚡ Cheap (1-3ч каждый, можно брать в любом порядке)
 
-- [ ] **`aperture` скаляр в depth engine** — заменяет 3 несвязанных knob'а одним slider'ом. Теперь cheap derived: `aperture = clamp(0.5 + (balance−1)·0.3)` или из `frequency_regime`. Spec — [resonance-code-changes.md](resonance-code-changes.md). ~2ч + ~1ч UI.
-- [ ] **Prompt-routing по `balance()` + chem profile** — `detect_sync_seeking` tone choice + `execute_deep` system prompt switch (5HT↑DA↑→«поддерживай поток», NE↑5HT↓→«якорь», ACh↑NE↓→«исследуй», GABA↑DA↓→«микро-шаги»). Из РГК v1.0 spec. ~2-3ч.
-- [ ] **`embedding_scattering` cheap proxy** — `len(active_session_indices) / 7` в `_advance_tick`, кормить `system.feed_gaba(freeze_active, embedding_scattering=...)`. Закрывает оставшийся отложенный Phase D feeder без expensive embedding ops. ~1ч.
-- [ ] **8-region «Карта состояний РГК»** в UI — переименование existing `named_state` (10-region Voronoi) под 8 РГК-регионов (🔵Поток / 🟢Устойчивость / 🟠Фокус / 🟡Исследование / 🔴Перегруз / ⚫Застой / ⚪Выгорание / ✨Инсайт). Из [rgk-spec.md §5](rgk-spec.md). ~50 строк в `user_state_map.py` + UI. ~1-2ч.
-- [ ] **yaml `session.chemistry` snapshot endpoint** — `r.project("balance")` уже даёт всё. ~30 строк, опционально для Lab.
-- [ ] **DMN bridge `_check_dmn_deep_research` + `_check_dmn_converge` ACh hook** — сейчас bridge_quality фидится только из `_run_dmn_continuous`. Расширить на 2 другие DMN entry points если они тоже находят bridges с quality. ~30 мин.
-- [ ] **`patterns × intent_router` auto-abandon** — если детектор нашёл паттерн но юзер молчит 2+ недели — убирать предложение. ~1ч.
+- [ ] **`aperture` UI slider** — backend done (`get_aperture()` в `api_backend.py` + 3 derived функции, backward-compat infer из legacy `deep_response_format`, 5 unit tests). Осталось добавить slider в settings UI (🎯 Фокус | 📘 Эссе | 📖 Статья | 🌐 Панорама) + одна строка POST `deep_aperture` в `update_settings`. Spec — [resonance-code-changes.md](resonance-code-changes.md). ~1ч UI.
 
 ---
 

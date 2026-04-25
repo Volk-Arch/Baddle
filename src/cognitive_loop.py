@@ -580,15 +580,23 @@ class CognitiveLoop:
 
         # Phase D Step 5b — 5-axis chem feeders.
         # System ACh: node-creation rate (cap 10/hour → 1.0). v1 proxy.
-        # System GABA: freeze.active boolean. embedding_scattering пока None.
+        # System GABA: freeze.active boolean + embedding_scattering proxy
+        #   (recent_bridges count за час / 5 cap). Больше bridges = больше
+        #   distributed attention = низкий damping. v1 proxy без embedding ops.
         # User GABA: derived from focus_residue (existing field).
         # User ACh не fed здесь — только при surprise boost (см. _check_user_surprise).
-        # См. docs/neurochem-design.md §6 «ACh+GABA feeders».
+        # См. docs/neurochem-design.md «ACh+GABA feeders».
         try:
             from .graph_logic import nodes_created_within
             rate = min(1.0, nodes_created_within(3600) / 10.0)
             gs.neuro.feed_acetylcholine(node_creation_rate=rate)
-            gs.neuro.feed_gaba(freeze_active=fz.active)
+            recent_bridge_count = sum(
+                1 for b in self._recent_bridges
+                if now - float(b.get("ts", 0)) < 3600.0
+            )
+            scattering = min(1.0, recent_bridge_count / 5.0)
+            gs.neuro.feed_gaba(freeze_active=fz.active,
+                                embedding_scattering=scattering)
             u.feed_gaba()
         except Exception as e:
             log.debug(f"[advance_tick] phase_d feeders failed: {e}")
@@ -1233,6 +1241,15 @@ class CognitiveLoop:
                 "quality": 0.7,
             })
             self._recent_bridges = self._recent_bridges[-10:]
+            # Phase D: System ACh boost — DMN deep research success.
+            # Quality proxy = min(1.0, nodes_created/10) — research breadth.
+            try:
+                from .horizon import get_global_state
+                deep_quality = min(1.0, max(0.0, nodes_created / 10.0))
+                get_global_state().neuro.feed_acetylcholine(
+                    node_creation_rate=0.0, bridge_quality=deep_quality)
+            except Exception as e:
+                log.debug(f"[dmn_deep] ACh feed failed: {e}")
         log.info(f"[cognitive_loop] DMN deep done: {nodes_created} nodes, synthesis={synthesis[:60]}")
         self.clear_thinking()
 
@@ -1393,13 +1410,22 @@ class CognitiveLoop:
                 elif action == "pump":
                     bridge = self._run_pump_bridge(max_iterations=1, save=True)
                     if bridge:
+                        b_quality = bridge.get("quality", 0)
                         self._recent_bridges.append({
                             "ts": time.time(),
                             "text": (bridge.get("text") or "")[:100],
                             "source": "converge_loop",
-                            "quality": bridge.get("quality", 0),
+                            "quality": b_quality,
                         })
                         self._recent_bridges = self._recent_bridges[-10:]
+                        # Phase D: System ACh boost — converge loop bridge.
+                        if b_quality > 0.5:
+                            try:
+                                from .horizon import get_global_state
+                                get_global_state().neuro.feed_acetylcholine(
+                                    node_creation_rate=0.0, bridge_quality=b_quality)
+                            except Exception as e:
+                                log.debug(f"[dmn_converge] ACh feed failed: {e}")
             except Exception as e:
                 log.debug(f"[cognitive_loop] converge step {step} {action}: {e}")
                 break
@@ -2325,16 +2351,32 @@ class CognitiveLoop:
         except Exception:
             pass
 
-        # Эвристический tone до LLM (используется как дефолт если
-        # LLM не отдаст структурированно). Frequency_regime сужает выбор:
-        # short_wave (стресс/симпатика) → не грузим абстракциями, simple/reference;
-        # long_wave (парасимпатика) → можно ambient/curious; mixed/flat — обычная
-        # эвристика по silence/hrv/recent. См. resonance-code-changes.md §2.
+        # Phase D prompt-routing: named_state (8-region РГК-карта по chem profile)
+        # имеет приоритет над frequency_regime. 5-axis chem точнее ловит режим
+        # чем 2-axis HRV-derived freq. См. docs/neurochem-design.md и rgk-spec §5.
+        # Mapping из РГК v1.0 §«Влияние на промпт-роутинг»:
+        #   flow → ambient (поддержка потока, не мешать)
+        #   stable → simple (нейтрально)
+        #   focus → reference (по делу, без воды — туннельное внимание)
+        #   explore → curious (поощрить exploration, аналогии)
+        #   overload/apathy/burnout → caring (мягко, без давления)
+        #   insight → reference (зафиксировать аттрактор)
+        _NAMED_TO_TONE = {
+            "flow": "ambient", "stable": "simple", "focus": "reference",
+            "explore": "curious", "overload": "caring", "apathy": "caring",
+            "burnout": "caring", "insight": "reference",
+        }
         try:
-            freq = get_user_state().frequency_regime
+            user = get_user_state()
+            ns_key = (user.named_state or {}).get("key")
+            freq = user.frequency_regime
         except Exception:
+            ns_key = None
             freq = "flat"
-        if freq == "short_wave":
+
+        if ns_key in _NAMED_TO_TONE:
+            heuristic_tone = _NAMED_TO_TONE[ns_key]
+        elif freq == "short_wave":
             heuristic_tone = "simple" if not recent_topics else "reference"
         elif freq == "long_wave":
             heuristic_tone = "curious" if recent_topics else "ambient"

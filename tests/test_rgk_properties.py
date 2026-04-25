@@ -490,3 +490,111 @@ class TestPhaseDFeeders:
         nc = Neurochem(dopamine=0.6, serotonin=0.5, norepinephrine=0.5)
         # (0.6·0.5·0.5)/(0.5·0.5) = 0.15/0.25 = 0.6
         assert nc.balance() == pytest.approx(0.6, abs=1e-3)
+
+
+# ── Phase D Step 5+: 8-region РГК-карта ────────────────────────────────────
+
+class TestNamedState8Region:
+    """Voronoi/named_state перепилен на 8-region РГК-карту по chem profile.
+    See src/user_state_map.py. Каждый target профиль из rgk-spec.md §5
+    должен matchить свой регион bit-perfect (distance 0)."""
+
+    @pytest.mark.parametrize("region,da,s,ne,ach,gaba", [
+        ("flow",     0.70, 0.60, 0.60, 0.70, 0.50),
+        ("stable",   0.50, 0.85, 0.40, 0.50, 0.85),
+        ("focus",    0.60, 0.30, 0.90, 0.40, 0.30),
+        ("explore",  0.60, 0.50, 0.30, 0.90, 0.50),
+        ("overload", 0.50, 0.20, 1.00, 0.50, 0.15),
+        ("apathy",   0.15, 0.50, 0.30, 0.40, 0.60),
+        ("burnout",  0.30, 0.40, 0.70, 0.30, 0.50),
+        ("insight",  0.85, 0.50, 0.40, 0.95, 0.50),
+    ])
+    def test_target_profile_maps_to_region(self, region, da, s, ne, ach, gaba):
+        from src.user_state_map import nearest_named_state
+        result = nearest_named_state(da=da, s=s, ne=ne, ach=ach, gaba=gaba)
+        assert result["key"] == region, \
+            f"target profile for {region} mapped to {result['key']}"
+        assert result["distance"] == pytest.approx(0.0, abs=1e-6)
+
+    def test_list_named_states_returns_8(self):
+        from src.user_state_map import list_named_states
+        states = list_named_states()
+        assert len(states) == 8
+        assert {s["key"] for s in states} == {
+            "flow", "stable", "focus", "explore",
+            "overload", "apathy", "burnout", "insight",
+        }
+
+    def test_ach_gaba_default_05_for_legacy_callers(self):
+        """ACh/GABA необязательные — default 0.5 для backward-compat."""
+        from src.user_state_map import nearest_named_state
+        result = nearest_named_state(da=0.7, s=0.6, ne=0.6)
+        # ach/gaba defaulted to 0.5 — ближе к flow (его профиль 0.7,0.6,0.6,0.7,0.5)
+        # дистанция не нулевая (ach offset 0.2) но flow ближайший
+        assert result["key"] == "flow"
+
+    def test_user_named_state_uses_chem_profile(self):
+        from src.user_state import UserState
+        us = UserState(dopamine=0.6, serotonin=0.5, norepinephrine=0.3)
+        us.acetylcholine = 0.9
+        # Профиль (0.6, 0.5, 0.3, 0.9, 0.5) совпадает с explore exact
+        assert us.named_state["key"] == "explore"
+        assert us.named_state["emoji"] == "🟡"
+
+
+# ── Phase D: aperture скаляр в depth engine ─────────────────────────────────
+
+class TestApertureDerivation:
+    """Aperture [0,1] заменяет 3 несвязанных knob (format, batched, depth)
+    одним slider'ом по апертурному пределу."""
+
+    def setup_method(self):
+        from src import api_backend
+        # Очищаем потенциальные explicit overrides
+        for k in ("deep_aperture", "deep_response_format", "deep_batched_synthesis"):
+            api_backend._settings.pop(k, None)
+
+    def test_aperture_default_essay(self):
+        from src.api_backend import get_aperture, get_deep_response_format, is_deep_batched
+        # Без deep_aperture в settings, без explicit format → derived из default essay → 0.5
+        assert get_aperture() == pytest.approx(0.5, abs=1e-6)
+        assert get_deep_response_format() == "essay"
+        assert is_deep_batched() is True  # 0.5 ≥ 0.4
+
+    def test_aperture_focus(self):
+        from src import api_backend
+        api_backend._settings["deep_aperture"] = 0.15
+        from src.api_backend import get_aperture, get_deep_response_format, is_deep_batched, get_mode_depth
+        assert get_aperture() == pytest.approx(0.15, abs=1e-6)
+        assert get_deep_response_format() == "brief"
+        assert is_deep_batched() is False
+        # depth_mult = 0.5 для aperture < 0.2; conkretное value зависит от
+        # persisted deep_mode_steps. Ключевое — depth strictly меньше дефолта.
+        depth_focus = get_mode_depth("horizon")
+        api_backend._settings["deep_aperture"] = 0.5
+        depth_default = get_mode_depth("horizon")
+        assert depth_focus < depth_default
+
+    def test_aperture_panorama(self):
+        from src import api_backend
+        api_backend._settings["deep_aperture"] = 0.95
+        from src.api_backend import get_aperture, get_deep_response_format, is_deep_batched, get_mode_depth
+        assert get_aperture() == pytest.approx(0.95, abs=1e-6)
+        assert get_deep_response_format() == "article"
+        assert is_deep_batched() is True
+        # depth_mult = 2.0 для aperture ≥ 0.9 → strictly больше дефолта.
+        depth_panorama = get_mode_depth("horizon")
+        api_backend._settings["deep_aperture"] = 0.5
+        depth_default = get_mode_depth("horizon")
+        assert depth_panorama > depth_default
+
+    def test_aperture_default_when_missing(self):
+        """Default aperture 0.5 если settings нет deep_aperture."""
+        from src import api_backend
+        api_backend._settings.pop("deep_aperture", None)
+        from src.api_backend import get_aperture
+        assert get_aperture() == pytest.approx(0.5, abs=1e-6)
+
+    def teardown_method(self):
+        from src import api_backend
+        api_backend._settings.pop("deep_aperture", None)

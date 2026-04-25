@@ -4,7 +4,16 @@
 >
 > Решение автора (2026-04-23): принять **тотальное упрощение** как фазу. 6 правил §4 — каркас в котором новая фича стоит копейки.
 >
-> Где история — `memory/project_session_*.md`. Где текущая реализация подсистем — [docs/](../docs/). Что осталось делать — [TODO.md](TODO.md).
+> Где история — `memory/project_session_*.md` + `git log`. Где текущая реализация подсистем — [docs/](../docs/). Что осталось делать — [TODO.md](TODO.md).
+
+## Сделанные фазы (краткая навигация)
+
+Строка на фазу — для понимания где что искать. Подробности в коде и git log.
+
+- **Phase A — MetricRegistry** (2026-04-24). `src/metrics.py` + 21 EMA в трёх registries (UserState/Neurochem/ProtectiveFreeze). Реализовано Правило 2 §4. Identity bit-identical через 10 тестов. — реализация в [src/metrics.py](../src/metrics.py); описана в Правиле 2 ниже.
+- **Phase B — Signal dispatcher** (2026-04-25). `src/signals.py` + `src/detectors.py` (13 pure-function детекторов с urgency-эвристиками). 21 bookkeeping `_check_*` в `cognitive_loop.py` сжаты на ~600 строк. Реализовано Правило 1 §4. — реализация в [src/signals.py](../src/signals.py), [src/detectors.py](../src/detectors.py).
+- **Phase C — 3-zone capacity** (2026-04-25). dual-pool `daily_spent + long_reserve` (legacy 0..100 + 0..2000) → `capacity_zone` (green/yellow/red) из 3 параллельных контуров (физио/эмо/когн). — описание в [docs/capacity-design.md](../docs/capacity-design.md).
+- **Phase D — РГК-коллапс** (2026-04-25). 5-axis chem (DA/5HT/NE/ACh/GABA) + balance() formula + R/C bit + adapter pattern UserState/Neurochem/PF поверх `src/rgk.py`. Реализовано Правило 6 §4. — описание в [docs/neurochem-design.md § Пять модуляторов](../docs/neurochem-design.md), теория в [rgk-spec.md](rgk-spec.md).
 
 ---
 

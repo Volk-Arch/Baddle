@@ -1124,28 +1124,27 @@ class UserState:
                 "advice": "Сильная активность + низкое HRV = риск overtraining. Снизь темп.",
                 "emoji": "🔴"}
 
-    # ── Named state (Voronoi) ──────────────────────────────────────────────
+    # ── Named state (8-region РГК-карта) ──────────────────────────────────
 
     @property
     def named_state(self) -> dict:
-        """Ближайший именованный регион в (T, A) пространстве.
+        """Ближайший регион РГК-карты по химическому профилю (5D).
 
-        T (emotional tone) = serotonin (стабильность, валентность)
-        A (activation) = weighted mean(DA, NE) + activity_contribution
-          — до этого A было чисто когнитивным arousal;
-          теперь physical activity_magnitude даёт дополнительный вклад
-          (клампом в [0, 1]) с весом 0.3. Бегущий юзер не может быть в
-          «медитации» по когнитивным скалярам.
+        8 регионов из rgk-spec.md §5: Поток / Устойчивость / Фокус-Тревога /
+        Исследование / Перегруз / Застой / Выгорание / Инсайт. Match по L2
+        в нормированном (DA, 5HT, NE, ACh, GABA) пространстве.
 
-        Возвращает {key, label, advice, distance, coord}. 10 регионов
-        из MindBalance v4 (flow / stress / burnout / curiosity / ...).
+        Возвращает {key, label, advice, emoji, distance, coord}. emoji даёт
+        визуальную метку для UI (🔵🟢🟠🟡🔴⚫⚪✨).
         """
         from .user_state_map import nearest_named_state
-        t = self.serotonin
-        cog_arousal = (self.dopamine + self.norepinephrine) / 2.0
-        phys_arousal = min(1.0, self.activity_magnitude / 2.0)  # 2+ = max
-        a = 0.7 * cog_arousal + 0.3 * phys_arousal
-        return nearest_named_state(t, max(0.0, min(1.0, a)))
+        return nearest_named_state(
+            da=self.dopamine,
+            s=self.serotonin,
+            ne=self.norepinephrine,
+            ach=self.acetylcholine,
+            gaba=self.gaba,
+        )
 
     # Phase C Шаг 6: dual-pool energy methods (energy_snapshot,
     # debit_energy, recover_long_reserve) удалены — заменены 3-zone capacity
@@ -1182,7 +1181,8 @@ class UserState:
             "activity_magnitude": round(self.activity_magnitude, 3),
             "activity_zone": az,
             "named_state": {"key": ns["key"], "label": ns["label"],
-                            "advice": ns["advice"]},
+                            "advice": ns["advice"],
+                            "emoji": ns.get("emoji", "")},
             "frequency_regime": self.frequency_regime,
             "focus_residue": round(self.focus_residue, 3),
             "cognitive_load_today": round(self.cognitive_load_today, 3),

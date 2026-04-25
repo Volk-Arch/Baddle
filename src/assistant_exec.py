@@ -730,6 +730,36 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             "\nУчитывай эти предпочтения и ограничения."
             if lang == "ru" else "\nTake constraints into account.")
 
+    # Phase D prompt-routing: добавляем chem-state hint в system prompt.
+    # 8-region РГК-карта (named_state) определяет когнитивный режим юзера,
+    # из РГК v1.0 §«Влияние на промпт-роутинг». Тонкий hint, не override.
+    try:
+        from .user_state import get_user_state
+        ns = (get_user_state().named_state or {})
+        ns_key = ns.get("key")
+        _NS_HINT = {
+            "flow":     ("\nЮзер в потоке — поддерживай его волну, не мешай. Развивай идеи без отступлений."
+                        if lang == "ru" else "\nUser in flow — support, don't interrupt. Develop ideas."),
+            "stable":   ("" if lang == "ru" else ""),  # baseline, no extra hint
+            "focus":    ("\nЮзер в туннельном фокусе/тревоге — короче, по делу, без воды. Заземляющий тон."
+                        if lang == "ru" else "\nUser in tunnel focus — be brief, grounded, structured."),
+            "explore":  ("\nЮзер в режиме исследования — предлагай аналогии, неочевидные связи, гибкие альтернативы."
+                        if lang == "ru" else "\nUser exploring — offer analogies, hidden links, flexible alternatives."),
+            "overload": ("\nЮзер в перегрузе — STOP-режим: одно действие, минимум слов, заземление."
+                        if lang == "ru" else "\nUser overloaded — STOP mode: one action, minimal words."),
+            "apathy":   ("\nЮзер в застое — разбей на микро-шаги ≤2 минуты. Фокус на «начать», не «сделать»."
+                        if lang == "ru" else "\nUser in apathy — micro-steps ≤2min. Focus on 'start' not 'finish'."),
+            "burnout":  ("\nЮзер в выгорании — мягко, без давления, восстановление приоритетнее задач."
+                        if lang == "ru" else "\nUser burned out — gentle, no pressure, recovery over tasks."),
+            "insight":  ("\nЮзер в инсайте — помоги зафиксировать аттрактор, структурировать только что найденную связь."
+                        if lang == "ru" else "\nUser in insight — help capture/structure the new connection."),
+        }
+        chem_hint = _NS_HINT.get(ns_key, "")
+        if chem_hint:
+            system += chem_hint
+    except Exception as e:
+        log.debug(f"[execute_deep] chem hint failed: {e}")
+
     try:
         mode_cfg = get_mode(mode_id) or {}
     except Exception:

@@ -1794,19 +1794,16 @@ function _updateNeurochemPanel(metrics) {
     originEl.dataset.stateKey = origin;
   }
 
-  // Named user-state badge (Voronoi)
+  // Named user-state badge (8-region РГК-карта по chem profile)
   const namedEl = document.getElementById('neuro-user-named');
   if (namedEl && metrics.user_state && metrics.user_state.named_state) {
     const ns = metrics.user_state.named_state;
-    const emojis = {
-      flow: '🌊', inspiration: '✨', curiosity: '🔍', gratitude: '🙏',
-      neutral: '😐', meditation: '🧘', apathy: '😶', stress: '😰',
-      disappointment: '😔', burnout: '🥀',
-    };
-    const em = emojis[ns.key] || '◯';
+    // Backend (user_state_map.py) даёт emoji в response напрямую.
+    // Fallback на ◯ если key неизвестен (legacy snapshot).
+    const em = ns.emoji || '◯';
     namedEl.textContent = `${em} ${(ns.label || ns.key).toLowerCase()}`;
     namedEl.title = (ns.advice || ns.key) + ' — клик для списка всех регионов';
-    namedEl.dataset.stateKey = ns.key || 'neutral';
+    namedEl.dataset.stateKey = ns.key || 'flow';
   }
 
   // Dashboard status strip — 4 живых индикатора

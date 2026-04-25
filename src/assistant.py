@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 
 log = logging.getLogger(__name__)
 
@@ -1102,6 +1102,53 @@ def assist_health():
     """Quick LLM-connection health for UI badge. `status` ∈ {ok, degraded, offline, unknown}."""
     from .api_backend import get_api_health
     return jsonify(get_api_health())
+
+
+@assistant_bp.route("/assist/chemistry", methods=["GET"])
+def assist_chemistry():
+    """5-axis химический профиль обоих резонаторов в YAML формате.
+
+    Параметрический snapshot из РГК v1.0 spec §«Параметрический профиль сессии».
+    Удобно для Lab — копировать в внешние tools, документацию, debug.
+    Query: ?format=json для JSON-эквивалента.
+    """
+    import yaml
+    from .horizon import get_global_state
+    from .user_state import get_user_state
+
+    user = get_user_state()
+    neuro = get_global_state().neuro
+    snap = {
+        "session_chemistry": {
+            "user": {
+                "dopamine_gain":           round(user.dopamine, 3),
+                "serotonin_hysteresis":    round(user.serotonin, 3),
+                "norepinephrine_aperture": round(user.norepinephrine, 3),
+                "acetylcholine_plasticity": round(user.acetylcholine, 3),
+                "gaba_damping":            round(user.gaba, 3),
+                "balance":                 round(user.balance(), 3),
+                "named_state":             user.named_state.get("key"),
+            },
+            "system": {
+                "dopamine_gain":           round(neuro.dopamine, 3),
+                "serotonin_hysteresis":    round(neuro.serotonin, 3),
+                "norepinephrine_aperture": round(neuro.norepinephrine, 3),
+                "acetylcholine_plasticity": round(neuro.acetylcholine, 3),
+                "gaba_damping":            round(neuro.gaba, 3),
+                "balance":                 round(neuro.balance(), 3),
+                "gamma":                   round(neuro.gamma, 3),
+            },
+            "coupling": {
+                "sync_error": round(float(get_global_state().sync_error), 3),
+                "sync_regime": get_global_state().sync_regime,
+            },
+        }
+    }
+    if request.args.get("format") == "json":
+        return jsonify(snap)
+    yaml_text = yaml.dump(snap, allow_unicode=True, sort_keys=False,
+                            default_flow_style=False)
+    return Response(yaml_text, mimetype="text/yaml; charset=utf-8")
 
 
 @assistant_bp.route("/patterns", methods=["GET"])

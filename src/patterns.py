@@ -374,3 +374,48 @@ def patterns_for_today() -> list[dict]:
     today_wd = datetime.now().weekday()
     all_recent = read_recent_patterns(hours=36)
     return [p for p in all_recent if p.get("weekday") == today_wd]
+
+
+def is_pattern_abandoned(p: dict,
+                          days_window: int = 14,
+                          max_appearances: int = 5) -> bool:
+    """Auto-abandon: pattern с той же signature повторился ≥ max_appearances
+    раз за days_window — юзер игнорирует, не предлагаем больше.
+
+    v1 time-based proxy. Реальное reaction-tracking (через action_memory
+    accepted/rejected events per pattern) — Tier 2 в TODO. Сейчас просто
+    «если детектится и детектится без видимой пользы — отстать».
+
+    Args:
+        p: pattern dict (kind/category/weekday/window).
+        days_window: окно в днях для подсчёта (default 14).
+        max_appearances: ≥ этого = abandoned (default 5 — детектор бежит
+            раз в день, 5 повторений за 2 нед = постоянное упорство).
+    """
+    sig = (p.get("kind"), p.get("category"),
+           p.get("weekday"), p.get("window"))
+    cutoff = time.time() - days_window * 86400
+    if not _PATTERNS_FILE.exists():
+        return False
+    count = 0
+    try:
+        with _PATTERNS_FILE.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    other = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (other.get("detected_at") or 0) < cutoff:
+                    continue
+                other_sig = (other.get("kind"), other.get("category"),
+                              other.get("weekday"), other.get("window"))
+                if other_sig == sig:
+                    count += 1
+                    if count >= max_appearances:
+                        return True
+    except Exception as e:
+        log.debug(f"[patterns] is_pattern_abandoned read failed: {e}")
+    return False

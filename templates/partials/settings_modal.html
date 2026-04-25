@@ -111,20 +111,19 @@
       </div>
 
       <div style="margin-top:12px">
-        <label class="modal-label" title="Формат финального синтеза в чате">Формат ответа deep-mode</label>
-        <select id="settings-deep-format" class="modal-select" style="padding:4px 8px;font-size:12px">
-          <option value="brief">brief — краткий (3-5 предложений)</option>
-          <option value="essay" selected>essay — эссе (3-5 параграфов)</option>
-          <option value="article">article — статья (6-10 параграфов)</option>
-          <option value="list">list — структурированный список + резюме</option>
-        </select>
-      </div>
-
-      <div style="margin-top:10px">
-        <label style="color:var(--text-primary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"
-          title="Pyramidal collapse: сначала section из каждой пачки по 5 нод, потом финал из sections. Надёжнее для локальных LLM — не упирается в context window.">
-          <input id="settings-deep-batched" type="checkbox" checked> Пошаговый (batched) синтез
+        <label class="modal-label"
+          title="Апертурный предел из cone-design: один scalar заменяет format/batched/depth. Узкая → краткий ответ + узкий конус; широкая → article + панорамный конус.">
+          Апертура deep-mode
+          <span id="settings-deep-aperture-label" style="margin-left:8px;color:var(--text-secondary);font-size:11px">📘 Эссе</span>
         </label>
+        <input id="settings-deep-aperture" type="range" min="0" max="1" step="0.05" value="0.5"
+          style="width:100%;margin-top:6px">
+        <div style="display:flex;justify-content:space-between;color:var(--text-tertiary);font-size:10px;margin-top:2px">
+          <span>🎯 Фокус</span>
+          <span>📘 Эссе</span>
+          <span>📖 Статья</span>
+          <span>🌐 Панорама</span>
+        </div>
       </div>
     </details>
 

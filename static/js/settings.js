@@ -20,10 +20,23 @@ function openSettings() {
     // Deep-mode infinite: default true если поле отсутствует в ответе
     const deepInf = document.getElementById('settings-deep-infinite');
     if (deepInf) deepInf.checked = s.deep_chat_infinite !== false;
-    const deepFmt = document.getElementById('settings-deep-format');
-    if (deepFmt) deepFmt.value = s.deep_response_format || 'essay';
-    const deepBatched = document.getElementById('settings-deep-batched');
-    if (deepBatched) deepBatched.checked = s.deep_batched_synthesis !== false;
+    // Phase D: aperture slider заменяет format/batched (derived из aperture)
+    const deepAp = document.getElementById('settings-deep-aperture');
+    const deepApLabel = document.getElementById('settings-deep-aperture-label');
+    if (deepAp) {
+      const apVal = (typeof s.deep_aperture === 'number') ? s.deep_aperture : 0.5;
+      deepAp.value = apVal;
+      const _label = (v) => {
+        if (v < 0.25) return '🎯 Фокус (brief)';
+        if (v < 0.7)  return '📘 Эссе';
+        if (v < 0.9)  return '📖 Статья';
+        return '🌐 Панорама';
+      };
+      if (deepApLabel) deepApLabel.textContent = _label(apVal);
+      deepAp.oninput = () => {
+        if (deepApLabel) deepApLabel.textContent = _label(parseFloat(deepAp.value));
+      };
+    }
     document.getElementById('settings-current-model').textContent = `Current: ${s.current_model || '(not configured)'}`;
 
     // Try to fetch available models if URL is set
@@ -63,10 +76,11 @@ function saveSettings() {
   if (liveBayes) body.live_bayes = liveBayes.checked;
   const deepInf = document.getElementById('settings-deep-infinite');
   if (deepInf) body.deep_chat_infinite = deepInf.checked;
-  const deepFmt = document.getElementById('settings-deep-format');
-  if (deepFmt && deepFmt.value) body.deep_response_format = deepFmt.value;
-  const deepBatched = document.getElementById('settings-deep-batched');
-  if (deepBatched) body.deep_batched_synthesis = deepBatched.checked;
+  const deepAp = document.getElementById('settings-deep-aperture');
+  if (deepAp) {
+    const v = parseFloat(deepAp.value);
+    if (isFinite(v)) body.deep_aperture = Math.max(0, Math.min(1, v));
+  }
 
   fetch('/settings', {
     method: 'POST',

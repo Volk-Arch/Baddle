@@ -608,8 +608,12 @@ def collect_suggestions(lang: str = "ru",
 
     if include_patterns:
         try:
-            from .patterns import read_recent_patterns
+            from .patterns import read_recent_patterns, is_pattern_abandoned
+            # Auto-abandon: пропускаем patterns которые повторялись ≥5 раз
+            # за 14 дней без видимого результата — юзер игнорирует.
             for p in read_recent_patterns(hours=48)[:3]:
+                if is_pattern_abandoned(p):
+                    continue
                 _add(suggest_from_pattern(p, lang=lang))
         except Exception as e:
             log.debug(f"[suggestions] pattern source failed: {e}")
