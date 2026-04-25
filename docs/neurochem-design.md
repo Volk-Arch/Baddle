@@ -113,6 +113,12 @@ balance = (DA · NE · ACh) / (5HT · GABA)
 
 Для доступа к полному 5-axis snapshot обоих резонаторов есть отдельный endpoint `GET /assist/chemistry` — возвращает yaml с user/system профилями + coupling (sync_error, sync_regime). Опционально `?format=json` для JSON-эквивалента. Удобно для Lab, копирования в внешние tools, debug. Структура совпадает с «Параметрический профиль сессии» из РГК v1.0 spec.
 
+### R/C mode — две роли резонатора
+
+Помимо пяти chem-параметров, Resonator несёт один битовый флаг — **mode** ∈ {R, C}. R (resonance) — пассивный приёмник, ткань следует за полем. C (counter-wave) — активный генератор инвертированной волны, разрывает деструктивный аттрактор. Переключение через `Resonator.update_mode(perturbation)` с гистерезисом ACT=0.15 / REC=0.08 — те же пороги что у `ProtectiveFreeze`, физически это одно и то же явление с разных точек зрения. `cognitive_loop._advance_tick` каждый tick подаёт perturbation = sync_error (для user mirror) и combined_imbalance (для system mirror).
+
+Когда `user.mode == 'C'`, dispatcher понижает urgency push-style сигналов (sync_seeking, recurring_lag, observation_suggestion, morning_briefing) на 0.3 — система перестаёт давить на юзера в режиме рассогласования. Полная теория — [resonance-model § Две роли одного резонатора](resonance-model.md), implementation pattern — [architecture-rules § Правило 7](architecture-rules.md).
+
 ### Пары-регуляторы и режимы
 
 Параметры пяти модуляторов взаимодействуют попарно — баланс пары задаёт характер режима, в котором сейчас работает резонатор. Это диагностический язык поверх индивидуальных осей: если в UI видно «balance = 0.4», следующий вопрос — какая пара перекошена.
