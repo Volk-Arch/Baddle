@@ -34,79 +34,13 @@ HRV сюда не приходит. Тело пользователя влияе
 import math
 import numpy as np
 
-from .ema import EMA, VectorEMA, Decays, TimeConsts
-from .metrics import MetricRegistry
+from .ema import TimeConsts
+from .rgk import РГК
 
 
-# ── Extractors (module-level, pure functions) ──────────────────────────────
-
-def _extract_d(payload: dict):
-    """dopamine feeder: raw distinct() value, when provided."""
-    return payload.get("d")
-
-
-def _extract_stability(payload: dict):
-    """serotonin feeder: 1 - std(w_change) ∈ [0, 1]. None если w_change пуст."""
-    wc = payload.get("w_change")
-    if wc is None:
-        return None
-    arr = np.asarray(list(wc), dtype=np.float32)
-    if arr.size == 0:
-        return None
-    return max(0.0, 1.0 - float(np.std(arr)))
-
-
-def _extract_entropy_norm(payload: dict):
-    """norepinephrine feeder: normalized entropy of weights ∈ [0, 1]."""
-    w = payload.get("weights")
-    if w is None:
-        return None
-    arr = np.asarray(list(w), dtype=np.float32)
-    if arr.size == 0:
-        return None
-    arr = np.clip(arr, 1e-9, 1.0)
-    total = float(np.sum(arr))
-    if total <= 0:
-        return None
-    pnorm = arr / total
-    ent = -float(np.sum(pnorm * np.log(pnorm + 1e-9)))
-    max_ent = float(np.log(max(2, arr.size)))
-    return min(1.0, ent / max_ent) if max_ent > 0 else 0.0
-
-
-def _extract_vector(payload: dict):
-    """self_expectation_vec feeder: текущий neurochem vector."""
-    return payload.get("vector")
-
-
-def _build_neurochem_registry(dopamine: float,
-                                serotonin: float,
-                                norepinephrine: float) -> MetricRegistry:
-    """Factory: построить registry с initials и подписками."""
-    reg = MetricRegistry()
-    reg.register(
-        "dopamine",
-        EMA(dopamine, decay=Decays.NEURO_DOPAMINE, bounds=(0.0, 1.0)),
-        listens=[("graph_update", _extract_d)],
-    )
-    reg.register(
-        "serotonin",
-        EMA(serotonin, decay=Decays.NEURO_SEROTONIN, bounds=(0.0, 1.0)),
-        listens=[("graph_update", _extract_stability)],
-    )
-    reg.register(
-        "norepinephrine",
-        EMA(norepinephrine, decay=Decays.NEURO_NOREPINEPHRINE,
-            bounds=(0.0, 1.0)),
-        listens=[("graph_update", _extract_entropy_norm)],
-    )
-    reg.register(
-        "self_expectation_vec",
-        VectorEMA([0.5, 0.5, 0.5], decay=Decays.SELF_EXPECTATION,
-                  bounds=(0.0, 1.0)),
-        listens=[("tick", _extract_vector)],
-    )
-    return reg
+# Phase D Step 4c: Neurochem extractors + _build_neurochem_registry удалены.
+# Все EMA живут в self._rgk.system (chem) + self._rgk.s_exp_vec (predictive).
+# Обновления через _rgk.s_graph(d, w_change, weights) и _rgk.tick_s_pred().
 
 
 class Neurochem:
@@ -131,8 +65,14 @@ class Neurochem:
                  dopamine: float = 0.5,
                  serotonin: float = 0.5,
                  norepinephrine: float = 0.5):
-        self.metrics = _build_neurochem_registry(
-            dopamine, serotonin, norepinephrine)
+        # Phase D Step 4c — chem state в self._rgk.system. MetricRegistry удалён;
+        # обновления через прямые вызовы _rgk.s_graph / tick_s_pred.
+        self._rgk = РГК()
+        self._rgk.system.gain.value = dopamine
+        self._rgk.system.hyst.value = serotonin
+        self._rgk.system.aperture.value = norepinephrine
+
+        # RPE history: legacy bespoke (record_outcome).
         self._delta_history: list = []
         self.recent_rpe: float = 0.0
 
@@ -140,37 +80,61 @@ class Neurochem:
 
     @property
     def dopamine(self) -> float:
-        return float(self.metrics.value("dopamine"))
+        return float(self._rgk.system.gain.value)
 
     @dopamine.setter
     def dopamine(self, v: float):
-        self.metrics.get("dopamine").value = max(0.0, min(1.0, float(v)))
+        self._rgk.system.gain.value = max(0.0, min(1.0, float(v)))
 
     @property
     def serotonin(self) -> float:
-        return float(self.metrics.value("serotonin"))
+        return float(self._rgk.system.hyst.value)
 
     @serotonin.setter
     def serotonin(self, v: float):
-        self.metrics.get("serotonin").value = max(0.0, min(1.0, float(v)))
+        self._rgk.system.hyst.value = max(0.0, min(1.0, float(v)))
 
     @property
     def norepinephrine(self) -> float:
-        return float(self.metrics.value("norepinephrine"))
+        return float(self._rgk.system.aperture.value)
 
     @norepinephrine.setter
     def norepinephrine(self, v: float):
-        self.metrics.get("norepinephrine").value = max(0.0, min(1.0, float(v)))
+        self._rgk.system.aperture.value = max(0.0, min(1.0, float(v)))
+
+    # ── Phase D: 5-axis chem (ACh + GABA доступны как property) ─────────────
+    # Без feeders default=0.5. Step 5 добавит источники signal в graph_logic /
+    # cognitive_loop. См. planning/rgk-migration-plan.md §6 «ACh+GABA feeders».
+
+    @property
+    def acetylcholine(self) -> float:
+        """Plasticity (текучесть ткани, скорость перестройки графа).
+        В Step 5 fed by node_creation_rate + bridge_quality. До тех пор = 0.5."""
+        return float(self._rgk.system.plasticity.value)
+
+    @acetylcholine.setter
+    def acetylcholine(self, v: float):
+        self._rgk.system.plasticity.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def gaba(self) -> float:
+        """Damping (стенки стоячей волны, гасит боковые лепестки).
+        В Step 5 fed by freeze.active duration + 1−scattering. До тех пор = 0.5."""
+        return float(self._rgk.system.damping.value)
+
+    @gaba.setter
+    def gaba(self, v: float):
+        self._rgk.system.damping.value = max(0.0, min(1.0, float(v)))
 
     @property
     def expectation_vec(self) -> np.ndarray:
-        return self.metrics.value("self_expectation_vec")
+        return self._rgk.s_exp_vec.value
 
     @expectation_vec.setter
     def expectation_vec(self, v):
         """Direct assign — для legacy from_dict."""
         arr = np.asarray(v, dtype=np.float32)
-        ema = self.metrics.get("self_expectation_vec")
+        ema = self._rgk.s_exp_vec
         if arr.shape == ema.value.shape:
             ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
 
@@ -188,22 +152,68 @@ class Neurochem:
 
         Любой аргумент может быть None — соответствующий скаляр не обновится.
         """
-        self.metrics.fire_event(
-            "graph_update",
-            d=d,
-            w_change=w_change,
-            weights=weights,
-        )
+        self._rgk.s_graph(d=d, w_change=w_change, weights=weights)
 
     # ── Self-prediction (Friston-loop симметрия) ─────────────────────────
 
     def vector(self) -> np.ndarray:
         """3D текущее состояние. Зеркально UserState.vector()."""
-        return self.metrics.vector(["dopamine", "serotonin", "norepinephrine"])
+        return self._rgk.system.vector()
 
     def tick_expectation(self):
         """Обновить self-baseline. Вызывается из cognitive_loop._advance_tick."""
-        self.metrics.fire_event("tick", vector=self.vector())
+        self._rgk.tick_s_pred()
+
+    def balance(self) -> float:
+        """5-axis резонансный баланс: (Gain·Aperture·Plasticity)/(Hyst·Damping).
+        ≈1.0 = резонанс; >1.5 гиперрезонанс (срыв); <0.5 гипостабильность.
+        До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/(5HT).
+        См. planning/rgk-spec.md §3.5."""
+        return self._rgk.system.balance()
+
+    # ── Phase D Step 5: ACh + GABA feeders ─────────────────────────────────
+
+    def feed_acetylcholine(self, node_creation_rate: float = 0.0,
+                            bridge_quality: float = None):
+        """Plasticity feeder — пластичность графа.
+
+        node_creation_rate ∈ [0, 1] — нормированная rate новых нод/час
+        (cap=10 default → если 10+ нод за час → 1.0, 5 нод → 0.5).
+        bridge_quality ∈ [0, 1] — качество последнего DMN-моста, если найден.
+        Если None — этот feeder не активирован.
+
+        v1 ОГРАНИЧЕНИЕ: node_creation_rate vs «реальная пластичность ткани»
+        — proxy. Граф может расти быстро, но ноды могут быть тривиальными
+        copy-paste, не отражая «открытость новому». Bridge_quality ловит
+        эту разницу частично (только бы значимые мосты находились).
+        Калибровка через 2 нед use, см. planning/rgk-migration-plan.md §6.
+        """
+        rate_norm = max(0.0, min(1.0, float(node_creation_rate)))
+        self._rgk.system.plasticity.feed(rate_norm)
+        if bridge_quality is not None:
+            bq = max(0.0, min(1.0, float(bridge_quality)))
+            self._rgk.system.plasticity.feed(bq, decay_override=0.9)
+
+    def feed_gaba(self, freeze_active: bool, embedding_scattering: float = None):
+        """Damping feeder — стенки стоячей волны.
+
+        freeze_active: True если ProtectiveFreeze.active. Сильный сигнал
+        для Damping — система чётко тормозит.
+        embedding_scattering ∈ [0, 1] — нормированная std embeddings активных
+        нод. Высокая = разнобой, низкая = узкая стоячая волна. Если None —
+        skip второй feeder.
+
+        v1 ОГРАНИЧЕНИЕ: freeze_active boolean — slow indicator. Между
+        активациями freeze_active=False даёт GABA=0 → damping ~0.5 default
+        EMA. embedding_scattering как proxy «чёткости границ» — но граф
+        может быть seman‌tically widely spread даже когда фокус узкий
+        (юзер думает над одним концептом, граф богат). Калибровка нужна.
+        """
+        sig = 1.0 if freeze_active else 0.0
+        self._rgk.system.damping.feed(sig)
+        if embedding_scattering is not None:
+            inv = max(0.0, min(1.0, 1.0 - float(embedding_scattering)))
+            self._rgk.system.damping.feed(inv, decay_override=0.95)
 
     @property
     def self_surprise_vec(self) -> np.ndarray:
@@ -246,8 +256,7 @@ class Neurochem:
             predicted = actual   # первый раз — RPE=0, просто записываем
         rpe = actual - predicted
         # RPE — additive bump not EMA, direct value mutation + clamp.
-        # Side effect остаётся bespoke — правило: registry только для EMA-дрейфа.
-        da = self.metrics.get("dopamine")
+        da = self._rgk.system.gain
         da.value = max(0.0, min(1.0, da.value + self.RPE_GAIN * rpe))
         self.recent_rpe = rpe
         self._delta_history.append(actual)
@@ -272,6 +281,10 @@ class Neurochem:
             "dopamine": round(self.dopamine, 3),
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
+            # Phase D: 5-axis chem + balance diagnostic
+            "acetylcholine": round(self.acetylcholine, 3),
+            "gaba": round(self.gaba, 3),
+            "balance": round(self.balance(), 3),
             "gamma": round(self.gamma, 3),
             "recent_rpe": round(self.recent_rpe, 3),
             "expectation_vec": [round(float(x), 3) for x in self.expectation_vec.tolist()],
@@ -286,6 +299,10 @@ class Neurochem:
             serotonin=d.get("serotonin", 0.5),
             norepinephrine=d.get("norepinephrine", 0.5),
         )
+        # Phase D: 5-axis ACh+GABA. Default 0.5 если поле отсутствует
+        # (backward-compat для legacy state.json до Phase D).
+        n.acetylcholine = float(d.get("acetylcholine", 0.5))
+        n.gaba = float(d.get("gaba", 0.5))
         n.recent_rpe = d.get("recent_rpe", 0.0)
         n._delta_history = list(d.get("_delta_history", []))
         vec = d.get("expectation_vec")
@@ -299,57 +316,10 @@ class Neurochem:
 
 # ── ProtectiveFreeze ───────────────────────────────────────────────────────
 
-def _extract_conflict(payload: dict):
-    """conflict_accumulator feeder: (d - TAU_STABLE)+ * (1 - serotonin)."""
-    d = payload.get("d")
-    if d is None:
-        return None
-    s = payload.get("serotonin", 0.5)
-    conflict_signal = max(0.0, float(d) - ProtectiveFreeze.TAU_STABLE)
-    instability = max(0.0, 1.0 - float(s))
-    return conflict_signal * instability
-
-
-def _extract_imbalance_dt(payload: dict):
-    """imbalance_pressure feeder: (|imbalance|, dt)-tuple для time-const EMA."""
-    dt = payload.get("dt")
-    if dt is None or dt <= 0:
-        return None
-    return (abs(float(payload.get("imbalance", 0.0))), float(dt))
-
-
-def _extract_sync_dt(payload: dict):
-    """sync_error EMA feeder: (sync_err/√3, dt)-tuple. Нормализация ~[0,√3]→[0,1]."""
-    dt = payload.get("dt")
-    if dt is None or dt <= 0:
-        return None
-    s = max(0.0, min(1.0, float(payload.get("sync_err", 0.0)) / 1.732))
-    return (s, float(dt))
-
-
-def _build_freeze_registry() -> MetricRegistry:
-    reg = MetricRegistry()
-    reg.register(
-        "conflict_accumulator",
-        EMA(0.0, decay=Decays.NEURO_CONFLICT_ACCUMULATOR, bounds=(0.0, 1.0)),
-        listens=[("conflict_update", _extract_conflict)],
-    )
-    reg.register(
-        "imbalance_pressure",
-        EMA(0.0, time_const=TimeConsts.IMBALANCE, bounds=(0.0, 1.0)),
-        listens=[("feed_tick", _extract_imbalance_dt)],
-    )
-    reg.register(
-        "sync_error_fast",
-        EMA(0.0, time_const=TimeConsts.SYNC_EMA_FAST, bounds=(0.0, 1.0)),
-        listens=[("feed_tick", _extract_sync_dt)],
-    )
-    reg.register(
-        "sync_error_slow",
-        EMA(0.0, time_const=TimeConsts.SYNC_EMA_SLOW, bounds=(0.0, 1.0)),
-        listens=[("feed_tick", _extract_sync_dt)],
-    )
-    return reg
+# Phase D Step 4c: extractors + _build_freeze_registry удалены.
+# Pressure layer EMAs живут в self._rgk (conflict, imbalance_press, sync_fast,
+# sync_slow + silence_press linear ramp + freeze_active flag).
+# Обновления через _rgk.p_conflict(d, serotonin) и _rgk.p_tick(dt, sync_err, imbalance).
 
 
 class ProtectiveFreeze:
@@ -394,28 +364,44 @@ class ProtectiveFreeze:
     SILENCE_RAMP_SECONDS = TimeConsts.SILENCE_RAMP
 
     def __init__(self):
-        self.metrics = _build_freeze_registry()
-        # Linear ramp timer, not EMA (остаётся bespoke)
-        self.silence_pressure: float = 0.0
-        self.active: bool = False
+        # Phase D Step 4c — pressure layer полностью в self._rgk.
+        # silence_pressure (linear ramp), conflict/imbalance/sync_fast/sync_slow EMAs,
+        # active flag — всё через _rgk.
+        self._rgk = РГК()
 
     # ── Public read accessors (backward-compat) ────────────────────────────
 
     @property
     def conflict_accumulator(self) -> float:
-        return float(self.metrics.value("conflict_accumulator"))
+        return float(self._rgk.conflict.value)
 
     @property
     def imbalance_pressure(self) -> float:
-        return float(self.metrics.value("imbalance_pressure"))
+        return float(self._rgk.imbalance_press.value)
 
     @property
     def sync_error_ema_fast(self) -> float:
-        return float(self.metrics.value("sync_error_fast"))
+        return float(self._rgk.sync_fast.value)
 
     @property
     def sync_error_ema_slow(self) -> float:
-        return float(self.metrics.value("sync_error_slow"))
+        return float(self._rgk.sync_slow.value)
+
+    @property
+    def silence_pressure(self) -> float:
+        return float(self._rgk.silence_press)
+
+    @silence_pressure.setter
+    def silence_pressure(self, v: float):
+        self._rgk.silence_press = max(0.0, min(1.0, float(v)))
+
+    @property
+    def active(self) -> bool:
+        return bool(self._rgk.freeze_active)
+
+    @active.setter
+    def active(self, v: bool):
+        self._rgk.freeze_active = bool(v)
 
     # ── Feeders ─────────────────────────────────────────────────────────────
 
@@ -427,16 +413,9 @@ class ProtectiveFreeze:
         Они **не** активируют Bayes-freeze — только display_burnout и
         idle multiplier.
         """
-        self.metrics.fire_event("conflict_update", d=d, serotonin=serotonin)
-
-        # State machine остаётся bespoke (не EMA) — registry только для EMA-дрейфа.
-        conflict = self.conflict_accumulator
-        if self.active:
-            if conflict < self.THETA_RECOVERY:
-                self.active = False
-        else:
-            if conflict > self.THETA_ACTIVE:
-                self.active = True
+        # Phase D: gate в _rgk.p_conflict (формула conflict EMA + freeze hysteresis).
+        # _rgk.p_conflict тоже обновляет freeze_active; self.active = property → _rgk.
+        self._rgk.p_conflict(d=d, serotonin=serotonin)
 
     def feed_tick(self, dt: float, sync_err: float = 0.0,
                    imbalance: float = 0.0):
@@ -450,16 +429,8 @@ class ProtectiveFreeze:
             sync_err: current L2-distance user↔system (0..≈√3 в 3D).
             imbalance: aggregated PE ∈ [0, 1] (см. cognitive_loop._advance_tick).
         """
-        if dt <= 0:
-            return
-        # Silence — linear ramp. Не EMA, не в registry.
-        self.silence_pressure = max(0.0, min(1.0,
-            self.silence_pressure + dt / float(self.SILENCE_RAMP_SECONDS)
-        ))
-
-        # EMA feeders (imbalance + 2 sync_error) через registry
-        self.metrics.fire_event(
-            "feed_tick", dt=dt, sync_err=sync_err, imbalance=imbalance)
+        # Phase D: silence_press ramp + 3 EMA feeders в _rgk.p_tick.
+        self._rgk.p_tick(dt=dt, sync_err=sync_err, imbalance=imbalance)
 
     @property
     def display_burnout(self) -> float:
@@ -499,18 +470,12 @@ class ProtectiveFreeze:
     @classmethod
     def from_dict(cls, d: dict) -> "ProtectiveFreeze":
         pf = cls()
-        pf.metrics.get("conflict_accumulator").value = float(
-            d.get("conflict_accumulator", 0.0))
+        pf._rgk.conflict.value = float(d.get("conflict_accumulator", 0.0))
         # Legacy fallback: до 2026-04-23 поле называлось `desync_pressure`.
         pf.silence_pressure = float(
-            d.get("silence_pressure",
-                  d.get("desync_pressure", 0.0))
-        )
-        pf.metrics.get("imbalance_pressure").value = float(
-            d.get("imbalance_pressure", 0.0))
-        pf.metrics.get("sync_error_fast").value = float(
-            d.get("sync_error_ema_fast", 0.0))
-        pf.metrics.get("sync_error_slow").value = float(
-            d.get("sync_error_ema_slow", 0.0))
+            d.get("silence_pressure", d.get("desync_pressure", 0.0)))
+        pf._rgk.imbalance_press.value = float(d.get("imbalance_pressure", 0.0))
+        pf._rgk.sync_fast.value = float(d.get("sync_error_ema_fast", 0.0))
+        pf._rgk.sync_slow.value = float(d.get("sync_error_ema_slow", 0.0))
         pf.active = bool(d.get("active", False))
         return pf

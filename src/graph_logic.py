@@ -1183,6 +1183,33 @@ _graph = _fresh_graph()
 graph_lock = threading.Lock()
 
 
+def nodes_created_within(seconds: float) -> int:
+    """Count nodes created within last `seconds`. Phase D Step 5b feeder.
+
+    Used as proxy для `acetylcholine` (Plasticity) feeder в Neurochem:
+    высокий rate = граф растёт быстро = ткань пластична.
+
+    v1 ОГРАНИЧЕНИЕ: считает append-rate, не семантическую новизну.
+    Если юзер копирует одно и то же — rate высокий, но настоящая
+    plasticity нулевая. Калибровка через 2 нед use.
+    """
+    import datetime as _dt
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=float(seconds))
+    count = 0
+    with graph_lock:
+        for n in _graph.get("nodes", []):
+            ca_str = n.get("created_at")
+            if not ca_str:
+                continue
+            try:
+                ca = _dt.datetime.fromisoformat(str(ca_str).replace("Z", "+00:00"))
+                if ca > cutoff:
+                    count += 1
+            except (ValueError, TypeError):
+                continue
+    return count
+
+
 def reset_graph():
     """Reset all graph state (clears in-place to preserve references)."""
     with graph_lock:

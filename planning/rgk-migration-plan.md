@@ -369,6 +369,32 @@ U-B перекликается с user.acetylcholine.U-D (та же триада
 | **plasticity (ACh)** | **distinct(msg, recent_5) + surprise_boost** | **node_creation_rate + bridge_quality** | 0.5 |
 | **damping (GABA)** | **1 − focus_residue** | **freeze.active + 1 − embedding_scattering** | 0.5 |
 
+### 6.5 Реализовано в Step 5 (фактическое состояние v1)
+
+| Feeder | API | Hook (где fed) | Реализовано? | Лимит v1 |
+|---|---|---|---|---|
+| System ACh — node rate | `Neurochem.feed_acetylcholine(node_creation_rate)` | `cognitive_loop._advance_tick` каждый tick | ✓ | append-rate, не семантическая новизна |
+| System ACh — bridge_quality | same method `(bridge_quality=...)` | DMN bridge cycle | **отложено** (API готов) | без него реальные находки не бустят ACh |
+| System GABA — freeze | `Neurochem.feed_gaba(freeze_active)` | `cognitive_loop._advance_tick` каждый tick | ✓ | slow indicator, между активациями GABA→0 |
+| System GABA — scattering | same method `(embedding_scattering=...)` | nowhere | **отложено** | embedding ops дорогие, hot path |
+| User ACh — novelty | `UserState.feed_acetylcholine(novelty, boost=False)` | `_check_user_surprise` (boost=True only) | partial | continuous novelty не реализована |
+| User ACh — meditation boost | (boost=True branch) | `_check_user_surprise` при detect | ✓ через surprise channel | meditation-only detection (low NE+coh+slow) opt-in |
+| User GABA — focus residue | `UserState.feed_gaba()` | `cognitive_loop._advance_tick` каждый tick | ✓ | redirect existing field, не новый сигнал |
+| User GABA — breathing | not implemented | n/a | **отложено** | opt-in detection не реализован |
+
+**Что это значит для balance():**
+- В стабильном состоянии ACh/GABA дрейфуют около 0.5 (defaults). Балансовая формула вырождается в `(DA·NE)/5HT` (3-axis equivalent).
+- 5-axis активируется только при **events**: surprise (User ACh boost), freeze (System GABA), node-creation bursts (System ACh).
+- Корридор `[0.3, 1.5]` — теоретический. Реальный distribution смотрим через 2 нед в `prime_directive.jsonl`.
+
+**Отложенные feeders как Tier 2 после Phase D merge:**
+- DMN bridge_quality hook — простая интеграция в `_check_dmn_bridges` после успешного bridge
+- embedding_scattering — нужен cheap proxy (например, len(active_session_indices) / 7 normalize)
+- User continuous novelty — distinct(latest_msg, recent_5) при register_input()
+- User breathing detection — composite check (low NE + high HRV coh + slow input rate)
+
+Калибровка корридора `[0.3, 1.5]` и cap'ов (10 нод/час, etc.) — через 2 нед use данных из prime_directive.
+
 ### balance() после feeders заехали
 
 ```

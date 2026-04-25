@@ -97,6 +97,47 @@
 
 ---
 
+## 5-axis расширение (Phase D, 2026-04-25)
+
+После коллапса Phase D ([rgk-spec.md](../planning/rgk-spec.md), [rgk-migration-plan.md](../planning/rgk-migration-plan.md)) нейрохимия Neurochem расширена с 3 до **5 осей**. Добавились два модулятора по картe резонансной модели:
+
+- **Ацетилхолин** (ACh, plasticity) — текучесть ткани, скорость перестройки графа.
+- **ГАМК** (GABA, damping) — стенки стоячей волны, гасит боковые лепестки, чёткость границ.
+
+Балансовая формула РГК (rgk-spec.md §3.5) теперь полная:
+
+```
+balance = (DA × NE × ACh) / (5HT × GABA)
+≈ 1.0 → резонанс
+> 1.5 → гиперрезонанс (срыв в шум, мания, аддикция)
+< 0.5 → гипостабильность (застревание, апатия)
+```
+
+Доступ: `Neurochem.acetylcholine`, `Neurochem.gaba`, `Neurochem.balance()`. Зеркально для UserState: `UserState.acetylcholine`, `UserState.gaba`, `UserState.balance()`.
+
+### v1 источники сигнала (честные ограничения)
+
+Реализованные feeders в Phase D Step 5b — **proxy v1**, не идеальные. Фиксируем как ограничения; калибровка через 2 нед реального use.
+
+| Параметр | v1 источник | Лимит / что не ловит |
+|---|---|---|
+| System ACh | `nodes_created_within(3600) / 10.0` (cap 10 нод/час → 1.0). Кормится в `_advance_tick`. | Считает append-rate, не семантическую новизну. Юзер копирует одно и то же → высокий rate, реальная пластичность нулевая. |
+| System ACh boost | DMN bridge_quality — **не подключено в v1**. Готовое API `feed_acetylcholine(node_creation_rate, bridge_quality)` ждёт интеграции. | Без bridge_quality реальная «находка нетривиальной связи» не отражается. |
+| System GABA | `freeze_active` boolean. Кормится в `_advance_tick`. | Slow indicator — между активациями freeze=False даёт GABA→0, damping≈0.5 (default EMA). |
+| System GABA boost | embedding_scattering — **не подключено в v1**. API `feed_gaba(freeze_active, embedding_scattering)` ждёт интеграции. | Без scattering невидим случай «узкая стоячая волна семантически» — граф широк по embedding, но фокус узкий. |
+| User ACh | distinct(latest_msg, recent_5) при surprise boost — кормится только из `_check_user_surprise` (`feed_acetylcholine(novelty=conf, boost=True)`). | Continuous novelty (без boost) пока не реализована. ACh редко дёргается. |
+| User GABA | `1 − focus_residue` (existing field). Кормится в `_advance_tick`. | Redirect existing сигнала, не новый источник. Breathing detection (low NE + high HRV coh + slow input) — opt-in, не реализована. |
+
+### Что эти ограничения значат на практике
+
+- **balance()** живёт, но в стабильном состоянии тяготеет к **3-axis эквиваленту** `(DA·NE)/5HT` потому что ACh/GABA дрейфуют около 0.5. Реально 5-axis активируется только при surprise events (ACh boost) или freeze (GABA boost).
+- **Корридор [0.3, 1.5]** из spec'а — теоретический. Реальный distribution смотрим через 2 нед в `prime_directive.jsonl` aggregate. Если 95%+ случаев в [0.4, 0.7] — формула слишком плоская, нужны жёстче feeders или новые источники.
+- **Калибровочный путь** — добавлять источники по мере того как 1) данные показывают что нужно, 2) реализовать дёшево (cheap = не expensive embedding ops в hot path).
+
+Полный дизайн feeders с альтернативами — [planning/rgk-migration-plan.md §6](../planning/rgk-migration-plan.md).
+
+---
+
 ## Нейромодуляторы как регуляторы чистоты и полосы
 
 Три скаляра — дофамин, серотонин, норадреналин — сами по себе сигнал не передают. В мозге они работают как **модуляторы**: меняют то, *как* нейрон будет реагировать на следующий сигнал. Меняют входное сопротивление мембраны, смещают порог возбуждения, поднимают или опускают усиление (gain) — то есть коэффициент, с которым слабый входной сигнал вырастает в активную реакцию. В терминах резонатора это ровно регулировка того, **какие частоты система готова поймать** и **насколько чисто она их удерживает** ([cone-design](cone-design.md)).

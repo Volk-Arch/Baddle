@@ -389,3 +389,104 @@ class TestPhaseAIdentity:
             assert got[k] == pytest.approx(EXPECTED_FREEZE[k], abs=TOL), \
                 f"{k}: got={got[k]} exp={EXPECTED_FREEZE[k]}"
         assert got["active"] == EXPECTED_FREEZE["active"]
+
+
+# ── Phase D Step 5: ACh + GABA feeders semantics ───────────────────────────
+
+class TestPhaseDFeeders:
+    """ACh/GABA feeder methods на UserState и Neurochem.
+
+    Default 0.5 без вызовов → balance() = (DA·NE)/(5HT) (3-axis equivalent).
+    После calls → 5-axis формула активна.
+    """
+
+    def test_user_acetylcholine_default(self):
+        from src.user_state import UserState
+        us = UserState()
+        assert us.acetylcholine == pytest.approx(0.5, abs=TOL)
+
+    def test_user_acetylcholine_novelty(self):
+        from src.user_state import UserState
+        us = UserState()
+        # Initial 0.5, decay 0.9 → after feed(0.8): 0.9*0.5 + 0.1*0.8 = 0.53
+        us.feed_acetylcholine(novelty=0.8)
+        assert us.acetylcholine == pytest.approx(0.53, abs=TOL)
+
+    def test_user_acetylcholine_boost_clamps_to_min_085(self):
+        from src.user_state import UserState
+        us = UserState()
+        # boost=True with low novelty → still bumps to ≥0.85
+        us.feed_acetylcholine(novelty=0.3, boost=True)
+        # decay_override=0.85, signal=max(0.3, 0.85)=0.85
+        # → 0.85*0.5 + 0.15*0.85 = 0.425 + 0.1275 = 0.5525
+        assert us.acetylcholine == pytest.approx(0.5525, abs=TOL)
+
+    def test_user_gaba_default(self):
+        from src.user_state import UserState
+        us = UserState()
+        assert us.gaba == pytest.approx(0.5, abs=TOL)
+
+    def test_user_gaba_high_when_focused(self):
+        from src.user_state import UserState
+        us = UserState()
+        # focus_residue=0.0 (default) → 1-0 = 1.0 → 0.95*0.5+0.05*1.0 = 0.525
+        us.feed_gaba()
+        assert us.gaba == pytest.approx(0.525, abs=TOL)
+
+    def test_user_gaba_low_when_scattered(self):
+        from src.user_state import UserState
+        us = UserState()
+        us.focus_residue = 0.9
+        # 1-0.9 = 0.1 → 0.95*0.5+0.05*0.1 = 0.48
+        us.feed_gaba()
+        assert us.gaba == pytest.approx(0.48, abs=TOL)
+
+    def test_system_acetylcholine_node_rate(self):
+        from src.neurochem import Neurochem
+        nc = Neurochem()
+        # decay 0.9, signal=0.7 → 0.9*0.5 + 0.1*0.7 = 0.52
+        nc.feed_acetylcholine(node_creation_rate=0.7)
+        assert nc.acetylcholine == pytest.approx(0.52, abs=TOL)
+
+    def test_system_acetylcholine_with_bridge_quality(self):
+        from src.neurochem import Neurochem
+        nc = Neurochem()
+        # First feed: 0.9*0.5+0.1*0.5 = 0.5
+        # Second feed (decay_override=0.9): 0.9*0.5+0.1*0.8 = 0.53
+        nc.feed_acetylcholine(node_creation_rate=0.5, bridge_quality=0.8)
+        assert nc.acetylcholine == pytest.approx(0.53, abs=TOL)
+
+    def test_system_gaba_freeze_active(self):
+        from src.neurochem import Neurochem
+        nc = Neurochem()
+        # decay 0.95, signal=1.0 → 0.95*0.5+0.05*1.0 = 0.525
+        nc.feed_gaba(freeze_active=True)
+        assert nc.gaba == pytest.approx(0.525, abs=TOL)
+
+    def test_system_gaba_freeze_inactive(self):
+        from src.neurochem import Neurochem
+        nc = Neurochem()
+        nc.feed_gaba(freeze_active=False)
+        # 0.95*0.5+0.05*0.0 = 0.475
+        assert nc.gaba == pytest.approx(0.475, abs=TOL)
+
+    def test_system_gaba_with_scattering(self):
+        from src.neurochem import Neurochem
+        nc = Neurochem()
+        # First: feed(1.0): 0.475 (см. выше? actually freeze_active=True → 0.525)
+        # Wait — freeze_active=True → first feed=1.0, decay=0.95: 0.525
+        # Then scattering=0.2 → inv=0.8, decay_override=0.95: 0.95*0.525+0.05*0.8=0.5388
+        nc.feed_gaba(freeze_active=True, embedding_scattering=0.2)
+        assert nc.gaba == pytest.approx(0.5388, abs=1e-4)
+
+    def test_user_balance_method(self):
+        from src.user_state import UserState
+        us = UserState(dopamine=0.7, serotonin=0.6, norepinephrine=0.4)
+        # plasticity=damping=0.5 default → (0.7·0.4·0.5)/(0.6·0.5) = 0.14/0.30 = 0.467
+        assert us.balance() == pytest.approx(0.4667, abs=1e-3)
+
+    def test_system_balance_method(self):
+        from src.neurochem import Neurochem
+        nc = Neurochem(dopamine=0.6, serotonin=0.5, norepinephrine=0.5)
+        # (0.6·0.5·0.5)/(0.5·0.5) = 0.15/0.25 = 0.6
+        assert nc.balance() == pytest.approx(0.6, abs=1e-3)

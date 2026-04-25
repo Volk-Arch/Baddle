@@ -289,9 +289,7 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 Прототип сделан → [src/rgk.py](../src/rgk.py). Identity 42/42 на event sequence из [tests/test_metric_identity.py](../tests/test_metric_identity.py). Диагностика — §6.5 выше.
 
-**Дальше:** Phase D миграция в новой ветке `rgk-collapse`. Пошаговый план — [planning/rgk-migration-plan.md](rgk-migration-plan.md). 8 шагов, оценка 25-35ч в одном sitting'е.
-
-**Идём в полную 5-axis модель** (не упрощаем до 3 как было предусмотрено в §12 simplification-plan'а): ACh+GABA приходят с feeders. Дизайн feeders — §«Дизайн ACh+GABA feeders» в migration-plan.
+**Phase D миграция выполнена** в той же сессии 2026-04-25 (без отдельной ветки, todo-14): 8 шагов done, identity preserved 10/10 + 150 property tests + 385 full repo tests pass. UserState / Neurochem / ProtectiveFreeze переписаны как adapters над `_rgk`; `_build_*_registry` + extractors + `MetricRegistry` удалены. 5-axis полная: ACh + GABA с v1 feeders (см. docs/neurochem-design.md «5-axis расширение» + planning/rgk-migration-plan.md §6.5). **§11 «когда делать»** отвечен: окно нашлось, всё в один sitting.
 
 ---
 
@@ -317,6 +315,6 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 **Цена:** одна сессия дизайна + одна-две сессии имплементации (новая ветка). Identity не bit-preserved, нужны property-based тесты. Возможно вскроется что модель неполна — тогда переоценка.
 
-**Когда делать:** когда у автора будет контекст на 2-4 часа подряд. Не инкрементально (то что мы делали в Phase A/B/C). Один большой коллапс в ветке, mergeable когда identity-проверка пройдёт.
+**Когда делать:** когда у автора будет контекст на 2-4 часа подряд. Не инкрементально (то что мы делали в Phase A/B/C). Один большой коллапс в ветке, mergeable когда identity-проверка пройдёт. **✓ Сделано 2026-04-25** в todo-14 (без отдельной ветки) — sub-steps 3a/3b/3c + 4a/4b/4c позволили сохранять identity на каждом шаге; см. planning/rgk-migration-plan.md.
 
 **Что сохраняется:** simplification-plan §11 main takeaway — «новая фича = декларация, не подсистема». РГК это финализирует: декларация = новый проектор или новый параметр в chem. Каркас один.

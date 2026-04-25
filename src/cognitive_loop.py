@@ -578,6 +578,21 @@ class CognitiveLoop:
             pass
         fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
 
+        # Phase D Step 5b — 5-axis chem feeders.
+        # System ACh: node-creation rate (cap 10/hour → 1.0). v1 proxy.
+        # System GABA: freeze.active boolean. embedding_scattering пока None.
+        # User GABA: derived from focus_residue (existing field).
+        # User ACh не fed здесь — только при surprise boost (см. _check_user_surprise).
+        # См. planning/rgk-migration-plan.md §6 «ACh+GABA feeders».
+        try:
+            from .graph_logic import nodes_created_within
+            rate = min(1.0, nodes_created_within(3600) / 10.0)
+            gs.neuro.feed_acetylcholine(node_creation_rate=rate)
+            gs.neuro.feed_gaba(freeze_active=fz.active)
+            u.feed_gaba()
+        except Exception as e:
+            log.debug(f"[advance_tick] phase_d feeders failed: {e}")
+
         # Focus residue естественное затухание (resonance-code-changes.md §3).
         # −0.05 за минуту покоя; rebuilt'ся через bump_focus_residue в
         # record_action на user-event'ы.
@@ -664,9 +679,15 @@ class CognitiveLoop:
             f"text_markers={txt_info.get('markers', [])}"
         )
 
-        # 1. Apply boost к expectation EMA
+        # 1. Apply boost к expectation EMA + ACh boost (Phase D Step 5b).
+        # User-side ACh feeder: surprise event = «юзер открыт новому» → bump
+        # plasticity до ≥0.85 с быстрым decay 0.85 (см. UserState.feed_acetylcholine).
+        # v1: novelty=conf от detector, boost=True. Документировано в
+        # planning/rgk-migration-plan.md §6 «User-side ACh».
         try:
-            get_user_state().apply_surprise_boost(n_ticks=3)
+            us = get_user_state()
+            us.apply_surprise_boost(n_ticks=3)
+            us.feed_acetylcholine(novelty=float(conf), boost=True)
         except Exception as e:
             log.debug(f"[cognitive_loop] surprise_boost failed: {e}")
 

@@ -392,6 +392,37 @@ class UserState:
     def agency(self, v: float):
         self._rgk.agency.value = max(0.0, min(1.0, float(v)))
 
+    # ── Phase D: 5-axis chem (ACh + GABA доступны как property) ─────────────
+    # Default 0.5 без feeders. Feeders подключены в cognitive_loop (Step 5c/d).
+    # См. planning/rgk-migration-plan.md §6 «User-side ACh + GABA feeders».
+
+    @property
+    def acetylcholine(self) -> float:
+        """Plasticity (текучесть ткани, открытость новому).
+        Fed by feed_acetylcholine(novelty, boost) — message novelty + surprise."""
+        return float(self._rgk.user.plasticity.value)
+
+    @acetylcholine.setter
+    def acetylcholine(self, v: float):
+        self._rgk.user.plasticity.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def gaba(self) -> float:
+        """Damping (стенки стоячей волны, чёткость границ).
+        Fed by feed_gaba() — производная от focus_residue (existing field)."""
+        return float(self._rgk.user.damping.value)
+
+    @gaba.setter
+    def gaba(self, v: float):
+        self._rgk.user.damping.value = max(0.0, min(1.0, float(v)))
+
+    def balance(self) -> float:
+        """5-axis резонансный баланс юзера: (DA·NE·ACh) / (5HT·GABA).
+        ≈1.0 = резонанс; >1.5 гиперрезонанс; <0.5 гипостабильность.
+        До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/5HT.
+        См. planning/rgk-spec.md §3.5."""
+        return self._rgk.user.balance()
+
     # ── Predictive layer accessors ─────────────────────────────────────────
 
     @property
@@ -754,6 +785,45 @@ class UserState:
             self._surprise_boost_remaining = n
         self._last_user_surprise_ts = time.time()
 
+    # ── Phase D Step 5: ACh + GABA feeders ─────────────────────────────────
+
+    def feed_acetylcholine(self, novelty: float, boost: bool = False):
+        """Plasticity feeder — открытость новому.
+
+        novelty ∈ [0, 1] — обычно `distinct(latest_msg, recent_5)` от
+        cognitive_loop. Высокая = темы юзера прыгают / новый паттерн →
+        ACh растёт → ткань становится более пластичной.
+
+        boost=True — детект user-side surprise (apply_surprise_boost
+        triggered) → принудительный bump до 0.85 с быстрым decay.
+
+        v1 ОГРАНИЧЕНИЕ: novelty считается через distinct() embedding-метрику
+        cognitive_loop'а, callers ответственны за качество. Если distinct
+        шумит — ACh шумит. Калибровка через 2 нед use, см. docs/world-model.md
+        и planning/rgk-migration-plan.md §6.
+        """
+        sig = max(0.0, min(1.0, float(novelty)))
+        if boost:
+            self._rgk.user.plasticity.feed(max(sig, 0.85), decay_override=0.85)
+        else:
+            self._rgk.user.plasticity.feed(sig)
+
+    def feed_gaba(self):
+        """Damping feeder — derived из focus_residue (existing field).
+
+        Высокий focus_residue = много переключений / rapid input →
+        низкий GABA (волна расползается).
+        Низкий focus_residue = стабильная работа → высокий GABA
+        (узкая чистая волна).
+
+        v1 ОГРАНИЧЕНИЕ: redirect existing focus_residue, не новый источник.
+        Breathing detection (low NE + high HRV coh + slow input rate) пока
+        не реализована — см. planning/rgk-migration-plan.md §6 для opt-in
+        второго feeder.
+        """
+        sig = max(0.0, min(1.0, 1.0 - float(self.focus_residue)))
+        self._rgk.user.damping.feed(sig)
+
     @property
     def reality(self) -> float:
         """Current observed state_level (для симметрии с MindBalance ID/IP)."""
@@ -1088,6 +1158,10 @@ class UserState:
             "dopamine": round(self.dopamine, 3),
             "serotonin": round(self.serotonin, 3),
             "norepinephrine": round(self.norepinephrine, 3),
+            # Phase D: 5-axis chem + balance diagnostic
+            "acetylcholine": round(self.acetylcholine, 3),
+            "gaba": round(self.gaba, 3),
+            "balance": round(self.balance(), 3),
             "burnout": round(self.burnout, 3),
             "agency": round(self.agency, 3),
             "valence": round(self.valence, 3),
@@ -1131,6 +1205,10 @@ class UserState:
             burnout=d.get("burnout", 0.0),
             agency=d.get("agency", 0.5),
         )
+        # Phase D: 5-axis ACh+GABA. Default 0.5 если поле отсутствует
+        # (backward-compat для legacy state.json до Phase D).
+        u.acetylcholine = float(d.get("acetylcholine", 0.5))
+        u.gaba = float(d.get("gaba", 0.5))
         u.expectation = float(d.get("expectation", 0.5))
         u.valence = float(d.get("valence", 0.0))
         u.activity_magnitude = float(d.get("activity_magnitude", 0.0))
