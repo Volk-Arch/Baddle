@@ -118,9 +118,10 @@
 **Где:** новый `src/capacity_estimator.py`.
 **Блок:** минимум 1 мес реальных данных.
 
-### #2 Agency — 6-я ось уже после (не gate, калибровка)
-**Статус:** `UserState.agency` — 5-я ось (VAD-Dominance), собирается. Теоретическая основа закрыта, механика остаётся.
-**Направление:** через 2-3 мес данных смотреть `mean_pe_agency` и калибровать вес. Дальше: `meaning` / `relatedness` из SDT как 6-я ось.
+### #2 6-я ось — VAD-Dominance уже есть, что после
+**Контекст:** 5-axis (DA/5HT/NE/ACh/GABA) реализована Phase D + B0/B4. `UserState.agency` (VAD-Dominance) собирается как aux observable.
+**Дилемма:** если данные через 2-3 мес покажут что нужна 6-я ось — тянуть `meaning` / `relatedness` из SDT (Self-Determination Theory) или продолжать на 5-axis. Trade-off: SDT добавляет психометрику без чистого нейрохимического mapping → может разрушить чистоту резонатора.
+**Блок:** статистика `mean_pe_agency` за 2-3 мес use.
 
 ### #3 Память как ключ настройки vs text + embedding
 **Проблема:** Нода хранит `{text, embedding, ...}`. По резонансной оптике (диалог 2026-04-24, источник РГК v1.0) память должна быть **протоколом воспроизведения волны**, не копией: мозг хранит параметры `[частота, фаза, угол, энергия]`, не сам узор. Каждое воспроизведение = новая сборка из текущего шума и контекста, поэтому память **меняется** при каждом recall (фазовый сдвиг от текущего frequency_regime). Embedding близок к «ключу настройки», text — к копии объекта. Возможно дублирование избыточно.
@@ -130,17 +131,6 @@
 ### #4 Lab-scratch — изолированный граф для экспериментов
 **Три варианта:** A. Active pointer; B. Cognitive pause; C. Dual runtime (`_graph` для main, `_lab_graph` для scratch).
 **Блок:** понять после 1-2 мес daily-use есть ли реальная потребность.
-
-### #5 Singleton РГК для каскада зеркал
-**Проблема:** UserState/Neurochem/ProtectiveFreeze каждый создаёт свой `_rgk` (3 разных). Cascade зеркал «user-system pair» формально не один объект.
-**Решение:** `get_global_rgk()` singleton + UserState/Neurochem/PF принимают `rgk=None` (default → use global).
-**Стоимость:** ~2ч + test isolation logic.
-**Когда:** если делается Phase E (cognitive_loop через project()) или новые feeders требуют cross-class state read.
-
-### #6 5-axis ACh/GABA feeders v1 — proxy quality
-**Проблема:** реализованные feeders — proxy v1 (см. [docs/neurochem-design.md § 5-axis](../docs/neurochem-design.md)). node_creation_rate ловит append, не семантику; freeze.active slow indicator; User ACh только на surprise boost; embedding_scattering не реализован.
-**Направление:** калибровка через 2 нед → подключить отложенные feeders или заменить proxy.
-**Блок:** данные prime_directive distribution `balance()`.
 
 ---
 

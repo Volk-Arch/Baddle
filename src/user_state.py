@@ -943,7 +943,7 @@ class UserState:
         """
         return float(np.linalg.norm(self.surprise_vec))
 
-    # ── PE attribution (OQ #6) ─────────────────────────────────────────────
+    # ── PE attribution ────────────────────────────────────────────────────
     # B4 Wave 1: формулы переехали в РГК.project("user_state"). Properties —
     # тонкие delegates (один dict за access; для UI/diagnostic нагрузки ОК).
 
