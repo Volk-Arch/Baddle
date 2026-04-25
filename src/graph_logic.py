@@ -450,7 +450,19 @@ def record_action(actor: str, action_kind: str, text: str,
         nodes.append(node)
         _graph.pop("_tick_tried", None)
         log.debug(f"[action-memory] record_action #{new_id}: {actor}/{action_kind} — {text[:60]!r}")
-        return new_id
+
+    # Focus residue bump для user-action'ов (rapid input + mode switch).
+    # Вне graph_lock — bump_focus_residue сама thread-safe (atomic float ops).
+    # См. planning/resonance-code-changes.md §3.
+    if str(actor or "") == "user":
+        try:
+            from .user_state import get_user_state
+            mode_id = (extras or {}).get("mode_id") if extras else None
+            get_user_state().bump_focus_residue(mode_id)
+        except Exception as e:
+            log.debug(f"[focus_residue] bump failed: {e}")
+
+    return new_id
 
 
 def close_action(action_idx: int, delta_sync_error: float,

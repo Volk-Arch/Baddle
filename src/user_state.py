@@ -392,6 +392,15 @@ class UserState:
         self._last_input_ts: Optional[float] = None
         self._feedback_counts = {"accepted": 0, "rejected": 0, "ignored": 0}
 
+        # Focus residue — мера накопленных переключений контекста
+        # (см. planning/resonance-code-changes.md §3). Растёт на mode-switch и
+        # rapid input, затухает 0.05/мин в _advance_tick. Используется как gate
+        # для observation_suggestions и sync_seeking — high residue = «юзер в
+        # хаосе переключений, не добавляем новых сигналов».
+        self.focus_residue: float = 0.0
+        self._last_focus_input_ts: Optional[float] = None
+        self._last_focus_mode_id: Optional[str] = None
+
     # ── Neurochemical mirrors (read/write через registry) ──────────────────
 
     @property
@@ -548,6 +557,46 @@ class UserState:
         для UI «давно ли писал» и будущего Active sync-seeking.
         """
         self._last_input_ts = now or time.time()
+
+    # ── Focus residue (resonance-code-changes.md §3) ──────────────────────
+
+    def bump_focus_residue(self, mode_id: Optional[str], now: Optional[float] = None):
+        """Учесть переключение/rapid input в focus_residue.
+
+        Источники приращения:
+          • +0.05 если предыдущий user input был < 30 сек назад (rapid input)
+          • +0.15 если mode_id отличается от предыдущего (mode switch)
+
+        Тимer и mode tracking хранятся в `_last_focus_input_ts` и
+        `_last_focus_mode_id` отдельно от register_input'а — чтобы не было
+        race conditions с порядком вызова.
+
+        Вызывается из `record_action` при `actor=user`. См.
+        planning/resonance-code-changes.md §3.
+        """
+        if now is None:
+            now = time.time()
+        # Rapid input bump
+        if (self._last_focus_input_ts is not None
+                and (now - self._last_focus_input_ts) < 30):
+            self.focus_residue = min(1.0, self.focus_residue + 0.05)
+        # Mode switch bump
+        if (mode_id and self._last_focus_mode_id
+                and mode_id != self._last_focus_mode_id):
+            self.focus_residue = min(1.0, self.focus_residue + 0.15)
+        self._last_focus_mode_id = mode_id or self._last_focus_mode_id
+        self._last_focus_input_ts = now
+
+    def decay_focus_residue(self, dt_seconds: float):
+        """Естественное затухание focus_residue по времени.
+
+        −0.05 за минуту покоя. Вызывается из cognitive_loop._advance_tick
+        с реальным `dt` между tick'ами.
+        """
+        if dt_seconds <= 0:
+            return
+        self.focus_residue = max(0.0,
+            self.focus_residue - 0.05 * (dt_seconds / 60.0))
 
     def update_from_engagement(self, signal: float = 0.65):
         """Мягкий EMA-вклад в dopamine от факта вовлечённости юзера
@@ -849,6 +898,36 @@ class UserState:
             return 0.0
         return abs(float(self.hrv_coherence) - float(ref))
 
+    # ── Frequency regime (resonance несущая частота) ───────────────────────
+
+    @property
+    def frequency_regime(self) -> str:
+        """Несущая частота текущего состояния. Derived из HRV+нейрохимии.
+
+        - **long_wave** 🔵 — coherence>0.6 + RMSSD>30мс + NE<0.5.
+          Парасимпатика, длинная λ, ассоциативный режим.
+        - **short_wave** 🔴 — coherence<0.4 ИЛИ NE>0.75. Симпатика,
+          короткая λ, реактивный/фокус режим.
+        - **mixed** ⚪ — промежуточные значения. Переключение возможно.
+        - **flat** — нет HRV данных, не классифицируем.
+
+        Использование: detect_sync_seeking tone choice, execute_deep
+        aperture cap при short_wave, briefing format adaptation.
+
+        Spec: planning/resonance-code-changes.md §2. Пороги через 1-2 нед
+        реальных данных откалибруются.
+        """
+        if self.hrv_coherence is None:
+            return "flat"
+        hrv = float(self.hrv_coherence)
+        rmssd = float(self.hrv_rmssd or 0)
+        ne = float(self.norepinephrine)
+        if hrv > 0.6 and rmssd > 30 and ne < 0.5:
+            return "long_wave"
+        if hrv < 0.4 or ne > 0.75:
+            return "short_wave"
+        return "mixed"
+
     # ── Activity zone (4 региона HRV × акселерометр) ───────────────────────
 
     @property
@@ -991,6 +1070,8 @@ class UserState:
             "activity_zone": az,
             "named_state": {"key": ns["key"], "label": ns["label"],
                             "advice": ns["advice"]},
+            "frequency_regime": self.frequency_regime,
+            "focus_residue": round(self.focus_residue, 3),
             "hrv": {
                 "coherence": self.hrv_coherence,
                 "stress": self.hrv_stress,
@@ -1011,6 +1092,8 @@ class UserState:
         u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
         u.valence = float(d.get("valence", 0.0))
         u.activity_magnitude = float(d.get("activity_magnitude", 0.0))
+        u.focus_residue = max(0.0, min(1.0,
+            float(d.get("focus_residue", 0.0))))
         # Predictive layer (TOD scalar + vector + HRV baseline). Все
         # optional — если legacy dump не имеет их, defaults из __init__.
         tod_map = d.get("expectation_by_tod") or {}

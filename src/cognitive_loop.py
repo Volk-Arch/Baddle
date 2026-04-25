@@ -577,6 +577,14 @@ class CognitiveLoop:
             pass
         fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
 
+        # Focus residue естественное затухание (resonance-code-changes.md §3).
+        # −0.05 за минуту покоя; rebuilt'ся через bump_focus_residue в
+        # record_action на user-event'ы.
+        try:
+            get_user_state().decay_focus_residue(dt_seconds=dt)
+        except Exception:
+            pass
+
     def _check_user_surprise(self):
         """OQ #7: detect момента когда юзер встретил неожиданное.
 
@@ -2262,8 +2270,19 @@ class CognitiveLoop:
             pass
 
         # Эвристический tone до LLM (используется как дефолт если
-        # LLM не отдаст структурированно)
-        if silence > 0.7:             heuristic_tone = "caring"
+        # LLM не отдаст структурированно). Frequency_regime сужает выбор:
+        # short_wave (стресс/симпатика) → не грузим абстракциями, simple/reference;
+        # long_wave (парасимпатика) → можно ambient/curious; mixed/flat — обычная
+        # эвристика по silence/hrv/recent. См. resonance-code-changes.md §2.
+        try:
+            freq = get_user_state().frequency_regime
+        except Exception:
+            freq = "flat"
+        if freq == "short_wave":
+            heuristic_tone = "simple" if not recent_topics else "reference"
+        elif freq == "long_wave":
+            heuristic_tone = "curious" if recent_topics else "ambient"
+        elif silence > 0.7:           heuristic_tone = "caring"
         elif hrv_hint == "напряжён":  heuristic_tone = "caring"
         elif recent_topics:           heuristic_tone = "reference"
         elif time_of_day == "ночь":   heuristic_tone = "ambient"

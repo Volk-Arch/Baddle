@@ -111,9 +111,9 @@ OQ #1 (personal capacity prior) из архитектурных вопросов
 
 **Открытые пункты:**
 
-- [ ] **Резонансные код-изменения** — `aperture` скаляр в depth engine (заменяет разрозненные knobs), `frequency_regime` derived field в UserState, `focus_residue` EMA для attentional residue. Подробно, с трейд-оффами и call-sites — в [resonance-code-changes.md](resonance-code-changes.md). ~4ч суммарно, можно по одному.
-- [ ] **Дыхательный режим (breathing_suggestion).** Baddle предлагает 5→5 / 4-4-4-4 / 4-7-8 при rassogласовании frequency_regime и ближайшей задачи. Self-guided, не лечит. Action Memory cycle закрывает обучение по outcome. Спецификация + менее инвазивные альтернативы в [breathing-mode.md](breathing-mode.md). Блокируется frequency_regime. ~5ч.
-- [ ] **Резонансный промпт-преset.** Chat UI: dropdown 🔵/🔴/⚪ + шаблон `[Контекст волны] [Состояние] [Запрос] [Параметры]`. Делает active inference юзера явным, zero backend change. Опционально auto-detect через frequency_regime (Variant C). Спецификация — [resonance-prompt-preset.md](resonance-prompt-preset.md). ~1-2ч.
+- [ ] **`aperture` скаляр в depth engine** — заменяет 3 несвязанных параметра (`deep_response_format`, `deep_batched_synthesis`, `deep_mode_steps`) одним [0,1] slider'ом. Settings UI rework: Tier 2, ~2ч + UI. См. [resonance-code-changes.md](resonance-code-changes.md).
+- [ ] **Дыхательный режим (breathing_suggestion).** Baddle предлагает 5→5 / 4-4-4-4 / 4-7-8 при rassogласовании frequency_regime и ближайшей задачи. Self-guided, не лечит. Action Memory cycle закрывает обучение по outcome. Спецификация — [breathing-mode.md](breathing-mode.md). Tier 2: ~5ч (backend 2ч + animated UI overlay 2ч + action-memory 1ч).
+- [ ] **Резонансный промпт-преset.** Chat UI: dropdown 🔵/🔴/⚪ + шаблон `[Контекст волны] [Состояние] [Запрос] [Параметры]`. Делает active inference юзера явным, zero backend change. Опционально auto-detect через `UserState.frequency_regime` (Variant C). Спецификация — [resonance-prompt-preset.md](resonance-prompt-preset.md). ~1-2ч.
 
 ---
 
@@ -131,7 +131,6 @@ OQ #1 (personal capacity prior) из архитектурных вопросов
 - [ ] **Специализированные card-рендеры для `fan` / `rhythm`.** Сейчас оба падают в `deep_research` card. `fan` (Мозговой штурм) = generate-list с ranging по новизне; `rhythm` (Привычка) = habit-tracker view с streak + next-occurrence. ~3ч.
 - [ ] **Расширение `score_action_candidates`** на другие детекторы помимо `detect_sync_seeking` — когда через месяц станет видно где реальный разброс outcomes по action_kind. Сейчас только tone-selection в sync_seeking. Кандидаты: suggestion-tone в observation→suggestion, morning-briefing section prioritization, recurring-lag reminder timing.
 - [ ] **Dialog pivot detection** в surprise detector. Резкое изменение темы через embedding distance между последовательными user-сообщениями: если `distinct(msg_prev, msg_curr) > τ_out` при коротком временном окне → candidate pivot-event. Третий канал OR рядом с HRV+text markers. Стоит только если false-positive rate низкий на реальных chat-логах. ~2ч.
-- [x] ~~**Counterfactual honesty для sync-seeking.**~~ Сделано 2026-04-23: random 10% skip когда все gate'ы прошли, пишется `action_kind=sync_seeking_counterfactual` в action-memory. Через месяц сравнить recovery-time в обеих ветках через action-outcome lag.
 
 ---
 

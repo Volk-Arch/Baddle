@@ -591,6 +591,11 @@ def detect_observation_suggestions(ctx: DetectorContext) -> Iterable[Signal]:
         if last_ts and (ctx.now - last_ts) < 600:
             return []
 
+        # Skip при высоком focus_residue — юзер в хаосе переключений, не
+        # добавляем новых сигналов (resonance-code-changes.md §3).
+        if getattr(ctx.user, "focus_residue", 0.0) > 0.5:
+            return []
+
         # Compute throttle daily
         if not ctx.loop._throttled("_last_suggestions_check",
                                     ctx.loop.SUGGESTIONS_CHECK_INTERVAL):

@@ -1,22 +1,18 @@
-# Резонансная модель — код-изменения (Слой 2)
+# Резонансная модель — `aperture` спецификация
 
-Три изменения в коде, которые **реализуют** резонансную рамку из
-[docs/resonance-model.md](../docs/resonance-model.md). Каждое
-самостоятельно, можно брать по одному.
+`aperture` — единый скаляр в depth engine, заменяющий 3 несвязанных
+параметра. Реализует апертурный предел из [docs/resonance-model.md](../docs/resonance-model.md)
+и [docs/cone-design.md § Апертурный предел](../docs/cone-design.md#апертурный-предел-3d).
 
-- Не ломают существующую архитектуру — все **аддитивны** или
-  **заменяют разрозненные knobs** одним.
-- Backward-compatible — старые settings/API работают с сохранёнными
-  defaults.
-- Оценка: aperture ~2ч, frequency_regime ~1ч, focus_residue ~1ч.
+> **Контекст:** другие два пункта пакета (`frequency_regime`, `focus_residue`)
+> завершены 2026-04-25 — см. `UserState.frequency_regime`, `UserState.focus_residue`.
+> Aperture отложен в Tier 2 потому что требует settings UI rework.
 
-Статус: **черновик спецификации**, не начато.
+Статус: **спецификация, не начато.** Оценка ~2ч код + ~1ч UI.
 
 ---
 
-## 1. `aperture` как единый скаляр в depth engine
-
-### Проблема
+## Проблема
 
 Сейчас глубокое рассуждение настраивается **тремя несвязанными
 параметрами**:
@@ -32,7 +28,7 @@
 (сжимаем в 3 предложения огромное исследование). Юзеру сложно
 подобрать консистентную комбинацию.
 
-### Резонансная рамка
+## Резонансная рамка
 
 Апертурный предел **Охват × Дальность × Детализация = const** —
 это одно 3D-ограничение. Конус с единым объёмом внимания
@@ -40,7 +36,7 @@
 должен быть **один скаляр**, а распределение по трём осям
 — детерминированная функция от него.
 
-### Спецификация
+## Спецификация
 
 Новый параметр `aperture: float ∈ [0, 1]` в settings.
 
@@ -57,7 +53,7 @@
 останется «глубже чем scout» на любой апертуре; aperture меняет
 **общий масштаб**.
 
-### Изменения в коде
+## Изменения в коде
 
 **[src/api_backend.py](../src/api_backend.py):**
 
@@ -104,7 +100,17 @@ state (consistency).
 Per-mode depth table — оставить как **Advanced override**, свёрнутая
 секция для power users.
 
-### Миграция
+### Дополнительно: `frequency_regime` integration
+
+После реализации aperture добавить связь с уже существующим
+`UserState.frequency_regime`:
+
+- При `short_wave` (стресс/симпатика) — force `aperture = min(0.4, current)`
+  в `execute_deep`. Не запускать панорамное рассуждение когда юзер не может
+  резонировать с длинной волной.
+- При `long_wave` (парасимпатика) — апертура работает как заданная.
+
+## Миграция
 
 1. При первом load настройки с новой версией: если `deep_aperture`
    отсутствует → попытаться вывести из текущих `deep_response_format`:
@@ -112,7 +118,7 @@ Per-mode depth table — оставить как **Advanced override**, свёр
 2. Старые settings продолжают работать, aperture показывается в UI
    как «текущая эффективная апертура» (derived).
 
-### Риск
+## Риск
 
 - **Power users** (сам Игорь в Lab) могут захотеть точный control.
   Решение: Advanced section с per-mode override остаётся.
@@ -120,248 +126,23 @@ Per-mode depth table — оставить как **Advanced override**, свёр
   Multiplier работает на top-level iterations, не меняет inner-loop
   — сохранение backward compatibility.
 
-### Ценность
+## Ценность
 
-- Один скаляр в UI вместо трёх — proще для новых пользователей.
+- Один скаляр в UI вместо трёх — проще для новых пользователей.
 - Консистентность: невозможно выставить «brief + 25 шагов».
 - Семантически связан с cone-design § Апертурный предел — UI и
   архитектура в одном языке.
+- Динамическая адаптация через `frequency_regime` — апертура
+  автоматически сужается в стрессе.
 
-### Оценка
+## Оценка
 
-~2ч. Средний риск (3 модуля затронуто, все в chat-layer).
-
----
-
-## 2. `frequency_regime` как derived field в UserState
-
-### Проблема
-
-Текущий `sync_regime ∈ {FLOW, REST, PROTECT, CONFESS}` — это
-классификация **по рассогласованию между user и system**. Он не
-отвечает на вопрос «в какой частоте сейчас пользователь» —
-только на «синхронен ли он с системой».
-
-Резонансный взгляд: у пользователя есть **несущая частота**,
-derived от ВНС-состояния + нейрохимии + темпа активности. Это
-ортогональная ось к sync_regime. Baddle может использовать её
-для **адаптации своего режима общения** (не «что сказать» — а
-«в каком темпе»).
-
-### Спецификация
-
-Новое derived поле `UserState.frequency_regime` ∈
-`{long_wave, short_wave, mixed, flat}`:
-
-| Режим | Условия | Что означает |
-|---|---|---|
-| **long_wave** 🔵 | HRV coherence > 0.6 И RMSSD > 30 мс И NE < 0.5 | Парасимпатика, длинная λ, ассоциативный режим |
-| **short_wave** 🔴 | HRV coherence < 0.4 ИЛИ LF/HF > 2.5 ИЛИ NE > 0.75 | Симпатика, короткая λ, реактивный режим |
-| **mixed** | средние значения, HRV между 0.4–0.6 | Промежуточный, переключение возможно |
-| **flat** | нет HRV данных + NE около baseline | Нет сигнала, не классифицируем |
-
-**Параметры уточнимы** — через 1-2 нед реальных данных посмотреть
-распределение и откалибровать пороги.
-
-### Изменения в коде
-
-**[src/user_state.py](../src/user_state.py):**
-
-```python
-@property
-def frequency_regime(self) -> str:
-    """Несущая частота текущего состояния. Derived, не persistent."""
-    if self.hrv_coherence is None:
-        return "flat"
-    hrv = self.hrv_coherence
-    rmssd = self.hrv_rmssd or 0
-    ne = self.norepinephrine
-
-    if hrv > 0.6 and rmssd > 30 and ne < 0.5:
-        return "long_wave"
-    if hrv < 0.4 or ne > 0.75:
-        return "short_wave"
-    return "mixed"
-```
-
-**[src/assistant.py](../src/assistant.py) `/assist/state`:**
-
-Добавить в response `frequency_regime` рядом с существующим
-`sync_regime`. UI (`cone_live.js`) может показывать как подсказку
-«🔵 длинная волна» в header, рядом с neurochem barами.
-
-**[templates/partials/header.html](../templates/partials/header.html) / [static/css/style.css](../static/css/style.css):**
-
-Маленький indicator-chip рядом с HRV-бара: иконка + текст. Кликом
-открывает tooltip «что это значит» + ссылку на dhana-сессию
-(если активна — см. [breathing-mode.md](breathing-mode.md)).
-
-### Использование внутри кода
-
-1. **`_check_sync_seeking`** ([src/cognitive_loop.py](../src/cognitive_loop.py)) —
-   выбирать tone по frequency_regime: long_wave → ambient/curious,
-   short_wave → simple/reference (не грузить абстракциями когда
-   юзер в стрессе).
-
-2. **execute_deep** ([src/assistant_exec.py](../src/assistant_exec.py)) —
-   при short_wave force `aperture = min(0.4, current)` — не
-   запускать панорамное рассуждение когда юзер не может
-   резонировать с длинной волной.
-
-3. **morning briefing** ([src/suggestions.py](../src/suggestions.py)) —
-   если пользователь регулярно в short_wave по утрам → briefing
-   формат brief/list вместо article.
-
-### Риск
-
-- **Шумный signal** при редком HRV data — `flat` default фильтрует.
-- **Хардкод порогов** — через 2 нед калибровать, пока это ok.
-- **Может конфликтовать с sync_regime** — но они ортогональны:
-  FLOW+short_wave (срочная задача, синхронно) — валидная комбинация.
-
-### Ценность
-
-- Честный сигнал для tone adaptation, не гадание по last_input.
-- Использует существующие HRV+neurochem без новой инфраструктуры.
-- Готовит почву для breathing-mode прompt (см. отдельный doc).
-
-### Оценка
-
-~1ч. Чистое расширение, нулевой риск регрессии (derived field).
-
----
-
-## 3. `focus_residue` — счётчик рассогласования при переключениях
-
-### Проблема
-
-Из [friston-loop.md § Отсутствующий объект](../docs/friston-loop.md) + резонансной
-рамки: **переключение контекста стоит дорого**. Новая волна
-требует `E_донастройки`, фрагменты старой волны остаются как шум
-(attentional residue).
-
-Сейчас в Baddle это частично решается через suppress
-observation_suggestion при `last_input < 10min`. Но это грубый
-proxy — **частое переключение между модами/сессиями не ловится**.
-
-### Резонансная рамка
-
-«Residue» — это мера того, насколько свежие переключения
-накопились. Высокий residue = много незавершённых волн →
-приглушать proactive alerts, не добавлять ещё нагрузку.
-
-### Спецификация
-
-Новое поле `UserState.focus_residue: float ∈ [0, 1]`:
-
-- **+0.15** при смене `mode_id` в новом запросе (внутри
-  `record_action` с kind=chat_event_*).
-- **+0.25** при смене workspace / abrupt session restart.
-- **+0.05** при каждом rapid input (< 30 сек после предыдущего).
-- **−0.05** каждую минуту без активности (естественное
-  затухание residue).
-- Clamp в [0, 1].
-
-### Изменения в коде
-
-**[src/user_state.py](../src/user_state.py):**
-
-```python
-self.focus_residue: float = 0.0
-self._last_mode_id: Optional[str] = None
-self._last_input_ts: Optional[float] = None
-
-def bump_focus_residue(self, mode_id: Optional[str], now: float):
-    """Вызывается из record_action при каждом user-event."""
-    if self._last_input_ts and (now - self._last_input_ts) < 30:
-        self.focus_residue = min(1.0, self.focus_residue + 0.05)
-
-    if mode_id and self._last_mode_id and mode_id != self._last_mode_id:
-        self.focus_residue = min(1.0, self.focus_residue + 0.15)
-
-    self._last_mode_id = mode_id
-    self._last_input_ts = now
-
-def decay_focus_residue(self, dt_seconds: float):
-    """Вызывается из _advance_tick раз в минуту."""
-    self.focus_residue = max(0.0, self.focus_residue - 0.05 * (dt_seconds / 60))
-```
-
-**[src/graph_logic.py](../src/graph_logic.py) `record_action`:**
-
-При action с actor=user — вызвать `user_state.bump_focus_residue(mode_id, ts)`.
-
-**[src/cognitive_loop.py](../src/cognitive_loop.py) `_advance_tick`:**
-
-Раз в минуту `user_state.decay_focus_residue(dt)`.
-
-### Использование
-
-1. **observation_suggestion throttle** ([src/cognitive_loop.py](../src/cognitive_loop.py)) —
-   если `focus_residue > 0.5` → silent skip даже если прошло 10+
-   минут. Пользователь в хаосе переключений, не добавляем новых
-   сигналов.
-
-2. **sync_seeking gate** — если residue > 0.7, заблокировать
-   active sync-seeking (это ещё одно переключение, добавит
-   интерференции).
-
-3. **UI indicator** — в header маленькая иконка 🌀 при residue >
-   0.6 с тултипом «Много переключений, я помолчу».
-
-### Риск
-
-- **Константы подобраны от балды** — через месяц калибровать
-  по реальному разбросу.
-- **Может переоценивать residue** при быстрой работе (power user
-  делает много mode switches, это **не** хаос). Решение: через
-  месяц посмотреть корреляцию с `sync_error` — если high residue
-  ↔ high sync_error, значит proxy правильный.
-
-### Ценность
-
-- Даёт физически мотивированный gate для proactive alerts.
-- Закрывает слабое место текущей логики (грубый last_input proxy).
-- Будет отображаться в prime_directive.jsonl как ещё один канал для
-  диагностики через 2 мес.
-
-### Оценка
-
-~1ч. Аддитивное расширение, нулевой риск регрессии.
-
----
-
-## Порядок реализации
-
-Рекомендуемый:
-
-1. **`frequency_regime`** первым (чистое расширение, показывает на
-   UI frequency-метку → Игорь видит данные на которых строятся
-   следующие два).
-2. **`focus_residue`** вторым (аддитивно, использует те же данные
-   + record_action).
-3. **`aperture`** последним (единственный с реальным рефакторингом
-   UI + settings migration).
-
-Или — по желанию — первым aperture если хочется максимум UI-эффекта
-за сессию.
-
----
-
-## Не делаем в этой сессии
-
-- Unit-тесты для frequency_regime thresholds — через 2 нед, когда
-  будут реальные данные и можно откалибровать.
-- Миграция старых settings.json — aperture default 0.5 = текущее
-  поведение essay+3steps+batched, для большинства invisible.
-- Перевод state_graph.jsonl на новый формат — не требуется,
-  frequency_regime и focus_residue это runtime-derived, не persist.
+~2ч код + ~1ч UI. Средний риск (3 модуля затронуто, все в chat-layer).
 
 ---
 
 **Связанные docs:**
 - [resonance-model.md](../docs/resonance-model.md) — единый словарь
 - [cone-design.md § Апертурный предел](../docs/cone-design.md#апертурный-предел-3d) — теория
-- [friston-loop.md § Отсутствующий объект](../docs/friston-loop.md#отсутствующий-объект--prediction-error--0) — обоснование focus_residue
-- [breathing-mode.md](breathing-mode.md) — использует frequency_regime
+- [breathing-mode.md](breathing-mode.md) — может использовать aperture для калибровки во время breathing-сессий
 - [resonance-prompt-preset.md](resonance-prompt-preset.md) — параллельная UX-фича

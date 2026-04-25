@@ -9,7 +9,8 @@
 - **Фаза A (metric registry)** — ✅ **Завершена 2026-04-24.** `src/metrics.py` + 21 EMA в три registries (UserState / Neurochem / ProtectiveFreeze). Identity-тесты bit-identical. Consolidation post-merge: `checkins.py` + `assistant.py:2028` (silently broken plan-difficulty feedback) → `apply_subjective_surprise` helper. Правило 2 из §4 реализовано.
 - **Фаза B (Signal dispatcher)** — ✅ **Завершена 2026-04-25.** `src/signals.py` (Signal + Dispatcher) + `src/detectors.py` (13 pure-function детекторов с urgency-эвристиками + dmn_eligible gate). 4 heavy `_check_*` → `_run_*(ctx) → Optional[Signal]`. `_loop()` переписан: build context → DETECTORS iteration → dispatch → emit. **Cleanup:** −819/+232 строк в cognitive_loop.py (3320→2534), удалены 9 dead `_check_*`, 8 `*_INTERVAL` констант, 7 `_last_*` полей, `_log_throttle_drop`, `_PROACTIVE_ALERT_TYPES`. Тесты: 175 passed (+24 dispatcher, +52 detector, +7 integration vs Phase A start). Правило 1 из §4 реализовано.
 - **Calibration window** — 🔄 ожидаем 2 нед реального use → анализ `data/throttle_drops.jsonl` → калибровка `compute_urgency` формул в детекторах.
-- **Capacity migration** — 🔜 следующая. Тонкая через registry (~5-7ч вместо 16-22ч bespoke).
+- **Capacity migration** — 🔜 следующая. Тонкая через registry (~8-10ч после инвентаризации; spec в [phase-c-capacity-migration.md](phase-c-capacity-migration.md)).
+- **Cheap items после A+B** — ✅ 2026-04-25. `UserState.frequency_regime` derived property + `focus_residue` field/bump/decay. 19 unit-тестов, integrated в `_generate_sync_seeking_message` (tone choice) и `detect_observation_suggestions` (silent skip при residue>0.5). Validates консолидацию: новые сигналы реально cheap (~2.5ч на 2 признака с persistence + tests + integration).
 
 ---
 
