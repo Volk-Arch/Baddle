@@ -151,6 +151,32 @@ ACh + GABA отсутствуют. Без них балансовая форму
 
 ---
 
+## 6.5. Диагностика после прототипа (2026-04-25)
+
+Прототип [src/rgk.py](../src/rgk.py) прогнал фиксированный event sequence из [tests/test_metric_identity.py](../tests/test_metric_identity.py). **Identity 42/42 fields, max Δ=4.97e-7** (TOL 1e-5). Гипотеза «6 правил = проекции одной модели» — подтверждается.
+
+### Что покрылось чисто (ядро ~50 строк)
+
+- 5-chem `Resonator(gain, hyst, aperture, plasticity, damping)` + EMA-обновления
+- `vector()` (3D legacy projection) → sync_error coupling
+- `balance()` formula
+- R/C bit с гистерезисом (механика на месте, в identity не активирован — порог не пробит)
+
+### Что НЕ покрывается ядром (4 declared subsystems, ~200 строк дополнительно)
+
+| Подсистема | Поля | Зачем нужна | Spec говорит |
+|---|---|---|---|
+| **Predictive baselines** (Friston) | `expectation`, `expectation_vec`, `expectation_by_tod`×4, `hrv_baseline_by_tod`×4, `s_exp_vec` | Источник PE для R/C-toggle. Без baselines surprise = 0 → mode never flips | §3.4 «гистерезис», но **где живут baselines** не описано |
+| **Aux axes** | `valence`, `agency`, `burnout` | Observable measurements помимо нейрохимии (sentiment LLM, plan ratio, usage counter) | §6 нет — РГК-spec про резонатор, не про периферийные observable юзера |
+| **Pressure layer** | `conflict_accumulator`, `silence_pressure`, `imbalance_pressure`, `sync_error_fast`/`slow`, `display_burnout`, `freeze_active` | Долговременные накопители (часы/дни), питают idle-multiplier и UI-усталость | §3.4 hysteresis в mode, но не отдельный pressure-блок |
+| **Bespoke counters** | RPE history (window 20), feedback streak, surprise_boost | Discrete bumps поверх EMA — нелинейные events, не подходят под `EMA(source, decay)` | §11 «декларация vs подсистема» — это и есть declared bespoke |
+
+### 5-axis: plasticity/damping без feeders = 0.5
+
+В identity event sequence нет источников ни для ACh, ни для GABA. Они остаются на 0.5 → balance() работает на 3-axis projection. **§4 балансовая формула не замыкается без feeders.** Это блокер Шага 4 миграции — без дизайна feeders переход на полную 5-axis модель невозможен. См. [rgk-migration-plan.md § Дизайн ACh+GABA feeders](rgk-migration-plan.md).
+
+---
+
 ## 7. Концепция коллапса
 
 ### Целевая архитектура
@@ -212,6 +238,29 @@ class РГК:
 
 ---
 
+## 7.5. Уточнённая оценка после прототипа (2026-04-25)
+
+Прототип показал что «~200 строк ядра» — оптимизм. Реальное распределение state+dynamics:
+
+| Слой | Строк (прототип) | Что входит |
+|---|---|---|
+| Resonator (5-chem + balance + R/C) | ~50 | Чистое ядро |
+| AuxAxes (valence/agency/burnout) | ~10 | Observable measurements |
+| PredictiveLayer (4 user EMA + system) | ~25 | Friston baselines |
+| PressureLayer (5 accumulators) | ~30 | conflict + sync EMAs + imbalance + silence |
+| Event-routing methods + bespoke | ~120 | feeders + RPE history + feedback streak + surprise boost |
+| **Итого state+dynamics** | **~235** | vs ~6150 legacy |
+| project() / serialize() / coupling | ~80 | Проекторы |
+| Identity diagnostic (тест) | ~150 | _run_identity_sequence + EXPECTED + diff |
+
+**Реалистичная оценка после интеграции:** ~250 ядра + ~250 проекторов = **~500 строк state+dynamics**. Это 12-25× редукция от 6150 текущих.
+
+Общий прогноз §7 «~2450 строк vs ~10000» сохраняется (heavy work + IO + UI/JS не сжимаются), просто внутри state+dynamics распределение другое: не «200 ядра + 250 проекторов», а **«50 ядра + 200 declared subsystems + 250 проекторов»**.
+
+Структурно это всё равно даёт обещанное §11 свойство: **новая фича = 1 строка в Resonator/AuxAxes/PredictiveLayer + projector**, а не подсистема.
+
+---
+
 ## 8. Открытые вопросы / риски
 
 ### Q1. Что если модель неполная?
@@ -236,21 +285,20 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 ---
 
-## 9. Конкретный первый шаг (для следующей сессии)
+## 9. Конкретный первый шаг — ✓ выполнено 2026-04-25
 
-Один промпт для старта:
+Прототип сделан → [src/rgk.py](../src/rgk.py). Identity 42/42 на event sequence из [tests/test_metric_identity.py](../tests/test_metric_identity.py). Диагностика — §6.5 выше.
 
-> Прочитай `planning/rgk-spec.md` + `docs/world-model.md` + `docs/friston-loop.md` + `docs/resonance-model.md`. Не код. Сделай прототип РГК-ядра в `src/rgk.py` (~200 строк, 2 связанных резонатора + 5-axis chem + R/C bit + balance() + project()). Прогони через эталонный event sequence из `tests/test_metric_identity.py`. Покажи: даёт ли semantic-identity с текущими derived metrics (vector, sync_regime, capacity_zone). Если нет — диагностика что не закрылось.
+**Дальше:** Phase D миграция в новой ветке `rgk-collapse`. Пошаговый план — [planning/rgk-migration-plan.md](rgk-migration-plan.md). 8 шагов, оценка 25-35ч в одном sitting'е.
 
-После прототипа:
-1. Если identity получается — план миграции существующего кода (новая ветка).
-2. Если не получается — диагностика. Что добавить в модель vs что отбросить как «реальный edge case».
-3. Если коллапс не оправдан (heavy work + IO так и останутся) — план применения только к `src/user_state.py + neurochem.py + horizon.py` (subset, ~2300 строк → ~300).
+**Идём в полную 5-axis модель** (не упрощаем до 3 как было предусмотрено в §12 simplification-plan'а): ACh+GABA приходят с feeders. Дизайн feeders — §«Дизайн ACh+GABA feeders» в migration-plan.
 
 ---
 
 ## 10. Связанные docs
 
+- **РГК v1.0** — исходная спецификация (диалог 2026-04-24, локально у автора). Этот документ — её адаптация под Baddle. Дополнительные слои из v1.0 (counter-wave generation, prompt-routing по химии, экстренные протоколы, 8-region map) → не входят в Phase D core, см. [rgk-migration-plan.md §10](rgk-migration-plan.md#10-что-не-входит-в-phase-d-core-post-merge-или-opt-in)
+- [rgk-migration-plan.md](rgk-migration-plan.md) — пошаговый план Phase D миграции (включает ACh+GABA feeders дизайн)
 - [simplification-plan.md](simplification-plan.md) §4 — 6 правил, которые проекции РГК аксиом
 - [docs/resonance-model.md](../docs/resonance-model.md) — единый словарь
 - [docs/friston-loop.md](../docs/friston-loop.md) — PE как условие переключения R/C

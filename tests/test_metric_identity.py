@@ -219,9 +219,10 @@ def test_freeze_derived(states):
 # ── Checkin-flow identity (2026-04-24 consolidation) ──────────────────────
 
 def test_checkin_event_identity(monkeypatch):
-    """checkin event → NE/serotonin/valence с override-decays должно дать
+    """apply_checkin → NE/serotonin/valence с override-decays должно дать
     то же значение что inline EMA `x = decay*x + (1-decay)*target` в
-    старом checkins.py (до миграции). Формулы не менялись, только маршрут.
+    старом checkins.py (до миграции). Формулы не менялись, маршрут — apply_checkin
+    после Phase D Step 3c.
     """
     monkeypatch.setattr(UserState, "_current_tod",
                          staticmethod(lambda: "day"))
@@ -241,11 +242,11 @@ def test_checkin_event_identity(monkeypatch):
     dv = Decays.CHECKIN_VALENCE
     us_a.valence = dv * us_a.valence + (1 - dv) * 0.5
 
-    # Path B — через registry fire_event
+    # Path B — через explicit apply_checkin (Phase D Step 3c)
     us_b = UserState()
     us_b.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
     us_b.update_from_engagement(0.65)
-    us_b.metrics.fire_event("checkin", stress=70, focus=80, reality=1)
+    us_b.apply_checkin(stress=70, focus=80, reality=1)
 
     assert us_a.norepinephrine == pytest.approx(us_b.norepinephrine, abs=1e-6)
     assert us_a.serotonin == pytest.approx(us_b.serotonin, abs=1e-6)
@@ -267,8 +268,8 @@ def test_apply_subjective_surprise_identity(monkeypatch):
 
     s = 0.25
     target = max(0.0, min(1.0, us_a.state_level() - s))
-    us_a.metrics.get("expectation").feed(target, decay_override=0.6)
-    us_a.metrics.get("expectation_by_tod_day").feed(target, decay_override=0.6)
+    us_a._rgk.u_exp.feed(target, decay_override=0.6)
+    us_a._rgk.u_exp_tod["day"].feed(target, decay_override=0.6)
 
     # Path B — helper
     us_b = UserState()

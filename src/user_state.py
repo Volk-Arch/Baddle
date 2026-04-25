@@ -94,8 +94,8 @@ from typing import Optional
 
 import numpy as np
 
-from .ema import EMA, VectorEMA, Decays
-from .metrics import MetricRegistry
+from .ema import Decays
+from .rgk import РГК
 
 
 # ── Sync regime constants ───────────────────────────────────────────────────
@@ -271,218 +271,10 @@ def compute_capacity_zone(indicators: dict) -> str:
     return "red"
 
 
-# ── Extractors (module-level, pure functions) ──────────────────────────────
-
-def _extract_coherence(payload: dict):
-    return payload.get("coherence")
-
-
-def _extract_stress(payload: dict):
-    return payload.get("stress")
-
-
-def _extract_engagement_signal(payload: dict):
-    s = payload.get("signal", 0.65)
-    try:
-        return max(0.0, min(1.0, float(s)))
-    except (ValueError, TypeError):
-        return None
-
-
-def _extract_dopamine_feedback(payload: dict):
-    return payload.get("dopamine_signal")
-
-
-def _extract_valence_feedback(payload: dict):
-    return payload.get("valence_signal")
-
-
-def _extract_sentiment(payload: dict):
-    s = payload.get("sentiment")
-    if s is None:
-        return None
-    try:
-        return max(-1.0, min(1.0, float(s)))
-    except (ValueError, TypeError):
-        return None
-
-
-def _extract_completion_ratio(payload: dict):
-    planned = payload.get("planned", 0)
-    if planned is None or planned <= 0:
-        return None
-    completed = payload.get("completed", 0) or 0
-    return max(0.0, min(1.0, completed / float(planned)))
-
-
-def _extract_usage(payload: dict):
-    decisions = payload.get("decisions_today")
-    if decisions is None:
-        return None
-    max_budget = payload.get("max_budget", 100.0) or 100.0
-    return min(1.0, max(0.0, float(decisions) * 6.0 / float(max_budget)))
-
-
-def _extract_expectation_scalar(payload: dict):
-    sl = payload.get("state_level")
-    if sl is None:
-        return None
-    override = payload.get("scalar_override")
-    if override is not None:
-        return {"signal": sl, "decay_override": override}
-    return sl
-
-
-def _extract_for_tod_state_level(tod_name: str):
-    """TOD-filtered state_level extractor (для expectation_by_tod_*)."""
-    def _fn(payload: dict):
-        if payload.get("tod") != tod_name:
-            return None
-        sl = payload.get("state_level")
-        if sl is None:
-            return None
-        override = payload.get("scalar_override")
-        if override is not None:
-            return {"signal": sl, "decay_override": override}
-        return sl
-    return _fn
-
-
-def _extract_expectation_vec(payload: dict):
-    v = payload.get("vector")
-    if v is None:
-        return None
-    override = payload.get("vec_override")
-    if override is not None:
-        return {"signal": v, "decay_override": override}
-    return v
-
-
-def _extract_for_tod_coherence(tod_name: str):
-    """TOD-filtered coherence extractor (для hrv_baseline_by_tod_*)."""
-    def _fn(payload: dict):
-        if payload.get("tod") != tod_name:
-            return None
-        return payload.get("coherence")
-    return _fn
-
-
-def _extract_checkin_ne(payload: dict):
-    """checkin.stress (0-100) → NE EMA с override CHECKIN_STRESS (0.7).
-
-    Агрессивнее обычных decays — явный user input должен корректировать
-    модель сильнее чем автоматические feeders. Dict-return для per-event
-    override, default decay остаётся USER_NOREPINEPHRINE_HRV (0.9) для
-    hrv_update.
-    """
-    stress = payload.get("stress")
-    if stress is None:
-        return None
-    return {"signal": float(stress) / 100.0,
-            "decay_override": Decays.CHECKIN_STRESS}
-
-
-def _extract_checkin_serotonin(payload: dict):
-    """checkin.focus (0-100) → serotonin EMA с override CHECKIN_FOCUS (0.7)."""
-    focus = payload.get("focus")
-    if focus is None:
-        return None
-    return {"signal": float(focus) / 100.0,
-            "decay_override": Decays.CHECKIN_FOCUS}
-
-
-def _extract_checkin_valence(payload: dict):
-    """checkin.reality (-2..+2) → valence EMA с override CHECKIN_VALENCE (0.6)."""
-    reality = payload.get("reality")
-    if reality is None:
-        return None
-    return {"signal": float(reality) / 2.0,
-            "decay_override": Decays.CHECKIN_VALENCE}
-
-
-def _build_user_registry(dopamine: float,
-                          serotonin: float,
-                          norepinephrine: float,
-                          burnout: float,
-                          agency: float) -> MetricRegistry:
-    """Factory: собрать все 13 user-metrics с подписками."""
-    reg = MetricRegistry()
-
-    # ── Neurochemical mirrors (inline EMA в legacy коде) ────────────────────
-    reg.register(
-        "dopamine",
-        EMA(dopamine, decay=Decays.USER_DOPAMINE_ENGAGEMENT, bounds=(0.0, 1.0)),
-        listens=[
-            ("engagement", _extract_engagement_signal),
-            ("feedback", _extract_dopamine_feedback),
-        ],
-    )
-    reg.register(
-        "serotonin",
-        EMA(serotonin, decay=Decays.USER_SEROTONIN_HRV, bounds=(0.0, 1.0)),
-        listens=[
-            ("hrv_update", _extract_coherence),
-            ("checkin", _extract_checkin_serotonin),
-        ],
-    )
-    reg.register(
-        "norepinephrine",
-        EMA(norepinephrine, decay=Decays.USER_NOREPINEPHRINE_HRV,
-            bounds=(0.0, 1.0)),
-        listens=[
-            ("hrv_update", _extract_stress),
-            ("checkin", _extract_checkin_ne),
-        ],
-    )
-    reg.register(
-        "valence",
-        EMA(0.0, decay=Decays.USER_VALENCE_SENTIMENT, bounds=(-1.0, 1.0)),
-        listens=[
-            ("chat_sentiment", _extract_sentiment),
-            ("feedback", _extract_valence_feedback),
-            ("checkin", _extract_checkin_valence),
-        ],
-    )
-    reg.register(
-        "burnout",
-        EMA(burnout, decay=Decays.USER_BURNOUT_ENERGY, bounds=(0.0, 1.0)),
-        listens=[("energy", _extract_usage)],
-    )
-    reg.register(
-        "agency",
-        EMA(agency, decay=Decays.USER_AGENCY, bounds=(0.0, 1.0)),
-        listens=[("plan_completion", _extract_completion_ratio)],
-    )
-
-    # ── Predictive layer (Friston) ──────────────────────────────────────────
-    reg.register(
-        "expectation",
-        EMA(0.5, decay=Decays.EXPECTATION, bounds=(0.0, 1.0)),
-        listens=[("tick", _extract_expectation_scalar)],
-    )
-    for tod in _TOD_NAMES:
-        reg.register(
-            f"expectation_by_tod_{tod}",
-            EMA(0.5, decay=Decays.EXPECTATION, bounds=(0.0, 1.0)),
-            listens=[("tick", _extract_for_tod_state_level(tod))],
-        )
-    reg.register(
-        "expectation_vec",
-        VectorEMA([0.5, 0.5, 0.5], decay=Decays.EXPECTATION_VEC,
-                  bounds=(0.0, 1.0)),
-        listens=[("tick", _extract_expectation_vec)],
-    )
-
-    # ── HRV baseline (per-TOD, seed_on_first) ───────────────────────────────
-    for tod in _TOD_NAMES:
-        reg.register(
-            f"hrv_baseline_by_tod_{tod}",
-            EMA(0.0, decay=Decays.HRV_BASELINE, bounds=(0.0, 1.0),
-                seed_on_first=True),
-            listens=[("hrv_update", _extract_for_tod_coherence(tod))],
-        )
-
-    return reg
+# Phase D Step 3c: extractors + _build_user_registry удалены.
+# Все EMA UserState'а живут в self._rgk (см. src/rgk.py); fire_event
+# абстракция заменена прямыми вызовами в update_from_*/apply_checkin/
+# tick_expectation/apply_subjective_surprise.
 
 
 class UserState:
@@ -494,8 +286,15 @@ class UserState:
                  norepinephrine: float = 0.5,
                  burnout: float = 0.0,
                  agency: float = 0.5):
-        self.metrics = _build_user_registry(
-            dopamine, serotonin, norepinephrine, burnout, agency)
+        # Phase D Step 3c — все EMA UserState'а живут в self._rgk.
+        # MetricRegistry удалён; events идут прямыми вызовами _rgk.user.*
+        # и _rgk.{valence|burnout|agency|u_exp|u_exp_tod|u_exp_vec|hrv_base_tod}.
+        self._rgk = РГК()
+        self._rgk.user.gain.value = dopamine
+        self._rgk.user.hyst.value = serotonin
+        self._rgk.user.aperture.value = norepinephrine
+        self._rgk.burnout.value = burnout
+        self._rgk.agency.value = agency
 
         # HRV passthrough — UI читает отсюда
         self.hrv_coherence: Optional[float] = None
@@ -543,80 +342,79 @@ class UserState:
         self.day_summary: dict = {}
         self.cognitive_load_today: float = 0.0
 
-    # ── Neurochemical mirrors (read/write через registry) ──────────────────
+    # ── Neurochemical mirrors (read/write через _rgk) ──────────────────────
 
     @property
     def dopamine(self) -> float:
-        return float(self.metrics.value("dopamine"))
+        return float(self._rgk.user.gain.value)
 
     @dopamine.setter
     def dopamine(self, v: float):
-        self.metrics.get("dopamine").value = max(0.0, min(1.0, float(v)))
+        self._rgk.user.gain.value = max(0.0, min(1.0, float(v)))
 
     @property
     def serotonin(self) -> float:
-        return float(self.metrics.value("serotonin"))
+        return float(self._rgk.user.hyst.value)
 
     @serotonin.setter
     def serotonin(self, v: float):
-        self.metrics.get("serotonin").value = max(0.0, min(1.0, float(v)))
+        self._rgk.user.hyst.value = max(0.0, min(1.0, float(v)))
 
     @property
     def norepinephrine(self) -> float:
-        return float(self.metrics.value("norepinephrine"))
+        return float(self._rgk.user.aperture.value)
 
     @norepinephrine.setter
     def norepinephrine(self, v: float):
-        self.metrics.get("norepinephrine").value = max(0.0, min(1.0, float(v)))
+        self._rgk.user.aperture.value = max(0.0, min(1.0, float(v)))
 
     @property
     def valence(self) -> float:
-        return float(self.metrics.value("valence"))
+        return float(self._rgk.valence.value)
 
     @valence.setter
     def valence(self, v: float):
-        self.metrics.get("valence").value = max(-1.0, min(1.0, float(v)))
+        self._rgk.valence.value = max(-1.0, min(1.0, float(v)))
 
     @property
     def burnout(self) -> float:
-        return float(self.metrics.value("burnout"))
+        return float(self._rgk.burnout.value)
 
     @burnout.setter
     def burnout(self, v: float):
-        self.metrics.get("burnout").value = max(0.0, min(1.0, float(v)))
+        self._rgk.burnout.value = max(0.0, min(1.0, float(v)))
 
     @property
     def agency(self) -> float:
-        return float(self.metrics.value("agency"))
+        return float(self._rgk.agency.value)
 
     @agency.setter
     def agency(self, v: float):
-        self.metrics.get("agency").value = max(0.0, min(1.0, float(v)))
+        self._rgk.agency.value = max(0.0, min(1.0, float(v)))
 
     # ── Predictive layer accessors ─────────────────────────────────────────
 
     @property
     def expectation(self) -> float:
-        return float(self.metrics.value("expectation"))
+        return float(self._rgk.u_exp.value)
 
     @expectation.setter
     def expectation(self, v: float):
-        self.metrics.get("expectation").value = max(0.0, min(1.0, float(v)))
+        self._rgk.u_exp.value = max(0.0, min(1.0, float(v)))
 
     @property
     def expectation_by_tod(self) -> dict:
         """Snapshot-копия 4 TOD-baselines. Для мутации — через tick_expectation()."""
-        return {tod: float(self.metrics.value(f"expectation_by_tod_{tod}"))
-                for tod in _TOD_NAMES}
+        return {tod: float(self._rgk.u_exp_tod[tod].value) for tod in _TOD_NAMES}
 
     @property
     def expectation_vec(self) -> np.ndarray:
-        return self.metrics.value("expectation_vec")
+        return self._rgk.u_exp_vec.value
 
     @expectation_vec.setter
     def expectation_vec(self, v):
         arr = np.asarray(v, dtype=np.float32)
-        ema = self.metrics.get("expectation_vec")
+        ema = self._rgk.u_exp_vec
         if arr.shape == ema.value.shape:
             ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
 
@@ -625,7 +423,7 @@ class UserState:
         """Snapshot-копия. None за TOD где baseline ещё не seeded."""
         result = {}
         for tod in _TOD_NAMES:
-            ema = self.metrics.get(f"hrv_baseline_by_tod_{tod}")
+            ema = self._rgk.hrv_base_tod[tod]
             result[tod] = float(ema.value) if ema._seeded else None
         return result
 
@@ -653,27 +451,18 @@ class UserState:
             if stress is None:
                 stress = max(0.0, min(1.0, 1.0 - (self.hrv_rmssd / 80.0)))
 
-        # Sanitize passthrough fields и собираем payload
-        payload_coherence = None
         if coherence is not None:
             self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
-            payload_coherence = self.hrv_coherence
+            self._rgk.user.hyst.feed(self.hrv_coherence)
+            self._rgk.hrv_base_tod[self._current_tod()].feed(self.hrv_coherence)
 
-        payload_stress = None
         if stress is not None:
             self.hrv_stress = max(0.0, min(1.0, float(stress)))
-            payload_stress = self.hrv_stress
+            self._rgk.user.aperture.feed(self.hrv_stress)
 
         if activity is not None:
             self.activity_magnitude = max(0.0, min(5.0, float(activity)))
 
-        # Registry update (None-поля автоматически skip'аются extractor'ами)
-        self.metrics.fire_event(
-            "hrv_update",
-            coherence=payload_coherence,
-            stress=payload_stress,
-            tod=self._current_tod(),
-        )
         self.tick_expectation()
 
     @staticmethod
@@ -753,7 +542,8 @@ class UserState:
         Вызывается рядом с `register_input()` в /assist и других user-initiated
         endpoint'ах. Парный feeder для `update_from_chat_sentiment` (valence).
         """
-        self.metrics.fire_event("engagement", signal=signal)
+        sig = max(0.0, min(1.0, float(signal)))
+        self._rgk.user.gain.feed(sig)
 
     # ── Feedback → dopamine + burnout ──────────────────────────────────────
 
@@ -772,30 +562,21 @@ class UserState:
             return
         self._feedback_counts[kind] = self._feedback_counts[kind] + 1
 
-        # USER_DOPAMINE_FEEDBACK == USER_VALENCE_FEEDBACK == 0.9, поэтому
-        # один _decay_override применим к обеим метрикам в этом событии.
+        ov = Decays.USER_DOPAMINE_FEEDBACK
         if kind == "accepted":
-            self.metrics.fire_event(
-                "feedback",
-                dopamine_signal=0.9,
-                valence_signal=0.7,
-                _decay_override=Decays.USER_DOPAMINE_FEEDBACK,
-            )
+            self._rgk.user.gain.feed(0.9, decay_override=ov)
+            self._rgk.valence.feed(0.7, decay_override=ov)
         elif kind == "rejected":
-            self.metrics.fire_event(
-                "feedback",
-                dopamine_signal=0.2,
-                valence_signal=-0.7,
-                _decay_override=Decays.USER_DOPAMINE_FEEDBACK,
-            )
+            self._rgk.user.gain.feed(0.2, decay_override=ov)
+            self._rgk.valence.feed(-0.7, decay_override=ov)
             # Bespoke additive: burnout bump (не EMA — discrete step)
-            bn = self.metrics.get("burnout")
+            bn = self._rgk.burnout
             bn.value = max(0.0, min(1.0, bn.value + 0.05))
             # Streak bias: чем больше подряд rejects, тем жёстче спад valence
             recent_rejects = self._feedback_counts.get("rejected", 0)
             recent_accepts = self._feedback_counts.get("accepted", 0)
             if recent_rejects - recent_accepts >= 3:
-                val = self.metrics.get("valence")
+                val = self._rgk.valence
                 val.value = max(-1.0, min(1.0,
                     val.value - 0.05 * min(5, recent_rejects - recent_accepts - 2)))
         # "ignored" — только counter, EMA не трогаем
@@ -814,7 +595,7 @@ class UserState:
 
         Sentiment ∈ [−1, 1] — см. `src/sentiment.py` `classify_message_sentiment`.
         """
-        self.metrics.fire_event("chat_sentiment", sentiment=sentiment)
+        self._rgk.valence.feed(max(-1.0, min(1.0, float(sentiment))))
 
     # ── Agency (5-я ось, OQ #2) ────────────────────────────────────────────
 
@@ -837,9 +618,10 @@ class UserState:
             planned: сколько было запланировано (recurring + oneshot).
                      Если 0 — метрика не обновляется (нет данных).
         """
-        # planned=0 → extractor вернёт None, registry skip'ает
-        self.metrics.fire_event(
-            "plan_completion", completed=completed, planned=planned)
+        if planned is None or planned <= 0:
+            return
+        ratio = max(0.0, min(1.0, float(completed or 0) / float(planned)))
+        self._rgk.agency.feed(ratio)
 
     # ── Energy → burnout ───────────────────────────────────────────────────
 
@@ -850,8 +632,9 @@ class UserState:
         Burnout накапливается монотонно за день: decisions * 6 / max_budget.
         Сбрасывается в полночь через _ensure_daily_reset.
         """
-        self.metrics.fire_event(
-            "energy", decisions_today=decisions_today, max_budget=max_budget)
+        sig = min(1.0, max(0.0,
+            float(decisions_today) * 6.0 / float(max_budget or 100.0)))
+        self._rgk.burnout.feed(sig)
         self.tick_expectation()
 
     # ── Helpers ────────────────────────────────────────────────────────────
@@ -863,7 +646,7 @@ class UserState:
 
     def vector(self) -> np.ndarray:
         """3D точка состояния для sync-метрики. Burnout отдельно (см. module doc)."""
-        return self.metrics.vector(["dopamine", "serotonin", "norepinephrine"])
+        return self._rgk.user.vector()
 
     def state_level(self) -> float:
         """Агрегированный «уровень» юзера — mean(dopamine, serotonin).
@@ -895,14 +678,18 @@ class UserState:
             scalar_override = None
             vec_override = None
 
-        self.metrics.fire_event(
-            "tick",
-            state_level=self.state_level(),
-            tod=self._current_tod(),
-            vector=self.vector(),
-            scalar_override=scalar_override,
-            vec_override=vec_override,
-        )
+        sl = self.state_level()
+        tod = self._current_tod()
+        v = self.vector()
+
+        if scalar_override is None:
+            self._rgk.u_exp.feed(sl)
+            self._rgk.u_exp_tod[tod].feed(sl)
+            self._rgk.u_exp_vec.feed(v)
+        else:
+            self._rgk.u_exp.feed(sl, decay_override=scalar_override)
+            self._rgk.u_exp_tod[tod].feed(sl, decay_override=scalar_override)
+            self._rgk.u_exp_vec.feed(v, decay_override=vec_override)
 
     def apply_subjective_surprise(self,
                                     signed_surprise: float,
@@ -927,10 +714,29 @@ class UserState:
         target = max(0.0, min(1.0,
             self.state_level() - float(signed_surprise)))
         override = max(0.001, min(0.999, 1.0 - float(blend)))
-        self.metrics.get("expectation").feed(target, decay_override=override)
+        self._rgk.u_exp.feed(target, decay_override=override)
         tod = self._current_tod()
-        self.metrics.get(f"expectation_by_tod_{tod}").feed(
-            target, decay_override=override)
+        self._rgk.u_exp_tod[tod].feed(target, decay_override=override)
+
+    def apply_checkin(self,
+                       stress: Optional[float] = None,
+                       focus: Optional[float] = None,
+                       reality: Optional[float] = None):
+        """Process a manual check-in: stress (0-100) → NE, focus (0-100) → 5HT,
+        reality (-2..+2) → valence. Aggressive decay overrides из Decays.CHECKIN_*.
+
+        Заменяет legacy `metrics.fire_event("checkin", ...)` после Phase D
+        Step 3c. Identity сохраняется — те же EMAs, тот же decay, тот же signal.
+        """
+        if stress is not None:
+            self._rgk.user.aperture.feed(float(stress) / 100.0,
+                                          decay_override=Decays.CHECKIN_STRESS)
+        if focus is not None:
+            self._rgk.user.hyst.feed(float(focus) / 100.0,
+                                      decay_override=Decays.CHECKIN_FOCUS)
+        if reality is not None:
+            self._rgk.valence.feed(float(reality) / 2.0,
+                                    decay_override=Decays.CHECKIN_VALENCE)
 
     def apply_surprise_boost(self, n_ticks: int = SURPRISE_BOOST_DEFAULT_TICKS):
         """Сигнал «юзер только что удивился чему-то» (OQ #7).
@@ -963,9 +769,9 @@ class UserState:
         ещё в default (0.5) — fallback на global expectation.
         """
         tod = self._current_tod()
-        ref = float(self.metrics.value(f"expectation_by_tod_{tod}"))
+        ref = float(self._rgk.u_exp_tod[tod].value)
         if ref == 0.5:
-            ref = float(self.metrics.value("expectation"))
+            ref = float(self._rgk.u_exp.value)
         return float(self.reality - ref)
 
     @property
@@ -1343,7 +1149,7 @@ class UserState:
             for k in _TOD_NAMES:
                 if k in tod_map:
                     try:
-                        ema = u.metrics.get(f"expectation_by_tod_{k}")
+                        ema = u._rgk.u_exp_tod[k]
                         ema.value = max(0.0, min(1.0, float(tod_map[k])))
                     except Exception:
                         pass
@@ -1356,7 +1162,7 @@ class UserState:
                 if k not in hrv_base:
                     continue
                 v = hrv_base[k]
-                ema = u.metrics.get(f"hrv_baseline_by_tod_{k}")
+                ema = u._rgk.hrv_base_tod[k]
                 if v is None:
                     ema.value = 0.0
                     ema._seeded = False

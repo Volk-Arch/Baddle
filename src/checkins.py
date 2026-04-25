@@ -175,14 +175,12 @@ def apply_to_user_state(entry: dict):
     """
     try:
         from .user_state import get_user_state
-        from .ema import Decays
         user = get_user_state()
 
-        # Stress/focus/reality → NE/serotonin/valence через checkin event.
-        # Каждая метрика получает per-event decay_override из Decays.CHECKIN_*
-        # (см. extractors в user_state.py).
-        user.metrics.fire_event(
-            "checkin",
+        # Stress/focus/reality → NE/serotonin/valence через explicit apply_checkin
+        # (Phase D Step 3c). Каждая метрика получает per-event decay_override
+        # из Decays.CHECKIN_* — реализация в UserState.apply_checkin.
+        user.apply_checkin(
             stress=entry.get("stress"),
             focus=entry.get("focus"),
             reality=entry.get("reality"),
