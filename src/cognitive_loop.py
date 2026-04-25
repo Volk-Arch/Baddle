@@ -578,6 +578,18 @@ class CognitiveLoop:
             pass
         fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
 
+        # Counter-wave (Правило 7): R/C bit через гистерезис.
+        # User mirror perturbation = sync_error (рассогласование с system).
+        # System mirror perturbation = combined_imbalance (max PE по 4 каналам).
+        # При perturbation > 0.15 mode → 'C' (counter-wave), при < 0.08 → 'R'.
+        # Используется Dispatcher'ом (signals.py): при user.mode == 'C'
+        # urgency push-style сигналов понижается на 0.3.
+        try:
+            u.update_mode(sync_err)
+            gs.neuro.update_mode(combined_imbalance)
+        except Exception as e:
+            log.debug(f"[advance_tick] counter-wave update_mode failed: {e}")
+
         # Phase D Step 5b — 5-axis chem feeders.
         # System ACh: node-creation rate (cap 10/hour → 1.0). v1 proxy.
         # System GABA: freeze.active boolean + embedding_scattering proxy
@@ -889,8 +901,16 @@ class CognitiveLoop:
                             log.warning(f"[detector] {detector.__name__} returned "
                                         f"non-iterable non-Signal: {type(result)}")
 
-                # 3. Dispatch — urgency sort + budget gate + dedup + drop logging
-                emitted = self._dispatcher.dispatch(candidates, now)
+                # 3. Dispatch — urgency sort + budget gate + dedup + drop logging.
+                # Counter-wave (Правило 7): user_mode='C' понижает urgency
+                # push-style сигналов на 0.3 (см. signals.py COUNTER_WAVE_PUSH_TYPES).
+                user_mode = "R"
+                try:
+                    user_mode = get_user_state().mode
+                except Exception:
+                    pass
+                emitted = self._dispatcher.dispatch(candidates, now,
+                                                     user_mode=user_mode)
                 for sig in emitted:
                     self._add_alert(sig.content)
 

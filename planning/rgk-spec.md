@@ -195,7 +195,6 @@ class РГК:
 - `src/user_state.py`: 1300 строк
 - `src/neurochem.py`: 400 строк
 - `src/horizon.py`: 600 строк
-- `src/metrics.py`: 150 строк
 - `src/signals.py` + `src/detectors.py`: 1200 строк
 - `src/cognitive_loop.py`: 2500 строк
 

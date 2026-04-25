@@ -27,6 +27,17 @@ _PROMPTS = {
         "dc_against":  "Arguments AGAINST",
         "dc_context":  "Neutral context",
         "dc_statement":"Statement to verify",
+        # Named-state chem hints — приставка к system prompt для адаптации
+        # тона ответа под текущий named_state юзера (Voronoi region).
+        # Используется в assistant_exec.execute_deep / execute_via_zones.
+        "ns_hint_flow":     "\nUser in flow — support, don't interrupt. Develop ideas.",
+        "ns_hint_stable":   "",
+        "ns_hint_focus":    "\nUser in tunnel focus — be brief, grounded, structured.",
+        "ns_hint_explore":  "\nUser exploring — offer analogies, hidden links, flexible alternatives.",
+        "ns_hint_overload": "\nUser overloaded — STOP mode: one action, minimal words.",
+        "ns_hint_apathy":   "\nUser in apathy — micro-steps ≤2min. Focus on 'start' not 'finish'.",
+        "ns_hint_burnout":  "\nUser burned out — gentle, no pressure, recovery over tasks.",
+        "ns_hint_insight":  "\nUser in insight — help capture/structure the new connection.",
     },
     "ru": {
         "think":       "/no_think\nТы генерируешь ОДНУ короткую идею (1 предложение, максимум 15 слов). Без нумерации, без списков, только идея. Отвечай сразу.",
@@ -54,6 +65,14 @@ _PROMPTS = {
         "dc_against":  "Аргументы ПРОТИВ",
         "dc_context":  "Нейтральный контекст",
         "dc_statement":"Утверждение для проверки",
+        "ns_hint_flow":     "\nЮзер в потоке — поддерживай его волну, не мешай. Развивай идеи без отступлений.",
+        "ns_hint_stable":   "",
+        "ns_hint_focus":    "\nЮзер в туннельном фокусе/тревоге — короче, по делу, без воды. Заземляющий тон.",
+        "ns_hint_explore":  "\nЮзер в режиме исследования — предлагай аналогии, неочевидные связи, гибкие альтернативы.",
+        "ns_hint_overload": "\nЮзер в перегрузе — STOP-режим: одно действие, минимум слов, заземление.",
+        "ns_hint_apathy":   "\nЮзер в застое — разбей на микро-шаги ≤2 минуты. Фокус на «начать», не «сделать».",
+        "ns_hint_burnout":  "\nЮзер в выгорании — мягко, без давления, восстановление приоритетнее задач.",
+        "ns_hint_insight":  "\nЮзер в инсайте — помоги зафиксировать аттрактор, структурировать только что найденную связь.",
     },
 }
 

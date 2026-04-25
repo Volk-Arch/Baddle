@@ -1078,8 +1078,8 @@ def assist_state():
     """Return full CognitiveState metrics (for UI panel, diagnostics).
 
     UserState через `user_state` ключ уже включает: dopamine/serotonin/
-    norepinephrine/burnout, expectation/reality/surprise/imbalance (signed
-    prediction error), named_state (Voronoi region), long_reserve (dual-pool).
+    norepinephrine/acetylcholine/gaba/balance, burnout, expectation/reality/
+    surprise/imbalance (signed prediction error), named_state (Voronoi region).
 
     `thinking` — что cognitive_loop делает в фоне прямо сейчас (pump /
     elaborate / scout / idle). UI polls этот endpoint и рисует cone-viz

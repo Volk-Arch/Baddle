@@ -55,6 +55,21 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
+# Counter-wave (Правило 7): типы сигналов которые «давят» — их urgency
+# понижается при user.mode == 'C', чтобы не усиливать desync. Идея: когда
+# юзер уже в counter-wave регулировании, push-style alerts (sync_seeking,
+# recurring_lag, observation_suggestion) только усиливают рассогласование.
+# Counter-wave подразумевает смену тактики: пауза, инверсия тона, смена
+# несущей. Реализуется простым понижением urgency на 0.3.
+COUNTER_WAVE_PUSH_TYPES = frozenset({
+    "sync_seeking",
+    "recurring_lag",
+    "observation_suggestion",
+    "morning_briefing",
+    "evening_retro",
+})
+
+
 @dataclass
 class Signal:
     """Unified alert envelope. Детектор возвращает это, dispatcher решает
@@ -134,21 +149,30 @@ class Dispatcher:
 
     def dispatch(self,
                  candidates: list[Signal],
-                 now: float) -> list[Signal]:
+                 now: float,
+                 user_mode: str = "R") -> list[Signal]:
         """Решить какие сигналы эмитить, остальное дропнуть в JSONL.
 
         Algorithm:
+          0. Counter-wave (Правило 7): если user_mode == 'C', понизить
+             urgency push-style сигналов (COUNTER_WAVE_PUSH_TYPES) на 0.3.
+             Critical (≥0.9) фактически перестаёт быть critical и попадает
+             в budget — это сознательно: при desync push'ить нельзя даже
+             критическим тоном, нужна counter-wave (пауза, смена несущей).
           1. Prune sliding window (forget emissions старше window_s)
           2. Filter expired (signal.expires_at ≤ now)
           3. Dedup (same dedup_key уже был в окне)
           4. Sort by urgency desc
           5. Budget gate: top-K + critical bypass
 
-        Drops пишутся в throttle_drops.jsonl с reason ∈ {expired, dedup, budget}.
+        Drops пишутся в throttle_drops.jsonl с reason ∈ {expired, dedup,
+        budget, counter_wave}.
 
         Args:
             candidates: всё что детекторы вернули за этот tick.
             now: unix ts текущего момента.
+            user_mode: 'R' (resonance) или 'C' (counter-wave). Передаётся
+                из cognitive_loop, отражает state.user.mode после _advance_tick.
 
         Returns:
             Список signals одобренных к emit. Caller вызывает `_add_alert`
@@ -156,6 +180,17 @@ class Dispatcher:
         """
         with self._lock:
             self._prune_history(now)
+
+            # 0. Counter-wave urgency reduction
+            if user_mode == "C" and candidates:
+                from dataclasses import replace
+                adjusted = []
+                for sig in candidates:
+                    if sig.type in COUNTER_WAVE_PUSH_TYPES:
+                        new_urg = max(0.0, sig.urgency - 0.3)
+                        sig = replace(sig, urgency=new_urg)
+                    adjusted.append(sig)
+                candidates = adjusted
 
             # 1. Filter expired
             alive: list[Signal] = []

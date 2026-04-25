@@ -344,7 +344,34 @@ class РГК:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 3. Identity diagnostic — прогон фиксированного event sequence
+# 3. Singleton — каскад зеркал = ОДНА пара резонаторов (D-5).
+# Tests НЕ используют global — создают independent РГК через UserState() /
+# Neurochem() / ProtectiveFreeze() без `rgk=` argument.
+# ────────────────────────────────────────────────────────────────────────────
+
+_GLOBAL_RGK: "РГК | None" = None
+
+
+def get_global_rgk() -> "РГК":
+    """Singleton РГК. Lazy init на первом вызове. Production bootstrap
+    (`get_user_state()` + `CognitiveState.__init__`) передаёт этот объект как
+    `rgk=` параметр всем трём facades — UserState/Neurochem/ProtectiveFreeze
+    делят один резонатор."""
+    global _GLOBAL_RGK
+    if _GLOBAL_RGK is None:
+        _GLOBAL_RGK = РГК()
+    return _GLOBAL_RGK
+
+
+def reset_global_rgk() -> "РГК":
+    """Reset singleton к fresh РГК. Для production restart / test fixture."""
+    global _GLOBAL_RGK
+    _GLOBAL_RGK = РГК()
+    return _GLOBAL_RGK
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4. Identity diagnostic — прогон фиксированного event sequence
 # ────────────────────────────────────────────────────────────────────────────
 
 def _run_identity_sequence() -> "РГК":

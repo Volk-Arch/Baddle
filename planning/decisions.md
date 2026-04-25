@@ -53,18 +53,6 @@
 
 ---
 
-## D-4 | 2026-04-25 | DMN bridge_quality hook только в `_run_dmn_continuous`
-
-**Контекст:** API `feed_acetylcholine(node_creation_rate, bridge_quality)` принимает quality. В каких DMN entry points звать?
-
-**Выбрали:** Только в `_run_dmn_continuous` после успешного bridge с `quality > 0.5`. `_run_dmn_deep_research` и `_run_dmn_converge` — **не подключены**.
-
-**Альтернативы:** Подключить во все 3 DMN методах.
-
-**Статус:** `provisional`. Расширение на 2 других — TODO ⚡ Cheap, ~30 мин. Сделать когда увидим distribution в данных.
-
----
-
 ## D-5 | 2026-04-25 | Per-class РГК vs singleton
 
 **Контекст:** Phase D создал `РГК` объект. Где он живёт?

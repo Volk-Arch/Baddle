@@ -10,7 +10,7 @@
 
 Строка на фазу — для понимания где что искать. Подробности в коде и git log.
 
-- **Phase A — MetricRegistry** (2026-04-24). `src/metrics.py` + 21 EMA в трёх registries (UserState/Neurochem/ProtectiveFreeze). Реализовано Правило 2 §4. Identity bit-identical через 10 тестов. — реализация в [src/metrics.py](../src/metrics.py); описана в Правиле 2 ниже.
+- **Phase A — EMA primitive** (2026-04-24). `src/ema.py` (`EMA`/`VectorEMA` + `Decays`/`TimeConsts`) — единое место для exponential moving averages. Реализовано Правило 2 §4. Identity sentinel через 10 тестов. — реализация в [src/ema.py](../src/ema.py); описана в Правиле 2 ниже.
 - **Phase B — Signal dispatcher** (2026-04-25). `src/signals.py` + `src/detectors.py` (13 pure-function детекторов с urgency-эвристиками). 21 bookkeeping `_check_*` в `cognitive_loop.py` сжаты на ~600 строк. Реализовано Правило 1 §4. — реализация в [src/signals.py](../src/signals.py), [src/detectors.py](../src/detectors.py).
 - **Phase C — 3-zone capacity** (2026-04-25). dual-pool `daily_spent + long_reserve` (legacy 0..100 + 0..2000) → `capacity_zone` (green/yellow/red) из 3 параллельных контуров (физио/эмо/когн). — описание в [docs/capacity-design.md](../docs/capacity-design.md).
 - **Phase D — РГК-коллапс** (2026-04-25). 5-axis chem (DA/5HT/NE/ACh/GABA) + balance() formula + R/C bit + adapter pattern UserState/Neurochem/PF поверх `src/rgk.py`. Реализовано Правило 6 §4. — описание в [docs/neurochem-design.md § Пять модуляторов](../docs/neurochem-design.md), теория в [rgk-spec.md](rgk-spec.md).
@@ -124,41 +124,14 @@ for sig in candidates[:ATTENTION_BUDGET_PER_WINDOW]:
 
 ### Правило 2 — Любая производная метрика это `EMA(source_event, decay)`
 
-**Сейчас:** `update_from_hrv`, `update_from_engagement`, `update_from_feedback`, `update_from_message`, `update_from_plan_completion`, `tick_expectation`, `tick_valence`, ...
-
-**Было бы:** declarative registry:
-
-```python
-METRICS = {
-    "agency":         EMA(source="plan_completion", decay=0.95),
-    "dopamine":       EMA(source="distinct_d",      decay=0.9),
-    "valence":        EMA(source="sentiment",       decay=0.92),
-    "cognitive_load": EMA(source="activity_event",  decay=0.85),
-    "serotonin":      EMA(source="weight_stability", decay=0.95),
-    # ... 20+ штук
-}
-
-# Event fires → registry updates
-def fire_event(event_type, payload):
-    for name, ema in METRICS.items():
-        if ema.listens_to(event_type):
-            ema.update(payload)
-```
-
-`vector()` просто читает:
-
-```python
-def vector():
-    return [METRICS[name].value for name in ["dopamine", "serotonin", "norepinephrine"]]
-```
+**Сейчас:** EMA-примитив (`src/ema.py`) — `EMA`/`VectorEMA` + `Decays`/`TimeConsts` константы в одном месте. После Phase D `Resonator` (`src/rgk.py`) хранит 5 chem-параметров как EMA-атрибуты, feeders explicit (`feed_acetylcholine(novelty, boost=False)`), без event-routing layer.
 
 **Сколько коллапсирует:**
-- TODO-пункт «Все формулы в один файл для наглядности» — **встроено**
-- Capacity миграция становится **declarative 5-строчной** вместо 30-item migration
-- `frequency_regime` из резонансной модели — **одна строка** в registry
-- Любой новый derived field — **одна строка**
-- 20+ `update_from_*` методов — **единый update_metrics(event)**
-- Scattered decay constants — **в одном registry**
+- 20+ `update_from_*` методов — заменены explicit `feed_*` на Resonator/UserState (узкий публичный API).
+- Scattered decay constants — все в `src/ema.py:Decays`.
+- Vector сборка legacy 3D (DA, 5HT, NE) — `Resonator.vector()` напрямую.
+- Capacity (3 параллельных контура) — derived поверх Resonator (см. [docs/capacity-design.md](../docs/capacity-design.md)).
+- Любой новый derived metric — добавить EMA-атрибут + 1 feeder вызов.
 
 ### Правило 3 — Любое знание это нода графа, любая связь через `distinct()`
 
@@ -227,58 +200,6 @@ nodes_near(embedding=query_vec, type="pattern", k=5)
 - `detect_sync_seeking tone` choice (через `_generate_sync_seeking_message`) — смена несущей
 - `ProtectiveFreeze` при конфликтах — прекращение обновлений, чтобы не давить на юзера ошибкой предсказания
 - `sync_regime` FLOW → PROTECT/CONFESS — явная инверсия тактики взаимодействия
-
----
-
----
-
-## 7. Tradeoffs честно
-
-### Плюсы
-
-- **Проект ~5k строк вместо 20k.** В 3-4 раза меньше кода поддерживать.
-- **Новая фича = декларация, не подсистема.** Bar на добавление низкий, цикл добавить/попробовать/удалить быстрый.
-- **Docs сжимаются.** 6 правил ≡ 6 контрактов. Книга перестаёт быть 28 глав, становится ~10-12 глав с чёткой структурой (Foundations → 6 правил → их применения).
-- **Тестируемость.** 6 контрактов = 6 test-suites. Bespoke-путь = 21 test-suite плюс интеграционные cascades.
-- **Легче онбордить нового разработчика (или себя через год).** «Вот 6 правил, всё остальное — их применения» vs «вот 28 docs, каждый про свою подсистему».
-
-### Минусы
-
-- **25-30ч рефакторинга без видимых фич.** Требует дисциплины не добавлять фичи в этот период.
-- **Risk неправильной абстракции.** 6 правил — моя гипотеза. Если на практике детекторы не влезают в единый `Signal(type, urgency, content, expires_at)` — придётся расширять Signal или разъединять dispatcher.
-- **Дисциплина после.** Абстракция помогает только если её соблюдают. Через год легко начать писать bespoke cascade снова. Нужно правило «новая фича = 1 из 6 или стоп, думай».
-- **Меньше артефактов проекта.** Для Habr-статьи больше скучнее — «сделал чистую архитектуру» vs «построил 28 подсистем».
-- **Теряется некоторая гибкость в краях.** Bespoke cascade может учесть нетипичный edge-case легче чем декларативный dispatcher.
-
-### Что делает эту инвестицию разумной именно сейчас
-
-1. **Workspace-removal показал паттерн.** Уже знаем как делать consolidation (−1030 строк за одну сессию). Мышца тренирована.
-2. **Capacity миграция впереди** — делать её bespoke = +20ч долга, делать её declarative после Фазы A = 5-7ч. Разница в 3x покрывает инвестицию в Фазу A сама по себе.
-3. **Throttle steps #2 и #3 бы делались.** Строя Signal dispatcher мы реализуем оба step'а одновременно. Иначе — 18ч дополнительно.
-4. **Капитал понимания растёт.** После месяца bespoke-фичей знание систем разложено по 21 месту. После consolidation — централизовано, восстанавливается быстрее при возврате к проекту.
-
----
-
-## 8. Дисциплина — ключевой risk
-
-Абстракция работает только если **соблюдается всегда**. Полу-абстракция хуже consistent bespoke, потому что дают иллюзию структуры без её гарантий.
-
-### Рабочее правило после consolidation
-
-**Любая новая фича проходит через фильтр:**
-1. Это новый детектор в dispatcher? — OK, написать как Signal-producer.
-2. Это новый derived metric? — OK, добавить в MetricRegistry одной строкой.
-3. Это новый тип ноды графа? — OK, через `record(type=...)`.
-4. Это что-то что не влезает? — **СТОП**. Или оно поверх 1-3 (тогда reformulate), или оно 7-е правило (тогда редкий случай, серьёзно думать прежде чем добавлять).
-
-### Что делать если правило не влезает
-
-Если через 3+ месяца появляется реальная фича которая **честно не укладывается** в 6 правил — это означает что **6-е правило неполно**. Тогда расширяем осознанно:
-- Документируем почему не влезло.
-- Обсуждаем что добавить: 7-е правило? изменить одно из 6?
-- Не делаем bespoke escape hatch «на этот раз».
-
-Если пропускаем этот rigor — через год снова TODO на 80 пунктов.
 
 ---
 

@@ -1,116 +1,147 @@
-# Cleanup plan — Phase E-I
+# Cleanup plan
 
-> Опциональный line-count cleanup. Не делается по умолчанию. Делать только при 15-25ч непрерывного контекста и реальной боли от code volume (например, при онбординге, или при добавлении 14-й проекции которая упирается в boilerplate).
+> Реалистичный compression bandwidth по аудиту 2026-04-25: **~420 LOC** через Track A (audit-driven small wins, не трогает adapter pattern) или **~1500-2500 LOC** через Track B (adapter unification, prerequisite Singleton РГК). Tracks **не пересекаются** по scope. Floor проекта **~22-23k**, не 5-7k. Архитектура **уже чистая** — 7 правил покрывают модель.
 >
-> Связь: [simplification-plan.md](simplification-plan.md) §5 (tradeoffs); [TODO.md](TODO.md) (текущие задачи); [decisions.md](decisions.md) D-1 (adapter pattern), D-5 (singleton РГК).
+> Связь: [simplification-plan.md](simplification-plan.md) §5 (tradeoffs); [TODO.md](TODO.md) (текущие задачи); [decisions.md](decisions.md).
 
 ---
 
-## Контекст: что осталось для line-count цели
+## Контекст: что показал аудит
 
-`src/rgk.py` (493) + `src/user_state.py` (1342) + `src/neurochem.py` (481) + `cognitive_loop.py` (2549) + `assistant.py` (~3000) + `detectors.py` (~900) + `horizon.py` (~700) — это **~9500 строк state+dynamics+IO+cognitive_loop**, основная боль.
+`src/` ~25k LOC — обманчивая цифра. Реальный breakdown:
 
-Spec [rgk-spec.md §7](rgk-spec.md) обещал `~6150 → ~2500` (4× reduction). Это был оптимизм — не учёл adapter overhead и bespoke business logic. Реалистичный target после Phase E-I: **~3500-4000 строк** (1.5-1.8× reduction в state+IO+cognitive_loop).
+| Категория | LOC | % |
+|---|---|---|
+| **IO/HTTP routes** (104 Flask endpoints + persistence) | ~9700 | 39% |
+| **R6 Resonator state** (rgk + adapter facades) | ~3200 | 13% |
+| **R3 Graph node** (graph_logic + store + state_graph) | ~2800 | 11% |
+| **Algorithm/Heavy work** (DMN/REM/scout/pump) | ~1900 | 8% |
+| **R1 Signal driver** (signals + detectors + suggestions) | ~1800 | 7% |
+| **R4 distinct primitive** (tick_nand + thinking + dialectic + meta) | ~1400 | 6% |
+| **Misc/glue** (defaults, prompts, modes, demo, init) | ~1200 | 5% |
+| **Adapter overhead** (UserState/Neurochem facades поверх _rgk) | ~900 | 4% |
+| **Bespoke pockets** (execute_deep, suggestions weekly, chat_commands NL) | ~1500 | 6% |
+| **R2 EMA** (ema.py) | ~330 | 1% |
+| **R5 PE driver** (распределён) | ~300 | 1% |
 
-**Adapter overhead** (~500 строк) — UserState/Neurochem/ProtectiveFreeze оставлены как facades поверх `_rgk` потому что внешние callers (cognitive_loop, assistant, detectors, UI JS) ожидают их API: 33 properties + 14 methods + to_dict/from_dict. Без удаления callers facades остаются.
-
-**Bespoke business logic** — `capacity_*` / `named_state` / `frequency_regime` / `focus_residue` это UX-логика, не chem state. Их можно переехать в projectors, но это **semantic move**, не удаление.
-
-**Heavy work** (DMN/REM/pump/scout) — алгоритмы, не state, не сжимаются.
-
----
-
-## Phase E — `cognitive_loop.py` rewrite
-
-**Scope:** убрать bookkeeping checks которые сейчас читают `user.dopamine`/`neuro.gamma`/etc через property accessors. Заменить на `r.project("user_state")["dopamine"]` reads. Удалить дублирующие state copies в loop-локальных переменных.
-
-**Estimated:** −500..−800 строк | **Время:** 4-6ч | **Risk:** medium
-
-**Что меняется:**
-- 21 bookkeeping `_check_*` методов читают через project()
-- `_advance_tick` упрощается (state synced через _rgk напрямую)
-- helpers (`_generate_sync_seeking_message`, `_build_morning_briefing_*`) тоже на project()
-
-**Что НЕ меняется:** heavy work методы (`_run_dmn_continuous`, `_rem_emotional`, `_run_pump_bridge`, `_run_scout`) — алгоритмы остаются.
-
-**Acceptance:** 83 detector+dispatcher+loop tests pass, 175 phase B tests pass.
+**60% src/ — каркас 7 правил. 39% — inherent IO. 10% — реально сжимаемо.**
 
 ---
 
-## Phase F — `assistant.py` rewrite
+## Track A — Audit-driven small wins (~420 LOC, low risk)
 
-**Scope:** все 50+ мест где `get_user_state()` + property read → `r.project()`. Удалить остатки legacy energy ссылок (`long_reserve`, `daily_spent` — Phase C удалила, но в комментариях/деталях могло остаться).
+5 шагов из аудита. **Не трогают adapter pattern** (UserState/Neurochem facades живут). Можно делать в любом порядке. Не требуют архитектурных prerequisites.
 
-**Estimated:** −300..−500 строк | **Время:** 3-5ч | **Risk:** medium
+> Adapter overhead (~900 LOC) **не закрывается Track A** — для него нужен Track B (через `r.project()` + delete facades).
 
-**Acceptance:** все assistant endpoints возвращают то же что и раньше; tests/test_capacity.py + test_resonance_signals.py pass.
+### A2. NS_HINT chem-routing → prompts.py ✅ done
 
----
+`_NS_HINT` inline dict в `assistant_exec.py:740-756` (8 entries × 2 langs = 17 LOC) → `_p(lang, f"ns_hint_{ns_key}")` в prompts.py.
 
-## Phase G — `src/detectors.py` audit
+**Done 2026-04-25:** −14 LOC inline, +16 LOC prompts.py, single source of truth.
 
-**Scope:** 13 детекторов читают user/neuro/freeze поля. Простые (1-3 поля) переписать через project(); сложные (multi-step computation, например `detect_observation_suggestions`) оставить.
+### A3. Sync_seeking + retro text templates → prompts.py
 
-**Estimated:** −100..−200 строк | **Время:** 1-2ч | **Risk:** low
+**Scope:** `src/cognitive_loop._generate_sync_seeking_message` + retro text generation — шаблонная генерация с `if lang == "ru"` блоками. Перенести в prompts.py как именованные templates.
 
-**Acceptance:** test_detectors.py pass без изменений в самих тестах.
+**Estimated:** −80 LOC | **Время:** 30 мин | **Risk:** low
 
----
+### A4. Suggestions 5 sources → unified `SOURCES` table
 
-## Phase H — Bespoke в projectors
+**Scope:** `src/suggestions.py` — 5 detector wrappers `suggest_from_*` каждый со своим LLM hint + `try/except return None` boilerplate. Унифицировать в `SOURCES = [(name, collector_fn, draft_hint_fn), ...]`.
 
-**Scope:** `compute_capacity_*` / `nearest_named_state` / `frequency_regime` derived / `focus_residue` логика — переехать из UserState в `rgk.project()` как 5 функций (semantic move). Сейчас живут как ~250 строк bespoke в user_state.py; в projectors это компактнее (~100 строк), single ownership.
+**Estimated:** −150 LOC | **Время:** 1ч | **Risk:** medium
 
-**Estimated:** −150 строк (semantic move, не deletion) | **Время:** 3-4ч | **Risk:** medium
+### A5. Morning briefing 13 sections → registry
 
-**Что выигрываем:** UserState становится чище — только chem state + HRV passthrough + day_summary. Логика capacity/named/regime — в одном месте (rgk projectors).
+**Scope:** `src/cognitive_loop.py:1673-2065` — 13 sections (capacity/named_state/recurring/checkins/sleep/...) каждая ~30 LOC inline. Переписать как `SECTIONS = [(collector_fn, render_template, condition), ...]`.
 
-**Acceptance:** test_capacity.py + test_resonance_signals.py pass.
+**Estimated:** −150 LOC | **Время:** 1ч | **Risk:** medium
 
----
+### A6. Per-mode prompts (51 inline `if lang == "ru"` blocks) → prompts.py
 
-## Phase I — Удалить facades
+**Scope:** `src/assistant_exec.py` содержит 51 occurrence `if lang == "ru"` для prompt templates. Каждый — bespoke template inline. Перенести в `prompts.py` с осмысленными ключами.
 
-**Scope:** UserState/Neurochem/ProtectiveFreeze как классы **удаляются**. Callers переписываются на `r = get_global_rgk()` + `r.project("user_state")["dopamine"]` (или короткий wrapper `r.user.dopamine` если оставить properties в Resonator). Все ~50 callers переписать. UI JS читает тот же `/assist/state` shape.
-
-**Estimated:** −1000..−1500 строк | **Время:** 1-2 дня | **Risk:** **high**
-
-**Prerequisite:** Singleton РГК (см. [decisions.md D-5](decisions.md)) — иначе callers будут обращаться к `UserState._rgk` / `Neurochem._rgk` (3 разных объекта).
-
-**Что меняется publicly:** UserState/Neurochem/ProtectiveFreeze imports → `from src.rgk import get_global_rgk`. Все `update_from_*` методы → `r.feed_*` или explicit method names.
-
-**Acceptance:** все 385 тестов pass; UI работает без визуальных изменений; serialization backward-compat.
+**Estimated:** −40 LOC | **Время:** 1-1.5ч | **Risk:** medium (user-facing prompts, неточный ключ ломает UX).
 
 ---
 
-## Зависимости
+## Track B — Adapter unification (~1500-2500 LOC, medium-high risk)
 
-```
-E ── (cognitive_loop тоньше) ─┐
-F ── (assistant тоньше) ──────┤
-G ── (detectors тоньше) ──────┼──> I (удаление facades возможно после E+F+G)
-H ── (bespoke в projectors) ──┘
-```
+Альтернативный путь: вместо точечных wins — переписать всех callers UserState/Neurochem с property accessors на `r.project()`. Затем **удалить facades полностью**.
 
-E/F/G/H можно делать **независимо** в любом порядке. **Phase I** — после хотя бы E+F (критично для самых больших callers).
+### B0. Singleton РГК ✅ done 2026-04-25
+
+`src/rgk.py` — `get_global_rgk()` + `reset_global_rgk()`. UserState/Neurochem/ProtectiveFreeze принимают keyword-only `rgk=` (default `None` → создаётся новый, backward-compat для тестов). Production bootstrap: `get_user_state()` + `CognitiveState.__init__` передают `rgk=get_global_rgk()` — каскад зеркал на одном объекте. 5 smoke tests добавлены, 398 passed.
+
+### B1. `cognitive_loop.py` rewrite через project()
+
+**Scope:** ~21 bookkeeping checks читают `user.dopamine`/`neuro.gamma` через property accessors. Заменить на `r.project("user_state")["dopamine"]`. Удалить дублирующие state copies.
+
+**Estimated:** −500..−800 | **Время:** 4-6ч | **Risk:** medium
+
+**Что НЕ меняется:** heavy work (`_run_dmn_*`, `_rem_emotional`, `_run_pump_bridge`, `_run_scout`) — алгоритмы остаются.
+
+### B2. `assistant.py` rewrite через project()
+
+**Scope:** все ~50 мест где `get_user_state()` + property read → `r.project()`.
+
+**Estimated:** −300..−500 | **Время:** 3-5ч | **Risk:** medium
+
+**Аудит caveat:** «fat routes» (`_assist` 405 LOC, `_morning`, `_weekly`, `/decompose`) — business logic, не сжимается. Win — в маленьких routes которые делают `cs.get_metrics()` boilerplate.
+
+### B3. `src/detectors.py` через project()
+
+**Scope:** 13 детекторов читают user/neuro/freeze поля. Простые (1-3 поля) переписать через project(); сложные (multi-step) оставить.
+
+**Estimated:** −100..−200 | **Время:** 1-2ч | **Risk:** low
+
+### B4. Bespoke в projectors (semantic move)
+
+**Scope:** `compute_capacity_*` / `nearest_named_state` / `frequency_regime` derived / `focus_residue` логика — переехать из UserState в `rgk.project()`. Сейчас ~250 LOC bespoke в user_state.py; в projectors ~100 LOC, single ownership.
+
+**Estimated:** −150 (semantic move, не deletion) | **Время:** 3-4ч | **Risk:** medium
+
+### B5. Удалить facades (UserState/Neurochem/ProtectiveFreeze)
+
+**Scope:** Классы удаляются. Callers используют `r = get_global_rgk()` + `r.project("user_state")["dopamine"]` (или короткий wrapper `r.user.dopamine`). UI JS читает тот же `/assist/state` shape.
+
+**Estimated:** −1000..−1500 | **Время:** 1-2 дня | **Risk:** **high**
+
+**Prerequisite:** B0 + B1 + B2 + B3 (хотя бы B1+B2).
 
 ---
 
-## Что Phase E-I НЕ закроют
+## Что Track A+B НЕ закроют
 
-- DMN/REM/pump_bridge/scout heavy work — алгоритмы, остаются.
-- LLM/HRV/HTTP IO — нельзя сжать.
-- UI/CSS/JS — DOM manipulation forced.
-- Test суиты — растут с features.
-
-Финальный проект всё равно будет **~5000 строк** в src/. Это **OK** — один человек поддерживает за 2-3ч onboarding.
+- **104 Flask routes** — inherent IO, 80% routes уже минимум 5-15 LOC. Generic dispatcher = net negative (см. аудит H3 verdict).
+- **`execute_deep` deepening + diversity guard + pairwise SmartDC** — это R4 в действии, не bespoke.
+- **`graph_logic.py`** — R3 каркас.
+- **`cognitive_loop._run_*` heavy work** (DMN/REM/scout) — алгоритмы.
+- **`_assist` mega-route** — business logic.
 
 ---
 
-## Decision: делаем или нет?
+## Counter-wave (Правило 7) — активирован 2026-04-25
 
-Если ответ «да, line-count важен» — стартуем с Phase E (cheapest big-bang for buck) или Phase G (smallest, validate подход). Phase I последним.
+`Resonator.update_mode(perturbation)` теперь вызывается в `cognitive_loop._advance_tick`. Dispatcher понижает urgency push-style сигналов при `user.mode='C'` (см. [signals.py](../src/signals.py) `COUNTER_WAVE_PUSH_TYPES`).
 
-Если ответ «нет, consolidation done на Phase D, переходим к Tier 2 фичам» — этот документ остаётся как reference. Никаких действий.
+**Tier 2 расширения** (см. [TODO.md § Tier 2 Резонансные](TODO.md)):
+- Sync_seeking explicit mode-aware tone (~1ч)
+- UI R/C индикатор в balance widget (~30 мин)
+- Property test на mode trajectory через `_advance_tick` (~30 мин)
 
-Текущее обязательство автора (2026-04-25): **не делается без явного решения**. Tier 2 фичи приоритетнее (см. [TODO.md](TODO.md) § 🌊 Tier 2).
+---
+
+## Стратегические замечания
+
+**Track A vs Track B trade-off:**
+- **Track A** — низкий риск, точечные wins (templates/registries/sources). Не трогает adapter pattern. Подходит для bursts свободного времени. Adapter overhead (~900 LOC) остаётся.
+- **Track B** — большой ROI на сжатие через РГК-only архитектуру. Требует ~2-3 дней непрерывного контекста + B0 (Singleton) + риск breaks UI/tests. Соответствует РГК-spec'у «один резонатор, всё остальное проекции» — финализирует Phase D.
+
+**Sequencing если делается Track B (skorrektirovano по факту B0):**
+B0 (Singleton) → **B4 (расширить project() bespoke fields)** → B3 (detectors pilot) → B1 (cognitive_loop) → B2 (assistant) → B5 (delete facades).
+
+**Почему B4 перед B3:** текущий `RGK.project("user_state")` покрывает chem axes + expectation + imbalance, но НЕ покрывает derived bespoke (capacity_zone, named_state, frequency_regime, focus_residue, hrv_surprise). Детекторы читают именно derived. Без B4 у B3 нет ground.
+
+**Текущее обязательство (2026-04-25):** Track A продвигается incrementally (A2 done). Track B — **не делается без явного решения о ~2-3 днях работы**. Tier 2 фичи приоритетнее по value-per-hour.

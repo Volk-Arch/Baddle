@@ -305,3 +305,43 @@ def test_recurring_lag_per_goal_dedup(disp):
 
     assert len(out1) == 2   # both goals first time
     assert out2 == []       # goal_1 already seen
+
+
+# ── Counter-wave (Правило 7) ───────────────────────────────────────────────
+
+def test_counter_wave_reduces_push_urgency(disp):
+    """user_mode='C' понижает urgency push-style сигналов на 0.3."""
+    sync_seeking = _sig("sync_seeking", urgency=0.95)   # critical → emit normally
+    out = disp.dispatch([sync_seeking], now=100.0, user_mode="C")
+    # After −0.3: 0.65, не critical, попадает в budget
+    assert len(out) == 1
+    assert out[0].urgency == pytest.approx(0.65, abs=1e-6)
+
+
+def test_counter_wave_does_not_affect_non_push(disp):
+    """user_mode='C' не трогает urgency не-push сигналов (dmn_bridge etc)."""
+    bridge = _sig("dmn_bridge", urgency=0.6)
+    out = disp.dispatch([bridge], now=100.0, user_mode="C")
+    assert len(out) == 1
+    assert out[0].urgency == pytest.approx(0.6, abs=1e-6)
+
+
+def test_counter_wave_default_mode_R_no_effect(disp):
+    """Default user_mode='R' (resonance) — push-сигналы проходят без изменений."""
+    sync = _sig("sync_seeking", urgency=0.7)
+    out = disp.dispatch([sync], now=100.0)   # default user_mode="R"
+    assert len(out) == 1
+    assert out[0].urgency == pytest.approx(0.7, abs=1e-6)
+
+
+def test_counter_wave_critical_loses_bypass(disp):
+    """При user_mode='C' даже critical sync_seeking (0.95→0.65) теряет bypass
+    и попадает в budget gate. Это сознательно: при desync push'ить нельзя
+    даже критическим тоном — нужна counter-wave (пауза/смена несущей)."""
+    # Заполняем budget=3 не-push сигналами
+    fillers = [_sig(f"dmn_bridge", urgency=0.5, dedup_key=f"f{i}") for i in range(3)]
+    disp.dispatch(fillers, now=100.0)
+    # Теперь critical sync_seeking при mode='C' попадает в budget (full)
+    sync = _sig("sync_seeking", urgency=0.95)
+    out = disp.dispatch([sync], now=101.0, user_mode="C")
+    assert out == []   # budget full + reduced urgency не bypass'ит

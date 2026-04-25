@@ -285,11 +285,13 @@ class UserState:
                  serotonin: float = 0.5,
                  norepinephrine: float = 0.5,
                  burnout: float = 0.0,
-                 agency: float = 0.5):
-        # Phase D Step 3c — все EMA UserState'а живут в self._rgk.
-        # MetricRegistry удалён; events идут прямыми вызовами _rgk.user.*
-        # и _rgk.{valence|burnout|agency|u_exp|u_exp_tod|u_exp_vec|hrv_base_tod}.
-        self._rgk = РГК()
+                 agency: float = 0.5,
+                 *,
+                 rgk: "Optional[РГК]" = None):
+        # B0: optional shared RGK (production bootstrap передаёт singleton
+        # через get_global_rgk() — каскад зеркал работает на одном объекте).
+        # Default rgk=None → создаётся новый РГК (backward-compat для тестов).
+        self._rgk = rgk if rgk is not None else РГК()
         self._rgk.user.gain.value = dopamine
         self._rgk.user.hyst.value = serotonin
         self._rgk.user.aperture.value = norepinephrine
@@ -422,6 +424,17 @@ class UserState:
         До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/5HT.
         См. planning/rgk-spec.md §3.5."""
         return self._rgk.user.balance()
+
+    @property
+    def mode(self) -> str:
+        """R/C bit (Правило 7 — Counter-wave). 'R' = passive resonance,
+        'C' = counter-wave generation. Updated by cognitive_loop._advance_tick
+        from sync_error через гистерезис ACT=0.15 / REC=0.08."""
+        return self._rgk.user.mode
+
+    def update_mode(self, perturbation: float) -> str:
+        """Update R/C mode by current perturbation (sync_error). Hysteresis."""
+        return self._rgk.user.update_mode(float(perturbation))
 
     # ── Predictive layer accessors ─────────────────────────────────────────
 
@@ -1161,6 +1174,7 @@ class UserState:
             "acetylcholine": round(self.acetylcholine, 3),
             "gaba": round(self.gaba, 3),
             "balance": round(self.balance(), 3),
+            "mode": self.mode,
             "burnout": round(self.burnout, 3),
             "agency": round(self.agency, 3),
             "valence": round(self.valence, 3),
@@ -1329,10 +1343,13 @@ _global_user: Optional[UserState] = None
 
 
 def get_user_state() -> UserState:
-    """Глобальный UserState — один на человека, shared across workspaces."""
+    """Глобальный UserState — один на человека, shared across workspaces.
+    B0: использует singleton РГК, чтобы каскад зеркал (UserState/Neurochem/
+    ProtectiveFreeze) работал на одном объекте."""
     global _global_user
     if _global_user is None:
-        _global_user = UserState()
+        from .rgk import get_global_rgk
+        _global_user = UserState(rgk=get_global_rgk())
     return _global_user
 
 

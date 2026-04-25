@@ -92,9 +92,13 @@ class CognitiveState:
 
         # ── Neurochem layer (composition — проще старой монолитной модели) ──
         # Три скаляра + отдельный защитный режим. См. src/neurochem.py.
+        # B0: shared singleton РГК — каскад зеркал (UserState/Neurochem/
+        # ProtectiveFreeze) работает на одном объекте.
         from .neurochem import Neurochem, ProtectiveFreeze
-        self.neuro = Neurochem()
-        self.freeze = ProtectiveFreeze()
+        from .rgk import get_global_rgk
+        rgk = get_global_rgk()
+        self.neuro = Neurochem(rgk=rgk)
+        self.freeze = ProtectiveFreeze(rgk=rgk)
         self._burnout_trip_count = 0  # kept for metrics
 
         # ── Mode flags ──────────────────────────────────────────────────

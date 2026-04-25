@@ -32,6 +32,8 @@ HRV сюда не приходит. Тело пользователя влияе
 не на внутреннюю химию системы. Система может работать и без HRV вообще.
 """
 import math
+from typing import Optional
+
 import numpy as np
 
 from .ema import TimeConsts
@@ -64,10 +66,12 @@ class Neurochem:
     def __init__(self,
                  dopamine: float = 0.5,
                  serotonin: float = 0.5,
-                 norepinephrine: float = 0.5):
-        # Phase D Step 4c — chem state в self._rgk.system. MetricRegistry удалён;
-        # обновления через прямые вызовы _rgk.s_graph / tick_s_pred.
-        self._rgk = РГК()
+                 norepinephrine: float = 0.5,
+                 *,
+                 rgk: "Optional[РГК]" = None):
+        # B0: optional shared РГК (production bootstrap передаёт singleton).
+        # Default rgk=None → создаётся новый РГК (backward-compat для тестов).
+        self._rgk = rgk if rgk is not None else РГК()
         self._rgk.system.gain.value = dopamine
         self._rgk.system.hyst.value = serotonin
         self._rgk.system.aperture.value = norepinephrine
@@ -170,6 +174,16 @@ class Neurochem:
         До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/(5HT).
         См. planning/rgk-spec.md §3.5."""
         return self._rgk.system.balance()
+
+    @property
+    def mode(self) -> str:
+        """R/C bit (Правило 7 — Counter-wave). System mirror — обновляется
+        cognitive_loop._advance_tick от combined_imbalance через гистерезис."""
+        return self._rgk.system.mode
+
+    def update_mode(self, perturbation: float) -> str:
+        """Update R/C mode by current perturbation (combined_imbalance)."""
+        return self._rgk.system.update_mode(float(perturbation))
 
     # ── Phase D Step 5: ACh + GABA feeders ─────────────────────────────────
 
@@ -285,6 +299,7 @@ class Neurochem:
             "acetylcholine": round(self.acetylcholine, 3),
             "gaba": round(self.gaba, 3),
             "balance": round(self.balance(), 3),
+            "mode": self.mode,
             "gamma": round(self.gamma, 3),
             "recent_rpe": round(self.recent_rpe, 3),
             "expectation_vec": [round(float(x), 3) for x in self.expectation_vec.tolist()],
@@ -363,11 +378,10 @@ class ProtectiveFreeze:
     # Feeder time-constants — см. `src.ema.TimeConsts`.
     SILENCE_RAMP_SECONDS = TimeConsts.SILENCE_RAMP
 
-    def __init__(self):
-        # Phase D Step 4c — pressure layer полностью в self._rgk.
-        # silence_pressure (linear ramp), conflict/imbalance/sync_fast/sync_slow EMAs,
-        # active flag — всё через _rgk.
-        self._rgk = РГК()
+    def __init__(self, *, rgk: "Optional[РГК]" = None):
+        # B0: optional shared РГК (production bootstrap передаёт singleton).
+        # Default rgk=None → новый РГК (backward-compat для тестов).
+        self._rgk = rgk if rgk is not None else РГК()
 
     # ── Public read accessors (backward-compat) ────────────────────────────
 

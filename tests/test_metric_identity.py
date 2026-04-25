@@ -1,13 +1,9 @@
-"""Identity check: фиксированный event-sequence через UserState / Neurochem /
-ProtectiveFreeze должен давать тот же snapshot ДО и ПОСЛЕ миграции на
-MetricRegistry (Фаза A из planning/simplification-plan.md).
+"""Identity sentinel: фиксированный event-sequence через UserState /
+Neurochem / ProtectiveFreeze должен давать тот же snapshot. EXPECTED
+захвачен 2026-04-24. Если тест падает — семантика формул изменилась.
 
-EXPECTED захвачен 2026-04-24 через `python scripts/capture_metric_baseline.py`
-на коммите до миграции. Если тест падает после миграции — семантика
-изменилась, миграция неверная.
-
-Пересоздать EXPECTED: запустить capture-script, вставить сюда. Но это
-валидно ТОЛЬКО если сознательно меняете формулу — иначе тест ловит регрессию.
+Пересоздать EXPECTED: capture-script + вставка. Валидно только при
+сознательной смене формулы — иначе тест ловит регрессию.
 """
 import pytest
 

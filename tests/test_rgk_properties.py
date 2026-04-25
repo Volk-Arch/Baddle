@@ -598,3 +598,116 @@ class TestApertureDerivation:
     def teardown_method(self):
         from src import api_backend
         api_backend._settings.pop("deep_aperture", None)
+
+
+# ── Counter-wave (Правило 7) — UserState/Neurochem mode activation ──────────
+
+class TestCounterWaveActivation:
+    """R/C bit (Правило 7) активирован 2026-04-25. UserState и Neurochem
+    exposed `.mode` property + `update_mode(perturbation)` method.
+    Cognitive_loop._advance_tick вызывает update_mode каждый tick.
+    """
+
+    def test_user_state_mode_default_R(self):
+        from src.user_state import UserState
+        u = UserState()
+        assert u.mode == "R"
+
+    def test_neurochem_mode_default_R(self):
+        from src.neurochem import Neurochem
+        n = Neurochem()
+        assert n.mode == "R"
+
+    def test_user_state_mode_flips_on_perturbation(self):
+        """Гистерезис ACT=0.15 / REC=0.08."""
+        from src.user_state import UserState
+        u = UserState()
+        # R → C при perturbation > 0.15
+        u.update_mode(0.20)
+        assert u.mode == "C"
+        # C остаётся при perturbation в hysteresis-окне [0.08, 0.15]
+        u.update_mode(0.10)
+        assert u.mode == "C"
+        # C → R при perturbation < 0.08
+        u.update_mode(0.05)
+        assert u.mode == "R"
+
+    def test_neurochem_mode_flips_on_perturbation(self):
+        from src.neurochem import Neurochem
+        n = Neurochem()
+        n.update_mode(0.20)
+        assert n.mode == "C"
+        n.update_mode(0.05)
+        assert n.mode == "R"
+
+    def test_user_state_to_dict_includes_mode(self):
+        from src.user_state import UserState
+        u = UserState()
+        u.update_mode(0.2)
+        d = u.to_dict()
+        assert d["mode"] == "C"
+
+    def test_neurochem_to_dict_includes_mode(self):
+        from src.neurochem import Neurochem
+        n = Neurochem()
+        d = n.to_dict()
+        assert d["mode"] == "R"
+
+
+# ── B0 Singleton РГК ───────────────────────────────────────────────────────
+
+class TestSingletonRGK:
+    """B0: каскад зеркал = ОДНА пара резонаторов. Production bootstrap
+    (`get_user_state()` + `CognitiveState.__init__`) использует
+    `get_global_rgk()` чтобы UserState/Neurochem/ProtectiveFreeze делили
+    один объект."""
+
+    def test_get_global_rgk_returns_singleton(self):
+        from src.rgk import get_global_rgk
+        a = get_global_rgk()
+        b = get_global_rgk()
+        assert a is b
+
+    def test_reset_global_rgk_returns_fresh(self):
+        from src.rgk import get_global_rgk, reset_global_rgk
+        a = get_global_rgk()
+        b = reset_global_rgk()
+        assert a is not b
+        c = get_global_rgk()
+        assert c is b
+
+    def test_user_state_default_creates_own_rgk(self):
+        """Backward compat: UserState() без rgk= создаёт собственный РГК."""
+        from src.user_state import UserState
+        from src.rgk import get_global_rgk
+        u = UserState()
+        assert u._rgk is not get_global_rgk()
+
+    def test_user_state_with_explicit_rgk_shares(self):
+        """Explicit rgk= sharing — production pattern."""
+        from src.user_state import UserState
+        from src.neurochem import Neurochem, ProtectiveFreeze
+        from src.rgk import РГК
+        rgk = РГК()
+        u = UserState(rgk=rgk)
+        n = Neurochem(rgk=rgk)
+        f = ProtectiveFreeze(rgk=rgk)
+        assert u._rgk is n._rgk is f._rgk is rgk
+
+    def test_production_bootstrap_shares_global(self):
+        """get_user_state() + CognitiveState — каскад зеркал на одном РГК."""
+        from src.rgk import reset_global_rgk
+        reset_global_rgk()
+        # Reset global UserState и global CognitiveState — иначе видим
+        # инстансы из прошлых тестов с другим _rgk.
+        import src.user_state
+        src.user_state._global_user = None
+        import src.horizon
+        src.horizon._global_state = None
+
+        from src.user_state import get_user_state
+        from src.horizon import get_global_state
+        u = get_user_state()
+        gs = get_global_state()
+        assert u._rgk is gs.neuro._rgk
+        assert u._rgk is gs.freeze._rgk
