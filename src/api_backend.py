@@ -137,11 +137,23 @@ def get_aperture() -> float:
 
     Default 0.5 (сбалансированный). Single-user — нет fallback из legacy
     `deep_response_format` ключей, новая система.
+
+    Resonance-aware cap: при `user.frequency_regime == 'short_wave'`
+    (симпатика/стресс) effective aperture капится в `min(0.4, raw)` —
+    не запускать панорамное рассуждение когда юзер не может резонировать
+    с длинной волной (Counter-wave принцип).
     """
     try:
-        return max(0.0, min(1.0, float(_settings.get("deep_aperture", 0.5))))
+        raw = max(0.0, min(1.0, float(_settings.get("deep_aperture", 0.5))))
     except (TypeError, ValueError):
-        return 0.5
+        raw = 0.5
+    try:
+        from .user_state import get_user_state
+        if get_user_state().frequency_regime == "short_wave":
+            return min(0.4, raw)
+    except Exception:
+        pass
+    return raw
 
 
 def _aperture_depth_mult(aperture: float) -> float:

@@ -35,12 +35,6 @@
 
 ---
 
-## ⚡ Cheap (1-3ч каждый, можно брать в любом порядке)
-
-- [ ] **`aperture` UI slider** — backend done (`get_aperture()` в `api_backend.py` + 3 derived функции, backward-compat infer из legacy `deep_response_format`, 5 unit tests). Осталось добавить slider в settings UI (🎯 Фокус | 📘 Эссе | 📖 Статья | 🌐 Панорама) + одна строка POST `deep_aperture` в `update_settings`. Spec — [resonance-code-changes.md](resonance-code-changes.md). ~1ч UI.
-
----
-
 ## 🌊 Tier 2 — фичи (большие, по очереди когда appetite)
 
 ### Резонансные

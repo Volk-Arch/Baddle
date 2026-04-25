@@ -595,9 +595,29 @@ class TestApertureDerivation:
         from src.api_backend import get_aperture
         assert get_aperture() == pytest.approx(0.5, abs=1e-6)
 
+    def test_aperture_capped_in_short_wave(self):
+        """Resonance-aware cap: при frequency_regime='short_wave' (стресс)
+        панорамная апертура капится в 0.4 — не запускать длинную волну
+        когда юзер на коротком ритме."""
+        from src import api_backend, user_state
+        # Force short_wave: coherence < 0.4 OR NE > 0.75
+        api_backend._settings["deep_aperture"] = 0.95   # raw панорамный
+        user_state._global_user = None
+        u = user_state.get_user_state()
+        u.hrv_coherence = 0.3   # < 0.4 → short_wave
+        u.hrv_rmssd = 20.0
+        assert u.frequency_regime == "short_wave"
+        from src.api_backend import get_aperture
+        assert get_aperture() == pytest.approx(0.4, abs=1e-6)
+        # Сбросим обратно: long_wave/mixed/flat НЕ капят
+        u.hrv_coherence = None   # → flat
+        assert u.frequency_regime == "flat"
+        assert get_aperture() == pytest.approx(0.95, abs=1e-6)
+
     def teardown_method(self):
-        from src import api_backend
+        from src import api_backend, user_state
         api_backend._settings.pop("deep_aperture", None)
+        user_state._global_user = None
 
 
 # ── Counter-wave (Правило 7) — UserState/Neurochem mode activation ──────────

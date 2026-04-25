@@ -4,11 +4,13 @@
 параметра. Реализует апертурный предел из [docs/resonance-model.md](../docs/resonance-model.md)
 и [docs/cone-design.md § Апертурный предел](../docs/cone-design.md#апертурный-предел-3d).
 
-> **Контекст:** другие два пункта пакета (`frequency_regime`, `focus_residue`)
-> завершены 2026-04-25 — см. `UserState.frequency_regime`, `UserState.focus_residue`.
-> Aperture отложен в Tier 2 потому что требует settings UI rework.
-
-Статус: **спецификация, не начато.** Оценка ~2ч код + ~1ч UI.
+Статус: **✅ done.** Все три пункта пакета реализованы:
+- `aperture` scalar + 3 derived getters в `src/api_backend.py` (Phase D).
+- UI slider в `settings_modal.html` + `settings.js` (Phase D).
+- 5 unit tests в `tests/test_rgk_properties.py § TestApertureScalar`.
+- `frequency_regime` integration: `get_aperture()` cap'ит до 0.4 при `short_wave`.
+- `focus_residue` decay в `user_state.decay_focus_residue` + `_advance_tick`.
+- `frequency_regime` formula в `rgk.frequency_regime()` (B4 Wave 2).
 
 ---
 
