@@ -68,7 +68,7 @@ Contact: `kriusovia@gmail.com`.
 Baddle runs fully **locally** by default — all user data (graphs,
 state, HRV, goals, profile) is stored in `data/` and `graphs/` on
 your machine. Licensor has no access to this data and no obligation
-to protect it beyond what is documented in [docs/storage-layout.md](docs/storage-layout.md).
+to protect it beyond what is documented in [docs/storage.md](docs/storage.md).
 
 If you configure Baddle to use a cloud LLM provider (OpenAI, Anthropic,
 etc.) via `settings.json`, **your data is sent to that third party

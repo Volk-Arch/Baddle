@@ -3,7 +3,7 @@
 Reference по schema всех файлов. **Append-only JSONL** для временных
 рядов, **single JSON** для snapshot'ов. Person-level в `data/`,
 per-workspace в `graphs/<ws>/`, registry в `workspaces/index.json` —
-физический layout целиком → [storage-layout.md](storage-layout.md).
+физический layout целиком → [storage.md](storage.md).
 
 ---
 

@@ -256,4 +256,4 @@ meta-tick на уровне дней.
 
 ---
 
-**Навигация:** [← Thinking operations](thinking-operations.md) · [Индекс](README.md) · [Storage layout →](storage-layout.md)
+**Навигация:** [← Thinking operations](thinking-operations.md) · [Индекс](README.md) · [Closure architecture →](closure-architecture.md)

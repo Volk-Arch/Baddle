@@ -186,7 +186,7 @@ Neurochem (системная сторона) эволюционирует по 
 
 10-минутная сессия: спокойное дыхание → baseline когерентности / RMSSD / LF/HF. Пороги = среднее ± 0.5 стандартных отклонения. Сохраняется в конфиг, обновляется со временем.
 
-Инфраструктура приёма сигналов (SensorStream, адаптеры Polar / Apple, формат persist) описана в [storage-layout § Sensor stream](storage-layout.md).
+Инфраструктура приёма сигналов (SensorStream, адаптеры Polar / Apple, формат persist) описана в [storage § Sensor stream](storage.md).
 
 ---
 

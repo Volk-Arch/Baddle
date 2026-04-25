@@ -2,7 +2,7 @@
 
 Документы читаются как книга: каждая глава опирается на предыдущую,
 каждый документ раскрывает термин, нужный следующему. Полный проход —
-≈ 4-5 часов, можно по одной главе в день. 22 основных doc'а в reading
+≈ 4-5 часов, можно по одной главе в день. 21 основный doc в reading
 order + вспомогательные (reference / context) + deprecated.
 
 ---
@@ -26,7 +26,7 @@ order + вспомогательные (reference / context) + deprecated.
 | «Как думает Baddle?» | [tick](tick-design.md) → [nand](nand-architecture.md) → [horizon](horizon-design.md) |
 | «Как адаптируется?» | [horizon](horizon-design.md) → [neurochem](neurochem-design.md) → [symbiosis](symbiosis-design.md) |
 | «Что такое симбиоз?» | [symbiosis](symbiosis-design.md) → [user-model](user-model-design.md) → [hrv](hrv-design.md) |
-| «Как помнит?» | [episodic-memory](episodic-memory.md) → [static-storage](static-storage-design.md) |
+| «Как помнит?» | [episodic-memory](episodic-memory.md) → [storage](storage.md) |
 | «Как находит инсайты?» | [thinking-operations](thinking-operations.md) — SmartDC / Pump / Novelty / Embedding-first |
 | «Как работает 24/7?» | [dmn-scout](dmn-scout-design.md) |
 | «Что в фоне дёргается?» | [alerts-and-cycles](alerts-and-cycles.md) — 21 check + alert types |
@@ -67,21 +67,20 @@ order + вспомогательные (reference / context) + deprecated.
 13. [capacity-design.md](capacity-design.md) *(20 мин)* — три контура нагрузки: физио / эмо / когн. Capacity через зоны, дневная метрика через observable, decision gate через компоненты.
 14. [episodic-memory.md](episodic-memory.md) *(30 мин)* — жизнь системы: state-graph → meta-tick → consolidation. Хеббовское крепление, ночная консолидация, детерминистический replay. Относится к когнитивному слою, хоть и работает с данными.
 
-### 📚 Глава 4 — Knowledge structures (70 мин)
+### 📚 Глава 4 — Knowledge structures (75 мин)
 *Как Baddle помнит.*
 
-15. [static-storage-design.md](static-storage-design.md) *(25 мин)* — profile / goals / solved archive. Замкнутый цикл с uncertainty-learning.
+15. [storage.md](storage.md) *(30 мин)* — physical layout (`data/` + `graphs/`) + content (profile / goals / solved archive) + sensor stream + reset. Замкнутый цикл с uncertainty-learning.
 16. [activity-log-design.md](activity-log-design.md) *(15 мин)* — `activity.jsonl`, 3 контура (event log / content graph / UserState), category → energy.
 17. [task-tracker-design.md](task-tracker-design.md) *(20 мин)* — задачный слой: backlog с оценкой сложности, auto-scheduling в план дня через capacity-зону, возврат незавершённого.
 18. [ontology.md](ontology.md) *(10 мин)* — **reference**: схемы всех data-файлов. Держи под рукой когда пишешь код.
 
-### 🔧 Глава 5 — Implementation (95 мин)
+### 🔧 Глава 5 — Implementation (85 мин)
 *Как всё собрано в единую систему.*
 
 19. [thinking-operations.md](thinking-operations.md) *(40 мин)* — 4 атомные операции на графе: SmartDC (диалектика), Pump (скрытые мосты), Novelty (фильтр повторов), Embedding-first (мышление без слов).
 20. [dmn-scout-design.md](dmn-scout-design.md) *(25 мин)* — фоновое сознание 24/7: 4 DMN-check + night cycle (Scout + REM + Consolidation) + heartbeat substrate.
-21. [storage-layout.md](storage-layout.md) *(10 мин)* — где что лежит на диске: `data/` / `graphs/<ws>/`, sensor stream инфраструктура, data flow, reset.
-22. [closure-architecture.md](closure-architecture.md) *(20 мин)* — как замкнуты инструменты: intent router, recurring / constraints, plan↔goal link, observation → suggestion, RAG.
+21. [closure-architecture.md](closure-architecture.md) *(20 мин)* — как замкнуты инструменты: intent router, recurring / constraints, plan↔goal link, observation → suggestion, RAG.
 
 ---
 
@@ -108,11 +107,9 @@ order + вспомогательные (reference / context) + deprecated.
                              ↓
                      [episodic-memory]
                              ↓
-              [static-storage] → [activity-log] → [task-tracker] → [ontology]
+                  [storage] → [activity-log] → [task-tracker] → [ontology]
                              ↓
-             [thinking-operations] → [dmn-scout]
-                             ↓
-                     [storage-layout] → [closure-architecture]
+             [thinking-operations] → [dmn-scout] → [closure-architecture]
 ```
 
 **Обратные стрелки** (user-model → symbiosis) означают: понимание

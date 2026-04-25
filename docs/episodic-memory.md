@@ -174,4 +174,4 @@ CONFLICT-ветвления, DMN walks по state-графу.
 
 ---
 
-**Навигация:** [← Capacity](capacity-design.md) · [Индекс](README.md) · [Следующее: Static storage →](static-storage-design.md)
+**Навигация:** [← Capacity](capacity-design.md) · [Индекс](README.md) · [Следующее: Storage →](storage.md)
