@@ -290,7 +290,7 @@ class CognitiveLoop:
 
         # Signal dispatcher — Phase B (2026-04-25). 13 детекторов в DETECTORS
         # collect signals → dispatcher решает emit/drop по urgency+budget+dedup.
-        # См. правило 1 в planning/simplification-plan.md.
+        # См. правило 1 в docs/architecture-rules.md.
         self._dispatcher = Dispatcher(
             budget_per_window=5,        # max 5 non-critical alerts/час
             window_s=3600.0,             # 1 час окно для budget + dedup

@@ -3,10 +3,9 @@
 > 🗺 **Где что:**
 > - **Эта страница** — что **остаётся сделать**.
 > - [docs/](../docs/) — как код работает (по подсистемам).
-> - [simplification-plan.md](simplification-plan.md) — strategy: 6 правил, дисциплина.
-> - [rgk-spec.md](rgk-spec.md) — теоретическая модель РГК.
-> - [decisions.md](decisions.md) — спорные решения сессий (что выбрали и почему).
-> - [cleanup-plan.md](cleanup-plan.md) — детальный план Phase E-I (опционально).
+> - [docs/architecture-rules.md](../docs/architecture-rules.md) — 7 правил архитектуры + фильтр для новых фич.
+> - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
+> - [cleanup-plan.md](cleanup-plan.md) — Track A + B оставшегося cleanup.
 > - [breathing-mode.md](breathing-mode.md), [resonance-code-changes.md](resonance-code-changes.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---
@@ -75,6 +74,11 @@
 - [ ] **`plan.create_from_text`** — «встречу в среду 11:00» → plan-object через LLM. **~2ч**.
 - [ ] **Предложение еды без tool-use** — реактивное и проактивное (pattern-detector видит «пропускаешь завтрак по четвергам → energy crash»). **~3ч**.
 - [ ] **Specialized card-рендеры для `fan` / `rhythm`** — сейчас оба падают в `deep_research` card. **~3ч**.
+- [ ] **Один чат** — убрать legacy entry, оставить единый chat UI. Дублирующая навигация копит cognitive overhead. **~2ч**.
+
+### Эмоциональная модель
+
+- [ ] **Модель Рассела (Valence × Arousal, 2D)** — UI-карта эмоционального состояния поверх существующих `valence` (LLM sentiment EMA) + `norepinephrine` (arousal proxy). Morning briefing раздел с координатой + траекторией за день. Надстройка без новых данных. **~3-4ч**.
 
 ### Action Memory расширения
 
@@ -160,7 +164,6 @@
 - **#5 Recurring = циклический goal-узел** (P4/R3). Только после доказательства #3.
 - **#6 Цели дня = 3 узла графа** (P4/R2). *Мнение:* **не делать полную замену** — goals имеют transactional семантику.
 - **#7 Узел выполнения** (P3/R4). *Мнение:* **да, быстрый win.** Action Memory делает 80%, остаётся форма + endpoint.
-- **#9 Один чат** (P3/R5). *Мнение:* **да, быстрый win.** Legacy UX на пару часов.
 - **#13 Constraints/preferences как узлы графа** (P4/R2). *Мнение:* **не делать** — `profile.json` editable руками, git-backup, viewable.
 - **#15 История чата влияет на reasoning** (P4/R3). *Мнение:* **делать** — это Tier 2 RAG в execute_deep.
 
@@ -171,7 +174,6 @@
 
 ### Пакет «Эмоциональная модель»
 
-- **#2 Модель Рассела (Valence × Arousal, 2D)** (P4/R4). *Мнение:* **да, лёгкий win.** Надстройка над существующими данными.
 - **#14 Emergent emotions из 2D** (P3/R2). *Мнение:* **не делать.** Дискретизация навязчива, риск psychological harm.
 
 ### Пакет «Задачный слой»

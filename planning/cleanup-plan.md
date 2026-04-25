@@ -2,7 +2,7 @@
 
 > Реалистичный compression bandwidth по аудиту 2026-04-25: **~420 LOC** через Track A (audit-driven small wins, не трогает adapter pattern) или **~1500-2500 LOC** через Track B (adapter unification, prerequisite Singleton РГК). Tracks **не пересекаются** по scope. Floor проекта **~22-23k**, не 5-7k. Архитектура **уже чистая** — 7 правил покрывают модель.
 >
-> Связь: [simplification-plan.md](simplification-plan.md) §5 (tradeoffs); [TODO.md](TODO.md) (текущие задачи); [decisions.md](decisions.md).
+> Связь: [TODO.md](TODO.md) (текущие задачи); [docs/architecture-rules.md](../docs/architecture-rules.md) (7 правил + фильтр).
 
 ---
 

@@ -73,7 +73,7 @@ Legacy `expectation` (scalar EMA state_level) и `surprise` (scalar)
 
 Все EMA-метрики живут в `self.metrics: MetricRegistry` — одна точка
 регистрации, обновления через `fire_event(type, **payload)`. Правило 2
-из planning/simplification-plan.md. События:
+из docs/architecture-rules.md. События:
 
   - `hrv_update` → serotonin, norepinephrine, hrv_baseline_by_tod_{tod}
   - `engagement` → dopamine (default decay)
@@ -383,7 +383,7 @@ class UserState:
         """5-axis резонансный баланс юзера: (DA·NE·ACh) / (5HT·GABA).
         ≈1.0 = резонанс; >1.5 гиперрезонанс; <0.5 гипостабильность.
         До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/5HT.
-        См. planning/rgk-spec.md §3.5."""
+        См. docs/neurochem-design.md § Балансовая формула."""
         return self._rgk.user.balance()
 
     @property
@@ -1139,9 +1139,9 @@ class UserState:
     def named_state(self) -> dict:
         """Ближайший регион РГК-карты по химическому профилю (5D).
 
-        8 регионов из rgk-spec.md §5: Поток / Устойчивость / Фокус-Тревога /
-        Исследование / Перегруз / Застой / Выгорание / Инсайт. Match по L2
-        в нормированном (DA, 5HT, NE, ACh, GABA) пространстве.
+        8 регионов: Поток / Устойчивость / Фокус-Тревога / Исследование /
+        Перегруз / Застой / Выгорание / Инсайт. Match по L2 в нормированном
+        (DA, 5HT, NE, ACh, GABA) пространстве — см. [user_state_map.py](user_state_map.py).
 
         Возвращает {key, label, advice, emoji, distance, coord}. emoji даёт
         визуальную метку для UI (🔵🟢🟠🟡🔴⚫⚪✨).

@@ -15,7 +15,7 @@
      `data/throttle_drops.jsonl` (формат сохраняется backward-compatible
      со старым `_log_throttle_drop`).
 
-См. правило 1 в [planning/simplification-plan.md](../planning/simplification-plan.md).
+См. правило 1 в [docs/architecture-rules.md](../docs/architecture-rules.md).
 
 ## Использование
 

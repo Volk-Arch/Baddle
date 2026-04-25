@@ -496,7 +496,7 @@ class TestPhaseDFeeders:
 
 class TestNamedState8Region:
     """Voronoi/named_state перепилен на 8-region РГК-карту по chem profile.
-    See src/user_state_map.py. Каждый target профиль из rgk-spec.md §5
+    See src/user_state_map.py. Каждый target профиль (хим. координаты региона)
     должен matchить свой регион bit-perfect (distance 0)."""
 
     @pytest.mark.parametrize("region,da,s,ne,ach,gaba", [

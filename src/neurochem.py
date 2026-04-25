@@ -1,7 +1,7 @@
 """Нейрохимия второго мозга — три скаляра, γ derived, burnout отдельно.
 
 Все EMA-метрики живут в `self.metrics: MetricRegistry` (2026-04-24, Фаза A
-из planning/simplification-plan.md). Правило 2: «любая производная метрика
+из docs/architecture-rules.md). Правило 2: «любая производная метрика
 это `EMA(source_event, decay)`». Обновления идут через `fire_event(type, **payload)`.
 
 Максимально простой контракт. Каждая формула — одна строка EMA.
@@ -172,7 +172,7 @@ class Neurochem:
         """5-axis резонансный баланс: (Gain·Aperture·Plasticity)/(Hyst·Damping).
         ≈1.0 = резонанс; >1.5 гиперрезонанс (срыв); <0.5 гипостабильность.
         До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/(5HT).
-        См. planning/rgk-spec.md §3.5."""
+        См. docs/neurochem-design.md § Балансовая формула."""
         return self._rgk.system.balance()
 
     @property

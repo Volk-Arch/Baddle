@@ -2,7 +2,7 @@
 
 Документы читаются как книга: каждая глава опирается на предыдущую,
 каждый документ раскрывает термин, нужный следующему. Полный проход —
-≈ 4-5 часов, можно по одной главе в день. 22 основных doc'а в reading
+≈ 4-5 часов, можно по одной главе в день. 23 основных doc'а в reading
 order + вспомогательные (reference / context) + deprecated.
 
 ---
@@ -34,6 +34,7 @@ order + вспомогательные (reference / context) + deprecated.
 | «Как измерить что работает?» | [friston-loop § Прайм-директива](friston-loop.md#связь-с-прайм-директивой) → `/assist/prime-directive` |
 | «Место Baddle относительно меня?» | [world-model](world-model.md) — каскад зеркал |
 | «Резонансная оптика / единый словарь?» | [resonance-model](resonance-model.md) — mapping «концепт ↔ Baddle ↔ код» |
+| «Какие принципы дизайна?» | [architecture-rules](architecture-rules.md) — 7 правил + фильтр для новых фич |
 | «Что не решено?» | [planning/TODO § Открытые вопросы](../planning/TODO.md) |
 
 ---
@@ -46,41 +47,42 @@ order + вспомогательные (reference / context) + deprecated.
 1. [origin-story.md](origin-story.md) *(10 мин)* — пять проектов сошлись через `prediction error`.
 2. [life-assistant-design.md](life-assistant-design.md) *(15 мин)* — четыре слоя стека: MindBalance + Тамагочи + Time Player + HRV.
 
-### 🧠 Глава 2 — Core concepts (85 мин)
+### 🧠 Глава 2 — Core concepts (100 мин)
 *Архитектура мышления на фундаментальном уровне.*
 
 3. [full-cycle.md](full-cycle.md) *(20 мин)* — полный цикл: статика + динамика, data flow одного запроса, lifecycle goal'а, три контура замкнутости.
-4. [nand-architecture.md](nand-architecture.md) *(30 мин)* — весь Baddle на одном примитиве `distinct()`. Эмерджентная логика, Git-версионирование графа.
-5. [cone-design.md](cone-design.md) *(15 мин)* — байесовский конус: 5 операций вокруг prediction error + универсальный ритм divergence/convergence, резонансные параметры конуса.
-6. [friston-loop.md](friston-loop.md) *(20 мин)* — **canonical PE layer**: 2 предиктора (user/self), 5 PE-каналов, `imbalance_pressure` aggregate, прайм-директива через `prime_directive.jsonl`. Читается рано — все последующие главы опираются на эту оптику.
+4. [architecture-rules.md](architecture-rules.md) *(15 мин)* — 7 правил архитектуры (Signal / EMA / Graph / distinct / PE / Resonator / Counter-wave) + фильтр для новых фич. Meta-обзор поверх остальных глав.
+5. [nand-architecture.md](nand-architecture.md) *(30 мин)* — весь Baddle на одном примитиве `distinct()`. Эмерджентная логика, Git-версионирование графа.
+6. [cone-design.md](cone-design.md) *(15 мин)* — байесовский конус: 5 операций вокруг prediction error + универсальный ритм divergence/convergence, резонансные параметры конуса.
+7. [friston-loop.md](friston-loop.md) *(20 мин)* — **canonical PE layer**: 2 предиктора (user/self), 5 PE-каналов, `imbalance_pressure` aggregate, прайм-директива через `prime_directive.jsonl`. Читается рано — все последующие главы опираются на эту оптику.
 
 ### 💭 Глава 3 — Cognitive layer (115 мин)
 *Состояние системы во времени: что ей хорошо, что плохо.*
 
-7. [tick-design.md](tick-design.md) *(15 мин)* — атомарный шаг мышления, фазы tick_nand, emergent через NAND.
-8. [horizon-design.md](horizon-design.md) *(20 мин)* — `CognitiveState`: precision, policy, γ, T, семь когнитивных состояний.
-9. [neurochem-design.md](neurochem-design.md) *(15 мин)* — dopamine / serotonin / norepinephrine, формулы EMA, RPE, ProtectiveFreeze.
-10. [symbiosis-design.md](symbiosis-design.md) *(15 мин)* — двойной state-вектор USER ↕ SYSTEM, `sync_error` как прайм-директива, 4 режима (flow/rest/protect/confess), таблица трёх схем классификации состояния.
-11. [user-model-design.md](user-model-design.md) *(20 мин)* — `UserState`: surprise, 10 named_states (Voronoi), day simulator.
-12. [hrv-design.md](hrv-design.md) *(20 мин)* — HRV как физический вход: coherence → θ/φ конуса, 4 activity zones, ВНС как переключатель несущей.
-13. [capacity-design.md](capacity-design.md) *(20 мин)* — три контура нагрузки: физио / эмо / когн. Capacity через зоны, дневная метрика через observable, decision gate через компоненты.
-14. [episodic-memory.md](episodic-memory.md) *(30 мин)* — жизнь системы: state-graph → meta-tick → consolidation. Хеббовское крепление, ночная консолидация, детерминистический replay. Относится к когнитивному слою, хоть и работает с данными.
+8. [tick-design.md](tick-design.md) *(15 мин)* — атомарный шаг мышления, фазы tick_nand, emergent через NAND.
+9. [horizon-design.md](horizon-design.md) *(20 мин)* — `CognitiveState`: precision, policy, γ, T, семь когнитивных состояний.
+10. [neurochem-design.md](neurochem-design.md) *(15 мин)* — dopamine / serotonin / norepinephrine, формулы EMA, RPE, ProtectiveFreeze.
+11. [symbiosis-design.md](symbiosis-design.md) *(15 мин)* — двойной state-вектор USER ↕ SYSTEM, `sync_error` как прайм-директива, 4 режима (flow/rest/protect/confess), таблица трёх схем классификации состояния.
+12. [user-model-design.md](user-model-design.md) *(20 мин)* — `UserState`: surprise, 10 named_states (Voronoi), day simulator.
+13. [hrv-design.md](hrv-design.md) *(20 мин)* — HRV как физический вход: coherence → θ/φ конуса, 4 activity zones, ВНС как переключатель несущей.
+14. [capacity-design.md](capacity-design.md) *(20 мин)* — три контура нагрузки: физио / эмо / когн. Capacity через зоны, дневная метрика через observable, decision gate через компоненты.
+15. [episodic-memory.md](episodic-memory.md) *(30 мин)* — жизнь системы: state-graph → meta-tick → consolidation. Хеббовское крепление, ночная консолидация, детерминистический replay. Относится к когнитивному слою, хоть и работает с данными.
 
 ### 📚 Глава 4 — Knowledge structures (70 мин)
 *Как Baddle помнит.*
 
-15. [static-storage-design.md](static-storage-design.md) *(25 мин)* — profile / goals / solved archive. Замкнутый цикл с uncertainty-learning.
-16. [activity-log-design.md](activity-log-design.md) *(15 мин)* — `activity.jsonl`, 3 контура (event log / content graph / UserState), category → energy.
-17. [task-tracker-design.md](task-tracker-design.md) *(20 мин)* — задачный слой: backlog с оценкой сложности, auto-scheduling в план дня через capacity-зону, возврат незавершённого.
-18. [ontology.md](ontology.md) *(10 мин)* — **reference**: схемы всех data-файлов. Держи под рукой когда пишешь код.
+16. [static-storage-design.md](static-storage-design.md) *(25 мин)* — profile / goals / solved archive. Замкнутый цикл с uncertainty-learning.
+17. [activity-log-design.md](activity-log-design.md) *(15 мин)* — `activity.jsonl`, 3 контура (event log / content graph / UserState), category → energy.
+18. [task-tracker-design.md](task-tracker-design.md) *(20 мин)* — задачный слой: backlog с оценкой сложности, auto-scheduling в план дня через capacity-зону, возврат незавершённого.
+19. [ontology.md](ontology.md) *(10 мин)* — **reference**: схемы всех data-файлов. Держи под рукой когда пишешь код.
 
 ### 🔧 Глава 5 — Implementation (95 мин)
 *Как всё собрано в единую систему.*
 
-19. [thinking-operations.md](thinking-operations.md) *(40 мин)* — 4 атомные операции на графе: SmartDC (диалектика), Pump (скрытые мосты), Novelty (фильтр повторов), Embedding-first (мышление без слов).
-20. [dmn-scout-design.md](dmn-scout-design.md) *(25 мин)* — фоновое сознание 24/7: 4 DMN-check + night cycle (Scout + REM + Consolidation) + heartbeat substrate.
-21. [storage-layout.md](storage-layout.md) *(10 мин)* — где что лежит на диске: `data/` / `graphs/<ws>/`, sensor stream инфраструктура, data flow, reset.
-22. [closure-architecture.md](closure-architecture.md) *(20 мин)* — как замкнуты инструменты: intent router, recurring / constraints, plan↔goal link, observation → suggestion, RAG.
+20. [thinking-operations.md](thinking-operations.md) *(40 мин)* — 4 атомные операции на графе: SmartDC (диалектика), Pump (скрытые мосты), Novelty (фильтр повторов), Embedding-first (мышление без слов).
+21. [dmn-scout-design.md](dmn-scout-design.md) *(25 мин)* — фоновое сознание 24/7: 4 DMN-check + night cycle (Scout + REM + Consolidation) + heartbeat substrate.
+22. [storage-layout.md](storage-layout.md) *(10 мин)* — где что лежит на диске: `data/` / `graphs/<ws>/`, sensor stream инфраструктура, data flow, reset.
+23. [closure-architecture.md](closure-architecture.md) *(20 мин)* — как замкнуты инструменты: intent router, recurring / constraints, plan↔goal link, observation → suggestion, RAG.
 
 ---
 
@@ -128,7 +130,7 @@ imbalance_pressure без контекста.
 | Doc | Зачем |
 |---|---|
 | [world-model.md](world-model.md) | Оптика проекта: каскад зеркал + resonance protocol + 5 механик. Содержит **canonical mapping** «внешние словари ↔ Baddle ↔ код» |
-| [resonance-model.md](resonance-model.md) | Резонансная рамка: волна/частота/чистота как единый словарь для существующих механик. Интерпретирующий слой над world-model |
+| [resonance-model.md](resonance-model.md) | Резонансная рамка: 5 аксиом + волна/частота/чистота как единый словарь для существующих механик. Интерпретирующий слой над world-model |
 | [alerts-and-cycles.md](alerts-and-cycles.md) | Полная карта фоновых check'ов + alert types + throttling math |
 | [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа |
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
@@ -162,6 +164,8 @@ imbalance_pressure без контекста.
 ---
 
 ## Как растить docs
+
+**Принцип:** `docs/` описывают **реальность** — как код работает сейчас, narrative-стиль, без temporal language («после Phase D», «ранее», «расширено»). `planning/` описывает **намерения** — что осталось делать, design specs для не-реализованных фич. Если код изменился — обновляется секция в docs, а не добавляется «после X». История — `git log` + `memory/project_session_*.md`.
 
 Когда добавляешь фичу:
 
