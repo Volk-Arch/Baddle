@@ -37,29 +37,23 @@
 
       <div class="assist-hrv-chart" id="assist-hrv-chart" aria-hidden="true"></div>
 
-      <!-- Energy: daily и резерв рядом, каждый со своим баром -->
-      <div class="assist-energy-grid">
-        <div class="assist-energy-cell" title="Daily energy: сбрасывается за ночь">
-          <div class="assist-energy-values">
-            <span id="assist-energy-value" class="assist-energy-big">100</span>
-            <span id="assist-energy-max" class="assist-energy-max">/100</span>
-          </div>
-          <div class="assist-energy-bar-bg">
-            <div id="assist-energy-bar" class="assist-energy-bar"></div>
-          </div>
-          <div class="assist-energy-label">daily</div>
+      <!-- Capacity: 3 контура (Физо/Эмо/Когн) — Phase C, см. docs/capacity-design.md -->
+      <div class="assist-capacity-grid" id="assist-capacity-grid"
+           title="3 контура capacity. Зелёный = ok, красный = провисает. См. tooltip каждого.">
+        <div class="capacity-cell" id="capacity-phys"
+             data-ind="phys" title="Физиологический: HRV когерентность + выгорание">
+          <span class="capacity-icon">🟢</span>
+          <span class="capacity-label">Физо</span>
         </div>
-        <div class="assist-energy-cell" title="Долгий резерв: общий пул, не сбрасывается (0-2000)">
-          <div class="assist-energy-values">
-            <span id="assist-reserve-big" class="assist-energy-big assist-reserve-big">75</span>
-            <span class="assist-energy-max">%</span>
-          </div>
-          <div class="assist-energy-bar-bg">
-            <div id="assist-reserve-bar" class="assist-reserve-bar"></div>
-          </div>
-          <div class="assist-energy-label">
-            резерв <span id="assist-reserve-value" class="assist-reserve-abs">—</span>
-          </div>
+        <div class="capacity-cell" id="capacity-affect"
+             data-ind="affect" title="Эмоциональный: серотонин + дофамин">
+          <span class="capacity-icon">🟢</span>
+          <span class="capacity-label">Эмо</span>
+        </div>
+        <div class="capacity-cell" id="capacity-cogload"
+             data-ind="cogload" title="Когнитивная нагрузка: tasks + switches + complexity">
+          <span class="capacity-icon">🟢</span>
+          <span class="capacity-label">Когн</span>
         </div>
       </div>
 
@@ -558,8 +552,6 @@
       <button class="activity-btn" onclick="profileOpen()" title="Preferences и constraints по категориям">👤 Профиль</button>
       <button class="activity-btn" onclick="openSettings()" title="API url / модель / neural defaults">⚙ API / модель</button>
       <button class="activity-btn" onclick="openCheckin()" title="Daily check-in">📝 Check-in</button>
-      <button class="activity-btn" onclick="resetEnergy()"
-              title="Сбросить дневной бюджет энергии на полный. long_reserve не трогается.">⚡ Сбросить энергию</button>
       <button class="activity-btn" onclick="debugAlertsCheck()"
               title="Прогнать все 17 фоновых check'ов и показать отчёт в чате: какие выдали alert, какие молчат.">🧪 Проверить алерты</button>
       <button class="activity-btn" onclick="assistClearChat()"

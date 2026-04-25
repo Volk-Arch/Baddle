@@ -133,51 +133,59 @@ def test_coherence_crit_none_when_no_data(ctx):
         assert detect_coherence_crit(ctx) is None
 
 
-# ── detect_low_energy ──────────────────────────────────────────────────────
+# ── detect_low_capacity_heavy (Phase C: capacity_zone gate) ───────────────
 
-def test_low_energy_emits_with_heavy_goal(ctx):
-    with patch("src.assistant._get_context") as mock_actx, \
-         patch("src.goals_store.list_goals") as mock_goals:
-        mock_actx.return_value = {"energy": {"energy": 20}}
+def _ctx_with_capacity(ctx, zone, reasons):
+    """Helper: устанавливает capacity_zone + capacity_reason на user mock."""
+    ctx.user.capacity_zone = zone
+    ctx.user.capacity_reason = reasons
+
+
+def test_low_capacity_emits_with_heavy_goal(ctx):
+    _ctx_with_capacity(ctx, "red", ["serotonin_low", "cogload_high"])
+    with patch("src.goals_store.list_goals") as mock_goals:
         mock_goals.return_value = [
             {"id": 42, "text": "Switch tech stack", "mode": "decision"}
         ]
         sig = detect_low_energy(ctx)
     assert sig is not None
-    assert sig.type == "low_energy_heavy"
+    assert sig.type == "low_energy_heavy"   # backward-compat alert.type
     assert sig.dedup_key == "low_energy_heavy:42"
     assert sig.content["goal_id"] == 42
-    assert sig.urgency > 0.5
+    assert sig.content["zone"] == "red"
+    assert "serotonin_low" in sig.content["reason"]
+    assert sig.urgency >= 0.6
 
 
-def test_low_energy_critical_when_near_zero(ctx):
-    with patch("src.assistant._get_context") as mock_actx, \
-         patch("src.goals_store.list_goals") as mock_goals:
-        mock_actx.return_value = {"energy": {"energy": 3}}
+def test_low_capacity_critical_when_all_fail(ctx):
+    """4 fail'а (max possible — все 4 reason тегов) → critical 0.95."""
+    _ctx_with_capacity(ctx, "red",
+        ["hrv_coherence_low", "burnout_high", "serotonin_low", "cogload_high"])
+    with patch("src.goals_store.list_goals") as mock_goals:
         mock_goals.return_value = [
             {"id": 1, "text": "decision", "mode": "decision"}
         ]
         sig = detect_low_energy(ctx)
     assert sig is not None
-    assert sig.urgency >= 0.9   # near-zero energy bypass
+    assert sig.urgency >= 0.9
 
 
-def test_low_energy_none_when_above_threshold(ctx):
-    with patch("src.assistant._get_context") as mock_actx, \
-         patch("src.goals_store.list_goals") as mock_goals:
-        mock_actx.return_value = {"energy": {"energy": 60}}
+def test_low_capacity_none_when_zone_not_red(ctx):
+    """zone=yellow или green — не fire, юзер не в красной зоне."""
+    _ctx_with_capacity(ctx, "yellow", ["serotonin_low"])
+    with patch("src.goals_store.list_goals") as mock_goals:
         mock_goals.return_value = [
             {"id": 1, "text": "decision", "mode": "decision"}
         ]
         assert detect_low_energy(ctx) is None
 
 
-def test_low_energy_none_without_heavy_goal(ctx):
-    with patch("src.assistant._get_context") as mock_actx, \
-         patch("src.goals_store.list_goals") as mock_goals:
-        mock_actx.return_value = {"energy": {"energy": 20}}
+def test_low_capacity_none_without_heavy_goal(ctx):
+    """red zone + только light-mode goal → не fire."""
+    _ctx_with_capacity(ctx, "red", ["serotonin_low", "cogload_high"])
+    with patch("src.goals_store.list_goals") as mock_goals:
         mock_goals.return_value = [
-            {"id": 1, "text": "lightweight", "mode": "fan"}   # not in HEAVY_MODES
+            {"id": 1, "text": "lightweight", "mode": "fan"}
         ]
         assert detect_low_energy(ctx) is None
 

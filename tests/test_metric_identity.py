@@ -296,7 +296,7 @@ def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(UserState, "_current_tod",
                          staticmethod(lambda: "day"))
 
-    from src.user_state import set_user_state, get_user_state, LONG_RESERVE_MAX
+    from src.user_state import set_user_state, get_user_state
     from src.ema import Decays
 
     # Prepare fresh user
@@ -306,18 +306,14 @@ def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
     fresh.tick_expectation()
     set_user_state(fresh)
 
-    # Apply checkin with all fields
+    # Apply checkin with all fields. Phase C: `energy` field больше не
+    # обрабатывается checkins (long_reserve удалён) — checkin отдаёт только
+    # stress/focus/reality/expected.
     entry = {"energy": 40, "stress": 70, "focus": 80,
              "expected": 1, "reality": -1}
     checkins.apply_to_user_state(entry)
 
     u = get_user_state()
-
-    # Verify expected mutations vs manual math
-    # energy 40 → target_pct 0.4, decay CHECKIN_ENERGY (0.85)
-    # cur_pct = LONG_RESERVE_DEFAULT(1500) / 2000 = 0.75
-    # new_pct = 0.85*0.75 + 0.15*0.4 = 0.6975, long_reserve = 1395
-    assert u.long_reserve == pytest.approx(0.6975 * LONG_RESERVE_MAX, abs=0.1)
 
     # stress 70 → target_ne 0.7, decay CHECKIN_STRESS (0.7)
     # cur_ne after hrv_update(stress=0.3) = 0.9*0.5 + 0.1*0.3 = 0.48

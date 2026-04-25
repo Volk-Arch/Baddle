@@ -160,29 +160,23 @@ def rolling_averages(days: int = 7) -> dict:
 def apply_to_user_state(entry: dict):
     """Спроецировать check-in в UserState — заменяет роль HRV когда HRV off.
 
-    - energy (0-100) → long_reserve bump/pull
     - stress (0-100) → NE EMA bump
     - focus  (0-100) → serotonin EMA bump
     - reality (-2..+2) → valence + subjective_surprise (если есть expected)
     - expected (-2..+2) → используется вместе с reality для nudge expectation
+
+    Phase C: `energy` поле checkin'а больше не пишется (long_reserve удалён в
+    Шаге 6). Если юзер пишет energy — игнорируется. Когнитивная нагрузка
+    теперь считается через `cognitive_load_today` из activity_log.
 
     Decay constants — см. `src/ema.py::Decays.CHECKIN_*`. Checkin decays
     агрессивнее обычных (0.6-0.85 vs 0.9-0.98) — явный user input должен
     корректировать модель сильнее чем автоматические feeders.
     """
     try:
-        from .user_state import get_user_state, LONG_RESERVE_MAX
+        from .user_state import get_user_state
         from .ema import Decays
         user = get_user_state()
-
-        # Energy: corrective EMA на long_reserve (не в registry — bespoke
-        # dual-pool legacy, уходит в capacity migration).
-        if entry.get("energy") is not None:
-            target_pct = entry["energy"] / 100.0
-            cur_pct = user.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX else 0.5
-            de = Decays.CHECKIN_ENERGY
-            new_pct = de * cur_pct + (1 - de) * target_pct
-            user.long_reserve = new_pct * LONG_RESERVE_MAX
 
         # Stress/focus/reality → NE/serotonin/valence через checkin event.
         # Каждая метрика получает per-event decay_override из Decays.CHECKIN_*

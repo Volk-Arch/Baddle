@@ -1,6 +1,62 @@
 // ── Baddle Assistant — chat-first interface ──────────────────────────
 
-let _assistEnergy = { energy: 100, max: 100, decisions_today: 0 };
+// Phase C Шаг 6: _assistEnergy global удалён. Используем _assistCapacity.
+// Backend в /assist response отдаёт
+// `capacity: {zone, reason[], phys_ok, affect_ok, cogload_ok, cognitive_load_today}`.
+let _assistCapacity = {
+  zone: 'green', reason: [],
+  phys_ok: true, affect_ok: true, cogload_ok: true,
+  cognitive_load_today: 0.0,
+};
+
+const _CAPACITY_REASON_RU = {
+  hrv_coherence_low: 'когерентность HRV низкая',
+  burnout_high:      'выгорание высокое',
+  serotonin_low:     'серотонин низкий',
+  dopamine_low:      'мотивация просела',
+  cogload_high:      'когнитивная нагрузка высокая',
+};
+
+function _capacityIndicatorTooltip(indKey) {
+  // Базовый текст из data-attr (HTML title) + reason если этот контур fail
+  const base = {
+    phys: 'Физиологический: HRV когерентность + выгорание',
+    affect: 'Эмоциональный: серотонин + дофамин',
+    cogload: 'Когнитивная нагрузка: tasks + switches + complexity',
+  }[indKey] || '';
+  const myReasons = (_assistCapacity.reason || []).filter(r => {
+    if (indKey === 'phys') return r === 'hrv_coherence_low' || r === 'burnout_high';
+    if (indKey === 'affect') return r === 'serotonin_low' || r === 'dopamine_low';
+    if (indKey === 'cogload') return r === 'cogload_high';
+    return false;
+  });
+  if (!myReasons.length) return base;
+  const ru = myReasons.map(r => _CAPACITY_REASON_RU[r] || r).join(', ');
+  return `${base}\n— ${ru}`;
+}
+
+function updateCapacityIndicators() {
+  const grid = document.getElementById('assist-capacity-grid');
+  if (!grid) return;
+  // Overall zone class на grid
+  grid.classList.remove('zone-yellow', 'zone-red');
+  if (_assistCapacity.zone === 'yellow') grid.classList.add('zone-yellow');
+  else if (_assistCapacity.zone === 'red') grid.classList.add('zone-red');
+
+  const items = [
+    { id: 'capacity-phys',    ok: _assistCapacity.phys_ok,    key: 'phys' },
+    { id: 'capacity-affect',  ok: _assistCapacity.affect_ok,  key: 'affect' },
+    { id: 'capacity-cogload', ok: _assistCapacity.cogload_ok, key: 'cogload' },
+  ];
+  for (const item of items) {
+    const cell = document.getElementById(item.id);
+    if (!cell) continue;
+    const icon = cell.querySelector('.capacity-icon');
+    if (icon) icon.textContent = item.ok ? '🟢' : '🔴';
+    cell.classList.toggle('fail', !item.ok);
+    cell.title = _capacityIndicatorTooltip(item.key);
+  }
+}
 let _assistHRV = null;
 let _assistAlertsPolling = false;
 
@@ -100,23 +156,8 @@ async function debugAlertsCheck() {
   }
 }
 
-async function resetEnergy() {
-  try {
-    const r = await fetch('/user_state/reset-energy', {method: 'POST'});
-    const d = await r.json();
-    if (d.ok) {
-      _assistEnergy = d.energy;
-      if (typeof assistUpdateHeader === 'function') assistUpdateHeader();
-      if (typeof assistAddMsg === 'function') {
-        assistAddMsg('assistant',
-          `⚡ Энергия восстановлена: ${Math.round(d.energy.energy)}/${Math.round(d.energy.max)}.`,
-          { mode_name: 'Защита' });
-      }
-    }
-  } catch (e) {
-    alert('Ошибка сброса энергии: ' + e.message);
-  }
-}
+// resetEnergy() удалён в Phase C Шаг 6 — dual-pool energy заменена capacity
+// (auto-roll, без manual reset). Кнопка из HTML тоже убрана.
 
 async function reloadDemo() {
   const typed = prompt(
@@ -1081,7 +1122,7 @@ function _assistShowResponse(d, originalText, lang) {
   }
 
   // Update energy/HRV display
-  if (d.energy) _assistEnergy = d.energy;
+  if (d.capacity) _assistCapacity = d.capacity;
   if (d.hrv !== undefined) _assistHRV = d.hrv;
   assistUpdateHeader();
 
@@ -1348,49 +1389,10 @@ var _assistHRVHistory = [];
 const HRV_HISTORY_LEN = 10;
 
 function assistUpdateHeader() {
-  const energyEl = document.getElementById('assist-energy-value');
-  const energyMaxEl = document.getElementById('assist-energy-max');
-  const energyBar = document.getElementById('assist-energy-bar');
-  const energyBig = document.getElementById('assist-energy-value');
   const hrvEl = document.getElementById('assist-hrv-status') || document.getElementById('assist-hrv-value');
 
-  // Energy — daily (быстрый пул) + long_reserve (общий медленный)
-  if (energyEl) energyEl.textContent = Math.round(_assistEnergy.energy);
-  if (energyMaxEl) energyMaxEl.textContent = '/' + Math.round(_assistEnergy.max);
-  if (energyBar && energyBig) {
-    const pct = (_assistEnergy.energy / _assistEnergy.max) * 100;
-    energyBar.style.width = pct + '%';
-    let color = '#10b981';
-    if (pct < 20) color = '#ef4444';
-    else if (pct < 50) color = '#f59e0b';
-    energyBar.style.background = color;
-    energyBig.style.color = color;
-  }
-
-  // Long reserve (общий пул, max 2000). Big число = процент, subtitle = N/2000.
-  const reserveBar = document.getElementById('assist-reserve-bar');
-  const reserveValue = document.getElementById('assist-reserve-value');
-  const reserveBig = document.getElementById('assist-reserve-big');
-  if (reserveBar && reserveValue && reserveBig) {
-    const lr = _assistEnergy.long_reserve;
-    const lrMax = _assistEnergy.long_reserve_max || 2000;
-    const lrPct = _assistEnergy.long_reserve_pct;
-    if (typeof lr === 'number' && typeof lrPct === 'number') {
-      const pct100 = Math.round(lrPct * 100);
-      reserveBar.style.width = pct100 + '%';
-      reserveBig.textContent = pct100;
-      let lrColor = '#818cf8';
-      if (lrPct < 0.3) lrColor = '#ef4444';
-      else if (lrPct < 0.7) lrColor = '#f59e0b';
-      reserveBar.style.background = lrColor;
-      reserveBig.style.color = lrColor;
-      reserveValue.textContent = `${Math.round(lr)}/${Math.round(lrMax)}`;
-    } else {
-      reserveBar.style.width = '0%';
-      reserveBig.textContent = '—';
-      reserveValue.textContent = '—';
-    }
-  }
+  // Phase C: capacity 3-zone indicators (заменили dual-pool energy bars)
+  updateCapacityIndicators();
 
   // HRV status text
   if (hrvEl) {
@@ -2624,7 +2626,7 @@ async function assistRefreshStatus() {
   try {
     const r = await fetch('/assist/status');
     const d = await r.json();
-    if (d.energy) _assistEnergy = d.energy;
+    if (d.capacity) _assistCapacity = d.capacity;
     if (d.hrv !== undefined) _assistHRV = d.hrv;
     assistUpdateHeader();
   } catch(e) {}
@@ -2649,7 +2651,7 @@ async function assistMorningBriefing() {
     } else if (d.text) {
       assistAddMsg('assistant', d.text, { mode_name: 'утренний брифинг' });
     }
-    if (d.energy) _assistEnergy = d.energy;
+    if (d.capacity) _assistCapacity = d.capacity;
     if (d.hrv !== undefined) _assistHRV = d.hrv;
     assistUpdateHeader();
   } catch(e) {
@@ -2907,7 +2909,7 @@ async function assistPollAlerts() {
       _assistLastAlertTypes.clear();
       bridgeKeys.forEach(k => _assistLastAlertTypes.add(k));
     }
-    if (d.energy) _assistEnergy = d.energy;
+    if (d.capacity) _assistCapacity = d.capacity;
     if (d.hrv !== undefined) _assistHRV = d.hrv;
     assistUpdateHeader();
   } catch(e) {}
@@ -3039,7 +3041,20 @@ async function saveCheckin() {
       try {
         const st = await (await fetch('/assist/state')).json();
         _updateNeurochemPanel(st);
-        if (st.user_state?.energy) _assistEnergy = st.user_state.energy;
+        if (st.user_state?.capacity_zone) {
+          // /assist/state user_state.to_dict() даёт capacity_zone + capacity_reason
+          _assistCapacity = {
+            zone: st.user_state.capacity_zone,
+            reason: st.user_state.capacity_reason || [],
+            phys_ok: !((st.user_state.capacity_reason || []).some(r =>
+              r === 'hrv_coherence_low' || r === 'burnout_high')),
+            affect_ok: !((st.user_state.capacity_reason || []).some(r =>
+              r === 'serotonin_low' || r === 'dopamine_low')),
+            cogload_ok: !((st.user_state.capacity_reason || []).some(r =>
+              r === 'cogload_high')),
+            cognitive_load_today: st.user_state.cognitive_load_today || 0,
+          };
+        }
         assistUpdateHeader();
       } catch(e) {}
     }

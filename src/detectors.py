@@ -165,26 +165,25 @@ def detect_coherence_crit(ctx: DetectorContext) -> Optional[Signal]:
         return None
 
 
-def detect_low_energy(ctx: DetectorContext) -> Optional[Signal]:
-    """daily_remaining < 30 + есть heavy-mode goal → предложить перенести.
+def detect_low_capacity_heavy(ctx: DetectorContext) -> Optional[Signal]:
+    """capacity_zone == red + есть heavy-mode goal → предложить перенести.
 
-    urgency = 0.5 + 0.4 * (1 - daily/30) → 0.5..0.9 при daily<30. Critical
-    при daily<5.
+    Phase C migration: legacy `daily_energy < 30` gate → 3-zone capacity.
+    Type alert остаётся `low_energy_heavy` для UI backward-compat (alert.type
+    consumed by JS handlers, ext libs etc).
 
-    Defensive: внешние вызовы (assistant._get_context, goals_store) могут
-    упасть — возвращаем None.
+    urgency:
+        2 fail (red minimal): 0.6
+        3 fail (всё провисает — exhausted): 0.95 critical
+    Heavy modes (HEAVY_MODES на CognitiveLoop): tournament/bayes/race/etc.
+
+    Defensive: external calls могут упасть → None.
     """
     try:
-        from .assistant import _get_context
-        from .goals_store import list_goals
-
-        actx = _get_context(reset_daily=False)
-        energy = actx.get("energy") or {}
-        daily = energy.get("energy", 100)
-        threshold = ctx.loop.LOW_ENERGY_THRESHOLD   # 30
-        if daily >= threshold:
+        if ctx.user.capacity_zone != "red":
             return None
 
+        from .goals_store import list_goals
         open_goals = list_goals(status="open", limit=20)
         heavy = [g for g in open_goals if g.get("mode") in ctx.loop.HEAVY_MODES]
         if not heavy:
@@ -192,25 +191,33 @@ def detect_low_energy(ctx: DetectorContext) -> Optional[Signal]:
         g0 = heavy[0]
         txt = (g0.get("text") or "")[:80]
 
-        deficit = 1.0 - max(0.0, float(daily)) / float(threshold)
-        urgency = min(0.95, 0.5 + 0.4 * deficit)
-        if daily < 5:
-            urgency = 0.95   # critical — practically out of energy
+        # urgency: чем больше fail'ов тем выше. capacity_reason — list строк.
+        n_fails = len(ctx.user.capacity_reason or [])
+        urgency = 0.6 + 0.1 * min(3, n_fails)   # 0.6..0.9
+        if n_fails >= 4:
+            urgency = 0.95   # critical: physical+emotional+cognitive все провисают
+
+        # Reason для UI — переводим первые 2 reason'а в человеческую строку
+        reason_tags = ctx.user.capacity_reason or []
+        from .assistant import _capacity_reason_text
+        reason_ru = _capacity_reason_text(reason_tags[:2], "ru")
+        reason_en = _capacity_reason_text(reason_tags[:2], "en")
 
         return Signal(
-            type="low_energy_heavy",
+            type="low_energy_heavy",   # backward-compat alert.type
             urgency=urgency,
             content={
                 "type": "low_energy_heavy",
                 "severity": "warning",
-                "text": f"Энергия {int(daily)}/100. Тяжёлое решение «{txt}» — "
+                "text": f"Capacity red — {reason_ru}. Тяжёлое решение «{txt}» — "
                         f"перенести на утро?",
-                "text_en": f"Energy {int(daily)}/100. Heavy decision '{txt}' — "
+                "text_en": f"Capacity red — {reason_en}. Heavy decision '{txt}' — "
                            f"move to tomorrow morning?",
                 "goal_id": g0.get("id"),
                 "goal_text": txt,
                 "goal_mode": g0.get("mode"),
-                "energy": int(daily),
+                "zone": "red",
+                "reason": reason_tags,
                 "actions": [
                     {"label": "Перенести", "label_en": "Postpone",
                      "action": "postpone_goal_tomorrow", "goal_id": g0.get("id")},
@@ -218,12 +225,16 @@ def detect_low_energy(ctx: DetectorContext) -> Optional[Signal]:
                      "action": "dismiss"},
                 ],
             },
-            expires_at=ctx.now + 1800,   # 30 мин — потом контекст устареет
+            expires_at=ctx.now + 1800,
             dedup_key=f"low_energy_heavy:{g0.get('id')}",
-            source="detect_low_energy",
+            source="detect_low_capacity_heavy",
         )
     except Exception:
         return None
+
+
+# Backward-compat alias — старое имя в DETECTORS list
+detect_low_energy = detect_low_capacity_heavy
 
 
 def detect_plan_reminder(ctx: DetectorContext) -> Optional[Signal]:

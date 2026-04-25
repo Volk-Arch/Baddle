@@ -19,28 +19,11 @@ from .cognitive_loop import get_cognitive_loop
 from .assistant_exec import execute as execute_mode
 
 
-# ── Decision cost by mode complexity (MindBalance intuition) ────────────────
-
-# Сложность режима определяет энергоёмкость решения. Разные моды тратят
-# разные объёмы — простой brainstorm ≠ tournament с LLM-судейством.
-_MODE_COST = {
-    # simple — быстрые, почти free flow
-    "free": 3, "scout": 3, "fan": 3,
-    # moderate — направленные, один LLM-путь
-    "vector": 6, "horizon": 6, "rhythm": 4, "bayes": 7,
-    # complex — multi-step, AND/OR cluster
-    "builder": 10, "pipeline": 10, "cascade": 10, "scales": 8,
-    # critical — XOR с LLM-judge + смысловая ответственность
-    "tournament": 12, "dispute": 12,
-    # race — быстрее XOR
-    "race": 6,
-}
-_DEFAULT_COST = 6
-
-
-def _decision_cost(mode_id: str) -> int:
-    """Стоимость решения в daily energy единицах по mode_id."""
-    return _MODE_COST.get(mode_id, _DEFAULT_COST)
+# Phase C Шаг 6: _MODE_COST / _decision_cost удалены — энергоёмкость per-mode
+# больше не используется как gate. Decision-gate теперь идёт через 3-zone
+# capacity (capacity_zone), cost per activity снимается через activity_log
+# duration × category rate (CATEGORY_ENERGY_COST_PER_MIN в activity_log.py)
+# и питает cognitive_load_today.
 
 
 # ── Category detection (lightweight keyword-first) ─────────────────────
@@ -102,7 +85,6 @@ def _load_state() -> dict:
         if not data:
             data = {
                 "decisions_today": 0,
-                "daily_spent": 0.0,   # сумма энергии потраченной за сегодня (дробная)
                 "last_reset_date": None,
                 "last_interaction": None,
                 "total_decisions": 0,
@@ -146,15 +128,44 @@ def _today_date() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+_CAPACITY_REASON_RU = {
+    "hrv_coherence_low": "когерентность HRV низкая",
+    "burnout_high":      "выгорание высокое",
+    "serotonin_low":     "серотонин низкий",
+    "dopamine_low":      "мотивация просела",
+    "cogload_high":      "когнитивная нагрузка высокая",
+}
+_CAPACITY_REASON_EN = {
+    "hrv_coherence_low": "HRV coherence low",
+    "burnout_high":      "burnout high",
+    "serotonin_low":     "serotonin low",
+    "dopamine_low":      "motivation low",
+    "cogload_high":      "cognitive load high",
+}
+
+
+def _capacity_reason_text(reasons: list, lang: str = "ru") -> str:
+    """Перевод [hrv_coherence_low, cogload_high] → 'когерентность HRV низкая,
+    когнитивная нагрузка высокая'. Используется в decision-gate explanation."""
+    table = _CAPACITY_REASON_RU if lang == "ru" else _CAPACITY_REASON_EN
+    parts = [table.get(r, r) for r in (reasons or [])]
+    if not parts:
+        return "общая нагрузка высокая" if lang == "ru" else "load is high"
+    return ", ".join(parts)
+
+
 def _ensure_daily_reset(state: dict) -> dict:
-    """Reset daily counters if date changed. Полуночный хук восстанавливает
-    long_reserve (ночное восстановление из MindBalance v2)."""
+    """Reset daily counters if date changed. Phase C: вызывает
+    `UserState.rollover_day(hrv_recovery)` — он:
+      • Persist'ит yesterday's cognitive_load в day_summary
+      • Snapshot'ит sync_error_at_dawn для today (для progress_delta)
+      • Reset'ит cognitive_load_today
+
+    Idempotent через date-gate на state["last_reset_date"]."""
     today = _today_date()
     if state.get("last_reset_date") != today:
-        # Ночь прошла — восстановим long reserve через HRV (если был)
         prev_date = state.get("last_reset_date")
         state["decisions_today"] = 0
-        state["daily_spent"] = 0.0
         state["last_reset_date"] = today
         if prev_date:
             try:
@@ -163,68 +174,25 @@ def _ensure_daily_reset(state: dict) -> dict:
                 rec = None
                 if hrv_mgr.is_running:
                     rec = (hrv_mgr.get_baddle_state() or {}).get("energy_recovery")
-                get_user_state().recover_long_reserve(hrv_recovery=rec)
+                get_user_state().rollover_day(hrv_recovery=rec)
             except Exception as e:
-                print(f"[assistant] overnight recovery error: {e}")
+                print(f"[assistant] overnight rollover error: {e}")
     return state
-
-
-def _compute_energy(state: dict, hrv_recovery: Optional[float] = None) -> dict:
-    """Compute current energy level. Dual-pool: daily + long_reserve.
-
-    daily_spent — фактически потраченная сегодня энергия (модально-взвешенная,
-    см. _decision_cost). Ceiling модулируется HRV recovery.
-    long_reserve — медленный пул, тратится при daily<20 как подстраховка.
-    """
-    daily_spent = float(state.get("daily_spent", 0.0))
-    base_max = 100.0
-    if hrv_recovery is not None:
-        base_max = 40 + 60 * hrv_recovery
-    daily_remaining = max(0.0, base_max - daily_spent)
-
-    from .user_state import get_user_state
-    user = get_user_state()
-    pool = user.energy_snapshot(state.get("decisions_today", 0))
-    return {
-        "energy": round(daily_remaining, 0),
-        "max": round(base_max, 0),
-        "decisions_today": state.get("decisions_today", 0),
-        "daily_spent": round(daily_spent, 1),
-        "recovery": hrv_recovery,
-        "long_reserve": pool["long_reserve"],
-        "long_reserve_max": pool["long_reserve_max"],
-        "long_reserve_pct": pool["long_reserve_pct"],
-        "burnout_risk": pool["burnout_risk"],
-    }
 
 
 def _log_decision(state: dict, kind: str, meta: dict = None, mode_id: str = None,
                   hrv_recovery: Optional[float] = None):
-    """Record decision. Debits energy по сложности mode_id (MindBalance intuition).
+    """Record decision history + increment decisions_today counter.
 
-    Dual-pool: если daily<20 → cascade в long_reserve (см. UserState.debit_energy).
+    Phase C: dual-pool debit removed. Cost per mode (`_MODE_COST`) удалён —
+    burnout EMA теперь питается через `update_from_energy(decisions_today)`,
+    а decision-gate идёт через `capacity_zone` (см. docs/capacity-design.md).
     """
-    cost = _decision_cost(mode_id) if mode_id else _DEFAULT_COST
     state["decisions_today"] = state.get("decisions_today", 0) + 1
     state["total_decisions"] = state.get("total_decisions", 0) + 1
     state["last_interaction"] = time.time()
 
-    # Dual-pool debit
-    base_max = 40 + 60 * hrv_recovery if hrv_recovery is not None else 100.0
-    daily_remaining = max(0.0, base_max - float(state.get("daily_spent", 0.0)))
-    debit = {"daily_used": cost, "long_used": 0.0}
-    try:
-        from .user_state import get_user_state
-        debit = get_user_state().debit_energy(cost, daily_remaining)
-    except Exception as e:
-        print(f"[assistant] debit error: {e}")
-    state["daily_spent"] = float(state.get("daily_spent", 0.0)) + debit["daily_used"]
-
-    entry = {
-        "ts": time.time(), "kind": kind,
-        "cost": cost, "daily_used": round(debit["daily_used"], 1),
-        "long_used": round(debit["long_used"], 1),
-    }
+    entry = {"ts": time.time(), "kind": kind}
     if meta:
         entry.update(meta)
     state.setdefault("history", []).append(entry)
@@ -235,13 +203,14 @@ def _log_decision(state: dict, kind: str, meta: dict = None, mode_id: str = None
 # ── Shared context helper (state + HRV + energy) ──────────────────────
 
 def _get_context(reset_daily: bool = True) -> Dict:
-    """Load user state + HRV snapshot + computed energy.
+    """Load user state + HRV snapshot + capacity (Phase C 3-zone gate).
 
     Returns:
       {
         "state": dict (loaded user_state.json, daily-reset applied),
         "hrv": dict | None (baddle_state or None if HRV off),
-        "energy": dict (computed from state + hrv.energy_recovery),
+        "capacity": dict {zone, reason[], phys_ok, affect_ok, cogload_ok,
+                          cognitive_load_today} — primary decision gate,
       }
     """
     state = _load_state()
@@ -250,10 +219,21 @@ def _get_context(reset_daily: bool = True) -> Dict:
 
     hrv_mgr = get_hrv_manager()
     hrv_state = hrv_mgr.get_baddle_state() if hrv_mgr.is_running else None
-    recovery = hrv_state.get("energy_recovery") if hrv_state else None
-    energy = _compute_energy(state, recovery)
 
-    return {"state": state, "hrv": hrv_state, "energy": energy}
+    # Capacity — Phase C decision-gate model (3-zone)
+    from .user_state import get_user_state
+    us = get_user_state()
+    indicators = us.capacity_indicators
+    capacity = {
+        "zone": us.capacity_zone,
+        "reason": indicators["reasons"],
+        "phys_ok": indicators["phys_ok"],
+        "affect_ok": indicators["affect_ok"],
+        "cogload_ok": indicators["cogload_ok"],
+        "cognitive_load_today": round(us.cognitive_load_today, 3),
+    }
+
+    return {"state": state, "hrv": hrv_state, "capacity": capacity}
 
 
 # ── Mode → user-facing response templates ──────────────────────────────
@@ -456,7 +436,7 @@ def _fastpath_envelope(*, text, mode, mode_name, cards, message,
         "message_echo": message,
         "cards": cards,
         "steps": [],
-        "energy": ctx_e.get("energy"),
+        "capacity": ctx_e.get("capacity"),
         "hrv": ctx_e.get("hrv"),
         "intent_router": router_intent,
         "lang": lang,
@@ -651,9 +631,9 @@ def assist():
             # Минимальный engagement-ping чтобы UserState видел что юзер активен
             from .user_state import get_user_state
             get_user_state().register_input()
-            # Привязываем energy+hrv к ответу (UI ожидает эти поля)
+            # Привязываем capacity+hrv к ответу (UI ожидает эти поля)
             ctx = _get_context()
-            cmd_res.setdefault("energy", ctx.get("energy"))
+            cmd_res.setdefault("capacity", ctx.get("capacity"))
             cmd_res.setdefault("hrv", ctx.get("hrv"))
             cmd_res.setdefault("warnings", [])
             cmd_res.setdefault("lang", lang)
@@ -704,7 +684,8 @@ def assist():
     user.update_from_engagement()
 
     ctx = _get_context()
-    state, hrv_state, energy = ctx["state"], ctx["hrv"], ctx["energy"]
+    state, hrv_state = ctx["state"], ctx["hrv"]
+    capacity = ctx.get("capacity") or {}
     user.update_from_energy(state.get("decisions_today", 0))
 
     # Build state hint for classifier (brief CognitiveState summary)
@@ -789,13 +770,19 @@ def assist():
     confidence = classification.get("confidence", 0.5)
     response = _response_for_mode(mode_id, message, lang)
 
-    # Check energy — warn if low
+    # Check capacity — warn if zone red (Phase C decision gate).
+    # Заменяет старый `energy < 20` gate на 3-зонную модель из docs/capacity-design.md.
     warnings = []
-    if energy["energy"] < 20:
+    capacity = ctx.get("capacity") or {}
+    if capacity.get("zone") == "red":
+        reason_ru = _capacity_reason_text(capacity.get("reason"), "ru")
+        reason_en = _capacity_reason_text(capacity.get("reason"), "en")
         warnings.append({
-            "type": "low_energy",
-            "text": "Энергия низкая. Сложные решения лучше оставить на утро." if lang == "ru"
-                    else "Energy low. Heavy decisions are better left for morning.",
+            "type": "low_capacity",
+            "zone": "red",
+            "reason": capacity.get("reason"),
+            "text": f"Capacity red — {reason_ru}. Сложные решения лучше отложить." if lang == "ru"
+                    else f"Capacity red — {reason_en}. Heavy decisions better postponed.",
         })
     if hrv_state and hrv_state.get("coherence") is not None and hrv_state["coherence"] < 0.3:
         warnings.append({
@@ -841,7 +828,7 @@ def assist():
             "steps": [f"Категория «{detected_category}» в профиле пустая — спрашиваю"
                       if lang == "ru"
                       else f"Profile for '{detected_category}' empty — asking"],
-            "energy": energy, "hrv": hrv_state, "warnings": warnings,
+            "capacity": capacity, "hrv": hrv_state, "warnings": warnings,
             "awaiting_input": True, "graph_updated": False,
             "lang": lang, "intent": intent, "confidence": confidence,
             "profile_category": detected_category,
@@ -883,7 +870,7 @@ def assist():
             "cards": [{"type": "clarify", "question": clarify_q, "prompt_user": True}],
             "steps": [f"Неопределённость (conf={confidence:.2f}) — спрашиваю" if lang == "ru"
                       else f"Ambiguity (conf={confidence:.2f}) — asking back"],
-            "energy": energy, "hrv": hrv_state, "warnings": warnings,
+            "capacity": capacity, "hrv": hrv_state, "warnings": warnings,
             "awaiting_input": True, "graph_updated": False,
             "lang": lang, "intent": intent, "confidence": confidence,
             "classify_source": classification.get("source"),
@@ -996,7 +983,7 @@ def assist():
         "message_echo": message,
         "cards": cards,
         "steps": steps,
-        "energy": energy,
+        "capacity": capacity,
         "hrv": hrv_state,
         "warnings": warnings,
         "awaiting_input": exec_result.get("awaiting_input", False),
@@ -1019,11 +1006,13 @@ def assist():
 def assist_status():
     """Current user state — energy, HRV, recent activity."""
     ctx = _get_context()
-    state, hrv_state, energy = ctx["state"], ctx["hrv"], ctx["energy"]
+    state, hrv_state = ctx["state"], ctx["hrv"]
+    capacity = ctx.get("capacity") or {}
     return jsonify({
-        "energy": energy,
+        "capacity": capacity,
         "hrv": hrv_state,
         "total_decisions": state.get("total_decisions", 0),
+        "decisions_today": state.get("decisions_today", 0),
         "streaks": state.get("streaks", {}),
         "last_interaction": state.get("last_interaction"),
     })
@@ -1264,84 +1253,10 @@ def assist_prime_directive():
     return jsonify({"ok": True, **summary})
 
 
-@assistant_bp.route("/assist/simulate-day", methods=["POST"])
-def assist_simulate_day():
-    """Day planning simulator — предсказать end-of-day state от плана решений.
-
-    Body: {
-      "plan": [{"mode": "tournament"}, {"mode": "fan"}, ...]
-      "hrv_recovery": 0.7   (optional, 0..1; если не задан — текущий HRV)
-    }
-
-    Симулирует по порядку: списывает cost из daily/long через UserState.debit_energy,
-    прокачивает (decisions_today, daily_spent). Возвращает прогноз:
-    end-of-day energy, long_reserve после, burnout_risk, predicted named_state.
-    """
-    from .user_state import UserState, get_user_state
-
-    d = request.get_json(force=True) or {}
-    plan = d.get("plan") or []
-    hrv_mgr = get_hrv_manager()
-    live_recovery = None
-    if hrv_mgr.is_running:
-        live_recovery = (hrv_mgr.get_baddle_state() or {}).get("energy_recovery")
-    hrv_recovery = d.get("hrv_recovery", live_recovery)
-
-    # Клонируем UserState чтобы симуляция не изменила живой
-    current = get_user_state()
-    sim = UserState.from_dict(current.to_dict())
-
-    # Стартовое daily_remaining — текущий reseted ceiling минус реально потраченное
-    state = _load_state()
-    state = _ensure_daily_reset(state)
-    base_max = 40 + 60 * hrv_recovery if hrv_recovery is not None else 100.0
-    daily_spent = float(state.get("daily_spent", 0.0))
-
-    steps = []
-    for step in plan:
-        mode = step.get("mode") or "free"
-        cost = _decision_cost(mode)
-        daily_rem = max(0.0, base_max - daily_spent)
-        debit = sim.debit_energy(cost, daily_rem)
-        daily_spent += debit["daily_used"]
-        steps.append({
-            "mode": mode, "cost": cost,
-            "daily_used": round(debit["daily_used"], 1),
-            "long_used": round(debit["long_used"], 1),
-            "daily_remaining_after": round(max(0.0, base_max - daily_spent), 1),
-            "long_reserve_after": round(sim.long_reserve, 1),
-        })
-        # Burnout каждое решение накапливает — приблизим update_from_energy
-        sim.burnout = min(1.0, sim.burnout + 0.005)
-
-    sim._clamp()
-    ns = sim.named_state
-    long_pct = sim.long_reserve / 2000.0
-    total_cost = sum(s["cost"] for s in steps)
-    total_daily = sum(s["daily_used"] for s in steps)
-    total_long = sum(s["long_used"] for s in steps)
-
-    return jsonify({
-        "plan_size": len(plan),
-        "total_cost": total_cost,
-        "total_daily_used": round(total_daily, 1),
-        "total_long_used": round(total_long, 1),
-        "steps": steps,
-        "end_of_day": {
-            "daily_remaining": round(max(0.0, base_max - daily_spent), 1),
-            "daily_max": round(base_max, 1),
-            "long_reserve": round(sim.long_reserve, 1),
-            "long_reserve_pct": round(long_pct, 3),
-            "burnout_risk": round(1.0 - long_pct, 3),
-            "predicted_named_state": {
-                "key": ns["key"], "label": ns["label"], "advice": ns["advice"],
-            },
-            "dopamine": round(sim.dopamine, 3),
-            "serotonin": round(sim.serotonin, 3),
-            "norepinephrine": round(sim.norepinephrine, 3),
-            "burnout": round(sim.burnout, 3),
-        },
-    })
+# /assist/simulate-day endpoint удалён в Phase C Шаг 6 — dual-pool simulation
+# (daily_spent + long_reserve cascade) больше не работает. По плану TODO нужна
+# capacity-based симуляция (предсказать cognitive_load_today + zone от плана
+# активностей) — это отдельная задача после данных calibration window.
 
 
 @assistant_bp.route("/assist/named-states", methods=["GET"])
@@ -2573,17 +2488,8 @@ def debug_alerts_trigger_all():
     return jsonify({"summary": summary, "results": results})
 
 
-@assistant_bp.route("/user_state/reset-energy", methods=["POST"])
-def user_state_reset_energy():
-    state = _load_state()
-    state["decisions_today"] = 0
-    state["daily_spent"] = 0.0
-    _save_state(state)
-    # HRV recovery для max bar (если есть)
-    hrv = (_get_context() or {}).get("hrv") or {}
-    energy = _compute_energy(state, hrv_recovery=hrv.get("energy_recovery"))
-    log.info(f"[user_state] energy reset: daily back to {energy['energy']}/{energy['max']}")
-    return jsonify({"ok": True, "energy": energy})
+# /user_state/reset-energy endpoint удалён в Phase C Шаг 6 — dual-pool energy
+# заменена 3-zone capacity model (без manual reset, само считается).
 
 
 # ── Chat history (ранее жил в browser localStorage) ───────────────────
@@ -2666,7 +2572,8 @@ def assist_morning():
     lang = request.get_json(force=True).get("lang", "ru") if request.is_json else "ru"
 
     ctx = _get_context()
-    state, hrv_state, energy = ctx["state"], ctx["hrv"] or {}, ctx["energy"]
+    state, hrv_state = ctx["state"], ctx["hrv"] or {}
+    capacity = ctx.get("capacity") or {}
     recovery = (hrv_state or {}).get("energy_recovery") if hrv_state else None
 
     # Compose greeting
@@ -2709,7 +2616,7 @@ def assist_morning():
     return jsonify({
         "text": greeting,
         "sections": sections,
-        "energy": energy,
+        "capacity": capacity,
         "hrv": hrv_state,
         "recovery_pct": recovery_pct,
         "hour": _dt.datetime.now().hour,
@@ -2995,7 +2902,8 @@ def assist_alerts():
     """
     from .horizon import get_global_state
     ctx = _get_context()
-    state, hrv_state, energy = ctx["state"], ctx["hrv"] or {}, ctx["energy"]
+    state, hrv_state = ctx["state"], ctx["hrv"] or {}
+    capacity = ctx.get("capacity") or {}
     alerts = []
 
     cs = get_global_state()
@@ -3028,13 +2936,17 @@ def assist_alerts():
             "regime": regime, "sync_error": round(sync_err, 2),
         })
 
-    # Hard floors (независимо от regime — критические пороги должны звенеть)
-    if energy["energy"] < 20 and state.get("decisions_today", 0) > 5:
+    # Hard floors (Phase C: capacity_zone red — critical signal независимо от regime)
+    if capacity.get("zone") == "red":
+        reason_ru = _capacity_reason_text(capacity.get("reason"), "ru")
+        reason_en = _capacity_reason_text(capacity.get("reason"), "en")
         alerts.append({
-            "type": "energy_critical",
+            "type": "capacity_red",
             "severity": "warning",
-            "text": "Энергия <20. Отложи сложные решения до утра.",
-            "text_en": "Energy <20. Postpone heavy decisions until morning.",
+            "text": f"Capacity red — {reason_ru}. Отложи сложные решения.",
+            "text_en": f"Capacity red — {reason_en}. Postpone heavy decisions.",
+            "zone": "red",
+            "reason": capacity.get("reason"),
         })
     if hrv_state:
         coh = hrv_state.get("coherence")
@@ -3077,7 +2989,7 @@ def assist_alerts():
     return jsonify({
         "alerts": alerts,
         "count": len(alerts),
-        "energy": energy,
+        "capacity": capacity,
         "hrv": hrv_state,
         "sync_regime": regime,
         "sync_error": round(sync_err, 3),

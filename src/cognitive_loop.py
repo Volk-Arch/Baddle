@@ -144,7 +144,7 @@ class CognitiveLoop:
     DEFAULT_WAKE_HOUR = 7             # если profile.context.wake_hour не задан
     GRAPH_FLUSH_INTERVAL = 120        # каждые 2 мин — auto-save графа на диск
                                       # (nodes + embeddings) чтобы рестарт не терял данные
-    LOW_ENERGY_THRESHOLD = 30         # ниже этого — тяжёлые решения предлагаем отложить
+    # Phase C: LOW_ENERGY_THRESHOLD удалена — gate теперь через capacity_zone.
     HEAVY_MODES = ("dispute", "tournament", "bayes", "race", "builder", "cascade", "scales")
 
     # Plan reminders: push-alert за N min до planned events
@@ -260,6 +260,7 @@ class CognitiveLoop:
         self._last_dmn_cross = 0.0  # таймер cross-graph bridge scan
         self._last_suggestions_check = 0.0  # таймер observation suggestions (compute throttle)
         self._last_agency_update = 0.0      # таймер agency EMA update
+        self._last_cognitive_load_update = 0.0  # Phase C: cogload bookkeeping
         self._last_action_outcomes_check = 0.0  # таймер closing action outcomes
         self._last_prime_directive = 0.0    # таймер hourly prime_directive.jsonl записи
         self._last_user_surprise_check = 0.0  # таймер OQ #7 detector
@@ -870,6 +871,7 @@ class CognitiveLoop:
                 self._check_activity_cost()         # energy debit per category
                 self._check_heartbeat()             # state_graph pulse (5 min)
                 self._check_agency_update()         # plan completion EMA (1h)
+                self._check_cognitive_load_update()  # capacity load aggregate (5 min)
                 self._check_action_outcomes()       # close action-memory entries
                 self._check_prime_directive_record()  # sync_error snapshot (1h)
                 self._check_user_surprise()         # HRV spike + text markers
@@ -1715,18 +1717,23 @@ class CognitiveLoop:
                     kind = "warn"
             sections.append({"emoji": "⚡", "title": title, "subtitle": subtitle or "—", "kind": kind})
 
-        # 3. Energy pool (long_reserve)
+        # 3. Capacity zone (Phase C: заменяет long_reserve %)
         try:
             metrics = get_global_state().get_metrics()
             user = metrics.get("user_state") or {}
-            lr = user.get("long_reserve")
-            if isinstance(lr, (int, float)):
-                pct = int(lr / 2000.0 * 100)
-                kind = "info" if pct >= 70 else "warn" if pct < 30 else "neutral"
-                sub = "полный" if pct >= 90 else ("в норме" if pct >= 50
-                                                   else "нужна пауза" if pct < 30 else "средний")
-                sections.append({"emoji": "🔋", "title": f"Резерв {pct}%",
-                                 "subtitle": f"{int(lr)}/2000 · {sub}", "kind": kind})
+            cap_zone = user.get("capacity_zone")
+            if cap_zone:
+                emoji = {"green": "🟢", "yellow": "🟡",
+                         "red": "🔴"}.get(cap_zone, "⚪")
+                reasons = user.get("capacity_reason") or []
+                kind = ("info" if cap_zone == "green"
+                        else "warn" if cap_zone == "yellow"
+                        else "alert")
+                sub = (", ".join(reasons) if reasons
+                       else "все три контура ok")
+                sections.append({"emoji": emoji,
+                                 "title": f"Capacity {cap_zone}",
+                                 "subtitle": sub, "kind": kind})
         except Exception:
             pass
 
@@ -1901,7 +1908,7 @@ class CognitiveLoop:
                 recovery_pct = int(rec * 100)
                 bits.append(f"Восстановление {recovery_pct}%.")
 
-        # User state (named region)
+        # User state (named region + capacity zone)
         try:
             cs = get_global_state()
             metrics = cs.get_metrics()
@@ -1909,10 +1916,11 @@ class CognitiveLoop:
             named = user.get("named_state") or {}
             if named.get("label"):
                 bits.append(f"Состояние: {named['label'].lower()}.")
-            long_reserve = user.get("long_reserve")
-            if isinstance(long_reserve, (int, float)):
-                pct = long_reserve / 2000.0 * 100
-                bits.append(f"Долгий резерв {int(pct)}%.")
+            cap_zone = user.get("capacity_zone")
+            if cap_zone and cap_zone != "green":
+                reasons = user.get("capacity_reason") or []
+                detail = ("(" + ", ".join(reasons) + ")") if reasons else ""
+                bits.append(f"Capacity: {cap_zone} {detail}".strip() + ".")
         except Exception:
             pass
 
@@ -2114,7 +2122,8 @@ class CognitiveLoop:
                 "burnout": round(neuro.get("burnout", 0), 2),
             }
             snapshot["user"] = {
-                "long_reserve_pct": us.get("long_reserve_pct"),
+                "capacity_zone": us.get("capacity_zone"),
+                "cognitive_load": us.get("cognitive_load_today"),
                 "named": (us.get("named_state") or {}).get("key"),
                 "sync_regime": m.get("sync_regime"),
             }
@@ -2168,6 +2177,21 @@ class CognitiveLoop:
             log.debug(f"[cognitive_loop] heartbeat write failed: {e}")
 
     # ── Agency update (OQ #2, 5-я ось) ─────────────────────────────────
+
+    def _check_cognitive_load_update(self):
+        """Phase C: раз в 5 мин пересчитать UserState.cognitive_load_today.
+
+        Compute throttle (300s) — pull из activity_log + sync_error EMA для
+        capacity zone. Не emit'ит alert, это bookkeeping.
+
+        Spec: docs/capacity-design.md §Дневная метрика.
+        """
+        if not self._throttled("_last_cognitive_load_update", 300):
+            return
+        try:
+            get_user_state().update_cognitive_load()
+        except Exception as e:
+            log.debug(f"[cognitive_load] update failed: {e}")
 
     def _check_agency_update(self):
         """Раз в час пересчитываем `UserState.agency` из сегодняшних

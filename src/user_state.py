@@ -121,10 +121,8 @@ EXPECTATION_VEC_DECAY_FAST = Decays.EXPECTATION_VEC_FAST  # 0.80
 # Surprise boost: когда юзер detect'ится как удивлённый (OQ #7), ускоряем
 # EMA decay на N tick'ов — его модель мира изменилась.
 SURPRISE_BOOST_DEFAULT_TICKS = 3
-LONG_RESERVE_MAX = 2000        # общий резерв (как в MindBalance v2)
-LONG_RESERVE_DEFAULT = 1500    # стартовое значение (можно восстановить от hrv)
-DAILY_ENERGY_MAX = 100
-LONG_RESERVE_TAP_THRESHOLD = 20  # ниже daily → начинаем тратить long reserve
+# Phase C Шаг 6: dual-pool константы (LONG_RESERVE_MAX/DEFAULT/TAP_THRESHOLD,
+# DAILY_ENERGY_MAX) удалены — заменены 3-zone capacity model.
 
 # Activity zone параметры (из прототипа HRV × акселерометр)
 ACTIVITY_THRESHOLD = 0.5       # magnitude выше которого юзер считается «активным»
@@ -136,6 +134,141 @@ ZONE_HEALTHY_LOAD = "healthy_load" #  active + hrv_ok    → 🔵 здорова
 ZONE_OVERLOAD = "overload"         #  active + !hrv_ok   → 🔴 перегрузка / overtraining
 
 _TOD_NAMES = ("morning", "day", "evening", "night")
+
+
+# ── Capacity helpers (Phase C) ─────────────────────────────────────────────
+#
+# 3-zone capacity model — из docs/capacity-design.md. Заменяет dual-pool
+# `daily_spent + long_reserve` на 3 параллельных контура (физио / эмо /
+# когнитивный) с явными зонами green/yellow/red.
+
+# Capacity thresholds (per docs/capacity-design.md §Формулы)
+CAPACITY_PHYS_COHERENCE_MIN = 0.5
+CAPACITY_PHYS_BURNOUT_MAX = 0.3
+CAPACITY_AFFECT_SEROTONIN_MIN = 0.4
+CAPACITY_AFFECT_DOPAMINE_MIN = 0.35
+CAPACITY_COGLOAD_MAX = 0.6
+
+
+def _normalize(value, cap):
+    """Нормализация v/cap в [0, 1]."""
+    if cap is None or cap <= 0:
+        return 0.0
+    try:
+        return min(1.0, max(0.0, float(value) / float(cap)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def compute_cognitive_load(day_summary_today: dict, progress_delta: float) -> float:
+    """Дневная когнитивная нагрузка [0, 1] из 6 observable.
+
+    Formula per docs/capacity-design.md §Формулы:
+        + 0.20 · normalize(tasks_started, cap=8)
+        + 0.30 · normalize(context_switches, cap=10)
+        + 0.30 · normalize(complexity_sum, cap=3.0)
+        − 0.25 · normalize(tasks_completed, cap=5)
+        − 0.25 · max(0, -progress_delta)        # good day reduces load
+
+    NOTE: progress_delta = sync_error_now − sync_error_at_dawn.
+    Negative = improvement (resonance улучшился) → "good progress"
+    → reduces cognitive_load. Docs literal `max(0, progress_delta)`
+    inconsistent with comment «положительный прогресс снижает» —
+    implementing semantic interpretation.
+
+    Коэффициенты калибруются по 2-недельному окну данных (через 2 нед
+    after merge сравнить cognitive_load распределение с реальным состоянием).
+
+    Args:
+        day_summary_today: dict с ключами `tasks_started`, `tasks_completed`,
+            `context_switches`, `complexity_sum` (defaults 0).
+        progress_delta: float, sync_error change за день (negative = improved).
+
+    Returns: float в [0, 1].
+    """
+    s = day_summary_today or {}
+    load = (
+        0.20 * _normalize(s.get("tasks_started", 0), cap=8)
+        + 0.30 * _normalize(s.get("context_switches", 0), cap=10)
+        + 0.30 * _normalize(s.get("complexity_sum", 0.0), cap=3.0)
+        - 0.25 * _normalize(s.get("tasks_completed", 0), cap=5)
+        - 0.25 * max(0.0, -float(progress_delta or 0.0))
+    )
+    return max(0.0, min(1.0, load))
+
+
+def compute_capacity_indicators(user) -> dict:
+    """3 boolean-индикатора + причины fail'ов.
+
+    Reads existing UserState fields/EMAs (Phase A registry):
+    - phys_ok: HRV coherence + low burnout (raw HRV или burnout-only fallback)
+    - affect_ok: serotonin + dopamine
+    - cogload_ok: cognitive_load_today
+
+    Returns:
+        {phys_ok, affect_ok, cogload_ok, reasons[]} — booleans + list of
+        failed-condition tags для capacity_reason property.
+    """
+    serotonin = float(user.serotonin)
+    burnout = float(user.burnout)
+    dopamine = float(user.dopamine)
+    cogload = float(getattr(user, "cognitive_load_today", 0.0))
+    coh = user.hrv_coherence
+
+    reasons: list[str] = []
+
+    # phys_ok: если HRV доступен — обе проверки; иначе fallback только на burnout
+    if coh is not None:
+        coh_ok = float(coh) > CAPACITY_PHYS_COHERENCE_MIN
+        burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
+        phys_ok = coh_ok and burnout_ok
+        if not coh_ok:
+            reasons.append("hrv_coherence_low")
+        if not burnout_ok:
+            reasons.append("burnout_high")
+    else:
+        burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
+        phys_ok = burnout_ok
+        if not burnout_ok:
+            reasons.append("burnout_high")
+
+    # affect_ok
+    sero_ok = serotonin > CAPACITY_AFFECT_SEROTONIN_MIN
+    da_ok = dopamine > CAPACITY_AFFECT_DOPAMINE_MIN
+    affect_ok = sero_ok and da_ok
+    if not sero_ok:
+        reasons.append("serotonin_low")
+    if not da_ok:
+        reasons.append("dopamine_low")
+
+    # cogload_ok
+    cogload_ok = cogload < CAPACITY_COGLOAD_MAX
+    if not cogload_ok:
+        reasons.append("cogload_high")
+
+    return {
+        "phys_ok": phys_ok,
+        "affect_ok": affect_ok,
+        "cogload_ok": cogload_ok,
+        "reasons": reasons,
+    }
+
+
+def compute_capacity_zone(indicators: dict) -> str:
+    """3-zone derived из 3 ok-индикаторов.
+
+    Returns: "green" (все 3 ok), "yellow" (один fail), "red" (≥2 fail).
+    """
+    n_ok = sum([
+        bool(indicators.get("phys_ok")),
+        bool(indicators.get("affect_ok")),
+        bool(indicators.get("cogload_ok")),
+    ])
+    if n_ok == 3:
+        return "green"
+    if n_ok == 2:
+        return "yellow"
+    return "red"
 
 
 # ── Extractors (module-level, pure functions) ──────────────────────────────
@@ -379,8 +512,9 @@ class UserState:
         # Timestamp последнего surprise event — для debouncing и UI.
         self._last_user_surprise_ts: Optional[float] = None
 
-        # Dual-pool energy (MindBalance v2): daily + долгосрочный резерв
-        self.long_reserve: float = LONG_RESERVE_DEFAULT
+        # Phase C: dual-pool `long_reserve` field удалён — energy теперь
+        # 3-zone capacity (capacity_zone). Активность списывается через
+        # activity_log → cognitive_load_today, не через manual debit.
 
         # Sleep duration: восстанавливается при утреннем briefing через
         # activity_log.estimate_last_sleep_hours() — либо явная задача «Сон»,
@@ -400,6 +534,14 @@ class UserState:
         self.focus_residue: float = 0.0
         self._last_focus_input_ts: Optional[float] = None
         self._last_focus_mode_id: Optional[str] = None
+
+        # Capacity (Phase C, docs/capacity-design.md). 3-zone модель
+        # заменяет dual-pool. Live-полем — `cognitive_load_today`,
+        # обновляется bookkeeping check'ом каждые 5 мин.
+        # `day_summary[YYYY-MM-DD]` — agregate за дни (persist через rollover).
+        # `capacity_zone` / `capacity_reason` — derived properties (cheap).
+        self.day_summary: dict = {}
+        self.cognitive_load_today: float = 0.0
 
     # ── Neurochemical mirrors (read/write через registry) ──────────────────
 
@@ -716,9 +858,7 @@ class UserState:
 
     def _clamp(self):
         """Safety net: EMA уже clamp'ит через bounds при feed, но дискретные
-        мутации (`long_reserve -= x`, `activity_magnitude = ...`) не идут
-        через EMA и требуют явного clamp."""
-        self.long_reserve = max(0.0, min(float(LONG_RESERVE_MAX), self.long_reserve))
+        мутации `activity_magnitude = ...` не идут через EMA и требуют явного clamp."""
         self.activity_magnitude = max(0.0, min(5.0, self.activity_magnitude))
 
     def vector(self) -> np.ndarray:
@@ -928,6 +1068,149 @@ class UserState:
             return "short_wave"
         return "mixed"
 
+    # ── Capacity zone (Phase C, 3-зона) ───────────────────────────────────
+
+    @property
+    def capacity_zone(self) -> str:
+        """green/yellow/red зона из 3 индикаторов (физио / эмо / когнитивный).
+
+        Заменяет dual-pool «энергия 0..100». Decision gate в assistant.py
+        читает эту property + capacity_reason для explanation при отказе.
+
+        Spec: docs/capacity-design.md §Capacity-зона.
+        """
+        return compute_capacity_zone(compute_capacity_indicators(self))
+
+    @property
+    def capacity_reason(self) -> list[str]:
+        """Причины не-зелёной зоны (tags для UI и decision gate explanation).
+
+        Возможные tags: "hrv_coherence_low", "burnout_high",
+        "serotonin_low", "dopamine_low", "cogload_high".
+        Пустой list когда все 3 ok (зона green).
+        """
+        return compute_capacity_indicators(self)["reasons"]
+
+    @property
+    def capacity_indicators(self) -> dict:
+        """Полный snapshot для UI: 3 boolean + reasons."""
+        return compute_capacity_indicators(self)
+
+    def update_cognitive_load(self) -> None:
+        """Pull today's activity log + sync_error → recompute cognitive_load_today.
+
+        Aggregates 4 observable из activity_log:
+            tasks_started     — count(start events today)
+            tasks_completed   — count(done activities today)
+            context_switches  — count(stop_reason="switch")
+            complexity_sum    — sum(surprise_at_start over today's activities)
+
+        Plus 1 derived:
+            progress_delta    — sync_error_slow_now − sync_error_at_dawn
+
+        Saves в `day_summary[today_str]` + recomputes `cognitive_load_today`
+        через `compute_cognitive_load` helper.
+
+        Вызывается из cognitive_loop._check_cognitive_load_update раз в 5 мин.
+        """
+        import datetime as _dt
+        today = _dt.date.today()
+        today_str = today.strftime("%Y-%m-%d")
+
+        # Pull today's activities from activity_log
+        tasks_started = 0
+        tasks_completed = 0
+        context_switches = 0
+        complexity_sum = 0.0
+        try:
+            from .activity_log import _replay
+            start_of_day = _dt.datetime.combine(
+                today, _dt.time.min).timestamp()
+            for act in _replay().values():
+                started = act.get("started_at") or 0
+                if started < start_of_day:
+                    continue
+                tasks_started += 1
+                if act.get("status") == "done":
+                    tasks_completed += 1
+                if act.get("stop_reason") == "switch":
+                    context_switches += 1
+                complexity_sum += float(act.get("surprise_at_start") or 0.0)
+        except Exception:
+            pass
+
+        # sync_error progress: now − at_dawn (snapshot в day_summary)
+        today_summary = self.day_summary.setdefault(today_str, {})
+        sync_at_dawn = today_summary.get("sync_error_at_dawn")
+        sync_now = sync_at_dawn or 0.0
+        try:
+            from .horizon import get_global_state
+            sync_now = float(get_global_state().freeze.sync_error_ema_slow)
+            if sync_at_dawn is None:
+                # Первый update в день — фиксируем dawn как текущий sync_error
+                sync_at_dawn = sync_now
+                today_summary["sync_error_at_dawn"] = round(sync_at_dawn, 6)
+        except Exception:
+            sync_at_dawn = sync_at_dawn or 0.0
+        progress_delta = sync_now - (sync_at_dawn or 0.0)
+
+        # Update today's aggregate
+        today_summary.update({
+            "tasks_started": tasks_started,
+            "tasks_completed": tasks_completed,
+            "context_switches": context_switches,
+            "complexity_sum": round(complexity_sum, 4),
+            "progress_delta": round(progress_delta, 6),
+        })
+
+        # Recompute load
+        self.cognitive_load_today = compute_cognitive_load(
+            today_summary, progress_delta)
+
+    def rollover_day(self, hrv_recovery: Optional[float] = None) -> None:
+        """Полуночный reset: persist yesterday в day_summary, обнулить load.
+
+        Ровно один раз в день (вызов идемпотентен через date check). Saves:
+            - cognitive_load_today as final cognitive_load в day_summary[yesterday]
+            - sync_error_at_dawn для следующего дня (snapshot для progress_delta)
+        Resets:
+            - cognitive_load_today = 0.0
+
+        hrv_recovery — параметр сохранён для backward-compat call signature
+        (Phase A/B вызывали с recovery), сейчас не используется (после Шага 6
+        long_reserve recovery удалён).
+
+        Spec: docs/capacity-design.md §Поля UserState.
+        """
+        import datetime as _dt
+        today = _dt.date.today()
+        yesterday_str = (today - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+        today_str = today.strftime("%Y-%m-%d")
+
+        # Save yesterday's final load
+        if yesterday_str in self.day_summary:
+            self.day_summary[yesterday_str]["cognitive_load"] = round(
+                self.cognitive_load_today, 4)
+
+        # Snapshot sync_error для today (нужен для progress_delta)
+        try:
+            from .horizon import get_global_state
+            sync_at_dawn = float(
+                get_global_state().freeze.sync_error_ema_slow)
+        except Exception:
+            sync_at_dawn = 0.0
+        self.day_summary.setdefault(today_str, {})
+        self.day_summary[today_str]["sync_error_at_dawn"] = round(sync_at_dawn, 6)
+
+        # Reset live field
+        self.cognitive_load_today = 0.0
+
+        # Trim history: keep only last 30 days
+        if len(self.day_summary) > 30:
+            cutoff = sorted(self.day_summary.keys())[:-30]
+            for k in cutoff:
+                self.day_summary.pop(k, None)
+
     # ── Activity zone (4 региона HRV × акселерометр) ───────────────────────
 
     @property
@@ -988,58 +1271,9 @@ class UserState:
         a = 0.7 * cog_arousal + 0.3 * phys_arousal
         return nearest_named_state(t, max(0.0, min(1.0, a)))
 
-    # ── Dual-pool energy ───────────────────────────────────────────────────
-
-    def energy_snapshot(self, decisions_today: int) -> dict:
-        """Мгновенный срез дуальной энергетики.
-
-        daily_energy   = max − decisions_today · avg_cost (рассчитывается в assistant.py)
-        long_reserve   = self.long_reserve (медленный пул)
-        burnout_risk   = 1 − long_reserve/LONG_RESERVE_MAX
-        Возвращает dict для API + UI.
-        """
-        long_pct = self.long_reserve / LONG_RESERVE_MAX if LONG_RESERVE_MAX > 0 else 0.0
-        return {
-            "decisions_today": decisions_today,
-            "long_reserve": round(self.long_reserve, 1),
-            "long_reserve_max": LONG_RESERVE_MAX,
-            "long_reserve_pct": round(long_pct, 3),
-            "burnout_risk": round(1.0 - long_pct, 3),
-        }
-
-    def debit_energy(self, cost: float, daily_remaining: float) -> dict:
-        """Списание cost из дневной энергии. Если daily < 20 → часть уходит в long.
-
-        cost: стоимость решения (определяется mode в assistant.py)
-        daily_remaining: сколько осталось daily перед этим решением
-        Возвращает {daily_used, long_used} — что реально списалось откуда.
-        """
-        daily_used = min(cost, max(0.0, daily_remaining))
-        overflow = cost - daily_used
-        long_used = 0.0
-        if overflow > 0 or daily_remaining < LONG_RESERVE_TAP_THRESHOLD:
-            # cascading: если daily был мал, часть уходит из long
-            # + full overflow идёт из long
-            extra = overflow
-            if daily_remaining < LONG_RESERVE_TAP_THRESHOLD and cost > 0:
-                # Дополнительный tax: при low daily расход дороже
-                extra += cost * 0.3
-            long_used = min(extra, self.long_reserve)
-            self.long_reserve -= long_used
-        self._clamp()
-        return {"daily_used": daily_used, "long_used": long_used}
-
-    def recover_long_reserve(self, hrv_recovery: Optional[float] = None):
-        """Ночное восстановление long_reserve (вызывается консолидацией).
-
-        hrv_recovery ∈ [0, 1] (из energy_recovery HRV) — скейлит amount.
-        Без HRV — консервативно восстанавливаем как при среднем сне (0.7).
-        """
-        recovery = hrv_recovery if hrv_recovery is not None else 0.7
-        # MindBalance v2 defaults: sleep_recovery=90, rest_bonus=20
-        amount = 90.0 * recovery + 20.0 * recovery
-        self.long_reserve = min(float(LONG_RESERVE_MAX), self.long_reserve + amount)
-        self._clamp()
+    # Phase C Шаг 6: dual-pool energy methods (energy_snapshot,
+    # debit_energy, recover_long_reserve) удалены — заменены 3-zone capacity
+    # model. capacity_zone / capacity_indicators properties выше.
 
     def to_dict(self) -> dict:
         ns = self.named_state
@@ -1065,13 +1299,16 @@ class UserState:
             "attribution_signed": round(self.attribution_signed, 3),
             "agency_gap": round(self.agency_gap, 3),
             "hrv_surprise": round(self.hrv_surprise, 3),
-            "long_reserve": round(self.long_reserve, 1),
             "activity_magnitude": round(self.activity_magnitude, 3),
             "activity_zone": az,
             "named_state": {"key": ns["key"], "label": ns["label"],
                             "advice": ns["advice"]},
             "frequency_regime": self.frequency_regime,
             "focus_residue": round(self.focus_residue, 3),
+            "cognitive_load_today": round(self.cognitive_load_today, 3),
+            "capacity_zone": self.capacity_zone,
+            "capacity_reason": self.capacity_reason,
+            "day_summary": self.day_summary,
             "hrv": {
                 "coherence": self.hrv_coherence,
                 "stress": self.hrv_stress,
@@ -1089,11 +1326,16 @@ class UserState:
             agency=d.get("agency", 0.5),
         )
         u.expectation = float(d.get("expectation", 0.5))
-        u.long_reserve = float(d.get("long_reserve", LONG_RESERVE_DEFAULT))
         u.valence = float(d.get("valence", 0.0))
         u.activity_magnitude = float(d.get("activity_magnitude", 0.0))
         u.focus_residue = max(0.0, min(1.0,
             float(d.get("focus_residue", 0.0))))
+        u.cognitive_load_today = max(0.0, min(1.0,
+            float(d.get("cognitive_load_today", 0.0))))
+        ds = d.get("day_summary")
+        if isinstance(ds, dict):
+            u.day_summary = {str(k): dict(v) for k, v in ds.items()
+                              if isinstance(v, dict)}
         # Predictive layer (TOD scalar + vector + HRV baseline). Все
         # optional — если legacy dump не имеет их, defaults из __init__.
         tod_map = d.get("expectation_by_tod") or {}
