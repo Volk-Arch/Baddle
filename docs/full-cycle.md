@@ -116,4 +116,4 @@ Schemas всех data-файлов — [ontology.md](ontology.md).
 
 ---
 
-**Навигация:** [← Life Assistant](life-assistant-design.md) · [Индекс](README.md) · [Следующее: NAND архитектура →](nand-architecture.md)
+**Навигация:** [← Foundation](foundation.md) · [Индекс](README.md) · [Следующее: NAND архитектура →](nand-architecture.md)
