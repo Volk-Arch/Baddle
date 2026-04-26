@@ -18,10 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from .sensor_stream import (
-    push_rr, push_hrv_snapshot, push_activity,
-    SOURCE_POLAR, SOURCE_APPLE,
-)
+from .sensor_stream import SOURCE_POLAR, SOURCE_APPLE
 
 log = logging.getLogger(__name__)
 

@@ -44,9 +44,7 @@ def test_build_context_works(tmp_path, monkeypatch):
         ctx = build_detector_context(loop, time.time())
 
     assert ctx.now > 0
-    assert ctx.user is not None
-    assert ctx.neuro is not None
-    assert ctx.freeze is not None
+    assert ctx.rgk is not None
     assert ctx.loop is loop
     # dmn_eligible should be True at fresh init (idle, no foreground tick)
     assert ctx.dmn_eligible is True
@@ -89,11 +87,11 @@ def test_dmn_eligible_gates_heavy_detectors(tmp_path):
     from types import SimpleNamespace
 
     user = SimpleNamespace(_last_input_ts=None, hrv_surprise=0.0)
-    neuro = SimpleNamespace()
-    freeze = SimpleNamespace(silence_pressure=0.0)
+    # neuro field удалён в W4
+    rgk = SimpleNamespace(silence_press=0.0)
     loop = SimpleNamespace()
-    ctx = DetectorContext(now=1_000_000.0, user=user, neuro=neuro,
-                            freeze=freeze, loop=loop, dmn_eligible=False)
+    ctx = DetectorContext(now=1_000_000.0,
+                            rgk=rgk, loop=loop, dmn_eligible=False)
 
     # Все 5 должны вернуть None если dmn_eligible=False
     assert detect_dmn_bridge(ctx) is None
@@ -182,7 +180,7 @@ class TestModeTrajectoryAdvanceTick:
 
         # Spread по dopamine оси: |Δ|=0.65 → sync_err ≈ 0.65 (3D vec)
         u.dopamine = 0.95
-        gs.neuro.dopamine = 0.30
+        gs.rgk.system.gain.value = 0.30
 
         fake_t = [10_000.0]
         monkeypatch.setattr(cl_mod.time, "time", lambda: fake_t[0])
@@ -205,14 +203,14 @@ class TestModeTrajectoryAdvanceTick:
 
         # Поднять в C
         u.dopamine = 0.95
-        gs.neuro.dopamine = 0.30
+        gs.rgk.system.gain.value = 0.30
         fake_t[0] += 1.0; loop._advance_tick()
         fake_t[0] += 5.0; loop._advance_tick()
         assert u.mode == "C"
 
         # Выровнять — perturbation → 0
         u.dopamine = 0.5
-        gs.neuro.dopamine = 0.5
+        gs.rgk.system.gain.value = 0.5
         fake_t[0] += 5.0; loop._advance_tick()
         assert u.mode == "R", f"low sync_err didn't restore R, got {u.mode}"
 
@@ -228,14 +226,14 @@ class TestModeTrajectoryAdvanceTick:
 
         # Drive в C
         u.dopamine = 0.95
-        gs.neuro.dopamine = 0.30
+        gs.rgk.system.gain.value = 0.30
         fake_t[0] += 1.0; loop._advance_tick()
         fake_t[0] += 5.0; loop._advance_tick()
         assert u.mode == "C"
 
         # Spread |Δ|=0.10 → sync_err ≈ 0.10 (в band [0.08, 0.15])
         u.dopamine = 0.55
-        gs.neuro.dopamine = 0.45
+        gs.rgk.system.gain.value = 0.45
         for _ in range(5):
             fake_t[0] += 5.0
             loop._advance_tick()
@@ -254,7 +252,7 @@ class TestModeTrajectoryAdvanceTick:
 
         # sync_err большой (DA spread), но user/system imbalance ноль
         u.dopamine = 0.95
-        gs.neuro.dopamine = 0.30
+        gs.rgk.system.gain.value = 0.30
         fake_t[0] += 1.0; loop._advance_tick()
         fake_t[0] += 5.0; loop._advance_tick()
 

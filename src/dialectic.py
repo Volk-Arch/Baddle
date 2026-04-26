@@ -7,7 +7,7 @@ Used by both:
 Extracted to avoid duplicating 4 LLM-call flow in two places.
 """
 import logging
-from typing import Dict, List, Optional
+from typing import Dict
 
 from .prompts import _p
 from .graph_logic import _graph_generate

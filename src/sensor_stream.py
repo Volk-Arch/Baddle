@@ -29,8 +29,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, asdict, field
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Optional, Iterable
 
 from .paths import SENSOR_READINGS_FILE

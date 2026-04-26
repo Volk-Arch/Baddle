@@ -21,7 +21,6 @@ NE-бюджет:
 Design: poll-based, non-blocking. UI дёргает /assist/alerts чтобы увидеть
 накопленные инсайты.
 """
-import json
 import threading
 import time
 import logging
@@ -31,7 +30,7 @@ from typing import Optional, Tuple
 from .graph_logic import _graph
 from .hrv_manager import get_manager as get_hrv_manager
 from .horizon import get_global_state, PROTECTIVE_FREEZE
-from .user_state import get_user_state
+# NOTE: get_user_state удалён в W5; используем get_global_state().rgk напрямую
 from .signals import Signal, Dispatcher
 
 log = logging.getLogger(__name__)
@@ -112,7 +111,7 @@ def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
 
     # Dopamine → sampling temperature
     try:
-        dopamine = float(get_global_state().neuro.dopamine)
+        dopamine = float(get_global_state().rgk.system.gain.value)
     except Exception:
         dopamine = 0.5
     T = max(0.1, 1.1 - dopamine)   # DA=0 → T=1.1 (flat); DA=1 → T=0.1 (sharp)
@@ -469,47 +468,44 @@ class CognitiveLoop:
 
     # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
 
-    def _get_freeze(self):
-        """Helper: быстрый доступ к ProtectiveFreeze (носитель silence / imbalance /
-        sync_error EMA). Возвращает None если horizon недоступен — защита при
-        init race.
-        """
+    def _get_rgk(self):
+        """Helper: быстрый доступ к РГК через global state. Возвращает None
+        если horizon недоступен (init race)."""
         try:
-            return get_global_state().freeze
+            return get_global_state().rgk
         except Exception:
             return None
 
     def _idle_multiplier(self) -> float:
         """1.0 при полном resonance, MAX при max combined burnout.
 
-        Делегирует в `ProtectiveFreeze.combined_burnout(user_burnout)` —
-        единый расчёт для UI и замедления циклов. Эмпатия: если юзер
-        устал (decisions/rejects → `user.burnout`), Baddle тоже тише.
-        Это не отдельный check «предлагаем отдых», а встроенное молчание.
+        Делегирует в `_rgk.combined_burnout(user_burnout)` — единый расчёт
+        для UI и замедления циклов. Эмпатия: если юзер устал
+        (decisions/rejects → `user.burnout`), Baddle тоже тише.
         """
-        fz = self._get_freeze()
-        if fz is None:
+        r = self._get_rgk()
+        if r is None:
             return 1.0
         try:
-            user_burnout = float(get_user_state().burnout)
+            user_burnout = float(r.burnout.value)
         except Exception:
             user_burnout = 0.0
-        combined = fz.combined_burnout(user_burnout)
+        combined = r.combined_burnout(user_burnout)
         return 1.0 + combined * (self.IDLE_MULTIPLIER_MAX - 1.0)
 
     def _register_user_event(self, reason: str = ""):
         """User-event (сообщение, foreground tick, ручная правка графа).
-        Снижает `silence_pressure` на SILENCE_EVENT_DROP (не обнуляет).
+        Снижает `silence_press` на SILENCE_EVENT_DROP (не обнуляет).
         ~20 таких событий возвращают multiplier в 1.0 из максимума.
         """
-        fz = self._get_freeze()
-        if fz is None:
+        r = self._get_rgk()
+        if r is None:
             return
-        prev = fz.silence_pressure
-        fz.add_silence_pressure(-self.SILENCE_EVENT_DROP)
+        prev = r.silence_press
+        r.add_silence(-self.SILENCE_EVENT_DROP)
         if prev > 0.001:
             log.info(f"[cognitive_loop] silence_pressure {prev:.3f} -> "
-                     f"{fz.silence_pressure:.3f} (event: {reason}, "
+                     f"{r.silence_press:.3f} (event: {reason}, "
                      f"multiplier now {self._idle_multiplier():.2f}×)")
 
     def signal_user_input(self):
@@ -546,39 +542,34 @@ class CognitiveLoop:
         self._last_loop_tick_ts = now
         if dt <= 0:
             return
-        fz = self._get_freeze()
-        if fz is None:
+        r = self._get_rgk()
+        if r is None:
             return
         sync_err = 0.0
         combined_imbalance = 0.0
         try:
             gs = get_global_state()
-            u = get_user_state()
             sync_err = float(gs.sync_error)
 
             # Self-prediction: Baddle предсказывает собственную нейрохимию
-            gs.neuro.tick_expectation()
+            gs.rgk.tick_s_pred()
 
             # 4 PE-канала, все в [0, 1]
             sqrt3 = 1.7320508
-            user_pe = float(u.imbalance) / sqrt3              # ‖3D PE_vec‖ / √3
-            self_pe = float(gs.neuro.self_imbalance) / sqrt3  # self ‖PE_vec‖ / √3
-            agency_gap = float(u.agency_gap)
-            hrv_pe = float(u.hrv_surprise)
+            up = gs.rgk.project("user_state")
+            user_pe = float(up["imbalance"]) / sqrt3
+            self_pe = float(gs.rgk.project("system")["self_imbalance"]) / sqrt3
+            agency_gap = float(up["agency_gap"])
+            hrv_pe = float(up["hrv_surprise"])
             combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)
         except Exception:
             pass
-        fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
+        r.p_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
 
         # Counter-wave (Правило 7): R/C bit через гистерезис.
-        # User mirror perturbation = sync_error (рассогласование с system).
-        # System mirror perturbation = combined_imbalance (max PE по 4 каналам).
-        # При perturbation > 0.15 mode → 'C' (counter-wave), при < 0.08 → 'R'.
-        # Используется Dispatcher'ом (signals.py): при user.mode == 'C'
-        # urgency push-style сигналов понижается на 0.3.
         try:
-            u.update_mode(sync_err)
-            gs.neuro.update_mode(combined_imbalance)
+            r.user.update_mode(sync_err)
+            gs.rgk.system.update_mode(combined_imbalance)
         except Exception as e:
             log.debug(f"[advance_tick] counter-wave update_mode failed: {e}")
 
@@ -593,23 +584,21 @@ class CognitiveLoop:
         try:
             from .graph_logic import nodes_created_within
             rate = min(1.0, nodes_created_within(3600) / 10.0)
-            gs.neuro.feed_acetylcholine(node_creation_rate=rate)
+            gs.rgk.s_ach_feed(node_creation_rate=rate)
             recent_bridge_count = sum(
                 1 for b in self._recent_bridges
                 if now - float(b.get("ts", 0)) < 3600.0
             )
             scattering = min(1.0, recent_bridge_count / 5.0)
-            gs.neuro.feed_gaba(freeze_active=fz.active,
+            gs.rgk.s_gaba_feed(freeze_active=r.freeze_active,
                                 embedding_scattering=scattering)
-            u.feed_gaba()
+            r.u_gaba_feed()
         except Exception as e:
             log.debug(f"[advance_tick] phase_d feeders failed: {e}")
 
-        # Focus residue естественное затухание: −0.05 за минуту покоя;
-        # rebuilt через bump_focus_residue в record_action на user-event'ы.
-        # См. docs/resonance-model.md.
+        # Focus residue естественное затухание: −0.05 за минуту покоя.
         try:
-            get_user_state().decay_focus_residue(dt_seconds=dt)
+            r.u_focus_decay(dt)
         except Exception:
             pass
 
@@ -697,9 +686,9 @@ class CognitiveLoop:
         # v1: novelty=conf от detector, boost=True. Документировано в
         # docs/neurochem-design.md §6 «User-side ACh».
         try:
-            us = get_user_state()
-            us.apply_surprise_boost(n_ticks=3)
-            us.feed_acetylcholine(novelty=float(conf), boost=True)
+            r = get_global_state().rgk
+            r.u_apply_boost(n_ticks=3)
+            r.u_ach_feed(novelty=float(conf), boost=True)
         except Exception as e:
             log.debug(f"[cognitive_loop] surprise_boost failed: {e}")
 
@@ -883,8 +872,8 @@ class CognitiveLoop:
                 self._advance_tick()
 
                 # 1. NE homeostasis (decay в сторону baseline)
-                ne = state.neuro.norepinephrine
-                state.neuro.norepinephrine = (
+                ne = state.rgk.system.aperture.value
+                state.rgk.system.aperture.value = (
                     ne * (1 - self.NE_DECAY_PER_TICK)
                     + self.NE_BASELINE * self.NE_DECAY_PER_TICK
                 )
@@ -915,7 +904,7 @@ class CognitiveLoop:
                 # push-style сигналов на 0.3 (см. signals.py COUNTER_WAVE_PUSH_TYPES).
                 user_mode = "R"
                 try:
-                    user_mode = get_user_state().mode
+                    user_mode = get_global_state().rgk.user.mode
                 except Exception:
                     pass
                 emitted = self._dispatcher.dispatch(candidates, now,
@@ -939,7 +928,7 @@ class CognitiveLoop:
             # 5. Adaptive sleep. Cap на HRV_PUSH_INTERVAL чтобы physical
             # state не устаревал.
             try:
-                ne = get_global_state().neuro.norepinephrine
+                ne = get_global_state().rgk.system.aperture.value
                 scaled = self.TICK_INTERVAL * max(0.5, 1.2 - ne)
             except Exception:
                 scaled = self.TICK_INTERVAL
@@ -1275,7 +1264,7 @@ class CognitiveLoop:
             try:
                 from .horizon import get_global_state
                 deep_quality = min(1.0, max(0.0, nodes_created / 10.0))
-                get_global_state().neuro.feed_acetylcholine(
+                get_global_state().rgk.s_ach_feed(
                     node_creation_rate=0.0, bridge_quality=deep_quality)
             except Exception as e:
                 log.debug(f"[dmn_deep] ACh feed failed: {e}")
@@ -1423,16 +1412,17 @@ class CognitiveLoop:
                               "content": f"Гипотеза: {t_text}\nFOR/AGAINST/SYNTHESIS. 3 строки."}],
                             max_tokens=2000, temp=0.4, top_k=20,
                         )
-                        # Confidence-update по длинам
-                        fr = ag = sy = ""
+                        # Confidence-update по длинам fr / ag (synthesis line
+                        # парсится моделью но не нужна здесь).
+                        fr = ag = ""
                         for l in res.split("\n"):
                             L = l.strip()
                             if L.upper().startswith(("FOR:", "ЗА:")):
                                 fr = L.split(":",1)[1].strip()
                             elif L.upper().startswith(("AGAINST:","ПРОТИВ:")):
                                 ag = L.split(":",1)[1].strip()
-                            elif L.upper().startswith(("SYNTHESIS:","СИНТЕЗ:")):
-                                sy = L.split(":",1)[1].strip()
+                            # SYNTHESIS line парсится моделью но не нужен здесь —
+                            # confidence weighting считается только по fr/ag len.
                         if fr and ag:
                             nodes[target]["confidence"] = (
                                 0.75 if len(fr) >= len(ag) else 0.35)
@@ -1451,7 +1441,7 @@ class CognitiveLoop:
                         if b_quality > 0.5:
                             try:
                                 from .horizon import get_global_state
-                                get_global_state().neuro.feed_acetylcholine(
+                                get_global_state().rgk.s_ach_feed(
                                     node_creation_rate=0.0, bridge_quality=b_quality)
                             except Exception as e:
                                 log.debug(f"[dmn_converge] ACh feed failed: {e}")
@@ -1579,7 +1569,7 @@ class CognitiveLoop:
         # (этот канал кормится в _advance_tick).
         try:
             from .horizon import get_global_state
-            get_global_state().neuro.feed_acetylcholine(
+            get_global_state().rgk.s_ach_feed(
                 node_creation_rate=0.0, bridge_quality=quality)
         except Exception as e:
             log.debug(f"[dmn_bridge] ACh feed failed: {e}")
@@ -1682,10 +1672,10 @@ class CognitiveLoop:
         """
         from .graph_logic import _graph
         cs = get_global_state()
-        neuro = cs.neuro
+        sys = cs.rgk.system
         bits = [f"state:{cs.state}"]
-        bits.append(f"S={neuro.serotonin:.2f} NE={neuro.norepinephrine:.2f} "
-                    f"DA={neuro.dopamine:.2f}")
+        bits.append(f"S={sys.hyst.value:.2f} NE={sys.aperture.value:.2f} "
+                    f"DA={sys.gain.value:.2f}")
         bits.append(cs.state_origin_hint or "1_rest")
         # Topic / goal text если есть
         topic = (_graph.get("meta") or {}).get("topic", "")
@@ -1740,7 +1730,7 @@ class CognitiveLoop:
                 bits.append(f"Сон {hrs}ч{suffix}.")
                 # Зеркалим в UserState чтобы simulate-day и другие могли читать
                 try:
-                    get_user_state().last_sleep_duration_h = float(hrs)
+                    get_global_state().rgk.last_sleep_duration_h = float(hrs)
                 except Exception:
                     pass
         except Exception:
@@ -1868,7 +1858,7 @@ class CognitiveLoop:
             return
         try:
             state = mgr.get_baddle_state() or {}
-            get_user_state().update_from_hrv(
+            get_global_state().rgk.u_hrv(
                 coherence=state.get("coherence"),
                 rmssd=state.get("rmssd"),
                 stress=state.get("stress"),
@@ -2008,7 +1998,6 @@ class CognitiveLoop:
 
         try:
             from .state_graph import get_state_graph
-            st = get_global_state()
             sg = get_state_graph()
             # state_origin: 1_held если есть active activity, иначе 1_rest
             origin = "1_held" if snapshot.get("active_activity") else "1_rest"
@@ -2037,7 +2026,8 @@ class CognitiveLoop:
         if not self._throttled("_last_cognitive_load_update", 300):
             return
         try:
-            get_user_state().update_cognitive_load()
+            from .user_dynamics import update_cognitive_load
+            update_cognitive_load(get_global_state().rgk)
         except Exception as e:
             log.debug(f"[cognitive_load] update failed: {e}")
 
@@ -2065,7 +2055,7 @@ class CognitiveLoop:
         planned = len(schedule)
         completed = sum(1 for s in schedule if s.get("done"))
         try:
-            get_user_state().update_from_plan_completion(completed=completed, planned=planned)
+            get_global_state().rgk.u_plan(completed, planned)
             log.debug(f"[cognitive_loop] agency update: {completed}/{planned}")
         except Exception as e:
             log.debug(f"[cognitive_loop] agency update failed: {e}")
@@ -2132,8 +2122,7 @@ class CognitiveLoop:
         # HRV short summary
         hrv_hint = ""
         try:
-            us = get_user_state()
-            coh = us.hrv_coherence
+            coh = get_global_state().rgk.hrv_coherence
             if coh is not None:
                 if coh > 0.6:     hrv_hint = "спокоен"
                 elif coh < 0.35:  hrv_hint = "напряжён"
@@ -2157,9 +2146,9 @@ class CognitiveLoop:
             "burnout": "caring", "insight": "reference",
         }
         try:
-            user = get_user_state()
-            ns_key = (user.named_state or {}).get("key")
-            freq = user.frequency_regime
+            r = get_global_state().rgk
+            ns_key = (r.project("named_state") or {}).get("key")
+            freq = r.frequency_regime()
         except Exception:
             ns_key = None
             freq = "flat"
@@ -2184,7 +2173,7 @@ class CognitiveLoop:
         # Симметрия с signals.COUNTER_WAVE_PUSH_TYPES — там тот же тип
         # сигнала понижается по urgency, здесь — по тону.
         try:
-            if get_user_state().mode == "C" and heuristic_tone in ("caring", "simple"):
+            if get_global_state().rgk.user.mode == "C" and heuristic_tone in ("caring", "simple"):
                 _old = heuristic_tone
                 heuristic_tone = "reference" if recent_topics else "curious"
                 log.debug(f"[counter-wave] sync_seeking tone {_old}→{heuristic_tone}")
@@ -2384,7 +2373,7 @@ class CognitiveLoop:
         """
         try:
             st = get_global_state()
-            ne = st.neuro.norepinephrine
+            ne = st.rgk.system.aperture.value
             state = st.state
             not_frozen = state != PROTECTIVE_FREEZE
         except Exception:

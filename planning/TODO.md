@@ -5,7 +5,6 @@
 > - [docs/](../docs/) — как код работает (по подсистемам).
 > - [docs/architecture-rules.md](../docs/architecture-rules.md) — 7 правил архитектуры + фильтр для новых фич.
 > - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
-> - [cleanup-plan.md](cleanup-plan.md) — Track A + B оставшегося cleanup.
 > - [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---
@@ -56,6 +55,13 @@
 
 - [ ] **RAG в `execute_deep` и `_fastpath_chat`** — similar past nodes/outcomes через `distinct()` к query, инжект в prompt. Pump/DMN частично делают это, нужно довести до всех путей. **~3-5ч**.
 - [ ] **META-вопросы — ночная генерация «что ты не заметил»** — два scout-моста обнаруживают общий абстрактный паттерн → вопрос. Зависит от того что scout реально находит мосты. **~2-3ч**.
+- [x] ~~**Beta-prior на confidence**~~ ✅ done 2026-04-26. Sidecar Beta-prior на nodes: `alpha/beta` + cached `confidence_total` + `confidence_ci` рядом с scalar `confidence` (last остался authoritative из `_bayesian_update_distinct` + RPE feedback). `_bump_evidence(node, supports, strength)` обновляет alpha/beta параллельно в evidence path. UI: 5-й tab «📐 Calib» в Outcome dashboard — 95% CI band вокруг `sync_error_ema_slow` daily + verdict («CI узкий — калибровка установилась» / средний / широкий). 7 property tests. Через 2 мес use покажет сужение CI = реальная calibration.
+- [ ] **Beta-prior consumers — подключить CI к решениям** — сейчас `confidence_ci` чистый observable. Behavioral change только когда поmkdir consumers:
+  - **Action Memory tone-scoring через CI overlap** — `score_action_candidates` сейчас выбирает greedy max. С CI: «два кандидата с overlap'ом → пробуем оба пополам, не winner-take-all». Закладывается exploration на маленьких выборках. **~1-2ч.**
+  - **Conservative confidence gate** — где сейчас `if confidence > 0.6` (verify threshold) → `if confidence_ci_lower > 0.6` (примет решение только когда CI узкий И mean высокий). Применимо к auto-promote thought→hypothesis, evidence sufficiency check, suggest-when-confident. Trade-off: slower decisions, точнее. **~2ч.**
+  - **CI на UI ноды** — в graph viewer / лаб карточке показать `confidence: 0.7 (±0.05)` вместо просто `0.7`. Тултип объясняет «20 evidence, узкий CI» vs «1 evidence, широкий». **~1ч.**
+
+  **Блок:** 1-2 мес use чтобы CI band у ноды успел стать содержательным.
 
 ### Sensors
 
@@ -98,12 +104,6 @@
 ## 🛠 Tool-use (отдельная сессия)
 
 - [ ] Слой действий (calendar / weather / web.search / file / rag / permission model) — отдельная сессия когда появится необходимость.
-
----
-
-## 🧹 Line-count cleanup
-
-Опциональный план Phase E-I (5 фаз, −2000..−3200 строк, 15-25ч) — отдельный документ [cleanup-plan.md](cleanup-plan.md). Не делается по умолчанию.
 
 ---
 

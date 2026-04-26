@@ -8,7 +8,7 @@ Neurochem / ProtectiveFreeze должен давать тот же snapshot. EXP
 import pytest
 
 from src.user_state import UserState
-from src.neurochem import Neurochem, ProtectiveFreeze
+from src.rgk import РГК
 
 
 # ── Expected snapshot (captured 2026-04-24, pre-migration) ─────────────────
@@ -72,12 +72,12 @@ def states(monkeypatch):
     TOD запинен в 'day' через monkeypatch — без этого tests на разных часах
     падают (`_current_tod` использует datetime.now()).
     """
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     us = UserState()
-    nc = Neurochem()
-    pf = ProtectiveFreeze()
+    nc = РГК()  # отдельный rgk для system events (раньше был Neurochem)
+    r = РГК()  # отдельный rgk для pressure layer (раньше был ProtectiveFreeze)
 
     # UserState events
     for _ in range(5):
@@ -95,7 +95,7 @@ def states(monkeypatch):
     for _ in range(10):
         us.tick_expectation()
 
-    # Neurochem events
+    # System (Neurochem) events — теперь через РГК
     for d, wc, w in [
         (0.4,  [0.1, -0.05, 0.2],   [0.3,  0.4,  0.3]),
         (0.3,  [0.05, -0.02, 0.1],  [0.35, 0.3,  0.35]),
@@ -103,19 +103,19 @@ def states(monkeypatch):
         (0.2,  [-0.05, 0.1, -0.02], [0.4,  0.3,  0.3]),
         (0.45, [0.1, 0.05, -0.05],  [0.3,  0.3,  0.4]),
     ]:
-        nc.update(d=d, w_change=wc, weights=w)
+        nc.s_graph(d=d, w_change=wc, weights=w)
     for _ in range(3):
-        nc.tick_expectation()
-    nc.record_outcome(prior=0.5, posterior=0.7)
-    nc.record_outcome(prior=0.6, posterior=0.55)
+        nc.tick_s_pred()
+    nc.s_outcome(prior=0.5, posterior=0.7)
+    nc.s_outcome(prior=0.6, posterior=0.55)
 
-    # ProtectiveFreeze events
-    pf.update(d=0.7, serotonin=0.4)
-    pf.update(d=0.65, serotonin=0.45)
+    # Pressure layer events (раньше через ProtectiveFreeze, теперь через РГК)
+    r.p_conflict(d=0.7, serotonin=0.4)
+    r.p_conflict(d=0.65, serotonin=0.45)
     for _ in range(20):
-        pf.feed_tick(dt=60.0, sync_err=0.5, imbalance=0.3)
+        r.p_tick(dt=60.0, sync_err=0.5, imbalance=0.3)
 
-    return us, nc, pf
+    return us, nc, r
 
 
 # ── UserState identity ─────────────────────────────────────────────────────
@@ -166,50 +166,50 @@ def test_user_state_vector_and_derived(states):
         EXPECTED_USER_STATE["imbalance"], abs=TOL)
 
 
-# ── Neurochem identity ─────────────────────────────────────────────────────
+# ── System chem identity (через РГК после W4) ──────────────────────────────
 
 def test_neurochem_scalars(states):
     _, nc, _ = states
-    assert nc.dopamine == pytest.approx(EXPECTED_NEUROCHEM["dopamine"], abs=TOL)
-    assert nc.serotonin == pytest.approx(EXPECTED_NEUROCHEM["serotonin"], abs=TOL)
-    assert nc.norepinephrine == pytest.approx(
+    assert nc.system.gain.value == pytest.approx(EXPECTED_NEUROCHEM["dopamine"], abs=TOL)
+    assert nc.system.hyst.value == pytest.approx(EXPECTED_NEUROCHEM["serotonin"], abs=TOL)
+    assert nc.system.aperture.value == pytest.approx(
         EXPECTED_NEUROCHEM["norepinephrine"], abs=TOL)
 
 
 def test_neurochem_predictive_and_derived(states):
     _, nc, _ = states
-    assert nc.expectation_vec.tolist() == pytest.approx(
+    assert nc.s_exp_vec.value.tolist() == pytest.approx(
         EXPECTED_NEUROCHEM["expectation_vec"], abs=TOL)
-    assert nc.gamma == pytest.approx(EXPECTED_NEUROCHEM["gamma"], abs=TOL)
+    assert nc.gamma() == pytest.approx(EXPECTED_NEUROCHEM["gamma"], abs=TOL)
     assert nc.recent_rpe == pytest.approx(
         EXPECTED_NEUROCHEM["recent_rpe"], abs=TOL)
-    assert nc.self_imbalance == pytest.approx(
+    assert nc.project("system")["self_imbalance"] == pytest.approx(
         EXPECTED_NEUROCHEM["self_imbalance"], abs=TOL)
-    assert nc.vector().tolist() == pytest.approx(
+    assert nc.system.vector().tolist() == pytest.approx(
         EXPECTED_NEUROCHEM["vector"], abs=TOL)
 
 
-# ── ProtectiveFreeze identity ──────────────────────────────────────────────
+# ── Freeze identity (через РГК после W3) ──────────────────────────────────
 
 def test_freeze_feeders(states):
-    _, _, pf = states
-    assert pf.conflict_accumulator == pytest.approx(
+    _, _, r = states
+    assert r.conflict.value == pytest.approx(
         EXPECTED_FREEZE["conflict_accumulator"], abs=TOL)
-    assert pf.silence_pressure == pytest.approx(
+    assert r.silence_press == pytest.approx(
         EXPECTED_FREEZE["silence_pressure"], abs=TOL)
-    assert pf.imbalance_pressure == pytest.approx(
+    assert r.imbalance_press.value == pytest.approx(
         EXPECTED_FREEZE["imbalance_pressure"], abs=TOL)
-    assert pf.sync_error_ema_fast == pytest.approx(
+    assert r.sync_fast.value == pytest.approx(
         EXPECTED_FREEZE["sync_error_ema_fast"], abs=TOL)
-    assert pf.sync_error_ema_slow == pytest.approx(
+    assert r.sync_slow.value == pytest.approx(
         EXPECTED_FREEZE["sync_error_ema_slow"], abs=TOL)
 
 
 def test_freeze_derived(states):
-    _, _, pf = states
-    assert pf.display_burnout == pytest.approx(
-        EXPECTED_FREEZE["display_burnout"], abs=TOL)
-    assert pf.active == EXPECTED_FREEZE["active"]
+    _, _, r = states
+    display = max(r.conflict.value, r.silence_press, r.imbalance_press.value)
+    assert display == pytest.approx(EXPECTED_FREEZE["display_burnout"], abs=TOL)
+    assert r.freeze_active == EXPECTED_FREEZE["active"]
 
 
 # ── Checkin-flow identity (2026-04-24 consolidation) ──────────────────────
@@ -220,8 +220,8 @@ def test_checkin_event_identity(monkeypatch):
     старом checkins.py (до миграции). Формулы не менялись, маршрут — apply_checkin
     после Phase D Step 3c.
     """
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
     from src.ema import Decays
 
     # Path A — ручной inline EMA через setters (semantics старого checkins)
@@ -253,8 +253,8 @@ def test_apply_subjective_surprise_identity(monkeypatch):
     """apply_subjective_surprise должен быть эквивалентен старому
     inline nudge `expectation.feed(reality - s, decay_override=0.6)`.
     """
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     # Path A — ручной nudge (то что делал старый checkins после fix'а)
     us_a = UserState()
@@ -290,38 +290,31 @@ def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "CHECKINS_FILE", tmp_path / "checkins.jsonl")
     from src import checkins
     monkeypatch.setattr(checkins, "_CHECKIN_FILE", tmp_path / "checkins.jsonl")
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК, reset_global_rgk
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
-    from src.user_state import set_user_state, get_user_state
-    from src.ema import Decays
+    # Reset global РГК — checkins.apply_to_user_state работает с singleton
+    r = reset_global_rgk()
+    r.u_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    r.u_engage(0.65)
+    r.tick_u_pred()
 
-    # Prepare fresh user
-    fresh = UserState()
-    fresh.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
-    fresh.update_from_engagement(0.65)
-    fresh.tick_expectation()
-    set_user_state(fresh)
-
-    # Apply checkin with all fields. Phase C: `energy` field больше не
-    # обрабатывается checkins (long_reserve удалён) — checkin отдаёт только
-    # stress/focus/reality/expected.
     entry = {"energy": 40, "stress": 70, "focus": 80,
              "expected": 1, "reality": -1}
     checkins.apply_to_user_state(entry)
 
-    u = get_user_state()
+    # Read через РГК напрямую (UserState constructor resets defaults).
 
     # stress 70 → target_ne 0.7, decay CHECKIN_STRESS (0.7)
     # cur_ne after hrv_update(stress=0.3) = 0.9*0.5 + 0.1*0.3 = 0.48
     # new_ne = 0.7*0.48 + 0.3*0.7 = 0.546
-    assert u.norepinephrine == pytest.approx(0.546, abs=1e-3)
+    assert float(r.user.aperture.value) == pytest.approx(0.546, abs=1e-3)
 
     # focus 80 → target_s 0.8, decay CHECKIN_FOCUS (0.7)
     # cur_s after hrv_update(coh=0.6) = 0.9*0.5 + 0.1*0.6 = 0.51
     # new_s = 0.7*0.51 + 0.3*0.8 = 0.597
-    assert u.serotonin == pytest.approx(0.597, abs=1e-3)
+    assert float(r.user.hyst.value) == pytest.approx(0.597, abs=1e-3)
 
     # reality -1 → valence target -0.5, decay CHECKIN_VALENCE (0.6)
     # cur_v = 0 → 0.6*0 + 0.4*(-0.5) = -0.2
-    assert u.valence == pytest.approx(-0.2, abs=1e-3)
+    assert float(r.valence.value) == pytest.approx(-0.2, abs=1e-3)

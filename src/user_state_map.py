@@ -15,7 +15,6 @@
 См. [docs/neurochem-design.md § Пары-регуляторы](../docs/neurochem-design.md)
 для физической интерпретации каждого региона через chem-профиль.
 """
-from typing import Optional
 
 # (key, da, 5ht, ne, ach, gaba, emoji, label_ru, advice)
 # 8-region map:

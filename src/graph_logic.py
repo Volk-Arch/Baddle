@@ -1,7 +1,7 @@
 """baddle — graph thinking logic (nodes, edges, Bayes, similarity, generation)."""
 
+import math
 import re
-import random
 import logging
 import threading
 from collections import defaultdict, deque
@@ -89,7 +89,7 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
         log.warning(f"[auto_evidence] LLM relation check failed: {e}")
 
     # Regex fallback
-    log.info(f"[auto_evidence] fallback to regex")
+    log.info("[auto_evidence] fallback to regex")
     neg_patterns = (r'\bне\b', r'\bнет\b', r'\bоднако\b', r'\bно\b', r'\bnot\b', r'\bhowever\b', r'\bbut\b')
     child_lower = child_text.lower()
     if any(re.search(p, child_lower) for p in neg_patterns):
@@ -107,9 +107,9 @@ def _bayesian_update_distinct(prior: float, d: float) -> float:
     """
     from .horizon import get_global_state
     cs = get_global_state()
-    posterior = cs.apply_to_bayes(prior, d)
+    posterior = cs.rgk.bayes_step(prior, d)
     try:
-        cs.neuro.record_outcome(prior, posterior)
+        cs.rgk.s_outcome(prior, posterior)
     except Exception as e:
         log.debug(f"[bayes] RPE record failed: {e}")
     # Maturity drift: нода пересекла verified threshold → система взрослеет
@@ -195,15 +195,22 @@ def _d_from_relation(relation: str, strength: float) -> float:
     return 0.5
 
 
-def _beta_prior_update(alpha: float, beta: float, supports: bool, strength: float = 1.0) -> tuple:
-    """Beta distribution prior update.
+# ── Beta-prior helpers (для confidence calibration с CI) ────────────────────
+#
+# Параллельный путь к `_bayesian_update_distinct(prior, d)` (single-scalar
+# update). Beta хранит (alpha, beta) → mean=alpha/total, total=alpha+beta
+# (накопленный evidence weight), CI=mean±1.96·std (степень уверенности).
+#
+# Ноды держат оба: `confidence` (scalar mean — backward-compat для всех
+# readers) + `alpha/beta` (для CI computation на serialize). Update пишет
+# в alpha/beta, синхронизирует confidence.
 
-    Prior: Beta(alpha, beta) → mean = alpha/(alpha+beta), confidence ~ alpha+beta
-    Observation: supports (True/False) with strength in [0,1]
-    Returns: (new_alpha, new_beta)
+def _beta_prior_update(alpha: float, beta: float, supports: bool,
+                        strength: float = 1.0) -> tuple:
+    """Beta(alpha, beta) + observation (supports/strength) → (new_alpha, new_beta).
 
-    Gives both probability AND confidence in that probability.
-    See docs/nand-architecture.md
+    Prior: Beta(alpha, beta) → mean = alpha/(alpha+beta), total = alpha+beta.
+    Observation: supports (True/False) with strength in (0, ∞] (typically [0,1]).
     """
     alpha = max(0.5, float(alpha))
     beta = max(0.5, float(beta))
@@ -215,13 +222,18 @@ def _beta_prior_update(alpha: float, beta: float, supports: bool, strength: floa
 
 
 def _beta_mean_ci(alpha: float, beta: float) -> dict:
-    """Extract mean and 95% credible interval from Beta(alpha, beta)."""
-    import math
+    """Extract mean / std / 95% credible interval / total из Beta(alpha, beta).
+
+    Returns: {mean, std, ci_lower, ci_upper, total}
+        mean = alpha / (alpha+beta)
+        total = alpha+beta (накопленный evidence weight; чем больше — тем
+                            уже CI и крепче confidence в самом mean)
+        ci_lower / ci_upper = mean ± 1.96·std (95% credible)
+    """
     alpha = max(0.5, float(alpha))
     beta = max(0.5, float(beta))
     total = alpha + beta
     mean = alpha / total if total > 0 else 0.5
-    # Approximation for variance/std
     var = (alpha * beta) / ((total ** 2) * (total + 1)) if total > 1 else 0.25
     std = math.sqrt(var)
     ci_lower = max(0.0, mean - 1.96 * std)
@@ -231,8 +243,49 @@ def _beta_mean_ci(alpha: float, beta: float) -> dict:
         "std": round(std, 3),
         "ci_lower": round(ci_lower, 3),
         "ci_upper": round(ci_upper, 3),
-        "confidence_strength": round(total, 2),  # higher = more certain
+        "total": round(total, 2),
     }
+
+
+def _confidence_to_alpha_beta(confidence: float, total: float = 4.0) -> tuple:
+    """Default alpha/beta для legacy nodes без явных Beta-параметров.
+
+    Backward-compat: при load старых nodes восстанавливаем (alpha, beta)
+    из scalar confidence. total=4 — слабый prior (как «после ~2 supports
+    или ~2 contradicts»). Когда node получит первое явное evidence через
+    _bump_evidence, total начнёт расти честно.
+    """
+    confidence = max(0.0, min(1.0, float(confidence)))
+    total = max(1.0, float(total))
+    alpha = round(confidence * total + 0.5, 2)  # +0.5 = uninformed prior baseline
+    beta = round((1.0 - confidence) * total + 0.5, 2)
+    return (alpha, beta)
+
+
+def _bump_evidence(node: dict, supports: bool, strength: float = 1.0) -> None:
+    """Sidecar Beta-prior update: alpha/beta tracker для CI calibration.
+
+    `confidence` (mean) **не перезаписывается** — он остаётся authoritative
+    из `_bayesian_update_distinct` (γ-modulation + RPE feedback +
+    maturity drift). alpha/beta здесь — **независимый evidence accumulator**:
+    total = alpha+beta растёт монотонно с каждым observation, что позволяет
+    считать CI `mean ± 1.96·std` для UI «насколько вообще накоплен evidence».
+
+    Используется в parallel со старым flow в caller'ах (graph_routes evidence
+    add). При serialize ноды отдают `confidence_total` + `confidence_ci`
+    derived из alpha/beta — независимый layer над scalar confidence.
+    """
+    alpha = node.get("alpha")
+    beta = node.get("beta")
+    if alpha is None or beta is None:
+        alpha, beta = _confidence_to_alpha_beta(node.get("confidence", 0.5))
+    new_alpha, new_beta = _beta_prior_update(alpha, beta, supports, strength)
+    node["alpha"] = new_alpha
+    node["beta"] = new_beta
+    # Cache CI / total на ноде — UI/serialize читает напрямую без recompute.
+    ci = _beta_mean_ci(new_alpha, new_beta)
+    node["confidence_total"] = ci["total"]
+    node["confidence_ci"] = [ci["ci_lower"], ci["ci_upper"]]
 
 
 # ── node helpers ─────────────────────────────────────────────────────────────
@@ -253,6 +306,12 @@ def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
     по клику через /graph/render-node — text-on-demand.
     """
     now = datetime.now(timezone.utc).isoformat()
+    # Beta-prior backing для confidence: alpha/beta хранят накопленный
+    # evidence weight (total = alpha+beta). confidence = mean = alpha/total.
+    # Initial total=4 (слабый prior, как ~2 supports или ~2 contradicts).
+    # См. docs/nand-architecture.md + _bump_evidence/_beta_mean_ci.
+    alpha, beta = _confidence_to_alpha_beta(confidence, total=4.0)
+    ci = _beta_mean_ci(alpha, beta)
     return {
         "id": node_id,
         "text": text,
@@ -261,6 +320,10 @@ def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
         "depth": depth,
         "topic": topic,
         "confidence": round(confidence, 2),
+        "alpha": alpha,
+        "beta": beta,
+        "confidence_total": ci["total"],
+        "confidence_ci": [ci["ci_lower"], ci["ci_upper"]],
         "type": node_type,
         "rendered": rendered,
         "created_at": now,
@@ -277,6 +340,17 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("depth", 0)
         node.setdefault("topic", "")
         node.setdefault("confidence", 0.5)
+        # Beta-prior backing: legacy nodes без alpha/beta получают defaults
+        # derived из confidence (total=4 — слабый prior). При первом
+        # _bump_evidence начнут расти честно от текущей точки.
+        if "alpha" not in node or "beta" not in node:
+            a, b = _confidence_to_alpha_beta(node.get("confidence", 0.5), total=4.0)
+            node.setdefault("alpha", a)
+            node.setdefault("beta", b)
+        if "confidence_ci" not in node or "confidence_total" not in node:
+            ci = _beta_mean_ci(node.get("alpha", 0.5), node.get("beta", 0.5))
+            node.setdefault("confidence_total", ci["total"])
+            node.setdefault("confidence_ci", [ci["ci_lower"], ci["ci_upper"]])
         node.setdefault("type", "thought")
         node.setdefault("rendered", True)    # legacy nodes считаются уже отрендеренными
         node.setdefault("created_at", None)
@@ -332,15 +406,6 @@ def touch_node(idx: int, boost: float = TOUCH_BOOST_DEFAULT) -> bool:
     return True
 
 
-def touch_nodes(indices, boost: float = TOUCH_BOOST_DEFAULT) -> int:
-    """Batch-версия touch_node для списка индексов. Возвращает сколько затронуто."""
-    n = 0
-    for idx in indices:
-        if touch_node(idx, boost=boost):
-            n += 1
-    return n
-
-
 # ── Action Memory (самообучение через граф) ─────────────────────────────────
 #
 # Action / outcome — ноды того же графа что и мысли. DMN / pump / consolidate
@@ -367,17 +432,17 @@ def _current_snapshot() -> dict:
     except Exception:
         pass
 
-    # User state (4 скаляра + agency + valence)
+    # User state (4 скаляра + agency + valence) — read directly from РГК
     try:
-        from .user_state import get_user_state
-        u = get_user_state()
+        from .rgk import get_global_rgk
+        r = get_global_rgk()
         snap["user_state_before"] = {
-            "dopamine":        round(u.dopamine, 3),
-            "serotonin":       round(u.serotonin, 3),
-            "norepinephrine":  round(u.norepinephrine, 3),
-            "burnout":         round(u.burnout, 3),
-            "agency":          round(u.agency, 3),
-            "valence":         round(u.valence, 3),
+            "dopamine":        round(float(r.user.gain.value), 3),
+            "serotonin":       round(float(r.user.hyst.value), 3),
+            "norepinephrine":  round(float(r.user.aperture.value), 3),
+            "burnout":         round(float(r.burnout.value), 3),
+            "agency":          round(float(r.agency.value), 3),
+            "valence":         round(float(r.valence.value), 3),
         }
     except Exception:
         pass
@@ -387,24 +452,24 @@ def _current_snapshot() -> dict:
         from .horizon import get_global_state
         gs = get_global_state()
         snap["system_state_before"] = {
-            "dopamine":             round(gs.neuro.dopamine, 3),
-            "serotonin":            round(gs.neuro.serotonin, 3),
-            "norepinephrine":       round(gs.neuro.norepinephrine, 3),
-            "conflict_accumulator": round(gs.freeze.conflict_accumulator, 3),
-            "silence_pressure":     round(gs.freeze.silence_pressure, 3),
-            "imbalance_pressure":   round(gs.freeze.imbalance_pressure, 3),
+            "dopamine":             round(gs.rgk.system.gain.value, 3),
+            "serotonin":            round(gs.rgk.system.hyst.value, 3),
+            "norepinephrine":       round(gs.rgk.system.aperture.value, 3),
+            "conflict_accumulator": round(gs.rgk.conflict.value, 3),
+            "silence_pressure":     round(gs.rgk.silence_press, 3),
+            "imbalance_pressure":   round(gs.rgk.imbalance_press.value, 3),
         }
         snap["sync_error_before"] = round(float(gs.sync_error), 3)
-        snap["sync_error_ema_fast"] = round(float(gs.freeze.sync_error_ema_fast), 4)
-        snap["sync_error_ema_slow"] = round(float(gs.freeze.sync_error_ema_slow), 4)
+        snap["sync_error_ema_fast"] = round(float(gs.rgk.sync_fast.value), 4)
+        snap["sync_error_ema_slow"] = round(float(gs.rgk.sync_slow.value), 4)
         snap["sync_regime"] = gs.sync_regime
     except Exception:
         pass
 
-    # HRV regime (activity_zone из UserState)
+    # HRV regime (activity_zone из РГК)
     try:
-        from .user_state import get_user_state
-        snap["hrv_regime"] = get_user_state().activity_zone
+        from .rgk import get_global_rgk
+        snap["hrv_regime"] = get_global_rgk().activity_zone()
     except Exception:
         pass
 
@@ -430,7 +495,6 @@ def record_action(actor: str, action_kind: str, text: str,
     Нода получает: type='action', actor, action_kind, text, context,
     closed=False, outcome_idx=None, плюс стандартные fields через _make_node.
     """
-    from datetime import datetime, timezone as _tz
     ctx = dict(context) if context is not None else _current_snapshot()
     with graph_lock:
         nodes = _graph["nodes"]
@@ -455,9 +519,9 @@ def record_action(actor: str, action_kind: str, text: str,
     # Вне graph_lock — bump_focus_residue сама thread-safe (atomic float ops).
     if str(actor or "") == "user":
         try:
-            from .user_state import get_user_state
+            from .rgk import get_global_rgk
             mode_id = (extras or {}).get("mode_id") if extras else None
-            get_user_state().bump_focus_residue(mode_id)
+            get_global_rgk().u_focus_bump(mode_id)
         except Exception as e:
             log.debug(f"[focus_residue] bump failed: {e}")
 
@@ -865,7 +929,6 @@ def _group_for_collapse(
     """
     from collections import defaultdict
     nodes = _graph.get("nodes", [])
-    src_set = set(source_indices)
     if len(source_indices) < min_group_size:
         return []
 
@@ -1000,7 +1063,6 @@ def force_synthesize_top(n: int = 5, lang: str = "ru",
     # Goal text: если source_indices задан — ищем goal в whitelist'е
     # (session-specific), иначе первый goal в графе.
     if source_indices is not None:
-        _whitelist = set(source_indices)
         goal_text = next(
             (nodes[i].get("text", "") for i in source_indices
              if 0 <= i < len(nodes) and nodes[i].get("type") == "goal"),

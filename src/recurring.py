@@ -15,18 +15,9 @@ import logging
 from datetime import datetime, date as date_type
 from typing import Optional
 
-from .goals_store import _replay, list_goals
+from .goals_store import _replay
 
 log = logging.getLogger(__name__)
-
-
-# ── Date utils ────────────────────────────────────────────────────────────
-
-def _today_start_ts() -> float:
-    """Unix ts начала сегодняшнего дня (локальное время)."""
-    now = datetime.now()
-    start = datetime(now.year, now.month, now.day)
-    return start.timestamp()
 
 
 def _day_bounds(day: Optional[date_type] = None) -> tuple[float, float]:

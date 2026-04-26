@@ -2,13 +2,11 @@
 
 Композиция из:
   • Horizon-слой: precision, policy, τ_in/τ_out, temperature_nand, state machine
-  • self.neuro (Neurochem): dopamine/serotonin/norepinephrine + derived γ
-  • self.freeze (ProtectiveFreeze): защитный режим при хроническом конфликте
+  • self.rgk (РГК): substrate всей нейрохимии + freeze + sync layer
   • Derived: sync_error, sync_regime, hrv_* — читают глобальный UserState
   • Mode flags: llm_disabled (Camera)
 
-Bayesian update делегирован в `self.neuro.apply_to_bayes`. См. neurochem.py для
-формул и neurochem-design.md для спецификации.
+Bayesian update делегирован в `self.rgk.bayes_step`. См. rgk.py для формул.
 
 Прайм-директива: sync_error = ‖user − system‖ в 4-мерном нейрохимическом
 пространстве. UserState питается сигналами юзера (HRV, тайминги, feedback),
@@ -90,15 +88,10 @@ class CognitiveState:
         # младенец (maturity=0) → exploratory (wide cone), зрелый (maturity=1) → narrow.
         self.maturity: float = 0.0
 
-        # ── Neurochem layer (composition — проще старой монолитной модели) ──
-        # Три скаляра + отдельный защитный режим. См. src/neurochem.py.
-        # B0: shared singleton РГК — каскад зеркал (UserState/Neurochem/
-        # ProtectiveFreeze) работает на одном объекте.
-        from .neurochem import Neurochem, ProtectiveFreeze
+        # ── Substrate (РГК) ─────────────────────────────────────────────
+        # Singleton каскада зеркал: 5-axis chem + freeze layer + sync EMA.
         from .rgk import get_global_rgk
-        rgk = get_global_rgk()
-        self.neuro = Neurochem(rgk=rgk)
-        self.freeze = ProtectiveFreeze(rgk=rgk)
+        self.rgk = get_global_rgk()
         self._burnout_trip_count = 0  # kept for metrics
 
         # ── Mode flags ──────────────────────────────────────────────────
@@ -211,48 +204,36 @@ class CognitiveState:
     @property
     def sync_error(self) -> float:
         try:
-            from .user_state import get_user_state, compute_sync_error
-            return compute_sync_error(get_user_state(), self.neuro, self.freeze)
+            from .user_state import compute_sync_error
+            return compute_sync_error(self.rgk)
         except Exception:
             return 0.0
 
     @property
     def sync_regime(self) -> str:
         try:
-            from .user_state import get_user_state, compute_sync_regime
-            return compute_sync_regime(get_user_state(), self.neuro, self.freeze)
+            from .user_state import compute_sync_regime
+            return compute_sync_regime(self.rgk)
         except Exception:
             return "flow"
 
     @property
     def hrv_coherence(self):
-        try:
-            from .user_state import get_user_state
-            return get_user_state().hrv_coherence
-        except Exception:
-            return None
+        return self.rgk.hrv_coherence
 
     @property
     def hrv_stress(self):
-        try:
-            from .user_state import get_user_state
-            return get_user_state().hrv_stress
-        except Exception:
-            return None
+        return self.rgk.hrv_stress
 
     @property
     def hrv_rmssd(self):
-        try:
-            from .user_state import get_user_state
-            return get_user_state().hrv_rmssd
-        except Exception:
-            return None
+        return self.rgk.hrv_rmssd
 
-    # ── Neurochem + freeze: делегируем в self.neuro / self.freeze ──────────
+    # ── Chem + freeze: делегируем в self.rgk ───────────────────────────────
 
     def inject_ne(self, amount: float = 0.3):
-        """User input → bump norepinephrine (внимание/напряжение). Backward compat."""
-        self.neuro.norepinephrine = max(0.0, min(1.0, self.neuro.norepinephrine + amount))
+        """User input → bump norepinephrine (внимание/напряжение)."""
+        self.rgk.system.aperture.value = max(0.0, min(1.0, self.rgk.system.aperture.value + amount))
 
     def update_neurochem(self, d=None, w_change=None, weights=None):
         """Обновить нейрохимию + защитный режим по сигналам тика.
@@ -260,22 +241,22 @@ class CognitiveState:
         d        → dopamine EMA (новизна)
         w_change → serotonin EMA (стабильность весов)
         weights  → norepinephrine EMA (энтропия распределения)
-        d + текущий serotonin → ProtectiveFreeze accumulator
+        d + текущий serotonin → freeze accumulator (через rgk.p_conflict)
         """
-        self.neuro.update(d=d, w_change=w_change, weights=weights)
+        self.rgk.s_graph(d=d, w_change=w_change, weights=weights)
 
         if d is not None:
-            self.freeze.update(d=d, serotonin=self.neuro.serotonin)
-            # Синхронизация state machine с freeze.active
-            if self.freeze.active and self.state != PROTECTIVE_FREEZE:
+            self.rgk.p_conflict(d=d, serotonin=self.rgk.system.hyst.value)
+            # Sync state machine с rgk.freeze_active
+            if self.rgk.freeze_active and self.state != PROTECTIVE_FREEZE:
                 self._prev_state = self.state
                 self.state = PROTECTIVE_FREEZE
                 self._burnout_trip_count += 1
-            elif not self.freeze.active and self.state == PROTECTIVE_FREEZE:
+            elif not self.rgk.freeze_active and self.state == PROTECTIVE_FREEZE:
                 self.state = self._prev_state or EXPLORATION
 
         # state_origin derived
-        if self.neuro.norepinephrine > 0.55 or self.freeze.conflict_accumulator > 0.1:
+        if self.rgk.system.aperture.value > 0.55 or self.rgk.conflict.value > 0.1:
             self.state_origin_hint = "1_held"
         else:
             self.state_origin_hint = "1_rest"
@@ -285,20 +266,20 @@ class CognitiveState:
 
         γ derived из norepinephrine и serotonin (см. Neurochem).
         """
-        if self.freeze.active or self.state == PROTECTIVE_FREEZE:
+        if self.rgk.freeze_active or self.state == PROTECTIVE_FREEZE:
             return prior
-        return self.neuro.apply_to_bayes(prior, d)
+        return self.rgk.bayes_step(prior, d)
 
     def effective_temperature(self) -> float:
         """T_eff базируется на NE (norepinephrine). Высокое напряжение → острее выбор."""
-        return max(T_FLOOR, self.temperature_nand_0 * (1 - KAPPA_NE_TEMP * self.neuro.norepinephrine) + T_FLOOR)
+        return max(T_FLOOR, self.temperature_nand_0 * (1 - KAPPA_NE_TEMP * self.rgk.system.aperture.value) + T_FLOOR)
 
     def horizon_budget(self) -> float:
         """Доля бюджета Horizon (vs DMN). Низкое внимание → DMN берёт бюджет."""
-        if self.freeze.active:
+        if self.rgk.freeze_active:
             return 0.3   # минимум при freeze
         # Высокое NE (напряжение/внимание) → Horizon в фокусе
-        return max(0.2, min(0.95, 0.8 * self.neuro.norepinephrine + 0.2))
+        return max(0.2, min(0.95, 0.8 * self.rgk.system.aperture.value + 0.2))
 
     # ── Update (feedback loop) ──────────────────────────────────────────────
 
@@ -344,8 +325,6 @@ class CognitiveState:
         - State change requires 2 consecutive ticks wanting the same target (debounce)
         - RECOVERY triggered instantly on surprise spike (no debounce)
         """
-        p = self.precision
-
         # Surprise spike → RECOVERY (instant, no debounce)
         if self._history and len(self._history) >= 2:
             last = self._history[-1]
@@ -389,7 +368,7 @@ class CognitiveState:
         > precision-driven (EXPLORATION/EXECUTION/INTEGRATION).
         """
         # Highest priority: honor active freeze until accumulator drops below recovery threshold
-        if self.state == PROTECTIVE_FREEZE and self.freeze.active:
+        if self.state == PROTECTIVE_FREEZE and self.rgk.freeze_active:
             return PROTECTIVE_FREEZE
 
         # HRV-driven states (if HRV sensor connected)
@@ -435,11 +414,10 @@ class CognitiveState:
             if w > 0:
                 entropy -= w * math.log2(w)
 
-        neuro_dict = self.neuro.to_dict()
-        # Pull user-side from global UserState for full symbiosis picture
+        neuro_dict = self.rgk.serialize_system()
+        # Pull user-side from РГК (раньше через UserState.to_dict)
         try:
-            from .user_state import get_user_state
-            user_dict = get_user_state().to_dict()
+            user_dict = self.rgk.serialize_user()
         except Exception:
             user_dict = None
         eff_p = self.effective_precision
@@ -480,19 +458,21 @@ class CognitiveState:
                 #   • conflict — графовые конфликты (единственный активирует freeze)
                 #   • silence  — хроническое молчание юзера (таймер)
                 #   • imbalance — EMA aggregate 4-х PE-каналов (Friston-loop)
-                "burnout":             round(self.freeze.display_burnout, 3),
-                "burnout_conflict":    round(self.freeze.conflict_accumulator, 3),
-                "burnout_silence":     round(self.freeze.silence_pressure, 3),
-                "burnout_imbalance":   round(self.freeze.imbalance_pressure, 3),
+                "burnout":             round(max(self.rgk.conflict.value,
+                                                  self.rgk.silence_press,
+                                                  self.rgk.imbalance_press.value), 3),
+                "burnout_conflict":    round(self.rgk.conflict.value, 3),
+                "burnout_silence":     round(self.rgk.silence_press, 3),
+                "burnout_imbalance":   round(self.rgk.imbalance_press.value, 3),
                 # Прайм-директива: EMA sync_error для валидации через 2 мес.
                 # Fast (1ч) — для UI тренда; slow (3д) — для weekly aggregate.
                 # Пишется раз в час в data/prime_directive.jsonl.
-                "sync_error_ema_fast": round(self.freeze.sync_error_ema_fast, 4),
-                "sync_error_ema_slow": round(self.freeze.sync_error_ema_slow, 4),
+                "sync_error_ema_fast": round(self.rgk.sync_fast.value, 4),
+                "sync_error_ema_slow": round(self.rgk.sync_slow.value, 4),
                 # Self-prediction: Baddle PE на её же baseline.
                 # Входит одной из 4-х компонент в burnout_imbalance.
                 "self_imbalance":      neuro_dict.get("self_imbalance", 0.0),
-                "freeze_active":       self.freeze.active,
+                "freeze_active":       self.rgk.freeze_active,
                 "state_origin":        self.state_origin_hint,
                 "recent_rpe":          neuro_dict.get("recent_rpe", 0.0),
             },
@@ -524,8 +504,8 @@ class CognitiveState:
             "_prev_policy_weights": dict(self._prev_policy_weights) if self._prev_policy_weights else None,
             "tau_in": self.tau_in,
             "tau_out": self.tau_out,
-            "neuro": self.neuro.to_dict(),
-            "freeze": self.freeze.to_dict(),
+            "neuro": self.rgk.serialize_system(),
+            "freeze": self.rgk.serialize_freeze(),
             "_burnout_trip_count": self._burnout_trip_count,
             "maturity": self.maturity,
             "llm_disabled": self.llm_disabled,
@@ -535,8 +515,6 @@ class CognitiveState:
     @classmethod
     def from_dict(cls, d: dict) -> "CognitiveState":
         """Восстановление из dump'а. Legacy поля sync_error/hrv_* игнорируются."""
-        from .neurochem import Neurochem, ProtectiveFreeze
-
         h = cls(
             precision=d.get("precision", 0.4),
             policy_weights=d.get("policy_weights"),
@@ -553,8 +531,8 @@ class CognitiveState:
         h._prev_policy_weights = d.get("_prev_policy_weights")
         h.tau_in = d.get("tau_in", 0.3)
         h.tau_out = d.get("tau_out", 0.7)
-        h.neuro = Neurochem.from_dict(d.get("neuro", {}))
-        h.freeze = ProtectiveFreeze.from_dict(d.get("freeze", {}))
+        h.rgk.load_system(d.get("neuro", {}))
+        h.rgk.load_freeze(d.get("freeze", {}))
         h._burnout_trip_count = d.get("_burnout_trip_count", 0)
         h.maturity = float(d.get("maturity", 0.0))
         h.llm_disabled = d.get("llm_disabled", False)
@@ -564,7 +542,7 @@ class CognitiveState:
     @property
     def gamma(self) -> float:
         """γ derived из neurochem."""
-        return self.neuro.gamma
+        return self.rgk.gamma()
 
 
 # ── Global state singleton (одна нейрохимия на человека) ─────────────

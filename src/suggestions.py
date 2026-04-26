@@ -16,7 +16,6 @@
 она предлагает. Последнее слово за юзером.
 """
 import logging
-import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -284,7 +283,7 @@ def suggest_from_checkins(days: int = 7,
     Если сработало — LLM генерит draft.
     """
     try:
-        from .checkins import rolling_averages, list_checkins
+        from .checkins import rolling_averages
     except Exception:
         return None
 

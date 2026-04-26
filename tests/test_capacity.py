@@ -3,7 +3,6 @@
 Spec: docs/capacity-design.md (3-zone модель). Phase C завершена 2026-04-25.
 """
 import datetime as _dt
-from unittest.mock import patch
 
 import pytest
 
@@ -11,12 +10,6 @@ from src.user_state import (
     UserState,
     compute_cognitive_load,
     compute_capacity_indicators,
-    compute_capacity_zone,
-    CAPACITY_PHYS_COHERENCE_MIN,
-    CAPACITY_PHYS_BURNOUT_MAX,
-    CAPACITY_AFFECT_SEROTONIN_MIN,
-    CAPACITY_AFFECT_DOPAMINE_MIN,
-    CAPACITY_COGLOAD_MAX,
 )
 
 
@@ -133,24 +126,9 @@ def test_indicators_high_cogload_fail():
     assert "cogload_high" in ind["reasons"]
 
 
-# ── compute_capacity_zone ─────────────────────────────────────────────────
-
-@pytest.mark.parametrize("phys,affect,cogload,expected", [
-    (True,  True,  True,  "green"),
-    (False, True,  True,  "yellow"),
-    (True,  False, True,  "yellow"),
-    (True,  True,  False, "yellow"),
-    (False, False, True,  "red"),
-    (False, True,  False, "red"),
-    (True,  False, False, "red"),
-    (False, False, False, "red"),
-])
-def test_zone_from_indicators(phys, affect, cogload, expected):
-    ind = {"phys_ok": phys, "affect_ok": affect, "cogload_ok": cogload}
-    assert compute_capacity_zone(ind) == expected
-
-
 # ── UserState properties ──────────────────────────────────────────────────
+# zone derivation 3-bool→{green,yellow,red} тестируется неявно через
+# UserState.capacity_zone ниже + полный матрикс в test_rgk_properties.
 
 def test_userstate_capacity_zone_green_default():
     us = UserState()
@@ -231,7 +209,7 @@ def test_update_cognitive_load_empty_activity_log(tmp_path, monkeypatch):
     # Mock global state freeze.sync_error_ema_slow to be stable
     from unittest.mock import MagicMock
     fake_state = MagicMock()
-    fake_state.freeze.sync_error_ema_slow = 0.0
+    fake_state.rgk.sync_slow.value = 0.0
     monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
 
     us = UserState()
@@ -247,12 +225,12 @@ def test_update_cognitive_load_aggregates_from_activity_log(tmp_path, monkeypatc
 
     # Фиксированные surprise значения через mock UserState.imbalance
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.5)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.5} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     fake_state = MagicMock()
-    fake_state.freeze.sync_error_ema_slow = 0.1
+    fake_state.rgk.sync_slow.value = 0.1
     monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
 
     # Добавим 3 активности (одна — switch на следующую → context_switch)
@@ -283,7 +261,7 @@ def test_update_cognitive_load_progress_delta_from_dawn(tmp_path, monkeypatch):
 
     from unittest.mock import MagicMock
     fake_state = MagicMock()
-    fake_state.freeze.sync_error_ema_slow = 0.5    # initial
+    fake_state.rgk.sync_slow.value = 0.5    # initial
     monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
 
     us = UserState()
@@ -294,7 +272,7 @@ def test_update_cognitive_load_progress_delta_from_dawn(tmp_path, monkeypatch):
     assert us.day_summary[today_str]["progress_delta"] == pytest.approx(0.0)
 
     # Час спустя sync улучшился (упал)
-    fake_state.freeze.sync_error_ema_slow = 0.3
+    fake_state.rgk.sync_slow.value = 0.3
     us.update_cognitive_load()
     # at_dawn остался 0.5 (зафиксирован), delta = 0.3 - 0.5 = -0.2
     assert us.day_summary[today_str]["sync_error_at_dawn"] == pytest.approx(0.5)
@@ -335,9 +313,9 @@ def test_activity_log_records_surprise_at_start(tmp_path, monkeypatch):
     monkeypatch.setattr(activity_log, "_ACTIVITY_FILE", tmp_path / "act.jsonl")
 
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.42)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.42} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     aid = activity_log.start_activity("Test task", category="work")
     rec = activity_log.get_active()
@@ -352,12 +330,12 @@ def test_activity_log_computes_surprise_delta(tmp_path, monkeypatch):
     monkeypatch.setattr(activity_log, "_ACTIVITY_FILE", tmp_path / "act.jsonl")
 
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.3)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.3} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     activity_log.start_activity("Test", category="work")
-    mock_user.imbalance = 0.8   # surprise grew
+    mock_rgk.project = lambda dom: {"imbalance": 0.8} if dom == "user_state" else {}   # surprise grew
     done = activity_log.stop_activity()
     assert done["surprise_at_start"] == pytest.approx(0.3, abs=1e-3)
     assert done["surprise_at_stop"] == pytest.approx(0.8, abs=1e-3)
@@ -424,12 +402,12 @@ def test_activity_log_auto_switch_records_surprise(tmp_path, monkeypatch):
     monkeypatch.setattr(activity_log, "_ACTIVITY_FILE", tmp_path / "act.jsonl")
 
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.2)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.2} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     aid1 = activity_log.start_activity("First", category="work")
-    mock_user.imbalance = 0.7
+    mock_rgk.project = lambda dom: {"imbalance": 0.7} if dom == "user_state" else {}
     aid2 = activity_log.start_activity("Second", category="meeting")
 
     # Replay — first task должна быть done с surprise_delta

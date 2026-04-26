@@ -1942,6 +1942,7 @@ function _renderOutcomeTab(d) {
   if (_outcomeTab === 'chem')   return _renderOutcomeChem(d);
   if (_outcomeTab === 'spread') return _renderOutcomeSpread(d);
   if (_outcomeTab === 'pe')     return _renderOutcomePE(d);
+  if (_outcomeTab === 'calib')  return _renderOutcomeCalib(d);
 }
 
 function _renderOutcomeSync(d) {
@@ -2101,6 +2102,97 @@ function _renderOutcomeSpread(d) {
     ).join('');
   }
 }
+
+// Calibration tab: CI band вокруг sync_error_ema_slow daily.
+// CI сужается с накоплением data → система калибруется (прайм-директива).
+
+function _renderOutcomeCalib(d) {
+  const svg = document.getElementById('outcome-calib-svg');
+  const stats = document.getElementById('outcome-calib-stats');
+  if (!svg) return;
+  const days = d.daily || [];
+  if (!days.length) {
+    svg.innerHTML = '<text x="180" y="58" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов в окне</text>';
+    if (stats) stats.innerHTML = '';
+    return;
+  }
+  const W = 360, H = 110, pad = 6;
+  const n = days.length;
+  const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+  // shape ymax: max upper-bound of CI или mean*1.2
+  let ymax = 0.3;
+  for (const b of days) {
+    const v = (b.mean_slow_ci ? b.mean_slow_ci[1] : b.mean_slow) || 0;
+    if (v > ymax) ymax = v;
+  }
+  ymax *= 1.2;
+  const yOf = (v) => pad + (1 - Math.max(0, Math.min(ymax, v || 0)) / ymax) * (H - 2*pad - 12);
+
+  // CI band: polygon из upper-bounds (forward) + lower-bounds (reverse)
+  const upper = [], lower = [], meanLine = [];
+  let nDaysWithCi = 0;
+  for (let i = 0; i < n; i++) {
+    const b = days[i];
+    const x = pad + i * stepX;
+    if (b.mean_slow != null) meanLine.push(`${x.toFixed(1)},${yOf(b.mean_slow).toFixed(1)}`);
+    if (b.mean_slow_ci) {
+      upper.push(`${x.toFixed(1)},${yOf(b.mean_slow_ci[1]).toFixed(1)}`);
+      lower.push(`${x.toFixed(1)},${yOf(b.mean_slow_ci[0]).toFixed(1)}`);
+      nDaysWithCi++;
+    }
+  }
+  let body = '';
+  // 0.3 sync-high threshold
+  const threshY = yOf(0.3);
+  body += `<line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
+                 stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.5"/>`;
+  body += `<text x="${W-pad-2}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
+                 font-size="8" opacity="0.7">0.3 sync</text>`;
+  // CI band (purple translucent)
+  if (upper.length >= 2) {
+    const polyPts = upper.concat(lower.reverse()).join(' ');
+    body += `<polygon points="${polyPts}" fill="#a78bfa" fill-opacity="0.18" stroke="none"/>`;
+  }
+  // Mean line (purple solid)
+  if (meanLine.length >= 1) {
+    body += `<polyline fill="none" stroke="#a78bfa" stroke-width="1.6"
+                       points="${meanLine.join(' ')}" opacity="0.95"/>`;
+  }
+  body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)} · band = 95% CI</text>`;
+  body += `<text x="${W-pad-2}" y="${pad+8}" text-anchor="end" fill="#a78bfa" font-size="8">slow EMA</text>`;
+  svg.innerHTML = body;
+
+  // Stats: avg CI width, days with CI, calibration verdict
+  if (stats) {
+    let widthSum = 0, widthCount = 0;
+    for (const b of days) {
+      if (b.mean_slow_ci) {
+        widthSum += (b.mean_slow_ci[1] - b.mean_slow_ci[0]);
+        widthCount++;
+      }
+    }
+    const avgWidth = widthCount ? widthSum / widthCount : null;
+    const fmt = (v, p=4) => v == null ? '—' : Number(v).toFixed(p);
+    let verdict = '';
+    if (nDaysWithCi < 2) {
+      verdict = '<span style="color:#52525b">недостаточно данных для calibration verdict</span>';
+    } else if (avgWidth != null && avgWidth < 0.05) {
+      verdict = '<span style="color:#10b981">CI узкий — калибровка установилась</span>';
+    } else if (avgWidth != null && avgWidth < 0.15) {
+      verdict = '<span style="color:#a1a1aa">CI средний — калибруется</span>';
+    } else {
+      verdict = '<span style="color:#fb923c">CI широкий — нужно больше snapshot\'ов</span>';
+    }
+    stats.innerHTML = `
+      <span><b>days with CI</b> ${nDaysWithCi}/${n}</span>
+      <span class="outcome-stats-sep">·</span>
+      <span><b>avg width</b> ${fmt(avgWidth)}</span>
+      <span class="outcome-stats-sep">·</span>
+      ${verdict}
+    `;
+  }
+}
+
 
 const _PE_CHANNELS = [
   { key: 'user_imbalance', label: 'user', color: '#10b981',

@@ -31,11 +31,10 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
-from .paths import PATTERNS_FILE as _PATTERNS_FILE, ACTIVITY_FILE as _ACTIVITY_FILE
+from .paths import PATTERNS_FILE as _PATTERNS_FILE
 
 # Интервалы (в ISO weekday: 0=понедельник ... 6=воскресенье)
 WEEKDAYS_RU = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
@@ -54,26 +53,6 @@ def _window_for_hour(h: int) -> str:
     if 12 <= h < 18: return "afternoon"
     if 18 <= h < 23: return "evening"
     return "night"
-
-
-def _read_activity_events() -> list[dict]:
-    f = _ACTIVITY_FILE
-    if not f.exists():
-        return []
-    out = []
-    try:
-        with f.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except Exception as e:
-        log.warning(f"[patterns] activity read failed: {e}")
-    return out
 
 
 def _replay_activities() -> list[dict]:

@@ -14,9 +14,8 @@ convergence decided emergently by avg_d between subgoals.
 This is the single tick engine — exported as both `tick` and `tick_emergent`.
 """
 import logging
-from typing import Optional
 
-from .thinking import classify_nodes, _find_similar_group, _pick_target, _pick_distant_pair, _tick_force_collapse
+from .thinking import classify_nodes, _pick_target, _pick_distant_pair, _tick_force_collapse
 from .main import distinct, distinct_decision
 
 log = logging.getLogger(__name__)
@@ -279,7 +278,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # Conditions: enough nodes exist, sync_error growing, not a FREEZE state
     try:
         from .horizon import PROTECTIVE_FREEZE
-        ne_low = horizon.neuro.norepinephrine < 0.35
+        ne_low = float(horizon.rgk.system.aperture.value) < 0.35
         high_sync_err = getattr(horizon, "sync_error", 0.0) > 0.6
         many_uncertain = len(unverified) >= 3 and len(verified) == 0
         not_frozen = horizon.state != PROTECTIVE_FREEZE

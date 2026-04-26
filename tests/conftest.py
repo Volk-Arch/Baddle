@@ -49,7 +49,6 @@ def temp_data_dir(monkeypatch, tmp_path):
 
     from src import patterns
     monkeypatch.setattr(patterns, "_PATTERNS_FILE", tmp_data / "patterns.jsonl")
-    monkeypatch.setattr(patterns, "_ACTIVITY_FILE", tmp_data / "activity.jsonl")
 
     try:
         from src import user_profile

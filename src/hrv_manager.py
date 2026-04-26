@@ -19,8 +19,7 @@ from collections import deque
 
 from .hrv_metrics import calculate_hrv_metrics, hrv_to_baddle_state, HRVSimulator
 from .sensor_stream import (
-    get_stream, push_rr, push_hrv_snapshot, push_activity,
-    SOURCE_SIMULATOR, SOURCE_POLAR, KIND_HRV_SNAPSHOT,
+    push_rr, push_hrv_snapshot, push_activity, SOURCE_SIMULATOR,
 )
 
 log = logging.getLogger(__name__)

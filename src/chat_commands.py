@@ -100,11 +100,9 @@ def _match_any(message: str, patterns) -> Optional[re.Match]:
 def _card_status(lang: str = "ru") -> dict:
     """Текущее состояние юзера одной карточкой."""
     from .horizon import get_global_state
-    from .hrv_manager import get_manager as get_hrv_mgr
     from .activity_log import get_active, day_summary
     from .checkins import latest_checkin
     from .plans import schedule_for_day
-    from .goals_store import list_goals
 
     cs = get_global_state()
     m = cs.get_metrics()
@@ -421,9 +419,7 @@ def try_handle(message: str, lang: str = "ru") -> Optional[dict]:
         return _card_start(res.group(1), lang)
     res = _match_any(m, _NEXT_PATTERNS)
     if res:
-        # «следующая» = stop current + start new
-        from .activity_log import get_active
-        cur = get_active()
-        # start_activity уже автостопает текущую с reason=switch
+        # «следующая» = stop current + start new.
+        # start_activity автостопает текущую с reason=switch.
         return _card_start(res.group(1), lang)
     return None

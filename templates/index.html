@@ -239,6 +239,8 @@
                 onclick="assistOutcomeTab('spread')" title="Per-axis расхождение user − system по 5 нейрохим. осям. Линии около 0 = резонанс. Прайм-директива по осям, а не одним скаляром.">🪞 Spread</button>
         <button type="button" class="outcome-tab" data-tab="pe"
                 onclick="assistOutcomeTab('pe')" title="Decomposition imbalance_pressure на 4 PE-канала (user/self/agency/hrv) — какой реально двигает">⚡ PE</button>
+        <button type="button" class="outcome-tab" data-tab="calib"
+                onclick="assistOutcomeTab('calib')" title="Calibration: 95% CI band вокруг sync_error EMA. Сужение CI с накоплением данных = система калибруется (прайм-директива работает).">📐 Calib</button>
       </div>
 
       <!-- Sync tab content (default visible) -->
@@ -274,6 +276,14 @@
         <div class="outcome-section-title">user − system · daily mean · 5 axes</div>
         <svg id="outcome-spread-svg" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
         <div class="outcome-chem-legend" id="outcome-spread-legend"></div>
+      </div>
+
+      <!-- Calibration tab: 95% CI band вокруг sync_error EMA daily.
+           Сужение band с накоплением data = система калибруется. -->
+      <div class="outcome-tab-panel" data-tab-panel="calib" style="display:none">
+        <div class="outcome-section-title">sync_error_ema_slow · 95% CI band</div>
+        <svg id="outcome-calib-svg" viewBox="0 0 360 110" preserveAspectRatio="none"></svg>
+        <div class="outcome-stats" id="outcome-calib-stats"></div>
       </div>
 
       <!-- PE decomposition tab content -->

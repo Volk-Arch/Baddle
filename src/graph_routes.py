@@ -1,28 +1,30 @@
 """baddle — graph Flask routes (Blueprint)."""
 
+import logging
 import random
-from collections import defaultdict, deque
-from datetime import datetime, timezone
+import re
+from collections import defaultdict
 
 import numpy as np
 
 from flask import Blueprint, request, jsonify
 
 from .prompts import _p
-from .main import cosine_similarity, distinct, distinct_decision
+from .main import cosine_similarity
 from .graph_logic import (
-    _graph, graph_lock, reset_graph,
+    _graph, reset_graph,
     _auto_type_and_confidence, _auto_evidence_relation,
-    _bayesian_update_distinct, _d_from_relation,
+    _bayesian_update_distinct, _d_from_relation, _bump_evidence,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
     _graph_generate, _clean_thought, _generate_thought,
-    _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
+    _ensure_embeddings, _compute_edges, _find_clusters,
     _detect_traps, _compute_alpha_beta,
     sample_in_embedding_space,
-    touch_node, touch_nodes, TOUCH_BOOST_DEFAULT,
+    touch_node, TOUCH_BOOST_DEFAULT,
 )
 from .hrv_manager import get_manager as get_hrv_manager
-from .http_utils import APIError, json_endpoint
+
+log = logging.getLogger(__name__)
 
 graph_bp = Blueprint("graph", __name__)
 
@@ -599,6 +601,8 @@ def graph_expand():
                 old_conf = nodes[idx]["confidence"]
                 d_val = _d_from_relation(rel, strength)
                 nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                # Sidecar Beta-prior: tracks evidence weight для CI calibration.
+                _bump_evidence(nodes[idx], supports=(rel == "supports"), strength=strength)
                 print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
@@ -693,6 +697,7 @@ def graph_elaborate():
                 old_conf = nodes[idx]["confidence"]
                 d_val = _d_from_relation(rel, strength)
                 nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                _bump_evidence(nodes[idx], supports=(rel == "supports"), strength=strength)
                 print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
@@ -1006,7 +1011,6 @@ def graph_horizon_params():
 @graph_bp.route("/graph/compare", methods=["POST"])
 def graph_compare():
     """LLM-as-judge: compare verified options and pick the best."""
-    from .prompts import _p
     d = _p_data()
     indices = d.get("indices", [])
     lang = d.get("lang", "ru")
@@ -1488,9 +1492,10 @@ def graph_add_evidence():
     d_val = _d_from_relation(relation, strength)
     posterior = _bayesian_update_distinct(prior, d_val)
 
-    # Update hypothesis confidence
+    # Update hypothesis confidence + sidecar Beta-prior (CI tracking)
     old_conf = hyp["confidence"]
     hyp["confidence"] = posterior
+    _bump_evidence(hyp, supports=(relation == "supports"), strength=strength)
 
     # Add evidence node
     parent_topic = hyp.get("topic", "")
@@ -1869,8 +1874,8 @@ def hrv_metrics():
 
     # Push to UserState — HRV — сигнал тела пользователя, не системы.
     # Системная нейрохимия эволюционирует по собственным сигналам графа.
-    from .user_state import get_user_state
-    get_user_state().update_from_hrv(
+    from .rgk import get_global_rgk
+    get_global_rgk().u_hrv(
         coherence=state.get("coherence"),
         rmssd=state.get("rmssd"),
         stress=state.get("stress"),

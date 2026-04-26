@@ -366,26 +366,3 @@ def _compute_streak(plan: dict, today: date) -> int:
     return streak
 
 
-# ── Аналитика: expected vs actual (байесовский слой) ──────────────────────
-
-def last_n_surprises(n: int = 10) -> list[dict]:
-    """Последние N выполнений с expected vs actual_difficulty.
-
-    Используется morning briefing для показа «trend ожиданий».
-    """
-    out = []
-    state = _replay()
-    for p in state.values():
-        exp = p.get("expected_difficulty")
-        for c in p.get("completions", []):
-            act = c.get("actual_difficulty")
-            if exp is not None and act is not None:
-                out.append({
-                    "plan_id": p["id"], "name": p["name"],
-                    "expected": exp, "actual": act,
-                    "surprise": act - exp,
-                    "for_date": c.get("for_date"),
-                    "ts": c.get("actual_ts"),
-                })
-    out.sort(key=lambda x: x["ts"] or 0, reverse=True)
-    return out[:n]

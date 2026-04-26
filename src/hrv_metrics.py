@@ -208,7 +208,6 @@ def hrv_to_baddle_state(metrics: Dict) -> Dict:
 # ── Simulator for demo without Polar H10 ──
 
 import random
-import time
 
 
 class HRVSimulator:

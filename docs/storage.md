@@ -57,6 +57,16 @@ graphs/
 
 **graph.json** — atomic replace на save. Dirty-flush через фоновый check (каждые 2 мин) + при значимых событиях.
 
+**Node fields (per-node JSON):**
+- `id`, `text`, `embedding`, `topic`, `type`, `depth`, `entropy`, `rendered`, `created_at`, `last_accessed` — base.
+- `confidence ∈ [0, 1]` — authoritative scalar (mean), управляется `_bayesian_update_distinct` + γ + RPE.
+- `alpha`, `beta` — Beta-prior sidecar accumulator (initial total=4 → растёт с каждым `_bump_evidence`). Total = alpha+beta = накопленный evidence weight.
+- `confidence_total`, `confidence_ci` — cached derivatives `[ci_lower, ci_upper]` для UI без recompute.
+- Action-Memory only (`type=action/outcome`): `actor`, `action_kind`, `context`, `closed`, `outcome_idx`, `linked_action_idx`, `delta_sync_error`, `user_reaction`, `latency_s`.
+- Evidence only: `evidence_relation`, `evidence_strength`, `evidence_target`.
+
+Backward-compat: legacy nodes без alpha/beta получают priors derived из confidence (`_confidence_to_alpha_beta`) при первом load через `_ensure_node_fields`.
+
 **state_graph.jsonl** — кто-что-когда системы. Источник истины для DMN walks, meta_tick `analyze_tail`, Markov transitions. Полный дизайн — [episodic-memory.md](episodic-memory.md).
 
 **solved/** — когда tick эмитит `action=stable, reason=GOAL REACHED`, `archive_solved()` пишет полный snapshot (копия графа + tail state_graph + final_synthesis). Юзер открывает в 🎯 → Завершённые.
