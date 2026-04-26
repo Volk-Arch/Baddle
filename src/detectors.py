@@ -476,10 +476,14 @@ def detect_evening_retro(ctx: DetectorContext) -> Optional[Signal]:
         # Set state BEFORE return — same legacy semantic
         ctx.loop._last_evening_retro_date = today_str
 
+        from .prompts import _p
         n_un = len(unfinished)
-        text = (f"Ретро дня: {n_un} невыполнен{'о' if n_un == 1 else 'ы'}. "
-                f"Откроем check-in?") if n_un \
-               else "Ретро дня: всё по плану. Сделаем check-in?"
+        if n_un == 0:
+            text = _p("ru", "retro_all_done")
+        elif n_un == 1:
+            text = _p("ru", "retro_unfinished_one").format(n=n_un)
+        else:
+            text = _p("ru", "retro_unfinished_many").format(n=n_un)
 
         # End of day — expires_at = midnight local
         midnight = local_dt.replace(hour=23, minute=59, second=59).timestamp()

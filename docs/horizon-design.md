@@ -95,18 +95,30 @@
 
 ---
 
-## Пресеты (13 режимов)
+## Пресеты (14 режимов)
 
-Каждый из 13 режимов = preset для Horizon:
+Каждый из 14 режимов = preset для Horizon: `(precision, policy_template, target_surprise)` плюс структурные метаданные (сколько целей / как связаны / когда стоп). Источник — `_MODES` в [src/modes.py](../src/modes.py).
 
-| Режим | Точность | Целевое удивление | Акцент политики |
-|---|---|---|---|
-| Исследование | 0.4 | 0.3 | generate 0.3 |
-| Мозговой штурм | 0.3 | 0.5 | generate 0.5 |
-| Фокус | 0.7 | 0.15 | doubt 0.5 |
-| Выбор | 0.7 | 0.15 | doubt 0.5 |
+| Режим | Goals | Logic | Termination | Точность | Цел. удивление | Акцент политики |
+|---|---|---|---|---|---|---|
+| Свободный (free) | 0 | manual | ручной | 0.5 | 0.3 | balanced 0.25 |
+| Блуждание (scout) | 0 | scan | novelty exhaustion | 0.3 | 0.5 | generate 0.5 |
+| Фокус (vector) | 1 | single | цель достигнута | 0.7 | 0.15 | doubt 0.5 |
+| Привычка (rhythm) | 1 | recurring | streak (никогда) | 0.5 | 0.2 | elab/doubt 0.3 |
+| Исследование (horizon) | 1 | depth | модель исчерпалась | 0.4 | 0.3 | generate 0.3 |
+| Сборка (builder) | 2+ | AND все | всё готово | 0.6 | 0.2 | doubt 0.4 |
+| По шагам (pipeline) | 2+ | AND ordered | последний шаг | 0.6 | 0.15 | elab/doubt 0.4 |
+| Приоритеты (cascade) | 2+ | AND priority | всё выполнено | 0.6 | 0.2 | doubt 0.4 |
+| Баланс (scales) | 2+ | AND parallel | snapshot (никогда) | 0.5 | 0.25 | merge/doubt 0.3 |
+| Любой вариант (race) | 2+ | OR | первый найден | 0.5 | 0.3 | doubt 0.4 |
+| Мозговой штурм (fan) | 2+ | open | идеи кончились | 0.3 | 0.5 | generate 0.5 |
+| Выбор (tournament) | 2+ | XOR | LLM-judge решил | 0.7 | 0.15 | doubt 0.5 |
+| Дебаты (dispute) | 2+ | XOR dialectic | синтез найден | 0.5 | 0.25 | doubt 0.6 |
+| Байесовский (bayes) | 1 | hypothesis | confidence stable | 0.6 | 0.2 | doubt 0.5 |
 
-Один движок, 13 настроек. Не 13 алгоритмов — один Horizon с разными пресетами.
+Три измерения от структурных колонок (Goals × Logic × Termination) — ровно те «три вопроса» из intro: сколько целей, как связаны, когда стоп. Они определяют **когда применить** mode. Остальные три (Точность × Цел. удивление × Акцент политики) — **как** Horizon настроится для этого mode.
+
+Один движок, 14 настроек. Не 14 алгоритмов. 10 shared policy templates (`_P_BALANCED`/`_P_GENERATE`/`_P_DOUBT`/`_P_ELABORATE`/`_P_BUILDER`/`_P_PIPELINE`/`_P_SCALES`/`_P_RACE`/`_P_HORIZON`/`_P_DISPUTE`) переиспользуются — `fan` и `scout` оба используют `_P_GENERATE`; `vector`+`tournament`+`bayes` оба `_P_DOUBT`. Smoke-тесты structure всех 14 — `tests/test_modes.py` (33 cases).
 
 ---
 

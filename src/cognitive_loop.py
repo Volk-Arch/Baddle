@@ -741,19 +741,36 @@ class CognitiveLoop:
             return
         try:
             from .prime_directive import record_tick
-            gs = get_global_state()
-            u = get_user_state()
+            from .rgk import get_global_rgk
+            r = get_global_rgk()
+            us, sys_, cap = r.project("user_state"), r.project("system"), r.project("capacity")
+            # B1: payload собран из projectors — facades в этом блоке больше не нужны.
+            # Sync_error остаётся на gs (deriv через CognitiveState.sync_error property).
             record_tick(
-                sync_error=float(gs.sync_error),
+                sync_error=float(get_global_state().sync_error),
                 sync_error_ema_fast=float(fz.sync_error_ema_fast),
                 sync_error_ema_slow=float(fz.sync_error_ema_slow),
                 imbalance_pressure=float(fz.imbalance_pressure),
                 silence_pressure=float(fz.silence_pressure),
                 conflict_accumulator=float(fz.conflict_accumulator),
-                user_imbalance=float(u.imbalance),
-                self_imbalance=float(gs.neuro.self_imbalance),
-                agency_gap=float(u.agency_gap),
-                hrv_surprise=float(u.hrv_surprise),
+                user_imbalance=us["imbalance"],
+                self_imbalance=sys_["self_imbalance"],
+                agency_gap=us["agency_gap"],
+                hrv_surprise=us["hrv_surprise"],
+                balance_user=us["balance"],
+                balance_system=sys_["balance"],
+                capacity_zone=cap["zone"],
+                frequency_regime=us["frequency_regime"],
+                mode_user=us["mode"],
+                mode_system=sys_["mode"],
+                chem={
+                    "da_user":   us["dopamine"],   "s_user":    us["serotonin"],
+                    "ne_user":   us["norepinephrine"],
+                    "ach_user":  us["acetylcholine"], "gaba_user": us["gaba"],
+                    "da_sys":    sys_["dopamine"], "s_sys":     sys_["serotonin"],
+                    "ne_sys":    sys_["norepinephrine"],
+                    "ach_sys":   sys_["acetylcholine"], "gaba_sys":  sys_["gaba"],
+                },
             )
         except Exception as e:
             log.debug(f"[cognitive_loop] prime_directive record failed: {e}")
@@ -1685,260 +1702,21 @@ class CognitiveLoop:
     def _build_morning_briefing_sections(self) -> list:
         """Структурированный briefing — список карточек {emoji, title, subtitle, kind}.
 
-        UI рендерит как набор секций (см. mockup Thursday briefing). Порядок:
-          1. Sleep      (из activity log)
-          2. Recovery   (HRV energy_recovery + named_state)
-          3. Capacity   (3-zone)
-          4. Overnight  (Scout bridges найденные ночью)
-          5. Activity   (вчера: N часов по категориям)
-          6. Goals      (открытые + первая)
-          7. Pattern    (weekday hint если есть)
+        Wave 3 cleanup (A5): каждая section → standalone helper в `_BRIEFING_SECTIONS`
+        registry (см. ниже). Порядок registry = порядок отображения. Каждый
+        builder возвращает dict | None (skip). Try/except + fallback централизован.
 
-        kind ∈ {info, warn, highlight, neutral} → CSS-класс акцента.
+        kind ∈ {info, warn, highlight, neutral, alert} → CSS-класс акцента.
         """
-        from .hrv_manager import get_manager as get_hrv_mgr
-        from .goals_store import list_goals
         sections: list = []
-
-        # 1. Sleep
-        try:
-            from .activity_log import estimate_last_sleep_hours
-            sleep = estimate_last_sleep_hours()
-            if sleep and sleep.get("hours"):
-                hrs = sleep["hours"]
-                src = "из трекера" if sleep.get("source") == "explicit" else "из пауз активности"
-                if hrs >= 7:
-                    sub, kind = f"Полноценный сон · {src}", "info"
-                elif hrs >= 5:
-                    sub, kind = f"Короткий сон · береги ресурс · {src}", "warn"
-                else:
-                    sub, kind = f"Сильно недоспал · сложные задачи позже · {src}", "warn"
-                sections.append({"emoji": "💤", "title": f"Сон {hrs}ч",
-                                 "subtitle": sub, "kind": kind})
-        except Exception:
-            pass
-
-        # 1b. Last check-in (если есть) — subjective сигнал юзера
-        try:
-            from .checkins import latest_checkin
-            ci = latest_checkin(hours=36)
-            if ci:
-                parts = []
-                if ci.get("energy") is not None:
-                    parts.append(f"E {int(ci['energy'])}")
-                if ci.get("focus") is not None:
-                    parts.append(f"F {int(ci['focus'])}")
-                if ci.get("stress") is not None:
-                    parts.append(f"S {int(ci['stress'])}")
-                surprise_part = None
-                if ci.get("expected") is not None and ci.get("reality") is not None:
-                    s = ci["reality"] - ci["expected"]
-                    surprise_part = f"Δ{'+' if s >= 0 else ''}{int(s)}"
-                subtitle_bits = []
-                if parts:
-                    subtitle_bits.append(" · ".join(parts))
-                if surprise_part:
-                    subtitle_bits.append(f"вчера ожидание vs реальность: {surprise_part}")
-                if ci.get("note"):
-                    subtitle_bits.append(f"«{ci['note'][:50]}»")
-                if subtitle_bits:
-                    kind = "info"
-                    # Если stress высокий — warn
-                    if (ci.get("stress") or 0) > 70:
-                        kind = "warn"
-                    sections.append({
-                        "emoji": "📝",
-                        "title": "Последний check-in",
-                        "subtitle": " · ".join(subtitle_bits),
-                        "kind": kind,
-                    })
-        except Exception:
-            pass
-
-        # 2. Recovery + named_state
-        recovery_pct = None
-        named_label = None
-        try:
-            mgr = get_hrv_mgr()
-            if mgr.is_running:
-                hrv_state = mgr.get_baddle_state() or {}
-                rec = hrv_state.get("energy_recovery")
-                if rec is not None:
-                    recovery_pct = int(rec * 100)
-            metrics = get_global_state().get_metrics()
-            ns = (metrics.get("user_state") or {}).get("named_state") or {}
-            named_label = ns.get("label") or ns.get("key")
-        except Exception:
-            pass
-        if recovery_pct is not None or named_label:
-            title = "Восстановление"
-            if recovery_pct is not None:
-                title += f" {recovery_pct}%"
-            kind = "neutral"
-            subtitle = f"Состояние: {named_label.lower()}" if named_label else ""
-            if recovery_pct is not None:
-                if recovery_pct >= 80:
-                    subtitle = (subtitle + " · хороший день для сложного") if subtitle else "Хороший день для сложного"
-                    kind = "info"
-                elif recovery_pct >= 60:
-                    subtitle = (subtitle + " · начни с важного") if subtitle else "Начни с важного"
-                else:
-                    subtitle = (subtitle + " · лёгкие задачи первыми") if subtitle else "Лёгкие задачи первыми"
-                    kind = "warn"
-            sections.append({"emoji": "⚡", "title": title, "subtitle": subtitle or "—", "kind": kind})
-
-        # 3. Capacity zone
-        try:
-            metrics = get_global_state().get_metrics()
-            user = metrics.get("user_state") or {}
-            cap_zone = user.get("capacity_zone")
-            if cap_zone:
-                emoji = {"green": "🟢", "yellow": "🟡",
-                         "red": "🔴"}.get(cap_zone, "⚪")
-                reasons = user.get("capacity_reason") or []
-                kind = ("info" if cap_zone == "green"
-                        else "warn" if cap_zone == "yellow"
-                        else "alert")
-                sub = (", ".join(reasons) if reasons
-                       else "все три контура ok")
-                sections.append({"emoji": emoji,
-                                 "title": f"Capacity {cap_zone}",
-                                 "subtitle": sub, "kind": kind})
-        except Exception:
-            pass
-
-        # 4. Overnight Scout / DMN bridges
-        try:
-            now_ts = time.time()
-            cutoff = now_ts - 10 * 3600
-            recent = [b for b in (self._recent_bridges or [])
-                      if (b.get("ts") or 0) >= cutoff]
-            if recent:
-                recent.sort(key=lambda b: b.get("ts", 0), reverse=True)
-                first = recent[0].get("text", "")[:80]
-                if len(recent) == 1:
-                    sections.append({
-                        "emoji": "🌙", "title": "Scout нашёл 1 мост",
-                        "subtitle": f"«{first}»", "kind": "highlight"
-                    })
-                else:
-                    sections.append({
-                        "emoji": "🌙", "title": f"Scout нашёл {len(recent)} мостов",
-                        "subtitle": f"Первый: «{first}»", "kind": "highlight"
-                    })
-        except Exception:
-            pass
-
-        # 5. Yesterday activity summary
-        try:
-            from .activity_log import day_summary
-            yday = day_summary(ts=time.time() - 86400)
-            if (yday.get("activity_count") or 0) > 0:
-                cat_h = yday.get("by_category_h") or {}
-                top = sorted(cat_h.items(), key=lambda kv: kv[1], reverse=True)[:2]
-                by_cat = ", ".join(f"{c} {h}ч" for c, h in top if h > 0.1)
-                sections.append({
-                    "emoji": "📊", "title": f"Вчера: {yday['total_tracked_h']}ч",
-                    "subtitle": f"{by_cat or '—'} · {yday.get('switches', 0)} переключений",
-                    "kind": "neutral"
-                })
-        except Exception:
-            pass
-
-        # 6. Open goals
-        try:
-            open_goals = list_goals(status="open", limit=3)
-            if open_goals:
-                first = (open_goals[0].get("text") or "")[:70]
-                sections.append({
-                    "emoji": "🎯",
-                    "title": f"Открытых целей: {len(open_goals)}",
-                    "subtitle": f"Первая: «{first}»",
-                    "kind": "neutral"
-                })
-        except Exception:
-            pass
-
-        # 7. Pattern hint for today
-        try:
-            from .patterns import patterns_for_today
-            today_patterns = patterns_for_today()
-            if today_patterns:
-                today_patterns.sort(key=lambda p: p.get("detected_at", 0), reverse=True)
-                hint = today_patterns[0].get("hint_ru") or ""
-                if hint:
-                    sections.append({
-                        "emoji": "💡", "title": "Паттерн на сегодня",
-                        "subtitle": hint, "kind": "highlight"
-                    })
-        except Exception:
-            pass
-
-        # 8. Today's schedule (plans + recurring habits)
-        try:
-            from .plans import schedule_for_day
-            sched = schedule_for_day()
-            if sched:
-                # Неотмеченные + неотпропущенные
-                todo = [s for s in sched if not s.get("done") and not s.get("skipped")]
-                recurring = [s for s in sched if s.get("kind") == "recurring"]
-                n_todo = len(todo)
-                n_total = len(sched)
-                n_rec = len(recurring)
-                # Краткая строка первых 2 событий по времени
-                preview_parts = []
-                for it in sorted(todo, key=lambda x: x.get("planned_ts") or 0)[:3]:
-                    import datetime as _dt
-                    t = _dt.datetime.fromtimestamp(it.get("planned_ts") or 0).strftime("%H:%M")
-                    preview_parts.append(f"{t} {it.get('name', '')[:30]}")
-                preview = "; ".join(preview_parts) if preview_parts else "все выполнено"
-                kind = "highlight" if n_todo > 0 else "info"
-                title = f"План: {n_todo}/{n_total}"
-                if n_rec > 0:
-                    title += f" · {n_rec} привычек"
-                sections.append({
-                    "emoji": "📋", "title": title,
-                    "subtitle": preview, "kind": kind,
-                })
-        except Exception:
-            pass
-
-        # 9. Food suggestion если нет завтрака в плане и profile.food непустой
-        try:
-            from .user_profile import load_profile, get_category
-            from .plans import schedule_for_day
-            import datetime as _dt
-            prof = load_profile()
-            food_cat = get_category("food", prof)
-            has_prefs = bool(food_cat.get("preferences") or food_cat.get("constraints"))
-            sched = schedule_for_day()
-            # Уже есть запланированная еда на утро (до 11:00)?
-            has_morning_food = any(
-                s for s in sched
-                if s.get("category") == "food"
-                and (s.get("planned_ts") or 0)
-                    and _dt.datetime.fromtimestamp(s["planned_ts"]).hour < 11
-            )
-            if has_prefs and not has_morning_food:
-                prefs = food_cat.get("preferences") or []
-                cons = food_cat.get("constraints") or []
-                constr_str = ""
-                if cons:
-                    constr_str = " · избегай: " + ", ".join(cons[:2])
-                pref_str = ""
-                if prefs:
-                    pref_str = " · любишь: " + ", ".join(prefs[:2])
-                sections.append({
-                    "emoji": "🍳", "title": "Завтрак?",
-                    "subtitle": f"Нет плана на утро{pref_str}{constr_str}.",
-                    "kind": "info",
-                    "actions": [
-                        {"label": "Выбери для меня", "action": "food_suggest"},
-                    ],
-                })
-        except Exception:
-            pass
-
+        for name, builder in _BRIEFING_SECTIONS:
+            try:
+                section = builder(self)
+            except Exception as e:
+                log.debug(f"[briefing] section {name} failed: {e}")
+                continue
+            if section:
+                sections.append(section)
         return sections
 
     def _build_morning_briefing_text(self) -> str:
@@ -2398,6 +2176,21 @@ class CognitiveLoop:
         elif time_of_day == "ночь":   heuristic_tone = "ambient"
         else:                          heuristic_tone = "simple"
 
+        # Counter-wave (Правило 7): при user.mode='C' резонатор уже активно
+        # компенсирует рассинхрон. Push-style тоны (caring/simple) добавляют
+        # шум: эмо-жалость или обыденный «как ты?» при desync воспринимаются
+        # как давление. Сдвиг в reference (опираемся на факт из графа если
+        # есть topics) или curious (мягкое любопытство без оценки).
+        # Симметрия с signals.COUNTER_WAVE_PUSH_TYPES — там тот же тип
+        # сигнала понижается по urgency, здесь — по тону.
+        try:
+            if get_user_state().mode == "C" and heuristic_tone in ("caring", "simple"):
+                _old = heuristic_tone
+                heuristic_tone = "reference" if recent_topics else "curious"
+                log.debug(f"[counter-wave] sync_seeking tone {_old}→{heuristic_tone}")
+        except Exception:
+            pass
+
         # Action Memory (этап 5): если у нас есть история past sync_seeking
         # outcomes, override heuristic_tone если есть явный winner.
         # Cold start (<3 closed actions) → scoring=all 0 → heuristic wins.
@@ -2427,26 +2220,21 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[action-memory] score tones failed: {e}")
 
-        # --- LLM prompt ---
-        system = (
-            "/no_think\n"
-            "Ты — Baddle, партнёр по мышлению одного человека. Он не писал тебе "
-            f"{idle_hours:.0f} часов. Молчание {severity}.\n"
-            "Напиши ОДНО короткое (1 предложение, макс 100 знаков) мягкое "
-            "сообщение — попытка восстановить контакт. Это НЕ приветствие, "
-            "НЕ представление возможностей, НЕ напоминание. Просто присутствие.\n"
-            "БЕЗ восклицаний. БЕЗ сиропа. БЕЗ «не забудь». БЕЗ emoji. БЕЗ кавычек.\n"
-            "Ответ — ТОЛЬКО текст сообщения, одной строкой. Без префиксов, "
-            "без лейблов, без объяснений."
-        )
-        user_ctx_parts = [f"Время: {time_of_day}"]
+        # --- LLM prompt --- (templates in src/prompts.py § sync_seeking_*)
+        from .prompts import _p
+        system = _p("ru", "sync_seeking_system").format(
+            idle_hours=idle_hours, severity=severity)
+        user_ctx_parts = [_p("ru", "sync_seeking_ctx_time").format(value=time_of_day)]
         if last_activity:
-            user_ctx_parts.append(f"Последнее что делал: {last_activity}")
+            user_ctx_parts.append(
+                _p("ru", "sync_seeking_ctx_last_activity").format(value=last_activity))
         if recent_topics:
-            user_ctx_parts.append(f"Темы в графе: {', '.join(recent_topics[:3])}")
+            user_ctx_parts.append(_p("ru", "sync_seeking_ctx_recent_topics").format(
+                value=", ".join(recent_topics[:3])))
         if hrv_hint:
-            user_ctx_parts.append(f"HRV: {hrv_hint}")
-        user_prompt = "\n".join(user_ctx_parts) + "\n\nСообщение:"
+            user_ctx_parts.append(
+                _p("ru", "sync_seeking_ctx_hrv").format(value=hrv_hint))
+        user_prompt = "\n".join(user_ctx_parts) + "\n\n" + _p("ru", "sync_seeking_ctx_message_label")
 
         try:
             from .graph_logic import _graph_generate
@@ -2475,16 +2263,8 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[cognitive_loop] sync_seeking LLM failed: {e}")
 
-        # Fallback: случайный мягкий шаблон
-        fallbacks_by_severity = {
-            "лёгкий": ["Как ты?", "Что сегодня?", "Я тут, если нужно.", "На связи?"],
-            "средний": ["Давно не слышу. Всё в порядке?", "Ты как? Я рядом.",
-                        "Если появится момент — я тут.", "Что происходит у тебя?"],
-            "высокий": ["Ты где? Всё ли ок?", "Я начал скучать. Ты в порядке?",
-                        "Давно тебя нет. Просто отмечусь — я тут.",
-                        "Хочу убедиться что с тобой всё хорошо."],
-        }
-        return random.choice(fallbacks_by_severity[severity]), "simple"
+        # Fallback: случайный мягкий шаблон (см. src/prompts.py § sync_seeking_fallback_*)
+        return random.choice(_p("ru", f"sync_seeking_fallback_{severity}")), "simple"
 
     # ── Activity → energy cost (category-based) ──────────────────────────
 
@@ -2641,6 +2421,210 @@ class CognitiveLoop:
             "dmn_interval_s": self.DMN_INTERVAL,
             "last_bridge": (self._recent_bridges[-1] if self._recent_bridges else None),
         }
+
+
+# ── Morning briefing section builders (Wave 3 cleanup A5) ────────────
+# Каждый builder: (CognitiveLoop) -> dict | None. None = section skipped.
+# Try/except + fallback централизован в `_build_morning_briefing_sections`.
+
+
+def _briefing_sleep(loop) -> Optional[dict]:
+    from .activity_log import estimate_last_sleep_hours
+    sleep = estimate_last_sleep_hours()
+    if not sleep or not sleep.get("hours"):
+        return None
+    hrs = sleep["hours"]
+    src = "из трекера" if sleep.get("source") == "explicit" else "из пауз активности"
+    if hrs >= 7:
+        sub, kind = f"Полноценный сон · {src}", "info"
+    elif hrs >= 5:
+        sub, kind = f"Короткий сон · береги ресурс · {src}", "warn"
+    else:
+        sub, kind = f"Сильно недоспал · сложные задачи позже · {src}", "warn"
+    return {"emoji": "💤", "title": f"Сон {hrs}ч", "subtitle": sub, "kind": kind}
+
+
+def _briefing_checkin(loop) -> Optional[dict]:
+    from .checkins import latest_checkin
+    ci = latest_checkin(hours=36)
+    if not ci:
+        return None
+    parts = []
+    if ci.get("energy") is not None:  parts.append(f"E {int(ci['energy'])}")
+    if ci.get("focus")  is not None:  parts.append(f"F {int(ci['focus'])}")
+    if ci.get("stress") is not None:  parts.append(f"S {int(ci['stress'])}")
+    surprise_part = None
+    if ci.get("expected") is not None and ci.get("reality") is not None:
+        s = ci["reality"] - ci["expected"]
+        surprise_part = f"Δ{'+' if s >= 0 else ''}{int(s)}"
+    bits = []
+    if parts:          bits.append(" · ".join(parts))
+    if surprise_part:  bits.append(f"вчера ожидание vs реальность: {surprise_part}")
+    if ci.get("note"): bits.append(f"«{ci['note'][:50]}»")
+    if not bits:
+        return None
+    kind = "warn" if (ci.get("stress") or 0) > 70 else "info"
+    return {"emoji": "📝", "title": "Последний check-in",
+            "subtitle": " · ".join(bits), "kind": kind}
+
+
+def _briefing_recovery(loop) -> Optional[dict]:
+    from .hrv_manager import get_manager as get_hrv_mgr
+    recovery_pct = None
+    named_label = None
+    try:
+        mgr = get_hrv_mgr()
+        if mgr.is_running:
+            rec = (mgr.get_baddle_state() or {}).get("energy_recovery")
+            if rec is not None:
+                recovery_pct = int(rec * 100)
+        ns = (get_global_state().get_metrics().get("user_state") or {}).get("named_state") or {}
+        named_label = ns.get("label") or ns.get("key")
+    except Exception:
+        pass
+    if recovery_pct is None and not named_label:
+        return None
+    title = "Восстановление"
+    if recovery_pct is not None:
+        title += f" {recovery_pct}%"
+    kind = "neutral"
+    subtitle = f"Состояние: {named_label.lower()}" if named_label else ""
+    if recovery_pct is not None:
+        if recovery_pct >= 80:
+            subtitle = (subtitle + " · хороший день для сложного") if subtitle else "Хороший день для сложного"
+            kind = "info"
+        elif recovery_pct >= 60:
+            subtitle = (subtitle + " · начни с важного") if subtitle else "Начни с важного"
+        else:
+            subtitle = (subtitle + " · лёгкие задачи первыми") if subtitle else "Лёгкие задачи первыми"
+            kind = "warn"
+    return {"emoji": "⚡", "title": title, "subtitle": subtitle or "—", "kind": kind}
+
+
+def _briefing_capacity(loop) -> Optional[dict]:
+    user = get_global_state().get_metrics().get("user_state") or {}
+    cap_zone = user.get("capacity_zone")
+    if not cap_zone:
+        return None
+    emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(cap_zone, "⚪")
+    reasons = user.get("capacity_reason") or []
+    kind = "info" if cap_zone == "green" else "warn" if cap_zone == "yellow" else "alert"
+    sub = ", ".join(reasons) if reasons else "все три контура ok"
+    return {"emoji": emoji, "title": f"Capacity {cap_zone}", "subtitle": sub, "kind": kind}
+
+
+def _briefing_bridges(loop) -> Optional[dict]:
+    cutoff = time.time() - 10 * 3600
+    recent = [b for b in (loop._recent_bridges or [])
+              if (b.get("ts") or 0) >= cutoff]
+    if not recent:
+        return None
+    recent.sort(key=lambda b: b.get("ts", 0), reverse=True)
+    first = recent[0].get("text", "")[:80]
+    if len(recent) == 1:
+        return {"emoji": "🌙", "title": "Scout нашёл 1 мост",
+                "subtitle": f"«{first}»", "kind": "highlight"}
+    return {"emoji": "🌙", "title": f"Scout нашёл {len(recent)} мостов",
+            "subtitle": f"Первый: «{first}»", "kind": "highlight"}
+
+
+def _briefing_yesterday(loop) -> Optional[dict]:
+    from .activity_log import day_summary
+    yday = day_summary(ts=time.time() - 86400)
+    if (yday.get("activity_count") or 0) <= 0:
+        return None
+    cat_h = yday.get("by_category_h") or {}
+    top = sorted(cat_h.items(), key=lambda kv: kv[1], reverse=True)[:2]
+    by_cat = ", ".join(f"{c} {h}ч" for c, h in top if h > 0.1)
+    return {"emoji": "📊", "title": f"Вчера: {yday['total_tracked_h']}ч",
+            "subtitle": f"{by_cat or '—'} · {yday.get('switches', 0)} переключений",
+            "kind": "neutral"}
+
+
+def _briefing_open_goals(loop) -> Optional[dict]:
+    from .goals_store import list_goals
+    open_goals = list_goals(status="open", limit=3)
+    if not open_goals:
+        return None
+    first = (open_goals[0].get("text") or "")[:70]
+    return {"emoji": "🎯",
+            "title": f"Открытых целей: {len(open_goals)}",
+            "subtitle": f"Первая: «{first}»", "kind": "neutral"}
+
+
+def _briefing_pattern(loop) -> Optional[dict]:
+    from .patterns import patterns_for_today
+    today_patterns = patterns_for_today()
+    if not today_patterns:
+        return None
+    today_patterns.sort(key=lambda p: p.get("detected_at", 0), reverse=True)
+    hint = today_patterns[0].get("hint_ru") or ""
+    if not hint:
+        return None
+    return {"emoji": "💡", "title": "Паттерн на сегодня",
+            "subtitle": hint, "kind": "highlight"}
+
+
+def _briefing_schedule(loop) -> Optional[dict]:
+    from .plans import schedule_for_day
+    sched = schedule_for_day()
+    if not sched:
+        return None
+    todo = [s for s in sched if not s.get("done") and not s.get("skipped")]
+    recurring = [s for s in sched if s.get("kind") == "recurring"]
+    n_todo, n_total, n_rec = len(todo), len(sched), len(recurring)
+    import datetime as _dt
+    preview_parts = []
+    for it in sorted(todo, key=lambda x: x.get("planned_ts") or 0)[:3]:
+        t = _dt.datetime.fromtimestamp(it.get("planned_ts") or 0).strftime("%H:%M")
+        preview_parts.append(f"{t} {it.get('name', '')[:30]}")
+    preview = "; ".join(preview_parts) if preview_parts else "все выполнено"
+    title = f"План: {n_todo}/{n_total}"
+    if n_rec > 0:
+        title += f" · {n_rec} привычек"
+    kind = "highlight" if n_todo > 0 else "info"
+    return {"emoji": "📋", "title": title, "subtitle": preview, "kind": kind}
+
+
+def _briefing_food(loop) -> Optional[dict]:
+    from .user_profile import load_profile, get_category
+    from .plans import schedule_for_day
+    import datetime as _dt
+    food_cat = get_category("food", load_profile())
+    has_prefs = bool(food_cat.get("preferences") or food_cat.get("constraints"))
+    if not has_prefs:
+        return None
+    has_morning_food = any(
+        s for s in schedule_for_day()
+        if s.get("category") == "food"
+        and (s.get("planned_ts") or 0)
+        and _dt.datetime.fromtimestamp(s["planned_ts"]).hour < 11
+    )
+    if has_morning_food:
+        return None
+    prefs = food_cat.get("preferences") or []
+    cons = food_cat.get("constraints") or []
+    pref_str   = " · любишь: " + ", ".join(prefs[:2]) if prefs else ""
+    constr_str = " · избегай: " + ", ".join(cons[:2]) if cons else ""
+    return {"emoji": "🍳", "title": "Завтрак?",
+            "subtitle": f"Нет плана на утро{pref_str}{constr_str}.",
+            "kind": "info",
+            "actions": [{"label": "Выбери для меня", "action": "food_suggest"}]}
+
+
+# Order = render order. Skip section'у легко: убрать строку из registry.
+_BRIEFING_SECTIONS: list = [
+    ("sleep",      _briefing_sleep),
+    ("checkin",    _briefing_checkin),
+    ("recovery",   _briefing_recovery),
+    ("capacity",   _briefing_capacity),
+    ("bridges",    _briefing_bridges),
+    ("yesterday",  _briefing_yesterday),
+    ("open_goals", _briefing_open_goals),
+    ("pattern",    _briefing_pattern),
+    ("schedule",   _briefing_schedule),
+    ("food",       _briefing_food),
+]
 
 
 # ── Singleton ─────────────────────────────────────────────────────────

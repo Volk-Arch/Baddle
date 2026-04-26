@@ -146,6 +146,122 @@ def test_loop_body_one_iteration(tmp_path):
             assert isinstance(sig, Signal)
 
 
+# ── Counter-wave (Правило 7): mode trajectory через _advance_tick ──────────
+
+class TestModeTrajectoryAdvanceTick:
+    """Property test: реальный путь cognitive_loop._advance_tick → user.mode/neuro.mode.
+
+    Проверяет cascade: chem spread → compute_sync_error → update_mode гистерезис.
+    Lower-level RG-resonator hysteresis покрыт в test_rgk_properties.py;
+    здесь — что _advance_tick его действительно вызывает.
+    """
+
+    def _fresh_state(self):
+        """Свежий РГК + user_state + cognitive_state перед каждым тестом.
+
+        UserState принимает rgk= explicitly; CognitiveState читает singleton
+        внутри __init__ (через get_global_rgk()), поэтому достаточно
+        reset_global_rgk() до его конструктора.
+        """
+        from src.rgk import reset_global_rgk
+        from src.user_state import UserState, set_user_state, get_user_state
+        from src.horizon import CognitiveState, set_global_state, get_global_state
+        rgk = reset_global_rgk()
+        set_user_state(UserState(rgk=rgk))
+        set_global_state(CognitiveState())
+        return get_user_state(), get_global_state()
+
+    def test_high_sync_err_drives_user_to_C(self, monkeypatch):
+        """sync_err >> THETA_ACT (0.15) через advance_tick → user.mode='C'."""
+        from src.cognitive_loop import CognitiveLoop
+        import src.cognitive_loop as cl_mod
+        u, gs = self._fresh_state()
+        loop = CognitiveLoop()
+
+        assert u.mode == "R"
+
+        # Spread по dopamine оси: |Δ|=0.65 → sync_err ≈ 0.65 (3D vec)
+        u.dopamine = 0.95
+        gs.neuro.dopamine = 0.30
+
+        fake_t = [10_000.0]
+        monkeypatch.setattr(cl_mod.time, "time", lambda: fake_t[0])
+        fake_t[0] += 1.0
+        loop._advance_tick()  # init _last_loop_tick_ts
+        fake_t[0] += 5.0
+        loop._advance_tick()  # реальный update с dt=5s
+
+        assert u.mode == "C", f"high sync_err didn't drive C, got {u.mode}"
+
+    def test_low_sync_err_restores_user_to_R(self, monkeypatch):
+        """C → R при sync_err < THETA_REC (0.08) (full cycle через _advance_tick)."""
+        from src.cognitive_loop import CognitiveLoop
+        import src.cognitive_loop as cl_mod
+        u, gs = self._fresh_state()
+        loop = CognitiveLoop()
+
+        fake_t = [10_000.0]
+        monkeypatch.setattr(cl_mod.time, "time", lambda: fake_t[0])
+
+        # Поднять в C
+        u.dopamine = 0.95
+        gs.neuro.dopamine = 0.30
+        fake_t[0] += 1.0; loop._advance_tick()
+        fake_t[0] += 5.0; loop._advance_tick()
+        assert u.mode == "C"
+
+        # Выровнять — perturbation → 0
+        u.dopamine = 0.5
+        gs.neuro.dopamine = 0.5
+        fake_t[0] += 5.0; loop._advance_tick()
+        assert u.mode == "R", f"low sync_err didn't restore R, got {u.mode}"
+
+    def test_hysteresis_band_keeps_C(self, monkeypatch):
+        """Между THETA_REC (0.08) и THETA_ACT (0.15) — mode не дребезжит."""
+        from src.cognitive_loop import CognitiveLoop
+        import src.cognitive_loop as cl_mod
+        u, gs = self._fresh_state()
+        loop = CognitiveLoop()
+
+        fake_t = [10_000.0]
+        monkeypatch.setattr(cl_mod.time, "time", lambda: fake_t[0])
+
+        # Drive в C
+        u.dopamine = 0.95
+        gs.neuro.dopamine = 0.30
+        fake_t[0] += 1.0; loop._advance_tick()
+        fake_t[0] += 5.0; loop._advance_tick()
+        assert u.mode == "C"
+
+        # Spread |Δ|=0.10 → sync_err ≈ 0.10 (в band [0.08, 0.15])
+        u.dopamine = 0.55
+        gs.neuro.dopamine = 0.45
+        for _ in range(5):
+            fake_t[0] += 5.0
+            loop._advance_tick()
+        assert u.mode == "C", f"flipped из C в band, got {u.mode}"
+
+    def test_neuro_mode_independent_from_user_mode(self, monkeypatch):
+        """user.mode и neuro.mode качаются независимо: user от sync_err,
+        neuro от combined_imbalance (max 4 PE-каналов)."""
+        from src.cognitive_loop import CognitiveLoop
+        import src.cognitive_loop as cl_mod
+        u, gs = self._fresh_state()
+        loop = CognitiveLoop()
+
+        fake_t = [10_000.0]
+        monkeypatch.setattr(cl_mod.time, "time", lambda: fake_t[0])
+
+        # sync_err большой (DA spread), но user/system imbalance ноль
+        u.dopamine = 0.95
+        gs.neuro.dopamine = 0.30
+        fake_t[0] += 1.0; loop._advance_tick()
+        fake_t[0] += 5.0; loop._advance_tick()
+
+        assert u.mode == "C", f"user mode not driven, got {u.mode}"
+        # neuro может остаться R: combined_imbalance не зависит от sync_err
+
+
 def test_phase_a_identity_still_holds():
     """Phase A identity check (EMA registry) должен работать после Phase B
     миграции — Phase B не трогает EMA, только alert dispatch."""

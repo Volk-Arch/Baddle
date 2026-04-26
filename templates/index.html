@@ -37,115 +37,65 @@
 
       <div class="assist-hrv-chart" id="assist-hrv-chart" aria-hidden="true"></div>
 
-      <!-- Capacity: 3 контура (Физо/Эмо/Когн) — Phase C, см. docs/capacity-design.md -->
-      <div class="assist-capacity-grid" id="assist-capacity-grid"
-           title="3 контура capacity. Зелёный = ok, красный = провисает. См. tooltip каждого.">
-        <div class="capacity-cell" id="capacity-phys"
-             data-ind="phys" title="Физиологический: HRV когерентность + выгорание">
-          <span class="capacity-icon">🟢</span>
-          <span class="capacity-label">Физо</span>
-        </div>
-        <div class="capacity-cell" id="capacity-affect"
-             data-ind="affect" title="Эмоциональный: серотонин + дофамин">
-          <span class="capacity-icon">🟢</span>
-          <span class="capacity-label">Эмо</span>
-        </div>
-        <div class="capacity-cell" id="capacity-cogload"
-             data-ind="cogload" title="Когнитивная нагрузка: tasks + switches + complexity">
-          <span class="capacity-icon">🟢</span>
-          <span class="capacity-label">Когн</span>
-        </div>
-      </div>
-
-      <!-- Phase D: balance() резонансный скаляр (DA·NE·ACh)/(5HT·GABA).
-           Корридор [0.3, 1.5] = резонанс. >1.5 → срыв; <0.3 → застой. -->
-      <div class="assist-balance" id="assist-balance"
-           title="🌊 Резонанс (Phase D): User × System balance. Формула (DA·NE·ACh)/(5HT·GABA). Зелёный [0.5–1.5] = резонанс, жёлтый [0.3–0.5] или [1.5–2.0] = пограничный, красный = срыв или застой.">
-        <span class="balance-icon">🌊</span>
-        <span class="balance-pair">
-          <span class="balance-cell" id="balance-user" title="User balance">U <span id="balance-user-val">—</span></span>
-          <span class="balance-sep">·</span>
-          <span class="balance-cell" id="balance-system" title="System balance">S <span id="balance-system-val">—</span></span>
-        </span>
-      </div>
-
       <!-- Live cognitive cone: precision → форма, state → цвет,
-           thinking → pulse + dual cones для pump. Polls /assist/state. -->
+           thinking → pulse + dual cones для pump. Polls /assist/state.
+           Capacity-grid и balance-widget переехали на вкладку «Состояние». -->
       <div class="baddle-cone-wrap" title="Когнитивный конус: precision → раствор и длина, state → цвет. Пульсирует когда Baddle думает. Раздваивается на pump (ищет мост).">
         <svg id="baddle-cone-svg" viewBox="0 0 80 80" width="76" height="76"></svg>
         <div class="baddle-cone-label" id="baddle-cone-label">—</div>
       </div>
     </div>
 
-    <!-- ═══ Sub-page: Dashboard (состояние системы + нейрохимия) ═══ -->
+    <!-- ═══ Sub-page: Dashboard (3 семантических блока) ═══
+         1. Cone block (Baddle thinking visual + DMN/heartbeat фон)
+         2. Row из 3 карт: 🧍 ТЫ · 🌊 СИНХРОН · 🤖 BADDLE
+         3. Toolbar внизу (Check-in / Sparkline / Sync-график / Timeline / Weekly / Камера) -->
     <div class="baddle-sub-page" data-sub-page="dashboard" style="display:none">
 
-    <!-- Live cognitive cone: главный визуал как Baddle думает прямо сейчас -->
+    <!-- 1. Cognitive cone block: state Baddle + DMN/heartbeat (раньше «Фон» card) -->
     <div id="dash-cone-block" class="dash-cone-block" title="Когнитивный конус Baddle в реальном времени. Precision → раствор конуса. State → цвет. Pulse когда думает. Dual cones когда ищет мост (pump).">
       <svg id="dash-cone-svg" viewBox="0 0 200 200" width="140" height="140"></svg>
       <div class="dash-cone-meta">
         <div class="dash-cone-title">Когнитивный конус</div>
         <div class="dash-cone-state" id="dash-cone-state">—</div>
         <div class="dash-cone-sub" id="dash-cone-sub">precision · γ · δt</div>
+        <!-- Фон: heartbeat + DMN. Перенесён сюда из status-strip — место конуса. -->
+        <div class="dash-cone-bg" title="Фоновый heartbeat + DMN: автономная работа когда юзер idle">
+          <span id="dash-background" class="dash-cone-bg-main">…</span>
+          <span class="dash-cone-bg-sep">·</span>
+          <span id="dash-dmn" class="dash-cone-bg-sub">—</span>
+        </div>
       </div>
     </div>
 
-    <!-- Live status strip: главное одной лентой -->
-    <div class="dash-status-strip">
-      <div class="dash-stat" title="Симбиоз: близость ТЫ↔BADDLE в 4D нейро-пространстве. Прайм-директива.">
-        <div class="dash-stat-label">Симбиоз</div>
-        <div class="dash-stat-value" id="dash-sync-regime">—</div>
-        <div class="dash-stat-sub" id="dash-sync-error">sync —</div>
-      </div>
-      <div class="dash-stat" title="Voronoi регион юзера — куда тебя кладёт 2D пространство activity × stability">
-        <div class="dash-stat-label">Твоё состояние</div>
-        <div class="dash-stat-value" id="dash-named">—</div>
-        <div class="dash-stat-sub" id="dash-named-advice">—</div>
-      </div>
-      <div class="dash-stat" title="Horizon state — когнитивный режим системы">
-        <div class="dash-stat-label">Режим системы</div>
-        <div class="dash-stat-value" id="dash-horizon">—</div>
-        <div class="dash-stat-sub" id="dash-origin">—</div>
-      </div>
-      <div class="dash-stat" title="Фоновый heartbeat + DMN: автономная работа когда юзер idle">
-        <div class="dash-stat-label">Фон</div>
-        <div class="dash-stat-value" id="dash-background">…</div>
-        <div class="dash-stat-sub" id="dash-dmn">—</div>
-      </div>
-    </div>
-
-    <!-- Toolbar: иконки + подписи, горизонтальная полоса -->
-    <div class="dash-toolbar">
-      <button onclick="openCheckin()" id="checkin-btn" class="dash-action" title="Daily check-in — ручной ввод energy/focus/stress + expected/reality">
-        <span class="dash-action-icon">📝</span><span class="dash-action-label">Check-in</span>
-      </button>
-      <button onclick="assistToggleSparkline()" id="neuro-spark-btn" class="dash-action" title="История нейрохимии — 30 последних тиков">
-        <span class="dash-action-icon">📈</span><span class="dash-action-label">Sparkline</span>
-      </button>
-      <button onclick="assistToggleSyncDash()" id="neuro-sync-btn" class="dash-action" title="Sync-dashboard — график sync_error + топ ошибки">
-        <span class="dash-action-icon">📊</span><span class="dash-action-label">Sync-график</span>
-      </button>
-      <button onclick="assistToggleTimeline()" id="neuro-timeline-btn" class="dash-action" title="Хронология — последние 20 action'ов системы">
-        <span class="dash-action-icon">⏱</span><span class="dash-action-label">Timeline</span>
-      </button>
-      <button onclick="assistWeeklyReview()" id="neuro-weekly-btn" class="dash-action" title="Weekly review — графики за неделю">
-        <span class="dash-action-icon">📆</span><span class="dash-action-label">Weekly</span>
-      </button>
-      <button onclick="assistToggleCamera()" id="neuro-camera-btn" class="dash-action" title="Камера / медитация — без LLM, distinct только на существующих нодах">
-        <span class="dash-action-icon">📷</span><span class="dash-action-label">Камера</span>
-      </button>
-      <span id="neuro-camera" class="neuro-camera-badge" style="display:none" title="Camera: сенсорная депривация, без LLM">📷 медитация</span>
-    </div>
-
-    <!-- Symbiosis panel: USER ↕ BADDLE с explicit labels на каждый bar -->
-    <div id="assist-neurochem" class="assist-neurochem assist-neurochem-labeled">
-      <!-- ═ ТЫ side ═ -->
+    <!-- 2. 3-card row: ТЫ ↔ СИНХРОН ↔ BADDLE (каскад зеркал, см. docs/world-model.md) -->
+    <div id="assist-neurochem" class="assist-neurochem assist-neurochem-labeled state-row">
+      <!-- ═ 🧍 ТЫ side ═ -->
       <div class="neuro-side-card neuro-user-card" title="Твоё состояние: питается HRV, таймингами, feedback'ом">
         <div class="neuro-side-header">
           <span class="neuro-side-title">🧍 ТЫ</span>
           <div class="neuro-side-chips">
             <span id="neuro-user-named" class="neuro-named-badge clickable-chip" onclick="chipInfoNamedState(this)" title="Named state (Voronoi) — клик для списка всех регионов">😐 нейтральное</span>
             <span id="neuro-activity-zone" class="neuro-zone-badge clickable-chip" style="display:none" onclick="chipInfoActivityZone(this)" title="Activity zone — клик для 4 зон"></span>
+          </div>
+        </div>
+        <!-- Capacity 3-grid (Phase C) — переехал из top-header. -->
+        <div class="assist-capacity-grid" id="assist-capacity-grid"
+             title="3 контура capacity. Зелёный = ok, красный = провисает. См. tooltip каждого.">
+          <div class="capacity-cell" id="capacity-phys"
+               data-ind="phys" title="Физиологический: HRV когерентность + выгорание">
+            <span class="capacity-icon">🟢</span>
+            <span class="capacity-label">Физо</span>
+          </div>
+          <div class="capacity-cell" id="capacity-affect"
+               data-ind="affect" title="Эмоциональный: серотонин + дофамин">
+            <span class="capacity-icon">🟢</span>
+            <span class="capacity-label">Эмо</span>
+          </div>
+          <div class="capacity-cell" id="capacity-cogload"
+               data-ind="cogload" title="Когнитивная нагрузка: tasks + switches + complexity">
+            <span class="capacity-icon">🟢</span>
+            <span class="capacity-label">Когн</span>
           </div>
         </div>
         <div class="neuro-labeled-bars">
@@ -192,14 +142,35 @@
         </div>
       </div>
 
-      <!-- Sync divider между ТЫ и BADDLE -->
-      <div class="sync-divider" title="‖user − system‖ в 4-мерном пространстве нейрохимии — прайм-директива">
-        <span class="sync-icon">⚡</span>
-        <span id="sync-regime" class="sync-regime">FLOW</span>
-        <span id="sync-error" class="sync-error">sync 100%</span>
+      <!-- ═ 🌊 СИНХРОН (середина: связь юзер ↔ Baddle) ═
+           Симбиоз = ‖user − system‖ в 4D нейрохимии. Прайм-директива.
+           Резонанс = (DA·NE·ACh)/(5HT·GABA), Phase D balance().
+           R/C = Counter-wave bit (Правило 7) — резонатор активно компенсирует. -->
+      <div class="neuro-side-card neuro-sync-card" title="Связь: насколько ТЫ и BADDLE звучат на одной волне. Симбиоз — Friston-метрика расстояния. Резонанс — мультипликативная формула баланса.">
+        <div class="neuro-side-header">
+          <span class="neuro-side-title">🌊 СИНХРОН</span>
+        </div>
+        <!-- Симбиоз: regime + sync% (был status-strip card #1) -->
+        <div class="sync-block" title="Симбиоз: близость ТЫ↔BADDLE в 4D нейро-пространстве. Прайм-директива.">
+          <div class="sync-block-label">Симбиоз <span class="sync-block-tech">‖user − system‖</span></div>
+          <div class="sync-block-value" id="dash-sync-regime">—</div>
+          <div class="sync-block-sub" id="dash-sync-error">sync —</div>
+        </div>
+        <!-- Резонанс + R/C bit (был balance widget в top-header) -->
+        <div class="sync-block" id="assist-balance" title="🌊 Резонанс (Phase D): User × System balance. Формула (DA·NE·ACh)/(5HT·GABA). Зелёный [0.5–1.5] = резонанс, жёлтый [0.3–0.5]/[1.5–2.0] = пограничный, красный = срыв или застой. R/C — Counter-wave bit: R = passive resonance, C = active compensation.">
+          <div class="sync-block-label">Резонанс <span class="sync-block-tech">balance · R/C</span></div>
+          <div class="sync-balance-pair">
+            <span class="balance-side-label">User</span>
+            <span class="balance-cell" id="balance-user">U <span id="balance-user-val">—</span><span class="balance-mode" id="balance-user-mode"></span></span>
+          </div>
+          <div class="sync-balance-pair">
+            <span class="balance-side-label">Baddle</span>
+            <span class="balance-cell" id="balance-system">S <span id="balance-system-val">—</span><span class="balance-mode" id="balance-system-mode"></span></span>
+          </div>
+        </div>
       </div>
 
-      <!-- ═ BADDLE side ═ -->
+      <!-- ═ 🤖 BADDLE side ═ -->
       <div class="neuro-side-card neuro-system-card" title="Baddle-сторона: питается динамикой графа (distinct-matrix в tick'ах)">
         <div class="neuro-side-header">
           <span class="neuro-side-title">🤖 BADDLE</span>
@@ -247,28 +218,100 @@
           </div>
         </div>
       </div>
+    </div>
 
-      <!-- Sparklines: dopamine/serotonin/NE/burnout over last 30 ticks -->
-      <div id="neuro-sparklines" class="neuro-sparklines" style="display:none">
-        <div class="neuro-sparkline-title">История нейрохимии · последние 30 тиков</div>
-        <svg id="neuro-sparkline-svg" viewBox="0 0 240 40" preserveAspectRatio="none"></svg>
+    <!-- Outcome dashboard / timeline — toggle через toolbar.
+         Outcome заменил Sparkline (heartbeat не пишет chem snapshots — был
+         пуст) + Sync-график (тот же sync_error trend, но из живых данных
+         data/prime_directive.jsonl с EMA fast/slow). -->
+    <div id="outcome-dashboard" class="outcome-dashboard" style="display:none">
+      <div class="dash-header">
+        Outcome <span id="outcome-meta" class="dash-count"></span>
+        <span id="outcome-verdict" class="outcome-verdict"></span>
+      </div>
+      <!-- Tabs: Sync / Chem / Spread / PE — переключение разных аспектов одних и тех же snapshot'ов. -->
+      <div class="outcome-tabs" role="tablist">
+        <button type="button" class="outcome-tab active" data-tab="sync"
+                onclick="assistOutcomeTab('sync')" title="sync_error EMA + capacity/regime/mode распределения">🌊 Sync</button>
+        <button type="button" class="outcome-tab" data-tab="chem"
+                onclick="assistOutcomeTab('chem')" title="История 10 chem axis (DA/5HT/NE/ACh/GABA × user+system) — daily means">🧪 Chem</button>
+        <button type="button" class="outcome-tab" data-tab="spread"
+                onclick="assistOutcomeTab('spread')" title="Per-axis расхождение user − system по 5 нейрохим. осям. Линии около 0 = резонанс. Прайм-директива по осям, а не одним скаляром.">🪞 Spread</button>
+        <button type="button" class="outcome-tab" data-tab="pe"
+                onclick="assistOutcomeTab('pe')" title="Decomposition imbalance_pressure на 4 PE-канала (user/self/agency/hrv) — какой реально двигает">⚡ PE</button>
       </div>
 
-      <!-- Sync-dashboard: график sync_error + top rejected modes -->
-      <div id="sync-dashboard" class="sync-dashboard" style="display:none">
-        <div class="dash-header">Sync dashboard <span id="sync-dash-count" class="dash-count"></span></div>
-        <svg id="sync-dash-svg" viewBox="0 0 360 80" preserveAspectRatio="none"></svg>
-        <div class="dash-subhead">Топ режимов с rejects</div>
-        <div id="sync-dash-top" class="dash-top"></div>
-      </div>
-      <!-- State-graph timeline (hidden by default, toggle with button) -->
-      <div id="neuro-timeline" class="neuro-timeline" style="display:none">
-        <div class="neuro-timeline-header">
-          Timeline · последние <span id="neuro-timeline-count">0</span> action'ов
+      <!-- Sync tab content (default visible) -->
+      <div class="outcome-tab-panel" data-tab-panel="sync">
+        <div class="outcome-section-title">sync_error EMA · daily</div>
+        <svg id="outcome-sync-svg" viewBox="0 0 360 90" preserveAspectRatio="none"></svg>
+        <div class="outcome-dist-grid">
+          <div class="outcome-dist-cell" title="Phase C: время в каждой capacity zone (физо/эмо/когн composite)">
+            <div class="outcome-dist-label">Capacity zone</div>
+            <div class="outcome-dist-bar" id="outcome-capacity-bar"></div>
+          </div>
+          <div class="outcome-dist-cell" title="HRV-derived: short_wave (тахикардия / симпатика) / flat / long_wave (когерентность / парасимпатика)">
+            <div class="outcome-dist-label">Frequency regime</div>
+            <div class="outcome-dist-bar" id="outcome-regime-bar"></div>
+          </div>
+          <div class="outcome-dist-cell" title="Counter-wave bit (Правило 7): R = passive resonance, C = active counter-wave при desync >0.15">
+            <div class="outcome-dist-label">Mode (R/C)</div>
+            <div class="outcome-dist-bar" id="outcome-mode-bar"></div>
+          </div>
         </div>
-        <div id="neuro-timeline-list" class="neuro-timeline-list"></div>
+        <div class="outcome-stats" id="outcome-stats"></div>
+      </div>
+
+      <!-- Chem tab content -->
+      <div class="outcome-tab-panel" data-tab-panel="chem" style="display:none">
+        <div class="outcome-section-title">5 axes × user/system · daily mean</div>
+        <svg id="outcome-chem-svg" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
+        <div class="outcome-chem-legend" id="outcome-chem-legend"></div>
+      </div>
+
+      <!-- Spread tab content: per-axis расхождение user − system -->
+      <div class="outcome-tab-panel" data-tab-panel="spread" style="display:none">
+        <div class="outcome-section-title">user − system · daily mean · 5 axes</div>
+        <svg id="outcome-spread-svg" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
+        <div class="outcome-chem-legend" id="outcome-spread-legend"></div>
+      </div>
+
+      <!-- PE decomposition tab content -->
+      <div class="outcome-tab-panel" data-tab-panel="pe" style="display:none">
+        <div class="outcome-section-title">PE channels · mean over window</div>
+        <div class="outcome-pe-bar" id="outcome-pe-bar"></div>
+        <div class="outcome-section-title outcome-section-title-sub">PE channels · daily</div>
+        <svg id="outcome-pe-svg" viewBox="0 0 360 90" preserveAspectRatio="none"></svg>
+        <div class="outcome-chem-legend" id="outcome-pe-legend"></div>
       </div>
     </div>
+    <div id="neuro-timeline" class="neuro-timeline" style="display:none">
+      <div class="neuro-timeline-header">
+        Timeline · последние <span id="neuro-timeline-count">0</span> action'ов
+      </div>
+      <div id="neuro-timeline-list" class="neuro-timeline-list"></div>
+    </div>
+
+    <!-- 3. Toolbar (вынесен вниз страницы): входы в expanders + camera/weekly. -->
+    <div class="dash-toolbar">
+      <button onclick="openCheckin()" id="checkin-btn" class="dash-action" title="Daily check-in — ручной ввод energy/focus/stress + expected/reality">
+        <span class="dash-action-icon">📝</span><span class="dash-action-label">Check-in</span>
+      </button>
+      <button onclick="assistToggleOutcome()" id="neuro-outcome-btn" class="dash-action" title="Outcome — sync_error EMA trend + capacity/regime/mode distributions из data/prime_directive.jsonl. Главный валидатор прайм-директивы.">
+        <span class="dash-action-icon">📊</span><span class="dash-action-label">Outcome</span>
+      </button>
+      <button onclick="assistToggleTimeline()" id="neuro-timeline-btn" class="dash-action" title="Хронология — последние 20 action'ов системы">
+        <span class="dash-action-icon">⏱</span><span class="dash-action-label">Timeline</span>
+      </button>
+      <button onclick="assistWeeklyReview()" id="neuro-weekly-btn" class="dash-action" title="Weekly review — графики за неделю">
+        <span class="dash-action-icon">📆</span><span class="dash-action-label">Weekly</span>
+      </button>
+      <button onclick="assistToggleCamera()" id="neuro-camera-btn" class="dash-action" title="Камера / медитация — без LLM, distinct только на существующих нодах">
+        <span class="dash-action-icon">📷</span><span class="dash-action-label">Камера</span>
+      </button>
+      <span id="neuro-camera" class="neuro-camera-badge" style="display:none" title="Camera: сенсорная депривация, без LLM">📷 медитация</span>
+    </div>
+
     </div>
     <!-- ═══ /Sub-page: Dashboard ═══ -->
 
@@ -598,7 +641,9 @@
       </div>
     </div>
 
-    <!-- Mode chip: показывает выбранный вручную режим (клик → dropdown) -->
+    <!-- Mode chip + inline aperture slider — оба про «как глубоко/широко рассуждать».
+         Mode = preset precision/policy (14 пресетов).
+         Aperture = depth multiplier + format (brief/essay/article) для /deep. -->
     <div id="mode-chip-row" class="mode-chip-row">
       <button id="mode-chip-btn" class="mode-chip-btn" onclick="toggleModeMenu(event)" title="Выбрать режим Baddle (как в graph). По умолчанию — auto">
         <span class="mode-chip-label">Режим:</span>
@@ -606,21 +651,60 @@
         <span class="mode-chip-caret">▾</span>
       </button>
       <div id="mode-chip-menu" class="mode-chip-menu" style="display:none" onclick="event.stopPropagation()"></div>
+      <!-- Inline aperture slider (раньше был спрятан в /settings modal).
+           Влияет ТОЛЬКО на /deep команду — обычный /assist chat и фоновые
+           процессы (DMN/scout/detectors) не трогает. -->
+      <div class="aperture-inline" title="Апертура для /deep команды: один scalar заменяет format/batched/depth. Узкая → brief + 0.5x шагов; широкая → article + 2x шагов + pyramidal collapse. Не влияет на обычный chat и фон.">
+        <span class="aperture-edge" aria-hidden="true">🎯</span>
+        <input id="aperture-inline-slider" type="range" min="0" max="1" step="0.05" value="0.5"
+               oninput="apertureInlineSlide(this.value)"
+               onchange="apertureInlineSave(this.value)">
+        <span class="aperture-edge" aria-hidden="true">🌐</span>
+        <span id="aperture-inline-label" class="aperture-inline-label">📘 Эссе</span>
+        <span class="aperture-inline-scope" title="Slider влияет только на /deep команду">/deep</span>
+      </div>
     </div>
 
-    <!-- Input (textarea + / команды + Continue + Send) -->
+    <!-- Input (textarea + / команды + ⭐ Bookmark + Continue + Send) -->
     <div class="assist-input-row">
       <textarea id="assist-input" placeholder="Спроси или поставь задачу..." rows="1"></textarea>
       <div class="chat-cmd-wrap">
         <button id="chat-cmd-btn" class="chat-cmd-btn" onclick="toggleCmdMenu(event)" aria-label="Команды" title="Быстрые команды">/</button>
         <div id="chat-cmd-menu" class="chat-cmd-menu" style="display:none" onclick="event.stopPropagation()"></div>
       </div>
+      <!-- ⭐ Insight bookmark: пометить «эта мысль повлияла» с context-снимком. -->
+      <button id="assist-bookmark-btn" onclick="assistOpenBookmark()"
+              aria-label="Bookmark insight"
+              title="Insight bookmark: сохранить мысль вместе со снимком текущего состояния (capacity, mode, balance, regime). Через год можно найти где сегодня был сдвиг.">⭐</button>
       <!-- ↳ Продолжить: показывается только если есть предыдущая сессия -->
       <button id="assist-continue-btn" onclick="assistSend(true)"
               aria-label="Продолжить тему"
               title="Включить мысли предыдущего ответа в финальный synthesis. Полезно когда развиваешь тему."
               style="display:none;background:#1e1b4b;color:#a5b4fc;border:1px solid #4338ca">↳</button>
       <button id="assist-send-btn" onclick="assistSend(false)" aria-label="Send">→</button>
+    </div>
+
+    <!-- Insight bookmark modal: textarea + автоматический context snapshot. -->
+    <div id="bookmark-modal" class="weekly-modal" style="display:none" onclick="bookmarkClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()" style="max-width:480px">
+        <div class="weekly-header">
+          ⭐ Insight bookmark
+          <button class="weekly-close" onclick="bookmarkClose()">×</button>
+        </div>
+        <div style="padding:12px 16px">
+          <div style="font-size:11px;color:#71717a;margin-bottom:6px">
+            Что зацепило? Состояние сохранится автоматически (capacity, mode, balance, regime).
+          </div>
+          <textarea id="bookmark-text" rows="3" maxlength="500"
+                    placeholder="Например: «осознал что переключаюсь на лёгкое когда устал — закономерно»"
+                    style="width:100%;background:#18181b;color:#e4e4e7;border:1px solid #27272a;border-radius:6px;padding:8px;font-size:13px;font-family:inherit;resize:vertical"></textarea>
+          <div id="bookmark-context-preview" style="margin-top:8px;font-size:10px;color:#52525b;font-family:ui-monospace,monospace"></div>
+          <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
+            <button onclick="bookmarkClose()" style="background:transparent;color:#71717a;border:1px solid #3f3f46;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">Отмена</button>
+            <button id="bookmark-save-btn" onclick="assistSaveBookmark()" style="background:#fb923c;color:#18181b;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Сохранить</button>
+          </div>
+        </div>
+      </div>
     </div>
     </div>
     <!-- ═══ /Sub-page: Chat ═══ -->

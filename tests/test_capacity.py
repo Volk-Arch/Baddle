@@ -86,7 +86,7 @@ def test_indicators_all_ok_green():
                       burnout=0.0, cogload=0.2)
     ind = compute_capacity_indicators(us)
     assert ind == {"phys_ok": True, "affect_ok": True, "cogload_ok": True,
-                    "reasons": []}
+                    "reasons": [], "zone": "green"}
 
 
 def test_indicators_low_coherence_phys_fail():

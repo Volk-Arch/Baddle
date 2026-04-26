@@ -880,3 +880,70 @@ class TestStateMoveAndProjectors:
         assert u.frequency_regime == u._rgk.frequency_regime()
         assert u.hrv_surprise == u._rgk.hrv_surprise()
         assert u.activity_zone == u._rgk.activity_zone()
+
+
+# ── Wave 3: named_state + capacity projectors ──────────────────────────────
+
+class TestWave3Projectors:
+    """B4 Wave 3 (2026-04-26): named_state и capacity_indicators переехали
+    в RGK.project как domains. UserState properties делегируют.
+    _feedback_counts больше не дублируется — все callers пишут в _rgk._fb."""
+
+    def test_project_named_state_returns_8_region_dict(self):
+        from src.user_state import UserState
+        u = UserState(dopamine=0.6, serotonin=0.5, norepinephrine=0.3)
+        u.acetylcholine = 0.9
+        ns = u._rgk.project("named_state")
+        assert ns["key"] == "explore"
+        assert "label" in ns and "advice" in ns and "emoji" in ns
+
+    def test_user_named_state_property_matches_project(self):
+        """UserState.named_state ≡ project("named_state")."""
+        from src.user_state import UserState
+        u = UserState(dopamine=0.4, serotonin=0.7, norepinephrine=0.5)
+        u.acetylcholine = 0.5
+        u.gaba = 0.8
+        assert u.named_state == u._rgk.project("named_state")
+
+    def test_project_capacity_returns_indicators_dict(self):
+        from src.user_state import UserState
+        u = UserState(dopamine=0.6, serotonin=0.6, burnout=0.0)
+        u.hrv_coherence = 0.7
+        u.cognitive_load_today = 0.2
+        cap = u._rgk.project("capacity")
+        assert cap == {
+            "phys_ok": True, "affect_ok": True, "cogload_ok": True,
+            "reasons": [], "zone": "green",
+        }
+
+    def test_capacity_failures_match_old_compute(self):
+        """compute_capacity_indicators(user) ≡ project('capacity')
+        ≡ исходная логика — все три fail-конфигурации (phys/affect/cogload)."""
+        from src.user_state import UserState, compute_capacity_indicators
+        u = UserState(dopamine=0.2, serotonin=0.2, burnout=0.5)
+        u.hrv_coherence = 0.3
+        u.cognitive_load_today = 0.8
+        via_shim    = compute_capacity_indicators(u)
+        via_project = u._rgk.project("capacity")
+        via_prop    = u.capacity_indicators
+        assert via_shim == via_project == via_prop
+        assert via_shim["phys_ok"] is False
+        assert via_shim["affect_ok"] is False
+        assert via_shim["cogload_ok"] is False
+        for reason in ("hrv_coherence_low", "burnout_high",
+                       "serotonin_low", "dopamine_low", "cogload_high"):
+            assert reason in via_shim["reasons"]
+
+    def test_feedback_counts_shared_with_rgk_fb(self):
+        """`apply_feedback` пишет в `_rgk._fb` (single source); _feedback_counts
+        дубликат удалён."""
+        from src.user_state import UserState
+        u = UserState()
+        assert not hasattr(u, "_feedback_counts"), \
+            "_feedback_counts удалён в Wave 3 — UserState не должен его держать"
+        u.update_from_feedback("accepted")
+        u.update_from_feedback("accepted")
+        u.update_from_feedback("rejected")
+        assert u._rgk._fb["accepted"] == 2
+        assert u._rgk._fb["rejected"] == 1
+        assert u._rgk._fb["ignored"] == 0

@@ -37,8 +37,9 @@
 
 ## ⚡ Cheap (validation / self-research)
 
-- [ ] **Outcome tracking dashboard** — UI viewer для validation работает ли система. Sync_error trends + balance() distribution + capacity zone time per zone + frequency_regime histogram. Данные уже пишутся в `data/prime_directive.jsonl` + state snapshots, нужен только chart endpoint + UI tab в /lab. Покажет работает ли система **на тебе** через месяц. **~3-4ч.**
-- [ ] **Insight bookmark** — Action Memory ловит actions/outcomes, episodic memory ловит nodes, но subjective marker «эта мысль повлияла» отсутствует. Простая ⭐ кнопка → нода `insight_bookmark` (type=insight, refs=[active_session_indices]) с context. Light feature, бесплатна для long-term self-research через год. **~1-2ч.**
+- [x] ~~**Outcome tracking dashboard**~~ ✅ done 2026-04-26. `📊 Outcome` кнопка в Состоянии открывает panel с sync_error EMA daily chart (slow + fast) + 3 distribution bars (capacity_zone / frequency_regime / mode R/C) + trend verdict (improving/stable/worsening). Источник — `data/prime_directive.jsonl` (расширен полями balance_user/balance_system/capacity_zone/frequency_regime/mode). Заменил Sparkline + Sync-график (оба читали state_graph, который heartbeat без chem snapshot — графики были пустые).
+- [x] ~~**Insight bookmark**~~ ✅ done 2026-04-26. ⭐ кнопка между `/` и `→` в чат-вводе → modal с textarea + auto-context snapshot (capacity_zone/mode/balance/frequency_regime/named_state). POST `/assist/bookmark` создаёт ноду `type="insight_bookmark"` с `bookmark_context` field. Бесплатно для long-term self-research через год.
+- [ ] **Insight viewer (⭐ list)** — UI для просмотра сохранённых bookmarks. Без него фича — write-only: сохраняем но не возвращаемся. Spec: GET `/assist/bookmarks?limit=50` отдаёт ноды `type="insight_bookmark"` отсортированные `created_at` desc + полный `bookmark_context` + `session_indices`. UI — 5-й tab «⭐ Insights» в Outcome panel: timeline list, каждый item = textarea-style card с text + chip-row (`zone · mode · regime · state`) + дата. Опц.: filter по zone/mode, text-search, click → переход к ноде в графе. **~2-3ч.**
 
 ---
 
@@ -50,10 +51,6 @@
 - [ ] **Резонансный промпт-preset** — Chat UI dropdown 🔵/🔴/⚪ + шаблон `[Контекст волны] [Состояние] [Запрос] [Параметры]`. Опционально auto-detect через `frequency_regime`. Spec — [resonance-prompt-preset.md](resonance-prompt-preset.md). **~1-2ч**.
 - [ ] **Snapshot-якорь узора при перерыве** — когда юзер прерывает работу (close session, switch context, idle >10мин), фиксировать текущую геометрию конуса + frequency_regime + active session_indices в `data/anchor_snapshots.jsonl`. При возврате — restore-предложение «продолжить узор» с этими параметрами. Идея: вход в поток после перерыва стоит 15-40 мин восстановления — anchor может сократить. A/B измеримо. **~3ч** (backend + UI prompt). Из chat-export 2026-04-22..24.
 - [ ] **Cone-viz controls (рычаги конуса как инструмент)** — текущий `baddle-cone-svg` показывает форму как индикатор. Сделать его **управляемым**: ширина (aperture slider), длина (horizon slider), направление (mode dropdown). Юзер видит и управляет геометрией внимания напрямую. Зависит от aperture фичи (cheap). **~2ч** UI после aperture. Из chat-export.
-- [ ] **Counter-wave Tier 2 — explicit mode-aware tactics** — Counter-wave (Правило 7) активирован 2026-04-25: `Resonator.update_mode()` вызывается в `_advance_tick`, Dispatcher понижает urgency push-style сигналов при `mode='C'`. Нужно расширить:
-  - **Sync_seeking explicit mode-aware tone** — `_generate_sync_seeking_message` при `user.mode='C'` выбирает curious/reference (без давления) вместо caring/simple. **~1ч**.
-  - **UI индикатор R/C** в balance widget — JS читает `state.user_state.mode`/`state.neurochem.mode` и рисует 🌊R / 🌊C значок рядом с balance числом. **~30 мин**.
-  - **Property test** на mode trajectory через реальный `_advance_tick` (sync_err > 0.15 → mode='C' через N тиков, потом restore при низком). **~30 мин**.
 
 ### Memory / RAG
 

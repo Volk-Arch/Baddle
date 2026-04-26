@@ -44,16 +44,34 @@ def record_tick(sync_error: float,
                 user_imbalance: float = 0.0,
                 self_imbalance: float = 0.0,
                 agency_gap: float = 0.0,
-                hrv_surprise: float = 0.0) -> bool:
+                hrv_surprise: float = 0.0,
+                # Outcome dashboard fields (added 2026-04-26):
+                balance_user: float | None = None,
+                balance_system: float | None = None,
+                capacity_zone: str | None = None,
+                frequency_regime: str | None = None,
+                mode_user: str | None = None,
+                mode_system: str | None = None,
+                # Chem timeline (added 2026-04-26 evening):
+                chem: dict | None = None) -> bool:
     """Append one snapshot. Возвращает True если записалось.
 
-    Все аргументы — float scalars. Failed write (read-only fs, permissions)
-    → False silent. Лог не критичен для работы — только для валидации.
+    Все аргументы — float scalars (или string для categorical). Failed write
+    (read-only fs, permissions) → False silent. Лог не критичен для работы.
 
     Дополнительные PE-компоненты (`user_imbalance`, `self_imbalance`,
     `agency_gap`, `hrv_surprise`) — decomposition агрегированного
-    `imbalance_pressure` на источники. Полезно для анализа через 2 мес:
-    какой канал PE реально двигал burnout, а какой всегда был 0.
+    `imbalance_pressure` на источники.
+
+    Outcome dashboard fields (Phase D + Counter-wave):
+    - `balance_user`/`balance_system` — резонансный скаляр (DA·NE·ACh)/(5HT·GABA)
+    - `capacity_zone` — green/yellow/red (Phase C)
+    - `frequency_regime` — short_wave/flat/long_wave (HRV-derived)
+    - `mode_user`/`mode_system` — R/C bit (Counter-wave, Правило 7)
+    - `chem` — dict с 10 chem axis snapshots для Chem timeline:
+        {da_user, s_user, ne_user, ach_user, gaba_user,
+         da_sys,  s_sys,  ne_sys,  ach_sys,  gaba_sys}
+    Все optional с None default — старые logs совместимы.
     """
     _ensure_dir()
     entry = {
@@ -69,6 +87,19 @@ def record_tick(sync_error: float,
         "agency_gap":           round(float(agency_gap), 4),
         "hrv_surprise":         round(float(hrv_surprise), 4),
     }
+    if balance_user     is not None: entry["balance_user"]     = round(float(balance_user), 4)
+    if balance_system   is not None: entry["balance_system"]   = round(float(balance_system), 4)
+    if capacity_zone    is not None: entry["capacity_zone"]    = str(capacity_zone)
+    if frequency_regime is not None: entry["frequency_regime"] = str(frequency_regime)
+    if mode_user        is not None: entry["mode_user"]        = str(mode_user)
+    if mode_system      is not None: entry["mode_system"]      = str(mode_system)
+    if chem:
+        # Flat-list 10 chem axis fields. Skip None values — пишем только заполненные.
+        for k in ("da_user", "s_user", "ne_user", "ach_user", "gaba_user",
+                  "da_sys",  "s_sys",  "ne_sys",  "ach_sys",  "gaba_sys"):
+            v = chem.get(k)
+            if v is not None:
+                entry[k] = round(float(v), 4)
     try:
         with open(_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -125,6 +156,21 @@ def aggregate(window_days: Optional[float] = None) -> dict:
         vals = [float(e.get(field, 0.0)) for e in entries]
         return round(sum(vals) / len(vals), 4) if vals else 0.0
 
+    def _mean_optional(field: str) -> Optional[float]:
+        """Усреднить только entries где field явно заполнен (не None)."""
+        vals = [float(e[field]) for e in entries if e.get(field) is not None]
+        return round(sum(vals) / len(vals), 4) if vals else None
+
+    def _categorical_counts(field: str) -> dict:
+        """Распределение string-значения по entries (capacity_zone, regime, mode)."""
+        out: dict = {}
+        for e in entries:
+            v = e.get(field)
+            if v is None:
+                continue
+            out[str(v)] = out.get(str(v), 0) + 1
+        return out
+
     span_s = float(entries[-1].get("ts", 0)) - float(entries[0].get("ts", 0))
     out = {
         "count":            len(entries),
@@ -142,6 +188,15 @@ def aggregate(window_days: Optional[float] = None) -> dict:
         "mean_pe_self":     _mean("self_imbalance"),
         "mean_pe_agency":   _mean("agency_gap"),
         "mean_pe_hrv":      _mean("hrv_surprise"),
+        # Outcome dashboard distributions (added 2026-04-26).
+        # Optional fields: None если в окне нет ни одного snapshot с этим полем
+        # (старые logs до Wave 3 расширения).
+        "mean_balance_user":   _mean_optional("balance_user"),
+        "mean_balance_system": _mean_optional("balance_system"),
+        "capacity_zone_counts":    _categorical_counts("capacity_zone"),
+        "frequency_regime_counts": _categorical_counts("frequency_regime"),
+        "mode_user_counts":        _categorical_counts("mode_user"),
+        "mode_system_counts":      _categorical_counts("mode_system"),
     }
 
     # Trend detection: первая треть vs последняя треть — по slow EMA.
@@ -170,13 +225,40 @@ def aggregate(window_days: Optional[float] = None) -> dict:
     return out
 
 
-def daily_bins(window_days: int = 30) -> list:
+_DEFAULT_DAILY_FIELDS = (
+    ("mean_fast", "sync_error_ema_fast"),
+    ("mean_slow", "sync_error_ema_slow"),
+)
+_CHEM_DAILY_FIELDS = tuple(
+    (f"mean_{k}", k) for k in (
+        "da_user", "s_user", "ne_user", "ach_user", "gaba_user",
+        "da_sys",  "s_sys",  "ne_sys",  "ach_sys",  "gaba_sys",
+    )
+)
+_PE_DAILY_FIELDS = tuple(
+    (f"mean_{k}", k) for k in (
+        "user_imbalance", "self_imbalance", "agency_gap", "hrv_surprise",
+    )
+)
+
+
+def daily_bins(window_days: int = 30,
+               fields: tuple | None = None) -> list:
     """Группировка snapshot'ов по суткам для charting.
 
-    Returns list[{date: 'YYYY-MM-DD', mean_slow, mean_fast, count}],
+    Args:
+        window_days: окно в днях; entries старше cutoff отбрасываются.
+        fields: tuple[(out_key, entry_field), ...] — какие поля усреднять.
+                Default: sync_error EMA fast/slow (sync chart).
+                Pass `_CHEM_DAILY_FIELDS` для chem timeline,
+                `_PE_DAILY_FIELDS` для PE decomposition.
+                None entry-values пропускаются (старые logs совместимы).
+
+    Returns list[{date: 'YYYY-MM-DD', count, <out_key>: float|None, ...}],
     sorted ascending. Пропущенные дни → не в списке.
     """
     import datetime as _dt
+    field_specs = fields if fields is not None else _DEFAULT_DAILY_FIELDS
     entries = read_all()
     if not entries:
         return []
@@ -193,12 +275,9 @@ def daily_bins(window_days: int = 30) -> list:
     out = []
     for date in sorted(buckets.keys()):
         items = buckets[date]
-        fast = [float(e.get("sync_error_ema_fast", 0.0)) for e in items]
-        slow = [float(e.get("sync_error_ema_slow", 0.0)) for e in items]
-        out.append({
-            "date": date,
-            "count": len(items),
-            "mean_fast": round(sum(fast) / len(fast), 4) if fast else 0.0,
-            "mean_slow": round(sum(slow) / len(slow), 4) if slow else 0.0,
-        })
+        bin_entry = {"date": date, "count": len(items)}
+        for out_key, src_field in field_specs:
+            vals = [float(it[src_field]) for it in items if it.get(src_field) is not None]
+            bin_entry[out_key] = round(sum(vals) / len(vals), 4) if vals else None
+        out.append(bin_entry)
     return out

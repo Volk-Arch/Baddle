@@ -565,6 +565,64 @@ def suggest_from_dmn_bridge(bridge: dict, lang: str = "ru") -> Optional[dict]:
 
 # ── Unified: собрать все suggestions ─────────────────────────────────────
 
+# 5 sources: каждый collector возвращает list[dict] из 0..N draft-suggestion'ов.
+# Используется в collect_suggestions через единый цикл (try/except + dedup
+# по draft.text — общие, не повторяются).
+#
+# Порядок: DMN первым — реальный «система нашла связь → предложила». Остальные —
+# fallback когда DMN ничего не нашла (маленький граф / новый юзер).
+
+def _collect_dmn(lang: str) -> list[dict]:
+    """До 2 suggestion'ов из недавних DMN-мостов с quality≥0.4 (последние 48ч)."""
+    from .cognitive_loop import get_cognitive_loop
+    import time as _time
+    cl = get_cognitive_loop()
+    cutoff = _time.time() - 48 * 3600
+    bridges = [b for b in (cl._recent_bridges or [])
+               if (b.get("ts") or 0) >= cutoff
+               and float(b.get("quality") or 0) >= 0.4]
+    bridges.sort(key=lambda b: b.get("quality", 0), reverse=True)
+    return [s for s in (suggest_from_dmn_bridge(b, lang=lang) for b in bridges[:2]) if s]
+
+
+def _collect_patterns(lang: str) -> list[dict]:
+    """До 3 patterns за 48ч; пропускаем abandoned (повторялись ≥5 раз без эффекта)."""
+    from .patterns import read_recent_patterns, is_pattern_abandoned
+    out: list[dict] = []
+    for p in read_recent_patterns(hours=48)[:3]:
+        if is_pattern_abandoned(p):
+            continue
+        s = suggest_from_pattern(p, lang=lang)
+        if s:
+            out.append(s)
+    return out
+
+
+def _collect_checkins(lang: str) -> list[dict]:
+    s = suggest_from_checkins(days=7, lang=lang)
+    return [s] if s else []
+
+
+def _collect_stress(lang: str) -> list[dict]:
+    s = suggest_from_stress_activity(lang=lang)
+    return [s] if s else []
+
+
+def _collect_weekly(lang: str) -> list[dict]:
+    s = suggest_from_weekly_review(lang=lang)
+    return [s] if s else []
+
+
+# Order matters: dmn first (real signal), остальные — fallback'и.
+_SUGGESTION_SOURCES = [
+    ("dmn",      _collect_dmn),
+    ("patterns", _collect_patterns),
+    ("checkins", _collect_checkins),
+    ("stress",   _collect_stress),
+    ("weekly",   _collect_weekly),
+]
+
+
 def collect_suggestions(lang: str = "ru",
                         include_patterns: bool = True,
                         include_checkins: bool = True,
@@ -576,6 +634,11 @@ def collect_suggestions(lang: str = "ru",
     Cheap guard — пропускаем если нет данных. Не дублирует одинаковые
     тексты draft'ов (dedup by draft.text).
     """
+    flags = {
+        "dmn": include_dmn, "patterns": include_patterns,
+        "checkins": include_checkins, "stress": include_stress,
+        "weekly": include_weekly,
+    }
     results: list[dict] = []
     seen_texts: set[str] = set()
 
@@ -588,53 +651,14 @@ def collect_suggestions(lang: str = "ru",
         seen_texts.add(key)
         results.append(item)
 
-    # DMN-driven первым — это настоящий «система нашла связь → предложила».
-    # Остальные триггеры (patterns/checkins/stress) — fallback на случай когда
-    # DMN ещё ничего не нашла (маленький граф / новый юзер).
-    if include_dmn:
+    for name, collector in _SUGGESTION_SOURCES:
+        if not flags.get(name, True):
+            continue
         try:
-            from .cognitive_loop import get_cognitive_loop
-            cl = get_cognitive_loop()
-            import time as _time
-            cutoff = _time.time() - 48 * 3600
-            bridges = [b for b in (cl._recent_bridges or [])
-                       if (b.get("ts") or 0) >= cutoff
-                       and float(b.get("quality") or 0) >= 0.4]
-            bridges.sort(key=lambda b: b.get("quality", 0), reverse=True)
-            for b in bridges[:2]:  # максимум 2 suggestion'a из мостов
-                _add(suggest_from_dmn_bridge(b, lang=lang))
+            for item in collector(lang):
+                _add(item)
         except Exception as e:
-            log.debug(f"[suggestions] dmn bridge source failed: {e}")
-
-    if include_patterns:
-        try:
-            from .patterns import read_recent_patterns, is_pattern_abandoned
-            # Auto-abandon: пропускаем patterns которые повторялись ≥5 раз
-            # за 14 дней без видимого результата — юзер игнорирует.
-            for p in read_recent_patterns(hours=48)[:3]:
-                if is_pattern_abandoned(p):
-                    continue
-                _add(suggest_from_pattern(p, lang=lang))
-        except Exception as e:
-            log.debug(f"[suggestions] pattern source failed: {e}")
-
-    if include_checkins:
-        try:
-            _add(suggest_from_checkins(days=7, lang=lang))
-        except Exception as e:
-            log.debug(f"[suggestions] checkin source failed: {e}")
-
-    if include_stress:
-        try:
-            _add(suggest_from_stress_activity(lang=lang))
-        except Exception as e:
-            log.debug(f"[suggestions] stress source failed: {e}")
-
-    if include_weekly:
-        try:
-            _add(suggest_from_weekly_review(lang=lang))
-        except Exception as e:
-            log.debug(f"[suggestions] weekly source failed: {e}")
+            log.debug(f"[suggestions] {name} source failed: {e}")
 
     return results
 

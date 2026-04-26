@@ -1754,20 +1754,24 @@ function _updateNeurochemPanel(metrics) {
   _setBalanceCell('balance-system-val', 'balance-system',
                    typeof neuro.balance === 'number' ? neuro.balance : null);
 
-  // Sync indicator (prime-directive в одном бейдже)
-  const regime = metrics.sync_regime || 'flow';
-  const syncErr = typeof metrics.sync_error === 'number' ? metrics.sync_error : 0;
-  const regimeEl = document.getElementById('sync-regime');
-  if (regimeEl) {
-    regimeEl.textContent = regime.toUpperCase();
-    regimeEl.className = 'sync-regime ' + regime;
-  }
-  const errEl = document.getElementById('sync-error');
-  if (errEl) {
-    // Max L2 на 4D в [0,1] ≈ 2.0 → пересчёт в percent «синхронизации»
-    const pct = Math.max(0, Math.min(100, Math.round((1 - syncErr / 2) * 100)));
-    errEl.textContent = 'sync ' + pct + '%';
-  }
+  // Counter-wave bit (Правило 7): R = passive resonance, C = active
+  // counter-wave generation (резонатор компенсирует desync >0.15).
+  const _setBalanceMode = (id, m) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('r', 'c');
+    if (m === 'R' || m === 'C') {
+      el.textContent = m;
+      el.classList.add(m.toLowerCase());
+    } else {
+      el.textContent = '';
+    }
+  };
+  _setBalanceMode('balance-user-mode', user.mode);
+  _setBalanceMode('balance-system-mode', neuro.mode);
+
+  // Sync indicator: единственная установка — в #dash-sync-regime/#dash-sync-error
+  // (ниже, в "Dashboard status strip" блоке). Старый sync-divider удалён.
 
   // Dopamine phasic arrow (legacy — new dopamine is single scalar, so always hidden)
   const phasicEl = document.getElementById('neuro-da-phasic');
@@ -1804,7 +1808,9 @@ function _updateNeurochemPanel(metrics) {
     namedEl.dataset.stateKey = ns.key || 'flow';
   }
 
-  // Dashboard status strip — 4 живых индикатора
+  // Sync block в Сihн-card (regime + sync%). Раньше был дубль также в neuro-divider
+  // и в status-strip; теперь — единственное место. named_state/horizon показаны
+  // в чипах ТЫ-card / BADDLE-card (live-обновляются ниже).
   try {
     const regime = metrics.sync_regime || '—';
     const syncErr = metrics.sync_error;
@@ -1814,18 +1820,6 @@ function _updateNeurochemPanel(metrics) {
     if (dashSE) dashSE.textContent = (syncErr !== undefined && syncErr !== null)
       ? `sync ${Math.round((1 - Math.min(1, syncErr)) * 100)}% · err ${syncErr.toFixed(2)}`
       : 'sync —';
-
-    const ns = (metrics.user_state || {}).named_state || {};
-    const dashN = document.getElementById('dash-named');
-    const dashNA = document.getElementById('dash-named-advice');
-    if (dashN) dashN.textContent = (ns.label || '—');
-    if (dashNA) dashNA.textContent = ns.advice || '—';
-
-    const dashH = document.getElementById('dash-horizon');
-    const dashO = document.getElementById('dash-origin');
-    const stateKey = metrics.state || 'exploration';
-    if (dashH) dashH.textContent = (_MODE_LABELS[stateKey] || stateKey);
-    if (dashO) dashO.textContent = (_ORIGIN_LABELS[neuro.state_origin] || neuro.state_origin || '◌ покой');
   } catch(e) {}
 
   // Activity zone badge (HRV × activity — 4 зоны)
@@ -1852,120 +1846,321 @@ function _updateNeurochemPanel(metrics) {
   if (camBtn) camBtn.classList.toggle('active', camOn);
   _lastCameraState = camOn;
 
-  // Refresh sparkline + sync-dashboard if open
-  if (_sparklineOpen) _refreshSparkline();
-  if (_syncDashOpen) _refreshSyncDash();
+  // Refresh outcome dashboard if open
+  if (_outcomeOpen) _refreshOutcome();
 }
 
-// ── Neurochem sparkline (30-tick history) ────────────────────────────
+// ── Outcome dashboard ───────────────────────────────────────────────
+//
+// Заменил Sparkline + Sync-график (оба читали state_graph, который
+// 90% — heartbeat без chem snapshot, графики были пустые). Outcome
+// читает data/prime_directive.jsonl — снапшоты sync_error EMA fast/slow
+// раз в час + balance/capacity_zone/frequency_regime/mode (Wave 3 fields).
+// Главный валидатор прайм-директивы: trend_verdict через 2 мес use.
 
-let _sparklineOpen = false;
+let _outcomeOpen = false;
+let _outcomeTab = 'sync';   // 'sync' | 'chem' | 'pe'
+let _outcomeData = null;     // last fetched payload — для tab switch без повторного fetch
 
-function assistToggleSparkline() {
-  const panel = document.getElementById('neuro-sparklines');
-  const btn = document.getElementById('neuro-spark-btn');
+async function assistToggleOutcome() {
+  const panel = document.getElementById('outcome-dashboard');
+  const btn = document.getElementById('neuro-outcome-btn');
   if (!panel) return;
-  _sparklineOpen = panel.style.display === 'none';
-  panel.style.display = _sparklineOpen ? 'block' : 'none';
-  if (btn) btn.classList.toggle('active', _sparklineOpen);
-  if (_sparklineOpen) _refreshSparkline();
+  _outcomeOpen = panel.style.display === 'none';
+  panel.style.display = _outcomeOpen ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', _outcomeOpen);
+  if (_outcomeOpen) await _refreshOutcome();
 }
 
-async function _refreshSparkline() {
+function assistOutcomeTab(tab) {
+  _outcomeTab = tab;
+  document.querySelectorAll('.outcome-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('.outcome-tab-panel').forEach(p => {
+    p.style.display = (p.dataset.tabPanel === tab) ? 'block' : 'none';
+  });
+  // Render — если данные уже загружены, переиспользуем
+  if (_outcomeData) _renderOutcomeTab(_outcomeData);
+}
+
+const _ZONE_COLORS  = { green: '#10b981', yellow: '#f59e0b', red: '#ef4444' };
+const _REGIME_COLORS = { short_wave: '#ef4444', flat: '#a1a1aa', long_wave: '#10b981' };
+const _MODE_COLORS  = { R: '#71717a', C: '#fb923c' };
+const _VERDICT_LABELS = {
+  improving:         { text: 'тренд: улучшение ↘', color: '#10b981' },
+  stable:            { text: 'тренд: стабильно',   color: '#a1a1aa' },
+  worsening:         { text: 'тренд: ухудшение ↗', color: '#ef4444' },
+  insufficient_data: { text: 'мало данных',         color: '#52525b' },
+};
+
+function _renderDistBar(elId, counts, colors) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const total = Object.values(counts || {}).reduce((s, n) => s + n, 0);
+  if (!total) {
+    el.innerHTML = '<span class="outcome-dist-empty">нет данных</span>';
+    return;
+  }
+  const segs = Object.entries(counts).map(([k, n]) => {
+    const pct = (n / total) * 100;
+    const color = colors[k] || '#52525b';
+    return `<span class="outcome-dist-seg" style="width:${pct.toFixed(1)}%;background:${color}" title="${_esc(k)} · ${n} (${pct.toFixed(0)}%)">${_esc(k)} ${pct.toFixed(0)}%</span>`;
+  }).join('');
+  el.innerHTML = segs;
+}
+
+async function _refreshOutcome() {
   try {
-    const r = await fetch('/assist/history?limit=30');
+    const r = await fetch('/assist/prime-directive?window_days=30&daily=1');
     const d = await r.json();
-    const svg = document.getElementById('neuro-sparkline-svg');
-    if (!svg || !d.entries || !d.entries.length) {
-      if (svg) svg.innerHTML = '<text x="120" y="22" text-anchor="middle" fill="#52525b" font-size="9">no history yet</text>';
-      return;
+    _outcomeData = d;
+
+    // Header — обновляется один раз, viewable во всех табах
+    const meta = document.getElementById('outcome-meta');
+    if (meta) {
+      const span = (d.days_span || 0).toFixed(1);
+      meta.textContent = `· ${d.count || 0} snapshots · ${span}d`;
     }
-    const series = [
-      {key: 'dopamine',        color: '#10b981', y: 0 },   // 4 strips x 10px each
-      {key: 'serotonin',       color: '#a78bfa', y: 10 },
-      {key: 'norepinephrine',  color: '#f59e0b', y: 20 },
-      {key: 'burnout',         color: '#ef4444', y: 30 },
-    ];
-    const n = d.entries.length;
-    const W = 240, H = 40;
-    const stepX = n > 1 ? W / (n - 1) : W;
-    let paths = '';
-    for (const s of series) {
-      const pts = d.entries.map((e, i) => {
-        const v = typeof e[s.key] === 'number' ? e[s.key] : 0.5;
-        const x = i * stepX;
-        const y = s.y + (1 - Math.max(0, Math.min(1, v))) * 8 + 1;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      }).join(' ');
-      paths += `<polyline fill="none" stroke="${s.color}" stroke-width="1.4" points="${pts}"/>`;
-      paths += `<line x1="0" x2="${W}" y1="${s.y + 9.5}" y2="${s.y + 9.5}" stroke="#27272a" stroke-width="0.4"/>`;
+    const v = document.getElementById('outcome-verdict');
+    if (v) {
+      const info = _VERDICT_LABELS[d.trend_verdict] || _VERDICT_LABELS.insufficient_data;
+      v.textContent = info.text;
+      v.style.color = info.color;
     }
-    svg.innerHTML = paths;
-  } catch(e) { /* silent */ }
+
+    _renderOutcomeTab(d);
+  } catch(e) {
+    console.warn('outcome refresh failed', e);
+  }
 }
 
-// ── Sync-dashboard ──────────────────────────────────────────────────
-
-let _syncDashOpen = false;
-
-function assistToggleSyncDash() {
-  const panel = document.getElementById('sync-dashboard');
-  const btn = document.getElementById('neuro-sync-btn');
-  if (!panel) return;
-  _syncDashOpen = panel.style.display === 'none';
-  panel.style.display = _syncDashOpen ? 'block' : 'none';
-  if (btn) btn.classList.toggle('active', _syncDashOpen);
-  if (_syncDashOpen) _refreshSyncDash();
+// Per-tab renderer. Вызывается при первой загрузке и при tab switch
+// (без повторного fetch — данные уже в _outcomeData).
+function _renderOutcomeTab(d) {
+  if (_outcomeTab === 'sync')   return _renderOutcomeSync(d);
+  if (_outcomeTab === 'chem')   return _renderOutcomeChem(d);
+  if (_outcomeTab === 'spread') return _renderOutcomeSpread(d);
+  if (_outcomeTab === 'pe')     return _renderOutcomePE(d);
 }
 
-async function _refreshSyncDash() {
-  try {
-    const r = await fetch('/assist/history?limit=80');
-    const d = await r.json();
-    const svg = document.getElementById('sync-dash-svg');
-    const top = document.getElementById('sync-dash-top');
-    const count = document.getElementById('sync-dash-count');
-    if (count) count.textContent = `· ${d.count || 0} ticks`;
-    if (!svg) return;
-    if (!d.entries || !d.entries.length) {
-      svg.innerHTML = '<text x="180" y="42" text-anchor="middle" fill="#52525b" font-size="10">нет данных</text>';
-      if (top) top.innerHTML = '';
-      return;
+function _renderOutcomeSync(d) {
+  // sync_error EMA: daily fast (yellow) и slow (purple)
+  const svg = document.getElementById('outcome-sync-svg');
+  if (svg) {
+    const days = d.daily || [];
+    if (!days.length) {
+      svg.innerHTML = '<text x="180" y="48" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов в окне</text>';
+    } else {
+      const W = 360, H = 90, pad = 6;
+      const n = days.length;
+      const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+      const maxY = Math.max(0.3, ...days.map(b => Math.max(b.mean_fast || 0, b.mean_slow || 0))) * 1.2;
+      const yOf = (val) => pad + (1 - Math.max(0, Math.min(maxY, val || 0)) / maxY) * (H - 2*pad - 12);
+      const pts = (key) => days.map((b, i) => `${(pad + i*stepX).toFixed(1)},${yOf(b[key]).toFixed(1)}`).join(' ');
+      const threshY = yOf(0.3);
+      svg.innerHTML = `
+        <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
+              stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.5"/>
+        <text x="${W-pad-2}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
+              font-size="8" opacity="0.7">0.3</text>
+        <polyline fill="none" stroke="#a78bfa" stroke-width="1.6" points="${pts('mean_slow')}" opacity="0.95"/>
+        <polyline fill="none" stroke="#eab308" stroke-width="1.0" points="${pts('mean_fast')}" opacity="0.7"/>
+        <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)}</text>
+        <text x="${W-pad-2}" y="${pad+8}" text-anchor="end" fill="#a78bfa" font-size="8">slow EMA</text>
+        <text x="${W-pad-2}" y="${pad+18}" text-anchor="end" fill="#eab308" font-size="8" opacity="0.8">fast EMA</text>
+      `;
     }
-    const W = 360, H = 80, pad = 4;
-    const n = d.entries.length;
-    const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
-    // sync_error L2-norm может быть 0..2, рисуем 0..1.5 вертикально
-    const maxSync = 1.5;
-    const pts = d.entries.map((e, i) => {
-      const v = typeof e.sync_error === 'number' ? e.sync_error : 0;
-      const x = pad + i * stepX;
-      const y = pad + (1 - Math.max(0, Math.min(maxSync, v)) / maxSync) * (H - 2*pad);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
-    // 0.3 threshold line (sync-high boundary)
-    const threshY = pad + (1 - 0.3/maxSync) * (H - 2*pad);
-    svg.innerHTML = `
-      <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
-            stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.6"/>
-      <text x="${W-pad-4}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
-            font-size="8" opacity="0.8">0.3 sync</text>
-      <polyline fill="none" stroke="#eab308" stroke-width="1.2" points="${pts}"/>
-      <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">older ——→ newer</text>
+  }
+  _renderDistBar('outcome-capacity-bar', d.capacity_zone_counts || {},    _ZONE_COLORS);
+  _renderDistBar('outcome-regime-bar',   d.frequency_regime_counts || {}, _REGIME_COLORS);
+  _renderDistBar('outcome-mode-bar',     d.mode_user_counts || {},        _MODE_COLORS);
+  const stats = document.getElementById('outcome-stats');
+  if (stats) {
+    const fmt = (v, prec = 3) => (v == null ? '—' : Number(v).toFixed(prec));
+    stats.innerHTML = `
+      <span><b>sync_error</b> mean ${fmt(d.mean_sync_error)} · slow EMA ${fmt(d.mean_ema_slow, 4)}</span>
+      <span class="outcome-stats-sep">·</span>
+      <span><b>balance</b> user ${fmt(d.mean_balance_user, 2)} · sys ${fmt(d.mean_balance_system, 2)}</span>
     `;
-    // Top rejected modes
-    if (top) {
-      const list = d.top_rejected_modes || [];
-      if (!list.length) {
-        top.innerHTML = '<div style="color:#52525b;font-size:10px">отказов нет</div>';
-      } else {
-        top.innerHTML = list.map(r =>
-          `<div class="dash-top-row"><span class="dash-top-mode">${_esc(r.mode)}</span>` +
-          `<span class="dash-top-count">${r.count}×</span></div>`
-        ).join('');
-      }
+  }
+}
+
+const _CHEM_LINES = [
+  { key: 'da_user',   label: 'DA · user',   color: '#10b981', dash: false },
+  { key: 's_user',    label: '5HT · user',  color: '#a78bfa', dash: false },
+  { key: 'ne_user',   label: 'NE · user',   color: '#f59e0b', dash: false },
+  { key: 'ach_user',  label: 'ACh · user',  color: '#06b6d4', dash: false },
+  { key: 'gaba_user', label: 'GABA · user', color: '#ec4899', dash: false },
+  { key: 'da_sys',    label: 'DA · sys',    color: '#10b981', dash: true },
+  { key: 's_sys',     label: '5HT · sys',   color: '#a78bfa', dash: true },
+  { key: 'ne_sys',    label: 'NE · sys',    color: '#f59e0b', dash: true },
+  { key: 'ach_sys',   label: 'ACh · sys',   color: '#06b6d4', dash: true },
+  { key: 'gaba_sys',  label: 'GABA · sys',  color: '#ec4899', dash: true },
+];
+
+function _renderOutcomeChem(d) {
+  const svg = document.getElementById('outcome-chem-svg');
+  const legend = document.getElementById('outcome-chem-legend');
+  if (!svg) return;
+  const days = d.daily_chem || [];
+  if (!days.length) {
+    svg.innerHTML = '<text x="180" y="68" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов с chem полями</text>';
+    if (legend) legend.innerHTML = '';
+    return;
+  }
+  const W = 360, H = 130, pad = 6;
+  const n = days.length;
+  const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+  // Все 5 chem axes в [0, 1] → фикс. шкала
+  const yOf = (val) => pad + (1 - Math.max(0, Math.min(1, val || 0))) * (H - 2*pad - 12);
+  let body = '';
+  // Сетка: 0 / 0.5 / 1.0 horizontal lines
+  for (const v of [0, 0.5, 1]) {
+    const y = yOf(v);
+    body += `<line x1="${pad}" x2="${W-pad}" y1="${y}" y2="${y}" stroke="#27272a" stroke-width="0.4"/>`;
+    body += `<text x="${pad-1}" y="${y+3}" text-anchor="end" fill="#3f3f46" font-size="7">${v}</text>`;
+  }
+  for (const ln of _CHEM_LINES) {
+    const pts = days
+      .map((b, i) => {
+        const v = b['mean_' + ln.key];
+        if (v == null) return null;
+        return `${(pad + i*stepX).toFixed(1)},${yOf(v).toFixed(1)}`;
+      })
+      .filter(Boolean)
+      .join(' ');
+    if (!pts) continue;
+    const dashAttr = ln.dash ? ' stroke-dasharray="2,2"' : '';
+    body += `<polyline fill="none" stroke="${ln.color}" stroke-width="1.1" points="${pts}"${dashAttr} opacity="0.85"/>`;
+  }
+  body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)} · solid=user, dashed=system</text>`;
+  svg.innerHTML = body;
+  if (legend) {
+    legend.innerHTML = _CHEM_LINES.slice(0, 5).map(ln =>
+      `<span class="outcome-legend-item" style="color:${ln.color}">— ${_esc(ln.label.split(' · ')[0])}</span>`
+    ).join('');
+  }
+}
+
+// Spread tab: 5 chem axes, diff user − system. Цвета те же что в Chem.
+const _SPREAD_AXES = [
+  { user: 'da_user',   sys: 'da_sys',   label: 'DA',   color: '#10b981' },
+  { user: 's_user',    sys: 's_sys',    label: '5HT',  color: '#a78bfa' },
+  { user: 'ne_user',   sys: 'ne_sys',   label: 'NE',   color: '#f59e0b' },
+  { user: 'ach_user',  sys: 'ach_sys',  label: 'ACh',  color: '#06b6d4' },
+  { user: 'gaba_user', sys: 'gaba_sys', label: 'GABA', color: '#ec4899' },
+];
+
+function _renderOutcomeSpread(d) {
+  const svg = document.getElementById('outcome-spread-svg');
+  const legend = document.getElementById('outcome-spread-legend');
+  if (!svg) return;
+  const days = d.daily_chem || [];
+  if (!days.length) {
+    svg.innerHTML = '<text x="180" y="68" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов с chem полями</text>';
+    if (legend) legend.innerHTML = '';
+    return;
+  }
+  const W = 360, H = 130, pad = 6;
+  const n = days.length;
+  const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+  // Шкала фиксирована [-0.5, +0.5] — chem axes в [0,1], так что max diff ±1.0,
+  // но 95% случаев укладываются в ±0.5. Если ось вылетает — данные говорят.
+  const Y_RANGE = 0.5;
+  const yOf = (val) => {
+    const v = Math.max(-Y_RANGE, Math.min(Y_RANGE, val || 0));
+    // 0 центрируется в середине chart area (между pad и H-pad-12)
+    const innerH = H - 2*pad - 12;
+    return pad + innerH/2 - (v / Y_RANGE) * (innerH/2);
+  };
+  let body = '';
+  // Сетка: zero-line жирная, ±0.25 / ±0.5 тонкие
+  for (const v of [-0.5, -0.25, 0, 0.25, 0.5]) {
+    const y = yOf(v);
+    const isZero = Math.abs(v) < 1e-6;
+    body += `<line x1="${pad}" x2="${W-pad}" y1="${y}" y2="${y}" stroke="${isZero ? '#52525b' : '#27272a'}" stroke-width="${isZero ? 0.8 : 0.4}"/>`;
+    body += `<text x="${pad-1}" y="${y+3}" text-anchor="end" fill="#3f3f46" font-size="7">${v >= 0 ? '+' : ''}${v.toFixed(2)}</text>`;
+  }
+  // Считаем diff per-axis per-day и рисуем линию
+  for (const ax of _SPREAD_AXES) {
+    const pts = days.map((b, i) => {
+      const u = b['mean_' + ax.user];
+      const s = b['mean_' + ax.sys];
+      if (u == null || s == null) return null;
+      return `${(pad + i*stepX).toFixed(1)},${yOf(u - s).toFixed(1)}`;
+    }).filter(Boolean).join(' ');
+    if (!pts) continue;
+    body += `<polyline fill="none" stroke="${ax.color}" stroke-width="1.2" points="${pts}" opacity="0.9"/>`;
+  }
+  body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)} · 0 = резонанс, +/− = расхождение</text>`;
+  svg.innerHTML = body;
+  if (legend) {
+    legend.innerHTML = _SPREAD_AXES.map(ax =>
+      `<span class="outcome-legend-item" style="color:${ax.color}">— ${_esc(ax.label)}</span>`
+    ).join('');
+  }
+}
+
+const _PE_CHANNELS = [
+  { key: 'user_imbalance', label: 'user', color: '#10b981',
+    title: '‖user PE_vec‖/√3 — наблюдаемое поведение vs ожидание' },
+  { key: 'self_imbalance', label: 'self', color: '#a78bfa',
+    title: 'Baddle PE на самой себе (self-prediction error)' },
+  { key: 'agency_gap',     label: 'agency', color: '#f59e0b',
+    title: '1 − agency: разрыв между сделанным и запланированным' },
+  { key: 'hrv_surprise',   label: 'hrv',  color: '#06b6d4',
+    title: 'Physical PE: реальный HRV vs Polar baseline' },
+];
+
+function _renderOutcomePE(d) {
+  // Stacked bar: mean_pe_user/_self/_agency/_hrv
+  const bar = document.getElementById('outcome-pe-bar');
+  if (bar) {
+    const vals = _PE_CHANNELS.map(c => Math.max(0, Number(d['mean_pe_' + c.label] || 0)));
+    const total = vals.reduce((s, v) => s + v, 0);
+    if (total < 1e-6) {
+      bar.innerHTML = '<span class="outcome-dist-empty">все каналы ≈0 (Polar не подключен / нет surprise) — подождать данных</span>';
+    } else {
+      bar.innerHTML = _PE_CHANNELS.map((c, i) => {
+        const pct = (vals[i] / total) * 100;
+        return `<span class="outcome-pe-seg" style="width:${pct.toFixed(1)}%;background:${c.color}" title="${c.label} · ${vals[i].toFixed(3)} (${pct.toFixed(0)}%) — ${c.title}">${c.label} ${pct.toFixed(0)}%</span>`;
+      }).join('');
     }
-  } catch(e) { /* silent */ }
+  }
+  // Daily breakdown — линии 4 каналов по дням
+  const svg = document.getElementById('outcome-pe-svg');
+  if (svg) {
+    const days = d.daily_pe || [];
+    if (!days.length) {
+      svg.innerHTML = '<text x="180" y="48" text-anchor="middle" fill="#52525b" font-size="10">нет PE snapshot\'ов в окне</text>';
+    } else {
+      const W = 360, H = 90, pad = 6;
+      const n = days.length;
+      const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+      const allVals = days.flatMap(b => _PE_CHANNELS.map(c => b['mean_' + c.key] || 0));
+      const maxY = Math.max(0.1, ...allVals) * 1.2;
+      const yOf = (val) => pad + (1 - Math.max(0, Math.min(maxY, val || 0)) / maxY) * (H - 2*pad - 12);
+      let body = '';
+      for (const c of _PE_CHANNELS) {
+        const pts = days.map((b, i) => {
+          const v = b['mean_' + c.key];
+          if (v == null) return null;
+          return `${(pad + i*stepX).toFixed(1)},${yOf(v).toFixed(1)}`;
+        }).filter(Boolean).join(' ');
+        if (!pts) continue;
+        body += `<polyline fill="none" stroke="${c.color}" stroke-width="1.2" points="${pts}" opacity="0.9"/>`;
+      }
+      body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)}</text>`;
+      svg.innerHTML = body;
+    }
+  }
+  const legend = document.getElementById('outcome-pe-legend');
+  if (legend) {
+    legend.innerHTML = _PE_CHANNELS.map(c =>
+      `<span class="outcome-legend-item" style="color:${c.color}" title="${c.title}">— ${_esc(c.label)}</span>`
+    ).join('');
+  }
 }
 
 // ── Weekly review modal ─────────────────────────────────────────────
@@ -4541,8 +4736,137 @@ function _initSubtabs() {
 // Auto-init when DOM ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function () {
-    assistInit(); activityInit(); _initSubtabs(); _initModes();
+    assistInit(); activityInit(); _initSubtabs(); _initModes(); _apertureInlineInit();
   });
 } else {
-  assistInit(); activityInit(); _initSubtabs(); _initModes();
+  assistInit(); activityInit(); _initSubtabs(); _initModes(); _apertureInlineInit();
+}
+
+
+// ── Inline aperture slider (рядом с Mode chip) ───────────────────────
+//
+// Раньше aperture был спрятан в /settings modal. Теперь visible в чате
+// рядом с mode chip — оба про «как глубоко/широко рассуждать»:
+//   mode      — preset precision/policy (14 пресетов).
+//   aperture  — depth multiplier + format (brief/essay/article) для /deep.
+//
+// Init подтягивает текущее value через GET /settings; save — через POST
+// (тот же endpoint что settings modal, не дублирует state).
+
+function _apertureLabel(v) {
+  if (v < 0.25) return '🎯 Фокус (brief)';
+  if (v < 0.7)  return '📘 Эссе';
+  if (v < 0.9)  return '📖 Статья';
+  return '🌐 Панорама';
+}
+
+function apertureInlineSlide(v) {
+  const lbl = document.getElementById('aperture-inline-label');
+  if (lbl) lbl.textContent = _apertureLabel(parseFloat(v));
+}
+
+async function apertureInlineSave(v) {
+  const value = Math.max(0, Math.min(1, parseFloat(v)));
+  try {
+    await fetch('/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({deep_aperture: value}),
+    });
+  } catch (e) {
+    console.warn('aperture save failed', e);
+  }
+}
+
+async function _apertureInlineInit() {
+  try {
+    const s = await fetch('/settings').then(r => r.json());
+    const slider = document.getElementById('aperture-inline-slider');
+    const lbl = document.getElementById('aperture-inline-label');
+    const v = (typeof s.deep_aperture === 'number') ? s.deep_aperture : 0.5;
+    if (slider) slider.value = v;
+    if (lbl) lbl.textContent = _apertureLabel(v);
+  } catch (e) {
+    console.debug('aperture init skipped', e);
+  }
+}
+
+// Инициализация в общем init flow ниже (см. конец файла).
+
+
+// ── Insight bookmark (⭐) ─────────────────────────────────────────────
+//
+// Открывает modal с textarea + автоматический snapshot текущего state
+// (capacity_zone / mode / balance / frequency_regime / named_state).
+// POST /assist/bookmark создаёт ноду type="insight_bookmark" в графе.
+
+async function assistOpenBookmark() {
+  const modal = document.getElementById('bookmark-modal');
+  const ta    = document.getElementById('bookmark-text');
+  const prev  = document.getElementById('bookmark-context-preview');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  if (ta) { ta.value = ''; setTimeout(() => ta.focus(), 50); }
+  // Сразу подтягиваем context для preview (живой snapshot)
+  if (prev) {
+    prev.textContent = '· загружаю снимок состояния…';
+    try {
+      const r = await fetch('/assist/state').then(x => x.json());
+      const us = r.user_state || {};
+      const cap = us.capacity_zone || '—';
+      const mode = us.mode || '—';
+      const balance = typeof us.balance === 'number' ? us.balance.toFixed(2) : '—';
+      const regime = us.frequency_regime || '—';
+      const ns = (us.named_state || {}).label || (us.named_state || {}).key || '—';
+      prev.textContent = `📸 zone=${cap} · mode=${mode} · balance=${balance} · regime=${regime} · state=${ns}`;
+    } catch (e) {
+      prev.textContent = '⚠ state snapshot не доступен';
+    }
+  }
+}
+
+function bookmarkClose(ev) {
+  if (ev && ev.target.id !== 'bookmark-modal') return;
+  const modal = document.getElementById('bookmark-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function assistSaveBookmark() {
+  const ta = document.getElementById('bookmark-text');
+  const btn = document.getElementById('bookmark-save-btn');
+  const text = (ta?.value || '').trim();
+  if (!text) {
+    ta?.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Сохраняю…'; }
+  try {
+    const res = await fetch('/assist/bookmark', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      bookmarkClose();
+      // Лёгкий toast — переиспользуем title attribute через alert? Лучше
+      // мини-визуальный feedback на самой ⭐ кнопке.
+      const star = document.getElementById('assist-bookmark-btn');
+      if (star) {
+        const orig = star.textContent;
+        star.textContent = '✓';
+        star.style.color = '#10b981';
+        setTimeout(() => {
+          star.textContent = orig;
+          star.style.color = '';
+        }, 1200);
+      }
+    } else {
+      console.warn('bookmark save failed', data);
+    }
+  } catch (e) {
+    console.warn('bookmark save error', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Сохранить'; }
+  }
 }

@@ -85,8 +85,8 @@ Updates через explicit methods:
   - `tick_expectation` → expectation_by_tod, expectation_vec
   - `feed_acetylcholine` (на surprise) / `feed_gaba` (на focus_residue)
 
-Bespoke остаются: `_feedback_counts` (legacy duplicate с `_rgk._fb`,
-TODO cleanup), burnout-bump (+0.05 на reject), streak-bias valence.
+Bespoke остаются: burnout-bump (+0.05 на reject), streak-bias valence
+(дискретные additive bumps, не EMA).
 """
 import math
 import time
@@ -198,60 +198,15 @@ def compute_cognitive_load(day_summary_today: dict, progress_delta: float) -> fl
 
 
 def compute_capacity_indicators(user) -> dict:
-    """3 boolean-индикатора + причины fail'ов.
-
-    Reads existing UserState fields/EMAs (Phase A registry):
-    - phys_ok: HRV coherence + low burnout (raw HRV или burnout-only fallback)
-    - affect_ok: serotonin + dopamine
-    - cogload_ok: cognitive_load_today
+    """Thin shim к `RGK.project("capacity")`. Wave 3 cleanup: вычисление
+    логики переехало в `rgk.py` (single source). Здесь — backward-compat
+    wrapper для существующих callers + tests.
 
     Returns:
         {phys_ok, affect_ok, cogload_ok, reasons[]} — booleans + list of
         failed-condition tags для capacity_reason property.
     """
-    serotonin = float(user.serotonin)
-    burnout = float(user.burnout)
-    dopamine = float(user.dopamine)
-    cogload = float(getattr(user, "cognitive_load_today", 0.0))
-    coh = user.hrv_coherence
-
-    reasons: list[str] = []
-
-    # phys_ok: если HRV доступен — обе проверки; иначе fallback только на burnout
-    if coh is not None:
-        coh_ok = float(coh) > CAPACITY_PHYS_COHERENCE_MIN
-        burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
-        phys_ok = coh_ok and burnout_ok
-        if not coh_ok:
-            reasons.append("hrv_coherence_low")
-        if not burnout_ok:
-            reasons.append("burnout_high")
-    else:
-        burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
-        phys_ok = burnout_ok
-        if not burnout_ok:
-            reasons.append("burnout_high")
-
-    # affect_ok
-    sero_ok = serotonin > CAPACITY_AFFECT_SEROTONIN_MIN
-    da_ok = dopamine > CAPACITY_AFFECT_DOPAMINE_MIN
-    affect_ok = sero_ok and da_ok
-    if not sero_ok:
-        reasons.append("serotonin_low")
-    if not da_ok:
-        reasons.append("dopamine_low")
-
-    # cogload_ok
-    cogload_ok = cogload < CAPACITY_COGLOAD_MAX
-    if not cogload_ok:
-        reasons.append("cogload_high")
-
-    return {
-        "phys_ok": phys_ok,
-        "affect_ok": affect_ok,
-        "cogload_ok": cogload_ok,
-        "reasons": reasons,
-    }
+    return user._rgk.project("capacity")
 
 
 def compute_capacity_zone(indicators: dict) -> str:
@@ -301,9 +256,8 @@ class UserState:
         self._rgk.burnout.value = burnout
         self._rgk.agency.value = agency
 
-        # _feedback_counts остаётся в UserState (legacy duplicate с _rgk._fb).
-        # Не трогаем в этой волне — отдельный cleanup.
-        self._feedback_counts = {"accepted": 0, "rejected": 0, "ignored": 0}
+        # _feedback_counts живёт в `_rgk._fb` (shared с u_feedback). Здесь
+        # не дублируем — `apply_feedback` читает/пишет напрямую туда.
 
     # ── Neurochemical mirrors (read/write через _rgk) ──────────────────────
 
@@ -672,9 +626,10 @@ class UserState:
         Burnout additive (+0.05 на reject) и streak-bias остаются bespoke —
         это дискретные bumps, не baseline EMA.
         """
-        if kind not in self._feedback_counts:
+        fb = self._rgk._fb  # shared counter (no duplicate)
+        if kind not in fb:
             return
-        self._feedback_counts[kind] = self._feedback_counts[kind] + 1
+        fb[kind] = fb[kind] + 1
 
         ov = Decays.USER_DOPAMINE_FEEDBACK
         if kind == "accepted":
@@ -687,12 +642,11 @@ class UserState:
             bn = self._rgk.burnout
             bn.value = max(0.0, min(1.0, bn.value + 0.05))
             # Streak bias: чем больше подряд rejects, тем жёстче спад valence
-            recent_rejects = self._feedback_counts.get("rejected", 0)
-            recent_accepts = self._feedback_counts.get("accepted", 0)
-            if recent_rejects - recent_accepts >= 3:
+            diff = fb.get("rejected", 0) - fb.get("accepted", 0)
+            if diff >= 3:
                 val = self._rgk.valence
                 val.value = max(-1.0, min(1.0,
-                    val.value - 0.05 * min(5, recent_rejects - recent_accepts - 2)))
+                    val.value - 0.05 * min(5, diff - 2)))
         # "ignored" — только counter, EMA не трогаем
 
         self.tick_expectation()
@@ -1136,23 +1090,11 @@ class UserState:
 
     @property
     def named_state(self) -> dict:
-        """Ближайший регион РГК-карты по химическому профилю (5D).
-
-        8 регионов: Поток / Устойчивость / Фокус-Тревога / Исследование /
-        Перегруз / Застой / Выгорание / Инсайт. Match по L2 в нормированном
-        (DA, 5HT, NE, ACh, GABA) пространстве — см. [user_state_map.py](user_state_map.py).
-
-        Возвращает {key, label, advice, emoji, distance, coord}. emoji даёт
-        визуальную метку для UI (🔵🟢🟠🟡🔴⚫⚪✨).
-        """
-        from .user_state_map import nearest_named_state
-        return nearest_named_state(
-            da=self.dopamine,
-            s=self.serotonin,
-            ne=self.norepinephrine,
-            ach=self.acetylcholine,
-            gaba=self.gaba,
-        )
+        """Ближайший регион РГК-карты по 5D chem-профилю (Wave 3: проектор
+        на РГК). Возвращает {key, label, advice, emoji, distance, coord} —
+        emoji даёт визуальную метку для UI (🔵🟢🟠🟡🔴⚫⚪✨).
+        См. [user_state_map.py](user_state_map.py) для координат регионов."""
+        return self._rgk.project("named_state")
 
     # Phase C Шаг 6: dual-pool energy methods (energy_snapshot,
     # debit_energy, recover_long_reserve) удалены — заменены 3-zone capacity
