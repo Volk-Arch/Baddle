@@ -229,12 +229,14 @@
         Outcome <span id="outcome-meta" class="dash-count"></span>
         <span id="outcome-verdict" class="outcome-verdict"></span>
       </div>
-      <!-- Tabs: Sync / Chem / PE — переключение разных аспектов одних и тех же snapshot'ов. -->
+      <!-- Tabs: Sync / Chem / Spread / PE — переключение разных аспектов одних и тех же snapshot'ов. -->
       <div class="outcome-tabs" role="tablist">
         <button type="button" class="outcome-tab active" data-tab="sync"
                 onclick="assistOutcomeTab('sync')" title="sync_error EMA + capacity/regime/mode распределения">🌊 Sync</button>
         <button type="button" class="outcome-tab" data-tab="chem"
                 onclick="assistOutcomeTab('chem')" title="История 10 chem axis (DA/5HT/NE/ACh/GABA × user+system) — daily means">🧪 Chem</button>
+        <button type="button" class="outcome-tab" data-tab="spread"
+                onclick="assistOutcomeTab('spread')" title="Per-axis расхождение user − system по 5 нейрохим. осям. Линии около 0 = резонанс. Прайм-директива по осям, а не одним скаляром.">🪞 Spread</button>
         <button type="button" class="outcome-tab" data-tab="pe"
                 onclick="assistOutcomeTab('pe')" title="Decomposition imbalance_pressure на 4 PE-канала (user/self/agency/hrv) — какой реально двигает">⚡ PE</button>
       </div>
@@ -265,6 +267,13 @@
         <div class="outcome-section-title">5 axes × user/system · daily mean</div>
         <svg id="outcome-chem-svg" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
         <div class="outcome-chem-legend" id="outcome-chem-legend"></div>
+      </div>
+
+      <!-- Spread tab content: per-axis расхождение user − system -->
+      <div class="outcome-tab-panel" data-tab-panel="spread" style="display:none">
+        <div class="outcome-section-title">user − system · daily mean · 5 axes</div>
+        <svg id="outcome-spread-svg" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
+        <div class="outcome-chem-legend" id="outcome-spread-legend"></div>
       </div>
 
       <!-- PE decomposition tab content -->

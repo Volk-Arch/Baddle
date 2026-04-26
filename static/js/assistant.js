@@ -1938,9 +1938,10 @@ async function _refreshOutcome() {
 // Per-tab renderer. Вызывается при первой загрузке и при tab switch
 // (без повторного fetch — данные уже в _outcomeData).
 function _renderOutcomeTab(d) {
-  if (_outcomeTab === 'sync') return _renderOutcomeSync(d);
-  if (_outcomeTab === 'chem') return _renderOutcomeChem(d);
-  if (_outcomeTab === 'pe')   return _renderOutcomePE(d);
+  if (_outcomeTab === 'sync')   return _renderOutcomeSync(d);
+  if (_outcomeTab === 'chem')   return _renderOutcomeChem(d);
+  if (_outcomeTab === 'spread') return _renderOutcomeSpread(d);
+  if (_outcomeTab === 'pe')     return _renderOutcomePE(d);
 }
 
 function _renderOutcomeSync(d) {
@@ -2038,6 +2039,65 @@ function _renderOutcomeChem(d) {
   if (legend) {
     legend.innerHTML = _CHEM_LINES.slice(0, 5).map(ln =>
       `<span class="outcome-legend-item" style="color:${ln.color}">— ${_esc(ln.label.split(' · ')[0])}</span>`
+    ).join('');
+  }
+}
+
+// Spread tab: 5 chem axes, diff user − system. Цвета те же что в Chem.
+const _SPREAD_AXES = [
+  { user: 'da_user',   sys: 'da_sys',   label: 'DA',   color: '#10b981' },
+  { user: 's_user',    sys: 's_sys',    label: '5HT',  color: '#a78bfa' },
+  { user: 'ne_user',   sys: 'ne_sys',   label: 'NE',   color: '#f59e0b' },
+  { user: 'ach_user',  sys: 'ach_sys',  label: 'ACh',  color: '#06b6d4' },
+  { user: 'gaba_user', sys: 'gaba_sys', label: 'GABA', color: '#ec4899' },
+];
+
+function _renderOutcomeSpread(d) {
+  const svg = document.getElementById('outcome-spread-svg');
+  const legend = document.getElementById('outcome-spread-legend');
+  if (!svg) return;
+  const days = d.daily_chem || [];
+  if (!days.length) {
+    svg.innerHTML = '<text x="180" y="68" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов с chem полями</text>';
+    if (legend) legend.innerHTML = '';
+    return;
+  }
+  const W = 360, H = 130, pad = 6;
+  const n = days.length;
+  const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+  // Шкала фиксирована [-0.5, +0.5] — chem axes в [0,1], так что max diff ±1.0,
+  // но 95% случаев укладываются в ±0.5. Если ось вылетает — данные говорят.
+  const Y_RANGE = 0.5;
+  const yOf = (val) => {
+    const v = Math.max(-Y_RANGE, Math.min(Y_RANGE, val || 0));
+    // 0 центрируется в середине chart area (между pad и H-pad-12)
+    const innerH = H - 2*pad - 12;
+    return pad + innerH/2 - (v / Y_RANGE) * (innerH/2);
+  };
+  let body = '';
+  // Сетка: zero-line жирная, ±0.25 / ±0.5 тонкие
+  for (const v of [-0.5, -0.25, 0, 0.25, 0.5]) {
+    const y = yOf(v);
+    const isZero = Math.abs(v) < 1e-6;
+    body += `<line x1="${pad}" x2="${W-pad}" y1="${y}" y2="${y}" stroke="${isZero ? '#52525b' : '#27272a'}" stroke-width="${isZero ? 0.8 : 0.4}"/>`;
+    body += `<text x="${pad-1}" y="${y+3}" text-anchor="end" fill="#3f3f46" font-size="7">${v >= 0 ? '+' : ''}${v.toFixed(2)}</text>`;
+  }
+  // Считаем diff per-axis per-day и рисуем линию
+  for (const ax of _SPREAD_AXES) {
+    const pts = days.map((b, i) => {
+      const u = b['mean_' + ax.user];
+      const s = b['mean_' + ax.sys];
+      if (u == null || s == null) return null;
+      return `${(pad + i*stepX).toFixed(1)},${yOf(u - s).toFixed(1)}`;
+    }).filter(Boolean).join(' ');
+    if (!pts) continue;
+    body += `<polyline fill="none" stroke="${ax.color}" stroke-width="1.2" points="${pts}" opacity="0.9"/>`;
+  }
+  body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)} · 0 = резонанс, +/− = расхождение</text>`;
+  svg.innerHTML = body;
+  if (legend) {
+    legend.innerHTML = _SPREAD_AXES.map(ax =>
+      `<span class="outcome-legend-item" style="color:${ax.color}">— ${_esc(ax.label)}</span>`
     ).join('');
   }
 }
