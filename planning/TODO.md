@@ -38,7 +38,7 @@
 ## ⚡ Cheap (validation / self-research)
 
 - [x] ~~**Outcome tracking dashboard**~~ ✅ done 2026-04-26. `📊 Outcome` кнопка в Состоянии открывает panel с sync_error EMA daily chart (slow + fast) + 3 distribution bars (capacity_zone / frequency_regime / mode R/C) + trend verdict (improving/stable/worsening). Источник — `data/prime_directive.jsonl` (расширен полями balance_user/balance_system/capacity_zone/frequency_regime/mode). Заменил Sparkline + Sync-график (оба читали state_graph, который heartbeat без chem snapshot — графики были пустые).
-- [ ] **Insight bookmark** — Action Memory ловит actions/outcomes, episodic memory ловит nodes, но subjective marker «эта мысль повлияла» отсутствует. Простая ⭐ кнопка → нода `insight_bookmark` (type=insight, refs=[active_session_indices]) с context. Light feature, бесплатна для long-term self-research через год. **~1-2ч.**
+- [x] ~~**Insight bookmark**~~ ✅ done 2026-04-26. ⭐ кнопка между `/` и `→` в чат-вводе → modal с textarea + auto-context snapshot (capacity_zone/mode/balance/frequency_regime/named_state). POST `/assist/bookmark` создаёт ноду `type="insight_bookmark"` с `bookmark_context` field. Бесплатно для long-term self-research через год.
 
 ---
 
