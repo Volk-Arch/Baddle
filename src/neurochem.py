@@ -32,7 +32,6 @@ Burnout — отдельный защитный механизм (см. `Protect
 HRV сюда не приходит. Тело пользователя влияет на **советы** в assistant.py,
 не на внутреннюю химию системы. Система может работать и без HRV вообще.
 """
-import math
 from typing import Optional
 
 import numpy as np
@@ -185,45 +184,12 @@ class Neurochem:
 
     def feed_acetylcholine(self, node_creation_rate: float = 0.0,
                             bridge_quality: float = None):
-        """Plasticity feeder — пластичность графа.
-
-        node_creation_rate ∈ [0, 1] — нормированная rate новых нод/час
-        (cap=10 default → если 10+ нод за час → 1.0, 5 нод → 0.5).
-        bridge_quality ∈ [0, 1] — качество последнего DMN-моста, если найден.
-        Если None — этот feeder не активирован.
-
-        v1 ОГРАНИЧЕНИЕ: node_creation_rate vs «реальная пластичность ткани»
-        — proxy. Граф может расти быстро, но ноды могут быть тривиальными
-        copy-paste, не отражая «открытость новому». Bridge_quality ловит
-        эту разницу частично (только бы значимые мосты находились).
-        Калибровка через 2 нед use, см. docs/neurochem-design.md §6.
-        """
-        rate_norm = max(0.0, min(1.0, float(node_creation_rate)))
-        self._rgk.system.plasticity.feed(rate_norm)
-        if bridge_quality is not None:
-            bq = max(0.0, min(1.0, float(bridge_quality)))
-            self._rgk.system.plasticity.feed(bq, decay_override=0.9)
+        """Trivial delegate в _rgk.s_ach_feed."""
+        self._rgk.s_ach_feed(node_creation_rate, bridge_quality)
 
     def feed_gaba(self, freeze_active: bool, embedding_scattering: float = None):
-        """Damping feeder — стенки стоячей волны.
-
-        freeze_active: True если ProtectiveFreeze.active. Сильный сигнал
-        для Damping — система чётко тормозит.
-        embedding_scattering ∈ [0, 1] — нормированная std embeddings активных
-        нод. Высокая = разнобой, низкая = узкая стоячая волна. Если None —
-        skip второй feeder.
-
-        v1 ОГРАНИЧЕНИЕ: freeze_active boolean — slow indicator. Между
-        активациями freeze_active=False даёт GABA=0 → damping ~0.5 default
-        EMA. embedding_scattering как proxy «чёткости границ» — но граф
-        может быть seman‌tically widely spread даже когда фокус узкий
-        (юзер думает над одним концептом, граф богат). Калибровка нужна.
-        """
-        sig = 1.0 if freeze_active else 0.0
-        self._rgk.system.damping.feed(sig)
-        if embedding_scattering is not None:
-            inv = max(0.0, min(1.0, 1.0 - float(embedding_scattering)))
-            self._rgk.system.damping.feed(inv, decay_override=0.95)
+        """Trivial delegate в _rgk.s_gaba_feed."""
+        self._rgk.s_gaba_feed(freeze_active, embedding_scattering)
 
     @property
     def self_surprise_vec(self) -> np.ndarray:
@@ -271,12 +237,8 @@ class Neurochem:
     # ── Bayesian step через distinct ────────────────────────────────────
 
     def apply_to_bayes(self, prior: float, d: float) -> float:
-        """Signed NAND-Bayes: logit(post) = logit(prior) + γ · (1 − 2d)."""
-        prior = max(0.01, min(0.99, prior))
-        log_prior = math.log(prior / (1.0 - prior))
-        log_post = log_prior + self.gamma * (1.0 - 2.0 * d)
-        posterior = 1.0 / (1.0 + math.exp(-log_post))
-        return round(max(0.01, min(0.99, posterior)), 3)
+        """Trivial delegate в _rgk.bayes_step."""
+        return self._rgk.bayes_step(prior, d)
 
     # ── Serialization ───────────────────────────────────────────────────
 
@@ -447,19 +409,12 @@ class ProtectiveFreeze:
                    self.imbalance_pressure)
 
     def combined_burnout(self, user_burnout: float = 0.0) -> float:
-        """Для `_idle_multiplier`: эмпатия к юзеру встроена.
-
-        max(display_burnout, user_burnout) — если юзер устал, Baddle тоже
-        тише. Это один канал, не отдельный check — само замедление есть
-        мягкое предложение.
-        """
-        ub = max(0.0, min(1.0, float(user_burnout or 0.0)))
-        return max(self.display_burnout, ub)
+        """Trivial delegate в _rgk.combined_burnout."""
+        return self._rgk.combined_burnout(user_burnout)
 
     def add_silence_pressure(self, delta: float):
-        """User-event input: снижение (−) при активности, рост (+) — редко."""
-        self.silence_pressure = max(0.0, min(1.0,
-            self.silence_pressure + float(delta)))
+        """Trivial delegate в _rgk.add_silence."""
+        self._rgk.add_silence(delta)
 
     def to_dict(self) -> dict:
         return {
