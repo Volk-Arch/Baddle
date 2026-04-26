@@ -73,9 +73,50 @@ _PROMPTS = {
         "ns_hint_apathy":   "\nЮзер в застое — разбей на микро-шаги ≤2 минуты. Фокус на «начать», не «сделать».",
         "ns_hint_burnout":  "\nЮзер в выгорании — мягко, без давления, восстановление приоритетнее задач.",
         "ns_hint_insight":  "\nЮзер в инсайте — помоги зафиксировать аттрактор, структурировать только что найденную связь.",
+
+        # Active sync-seeking (cognitive_loop._generate_sync_seeking_message).
+        # System prompt подставляет idle_hours/severity через .format().
+        "sync_seeking_system": (
+            "/no_think\n"
+            "Ты — Baddle, партнёр по мышлению одного человека. Он не писал тебе "
+            "{idle_hours:.0f} часов. Молчание {severity}.\n"
+            "Напиши ОДНО короткое (1 предложение, макс 100 знаков) мягкое "
+            "сообщение — попытка восстановить контакт. Это НЕ приветствие, "
+            "НЕ представление возможностей, НЕ напоминание. Просто присутствие.\n"
+            "БЕЗ восклицаний. БЕЗ сиропа. БЕЗ «не забудь». БЕЗ emoji. БЕЗ кавычек.\n"
+            "Ответ — ТОЛЬКО текст сообщения, одной строкой. Без префиксов, "
+            "без лейблов, без объяснений."
+        ),
+        "sync_seeking_ctx_time":          "Время: {value}",
+        "sync_seeking_ctx_last_activity": "Последнее что делал: {value}",
+        "sync_seeking_ctx_recent_topics": "Темы в графе: {value}",
+        "sync_seeking_ctx_hrv":           "HRV: {value}",
+        "sync_seeking_ctx_message_label": "Сообщение:",
+        "sync_seeking_fallback_лёгкий":  ["Как ты?", "Что сегодня?",
+                                           "Я тут, если нужно.", "На связи?"],
+        "sync_seeking_fallback_средний": ["Давно не слышу. Всё в порядке?",
+                                           "Ты как? Я рядом.",
+                                           "Если появится момент — я тут.",
+                                           "Что происходит у тебя?"],
+        "sync_seeking_fallback_высокий": ["Ты где? Всё ли ок?",
+                                           "Я начал скучать. Ты в порядке?",
+                                           "Давно тебя нет. Просто отмечусь — я тут.",
+                                           "Хочу убедиться что с тобой всё хорошо."],
+
+        # Evening retro (detect_evening_retro). {n} — кол-во невыполненных.
+        "retro_unfinished_one":  "Ретро дня: {n} невыполнено. Откроем check-in?",
+        "retro_unfinished_many": "Ретро дня: {n} невыполнены. Откроем check-in?",
+        "retro_all_done":        "Ретро дня: всё по плану. Сделаем check-in?",
     },
 }
 
 
-def _p(lang: str, key: str) -> str:
-    return _PROMPTS.get(lang, _PROMPTS["en"]).get(key, _PROMPTS["en"][key])
+def _p(lang: str, key: str):
+    """Lookup prompt template. Возвращает значение из lang→key, fallback к en→key,
+    fallback к "" если ключа нет нигде. Тип не строго string — может быть list
+    (sync_seeking fallbacks) или dict; caller должен знать формат конкретного key.
+    Базовые prompts (think/collapse/etc) — strings."""
+    bucket = _PROMPTS.get(lang, _PROMPTS["en"])
+    if key in bucket:
+        return bucket[key]
+    return _PROMPTS["en"].get(key, "")
