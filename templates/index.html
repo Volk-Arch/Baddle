@@ -641,7 +641,9 @@
       </div>
     </div>
 
-    <!-- Mode chip: показывает выбранный вручную режим (клик → dropdown) -->
+    <!-- Mode chip + inline aperture slider — оба про «как глубоко/широко рассуждать».
+         Mode = preset precision/policy (14 пресетов).
+         Aperture = depth multiplier + format (brief/essay/article) для /deep. -->
     <div id="mode-chip-row" class="mode-chip-row">
       <button id="mode-chip-btn" class="mode-chip-btn" onclick="toggleModeMenu(event)" title="Выбрать режим Baddle (как в graph). По умолчанию — auto">
         <span class="mode-chip-label">Режим:</span>
@@ -649,6 +651,15 @@
         <span class="mode-chip-caret">▾</span>
       </button>
       <div id="mode-chip-menu" class="mode-chip-menu" style="display:none" onclick="event.stopPropagation()"></div>
+      <!-- Inline aperture slider (раньше был спрятан в /settings modal). -->
+      <div class="aperture-inline" title="Апертура deep-mode: один scalar заменяет format/batched/depth для /deep команды. Узкая → краткий ответ + узкий конус; широкая → article + панорамный.">
+        <span class="aperture-edge" aria-hidden="true">🎯</span>
+        <input id="aperture-inline-slider" type="range" min="0" max="1" step="0.05" value="0.5"
+               oninput="apertureInlineSlide(this.value)"
+               onchange="apertureInlineSave(this.value)">
+        <span class="aperture-edge" aria-hidden="true">🌐</span>
+        <span id="aperture-inline-label" class="aperture-inline-label">📘 Эссе</span>
+      </div>
     </div>
 
     <!-- Input (textarea + / команды + ⭐ Bookmark + Continue + Send) -->

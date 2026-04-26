@@ -785,9 +785,10 @@ select {
 .mode-chip-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 6px 0 0;
   position: relative;
+  flex-wrap: wrap;
 }
 .mode-chip-btn {
   display: inline-flex;
@@ -803,6 +804,36 @@ select {
   transition: background .15s, border-color .15s, color .15s;
 }
 .mode-chip-btn:hover { border-color: #52525b; color: #e4e4e7; }
+
+/* Inline aperture slider — рядом с mode chip, оба про «как глубоко». */
+.aperture-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #1f1f23;
+  border: 1px solid #3f3f46;
+  border-radius: 14px;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+.aperture-inline .aperture-edge {
+  font-size: 11px;
+  opacity: 0.7;
+  user-select: none;
+}
+#aperture-inline-slider {
+  width: 90px;
+  cursor: pointer;
+  accent-color: #fb923c;
+}
+.aperture-inline-label {
+  font-size: 10px;
+  color: #71717a;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  min-width: 78px;
+}
 .mode-chip-btn.forced {
   background: #1e1b4b;
   border-color: #4338ca;

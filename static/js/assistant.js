@@ -4736,11 +4736,62 @@ function _initSubtabs() {
 // Auto-init when DOM ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function () {
-    assistInit(); activityInit(); _initSubtabs(); _initModes();
+    assistInit(); activityInit(); _initSubtabs(); _initModes(); _apertureInlineInit();
   });
 } else {
-  assistInit(); activityInit(); _initSubtabs(); _initModes();
+  assistInit(); activityInit(); _initSubtabs(); _initModes(); _apertureInlineInit();
 }
+
+
+// ── Inline aperture slider (рядом с Mode chip) ───────────────────────
+//
+// Раньше aperture был спрятан в /settings modal. Теперь visible в чате
+// рядом с mode chip — оба про «как глубоко/широко рассуждать»:
+//   mode      — preset precision/policy (14 пресетов).
+//   aperture  — depth multiplier + format (brief/essay/article) для /deep.
+//
+// Init подтягивает текущее value через GET /settings; save — через POST
+// (тот же endpoint что settings modal, не дублирует state).
+
+function _apertureLabel(v) {
+  if (v < 0.25) return '🎯 Фокус (brief)';
+  if (v < 0.7)  return '📘 Эссе';
+  if (v < 0.9)  return '📖 Статья';
+  return '🌐 Панорама';
+}
+
+function apertureInlineSlide(v) {
+  const lbl = document.getElementById('aperture-inline-label');
+  if (lbl) lbl.textContent = _apertureLabel(parseFloat(v));
+}
+
+async function apertureInlineSave(v) {
+  const value = Math.max(0, Math.min(1, parseFloat(v)));
+  try {
+    await fetch('/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({deep_aperture: value}),
+    });
+  } catch (e) {
+    console.warn('aperture save failed', e);
+  }
+}
+
+async function _apertureInlineInit() {
+  try {
+    const s = await fetch('/settings').then(r => r.json());
+    const slider = document.getElementById('aperture-inline-slider');
+    const lbl = document.getElementById('aperture-inline-label');
+    const v = (typeof s.deep_aperture === 'number') ? s.deep_aperture : 0.5;
+    if (slider) slider.value = v;
+    if (lbl) lbl.textContent = _apertureLabel(v);
+  } catch (e) {
+    console.debug('aperture init skipped', e);
+  }
+}
+
+// Инициализация в общем init flow ниже (см. конец файла).
 
 
 // ── Insight bookmark (⭐) ─────────────────────────────────────────────
