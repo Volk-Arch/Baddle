@@ -20,15 +20,6 @@ from .goals_store import _replay
 log = logging.getLogger(__name__)
 
 
-# ── Date utils ────────────────────────────────────────────────────────────
-
-def _today_start_ts() -> float:
-    """Unix ts начала сегодняшнего дня (локальное время)."""
-    now = datetime.now()
-    start = datetime(now.year, now.month, now.day)
-    return start.timestamp()
-
-
 def _day_bounds(day: Optional[date_type] = None) -> tuple[float, float]:
     """Ts-интервал (start, end) указанного дня. Default — сегодня."""
     d = day or date_type.today()

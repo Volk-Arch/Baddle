@@ -138,7 +138,7 @@ Merge отслеживает происхождение: `collapsed_from: [3, 5,
 
 - [src/tick_nand.py](../src/tick_nand.py) — `tick_emergent()` (единственный tick engine)
 - [src/cognitive_loop.py](../src/cognitive_loop.py) — `CognitiveLoop.tick_foreground()` для `/graph/tick` + фоновый поток
-- [src/thinking.py](../src/thinking.py) — helpers (`classify_nodes`, `_find_similar_group`, `_pick_target`, `_pick_distant_pair`)
+- [src/thinking.py](../src/thinking.py) — helpers (`classify_nodes`, `_pick_target`, `_pick_distant_pair`)
 - [src/horizon.py](../src/horizon.py) — `select_phase`, `update`, `to_llm_params`, `apply_to_bayes`
 - [src/state_graph.py](../src/state_graph.py) — hook на каждый тик emit
 - Endpoint `/graph/tick` → `loop.tick_foreground()`

@@ -1422,16 +1422,17 @@ class CognitiveLoop:
                               "content": f"Гипотеза: {t_text}\nFOR/AGAINST/SYNTHESIS. 3 строки."}],
                             max_tokens=2000, temp=0.4, top_k=20,
                         )
-                        # Confidence-update по длинам
-                        fr = ag = sy = ""
+                        # Confidence-update по длинам fr / ag (synthesis line
+                        # парсится моделью но не нужна здесь).
+                        fr = ag = ""
                         for l in res.split("\n"):
                             L = l.strip()
                             if L.upper().startswith(("FOR:", "ЗА:")):
                                 fr = L.split(":",1)[1].strip()
                             elif L.upper().startswith(("AGAINST:","ПРОТИВ:")):
                                 ag = L.split(":",1)[1].strip()
-                            elif L.upper().startswith(("SYNTHESIS:","СИНТЕЗ:")):
-                                sy = L.split(":",1)[1].strip()
+                            # SYNTHESIS line парсится моделью но не нужен здесь —
+                            # confidence weighting считается только по fr/ag len.
                         if fr and ag:
                             nodes[target]["confidence"] = (
                                 0.75 if len(fr) >= len(ag) else 0.35)
@@ -2007,7 +2008,6 @@ class CognitiveLoop:
 
         try:
             from .state_graph import get_state_graph
-            st = get_global_state()
             sg = get_state_graph()
             # state_origin: 1_held если есть active activity, иначе 1_rest
             origin = "1_held" if snapshot.get("active_activity") else "1_rest"

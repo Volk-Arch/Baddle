@@ -8,8 +8,6 @@ import random
 import logging
 from collections import defaultdict, deque
 
-from .graph_logic import _find_clusters
-
 log = logging.getLogger(__name__)
 
 
@@ -55,35 +53,6 @@ def classify_nodes(nodes, edges, graph, stable_threshold=0.8):
 # ── Merge: find similar to collapse ─────────────────────────────────────────
 
 MAX_MERGE_BATCH = 4  # merge at most 4 at a time — preserves diversity
-
-
-def _find_similar_group(candidates, nodes, edges, threshold, min_size=2):
-    """Find a group of similar nodes to merge.
-    Returns list of indices (capped at MAX_MERGE_BATCH) or None."""
-    if len(candidates) < min_size:
-        return None
-
-    c_set = {i for i, _ in candidates}
-
-    # Semantic clusters
-    clusters = _find_clusters(len(nodes), edges, threshold)
-    for c in clusters:
-        group = [i for i in c if i in c_set
-                 and nodes[i].get("type") not in ("evidence", "goal")]
-        fresh = _filter_lineage(group, nodes)
-        if len(fresh) >= min_size:
-            return fresh[:MAX_MERGE_BATCH]
-
-    # Topic groups
-    by_topic = defaultdict(list)
-    for i, n in candidates:
-        by_topic[n.get("topic", "") or ""].append(i)
-    for ids in sorted(by_topic.values(), key=len, reverse=True):
-        fresh = _filter_lineage(ids, nodes)
-        if len(fresh) >= min_size:
-            return fresh[:MAX_MERGE_BATCH]
-
-    return None
 
 
 def _filter_lineage(indices, nodes):

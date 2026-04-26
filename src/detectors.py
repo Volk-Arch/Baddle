@@ -627,7 +627,7 @@ def detect_observation_suggestions(ctx: DetectorContext) -> Iterable[Signal]:
                 draft_text = ((card.get("draft") or {}).get("text") or "").strip()
                 card_title = (card.get("title") or "").strip()
                 if len(draft_text) < 3 or not card_title:
-                    log.info(f"[detect_observation_suggestions] skipped empty draft")
+                    log.info("[detect_observation_suggestions] skipped empty draft")
                     continue
                 trigger = (item.get("trigger") or {}).get("type", "")
                 # urgency: pattern strength heuristic

@@ -344,8 +344,6 @@ class CognitiveState:
         - State change requires 2 consecutive ticks wanting the same target (debounce)
         - RECOVERY triggered instantly on surprise spike (no debounce)
         """
-        p = self.precision
-
         # Surprise spike → RECOVERY (instant, no debounce)
         if self._history and len(self._history) >= 2:
             last = self._history[-1]

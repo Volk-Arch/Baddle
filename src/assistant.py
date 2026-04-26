@@ -2178,7 +2178,6 @@ def graph_assist():
     d = request.get_json(force=True) or {}
     lang = d.get("lang", "ru")
     answer = (d.get("answer") or "").strip()
-    question = (d.get("question") or "").strip()
     requested_mode = d.get("mode")
 
     nodes = _graph["nodes"]
@@ -2259,8 +2258,6 @@ def graph_assist():
         context_lines.append("Текущие гипотезы:")
         for h in hypotheses:
             context_lines.append(f"- {h['text'][:80]} (conf={h.get('confidence', 0.5):.0%})")
-    unverified = [n for n in nodes if n.get("type") in ("hypothesis", "thought")
-                  and n.get("confidence", 0.5) < 0.6][:3]
 
     if lang == "ru":
         system = ("/no_think\nТы задаёшь ОДИН короткий уточняющий вопрос, "
@@ -2951,7 +2948,7 @@ def assist_weekly():
             "source": b.get("source"),
             "ts": b.get("ts"),
         } for b in bridges[:10]]
-    except Exception as e:
+    except Exception:
         digest["scout_bridges"] = []
 
     # Check-in averages (7-day)
@@ -2993,7 +2990,7 @@ def assist_alerts():
     """
     from .horizon import get_global_state
     ctx = _get_context()
-    state, hrv_state = ctx["state"], ctx["hrv"] or {}
+    hrv_state = ctx["hrv"] or {}
     capacity = ctx.get("capacity") or {}
     alerts = []
 

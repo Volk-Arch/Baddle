@@ -88,7 +88,7 @@ def _auto_evidence_relation(parent_text: str, child_text: str) -> tuple[str, flo
         log.warning(f"[auto_evidence] LLM relation check failed: {e}")
 
     # Regex fallback
-    log.info(f"[auto_evidence] fallback to regex")
+    log.info("[auto_evidence] fallback to regex")
     neg_patterns = (r'\bне\b', r'\bнет\b', r'\bоднако\b', r'\bно\b', r'\bnot\b', r'\bhowever\b', r'\bbut\b')
     child_lower = child_text.lower()
     if any(re.search(p, child_lower) for p in neg_patterns):
@@ -194,46 +194,6 @@ def _d_from_relation(relation: str, strength: float) -> float:
     return 0.5
 
 
-def _beta_prior_update(alpha: float, beta: float, supports: bool, strength: float = 1.0) -> tuple:
-    """Beta distribution prior update.
-
-    Prior: Beta(alpha, beta) → mean = alpha/(alpha+beta), confidence ~ alpha+beta
-    Observation: supports (True/False) with strength in [0,1]
-    Returns: (new_alpha, new_beta)
-
-    Gives both probability AND confidence in that probability.
-    See docs/nand-architecture.md
-    """
-    alpha = max(0.5, float(alpha))
-    beta = max(0.5, float(beta))
-    if supports:
-        alpha += strength
-    else:
-        beta += strength
-    return (round(alpha, 2), round(beta, 2))
-
-
-def _beta_mean_ci(alpha: float, beta: float) -> dict:
-    """Extract mean and 95% credible interval from Beta(alpha, beta)."""
-    import math
-    alpha = max(0.5, float(alpha))
-    beta = max(0.5, float(beta))
-    total = alpha + beta
-    mean = alpha / total if total > 0 else 0.5
-    # Approximation for variance/std
-    var = (alpha * beta) / ((total ** 2) * (total + 1)) if total > 1 else 0.25
-    std = math.sqrt(var)
-    ci_lower = max(0.0, mean - 1.96 * std)
-    ci_upper = min(1.0, mean + 1.96 * std)
-    return {
-        "mean": round(mean, 3),
-        "std": round(std, 3),
-        "ci_lower": round(ci_lower, 3),
-        "ci_upper": round(ci_upper, 3),
-        "confidence_strength": round(total, 2),  # higher = more certain
-    }
-
-
 # ── node helpers ─────────────────────────────────────────────────────────────
 
 def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
@@ -329,15 +289,6 @@ def touch_node(idx: int, boost: float = TOUCH_BOOST_DEFAULT) -> bool:
         cur = float(node.get("confidence", 0.5))
         node["confidence"] = round(min(1.0, cur + boost), 3)
     return True
-
-
-def touch_nodes(indices, boost: float = TOUCH_BOOST_DEFAULT) -> int:
-    """Batch-версия touch_node для списка индексов. Возвращает сколько затронуто."""
-    n = 0
-    for idx in indices:
-        if touch_node(idx, boost=boost):
-            n += 1
-    return n
 
 
 # ── Action Memory (самообучение через граф) ─────────────────────────────────
@@ -863,7 +814,6 @@ def _group_for_collapse(
     """
     from collections import defaultdict
     nodes = _graph.get("nodes", [])
-    src_set = set(source_indices)
     if len(source_indices) < min_group_size:
         return []
 
@@ -998,7 +948,6 @@ def force_synthesize_top(n: int = 5, lang: str = "ru",
     # Goal text: если source_indices задан — ищем goal в whitelist'е
     # (session-specific), иначе первый goal в графе.
     if source_indices is not None:
-        _whitelist = set(source_indices)
         goal_text = next(
             (nodes[i].get("text", "") for i in source_indices
              if 0 <= i < len(nodes) and nodes[i].get("type") == "goal"),

@@ -419,9 +419,7 @@ def try_handle(message: str, lang: str = "ru") -> Optional[dict]:
         return _card_start(res.group(1), lang)
     res = _match_any(m, _NEXT_PATTERNS)
     if res:
-        # «следующая» = stop current + start new
-        from .activity_log import get_active
-        cur = get_active()
-        # start_activity уже автостопает текущую с reason=switch
+        # «следующая» = stop current + start new.
+        # start_activity автостопает текущую с reason=switch.
         return _card_start(res.group(1), lang)
     return None

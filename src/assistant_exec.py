@@ -705,7 +705,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         trace.append({"step": 1, "action": "seed_goal",
                       "detail": f"Цель добавлена как node #{goal_idx}",
                       "nodes_touched": [goal_idx]})
-    except Exception as e:
+    except Exception:
         return execute_via_zones(message, lang, mode_id, profile_hint)
 
     # Для comparative/cluster modes: используем user-provided options как hypotheses
@@ -1049,7 +1049,6 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         from .horizon import get_global_state
         from .thinking import classify_nodes
         from .modes import should_stop
-        from .graph_logic import _compute_edges
         _live = get_global_state()
         class _HorizonSnap:
             __slots__ = ("tau_in", "tau_out", "precision")
@@ -1258,7 +1257,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     for t in trace:
         a = t.get("action", "?")
         if a == "seed_goal":
-            steps_human.append(f"① Записал цель в граф")
+            steps_human.append("① Записал цель в граф")
         elif a == "brainstorm":
             steps_human.append(f"② Сгенерировал {len(t.get('nodes_touched',[]))} гипотез")
         elif a == "diversity_pump":
@@ -1272,7 +1271,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
         elif a == "pairwise_smartdc":
             steps_human.append(f"④ Pairwise SmartDC: {len(t.get('pairs',[]))} пар")
         elif a == "smartdc":
-            steps_human.append(f"④ SmartDC thesis vs antithesis → синтез")
+            steps_human.append("④ SmartDC thesis vs antithesis → синтез")
         elif a == "deepen":
             deepen_count += 1
             steps_human.append(f"↻ Раунд углубления #{deepen_count}: "
