@@ -761,6 +761,20 @@ class CognitiveLoop:
                 frequency_regime=u.frequency_regime,
                 mode_user=u.mode,
                 mode_system=gs.neuro.mode,
+                # Chem timeline: 5 axes × user/system. Pump'ить хотя бы раз в час
+                # чтобы Outcome > Chem tab построил daily trend по 10 линиям.
+                chem={
+                    "da_user":   float(u.dopamine),
+                    "s_user":    float(u.serotonin),
+                    "ne_user":   float(u.norepinephrine),
+                    "ach_user":  float(u.acetylcholine),
+                    "gaba_user": float(u.gaba),
+                    "da_sys":    float(gs.neuro.dopamine),
+                    "s_sys":     float(gs.neuro.serotonin),
+                    "ne_sys":    float(gs.neuro.norepinephrine),
+                    "ach_sys":   float(gs.neuro.acetylcholine),
+                    "gaba_sys":  float(gs.neuro.gaba),
+                },
             )
         except Exception as e:
             log.debug(f"[cognitive_loop] prime_directive record failed: {e}")

@@ -1859,6 +1859,8 @@ function _updateNeurochemPanel(metrics) {
 // Главный валидатор прайм-директивы: trend_verdict через 2 мес use.
 
 let _outcomeOpen = false;
+let _outcomeTab = 'sync';   // 'sync' | 'chem' | 'pe'
+let _outcomeData = null;     // last fetched payload — для tab switch без повторного fetch
 
 async function assistToggleOutcome() {
   const panel = document.getElementById('outcome-dashboard');
@@ -1868,6 +1870,18 @@ async function assistToggleOutcome() {
   panel.style.display = _outcomeOpen ? 'block' : 'none';
   if (btn) btn.classList.toggle('active', _outcomeOpen);
   if (_outcomeOpen) await _refreshOutcome();
+}
+
+function assistOutcomeTab(tab) {
+  _outcomeTab = tab;
+  document.querySelectorAll('.outcome-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('.outcome-tab-panel').forEach(p => {
+    p.style.display = (p.dataset.tabPanel === tab) ? 'block' : 'none';
+  });
+  // Render — если данные уже загружены, переиспользуем
+  if (_outcomeData) _renderOutcomeTab(_outcomeData);
 }
 
 const _ZONE_COLORS  = { green: '#10b981', yellow: '#f59e0b', red: '#ef4444' };
@@ -1900,8 +1914,9 @@ async function _refreshOutcome() {
   try {
     const r = await fetch('/assist/prime-directive?window_days=30&daily=1');
     const d = await r.json();
+    _outcomeData = d;
 
-    // Header meta + verdict chip
+    // Header — обновляется один раз, viewable во всех табах
     const meta = document.getElementById('outcome-meta');
     if (meta) {
       const span = (d.days_span || 0).toFixed(1);
@@ -1914,55 +1929,177 @@ async function _refreshOutcome() {
       v.style.color = info.color;
     }
 
-    // Sync_error EMA chart: daily bins, fast (yellow) и slow (purple)
-    const svg = document.getElementById('outcome-sync-svg');
-    if (svg) {
-      const days = d.daily || [];
-      if (!days.length) {
-        svg.innerHTML = '<text x="180" y="48" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов в окне</text>';
-      } else {
-        const W = 360, H = 90, pad = 6;
-        const n = days.length;
-        const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
-        const maxY = Math.max(0.3, ...days.map(b => Math.max(b.mean_fast, b.mean_slow))) * 1.2;
-        const yOf = (val) => pad + (1 - Math.max(0, Math.min(maxY, val)) / maxY) * (H - 2*pad - 12);
-        const pts = (key) => days.map((b, i) => {
-          const x = pad + i * stepX;
-          return `${x.toFixed(1)},${yOf(b[key]).toFixed(1)}`;
-        }).join(' ');
-        // 0.3 sync-high threshold dashed
-        const threshY = yOf(0.3);
-        svg.innerHTML = `
-          <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
-                stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.5"/>
-          <text x="${W-pad-2}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
-                font-size="8" opacity="0.7">0.3</text>
-          <polyline fill="none" stroke="#a78bfa" stroke-width="1.6" points="${pts('mean_slow')}" opacity="0.95"/>
-          <polyline fill="none" stroke="#eab308" stroke-width="1.0" points="${pts('mean_fast')}" opacity="0.7"/>
-          <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)}</text>
-          <text x="${W-pad-2}" y="${pad+8}" text-anchor="end" fill="#a78bfa" font-size="8">slow EMA</text>
-          <text x="${W-pad-2}" y="${pad+18}" text-anchor="end" fill="#eab308" font-size="8" opacity="0.8">fast EMA</text>
-        `;
-      }
-    }
-
-    // 3 distribution bars
-    _renderDistBar('outcome-capacity-bar', d.capacity_zone_counts || {},    _ZONE_COLORS);
-    _renderDistBar('outcome-regime-bar',   d.frequency_regime_counts || {}, _REGIME_COLORS);
-    _renderDistBar('outcome-mode-bar',     d.mode_user_counts || {},        _MODE_COLORS);
-
-    // Stats line: mean balance + sync EMA
-    const stats = document.getElementById('outcome-stats');
-    if (stats) {
-      const fmt = (v, prec = 3) => (v == null ? '—' : Number(v).toFixed(prec));
-      stats.innerHTML = `
-        <span><b>sync_error</b> mean ${fmt(d.mean_sync_error)} · slow EMA ${fmt(d.mean_ema_slow, 4)}</span>
-        <span class="outcome-stats-sep">·</span>
-        <span><b>balance</b> user ${fmt(d.mean_balance_user, 2)} · sys ${fmt(d.mean_balance_system, 2)}</span>
-      `;
-    }
+    _renderOutcomeTab(d);
   } catch(e) {
     console.warn('outcome refresh failed', e);
+  }
+}
+
+// Per-tab renderer. Вызывается при первой загрузке и при tab switch
+// (без повторного fetch — данные уже в _outcomeData).
+function _renderOutcomeTab(d) {
+  if (_outcomeTab === 'sync') return _renderOutcomeSync(d);
+  if (_outcomeTab === 'chem') return _renderOutcomeChem(d);
+  if (_outcomeTab === 'pe')   return _renderOutcomePE(d);
+}
+
+function _renderOutcomeSync(d) {
+  // sync_error EMA: daily fast (yellow) и slow (purple)
+  const svg = document.getElementById('outcome-sync-svg');
+  if (svg) {
+    const days = d.daily || [];
+    if (!days.length) {
+      svg.innerHTML = '<text x="180" y="48" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов в окне</text>';
+    } else {
+      const W = 360, H = 90, pad = 6;
+      const n = days.length;
+      const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+      const maxY = Math.max(0.3, ...days.map(b => Math.max(b.mean_fast || 0, b.mean_slow || 0))) * 1.2;
+      const yOf = (val) => pad + (1 - Math.max(0, Math.min(maxY, val || 0)) / maxY) * (H - 2*pad - 12);
+      const pts = (key) => days.map((b, i) => `${(pad + i*stepX).toFixed(1)},${yOf(b[key]).toFixed(1)}`).join(' ');
+      const threshY = yOf(0.3);
+      svg.innerHTML = `
+        <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
+              stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.5"/>
+        <text x="${W-pad-2}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
+              font-size="8" opacity="0.7">0.3</text>
+        <polyline fill="none" stroke="#a78bfa" stroke-width="1.6" points="${pts('mean_slow')}" opacity="0.95"/>
+        <polyline fill="none" stroke="#eab308" stroke-width="1.0" points="${pts('mean_fast')}" opacity="0.7"/>
+        <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)}</text>
+        <text x="${W-pad-2}" y="${pad+8}" text-anchor="end" fill="#a78bfa" font-size="8">slow EMA</text>
+        <text x="${W-pad-2}" y="${pad+18}" text-anchor="end" fill="#eab308" font-size="8" opacity="0.8">fast EMA</text>
+      `;
+    }
+  }
+  _renderDistBar('outcome-capacity-bar', d.capacity_zone_counts || {},    _ZONE_COLORS);
+  _renderDistBar('outcome-regime-bar',   d.frequency_regime_counts || {}, _REGIME_COLORS);
+  _renderDistBar('outcome-mode-bar',     d.mode_user_counts || {},        _MODE_COLORS);
+  const stats = document.getElementById('outcome-stats');
+  if (stats) {
+    const fmt = (v, prec = 3) => (v == null ? '—' : Number(v).toFixed(prec));
+    stats.innerHTML = `
+      <span><b>sync_error</b> mean ${fmt(d.mean_sync_error)} · slow EMA ${fmt(d.mean_ema_slow, 4)}</span>
+      <span class="outcome-stats-sep">·</span>
+      <span><b>balance</b> user ${fmt(d.mean_balance_user, 2)} · sys ${fmt(d.mean_balance_system, 2)}</span>
+    `;
+  }
+}
+
+const _CHEM_LINES = [
+  { key: 'da_user',   label: 'DA · user',   color: '#10b981', dash: false },
+  { key: 's_user',    label: '5HT · user',  color: '#a78bfa', dash: false },
+  { key: 'ne_user',   label: 'NE · user',   color: '#f59e0b', dash: false },
+  { key: 'ach_user',  label: 'ACh · user',  color: '#06b6d4', dash: false },
+  { key: 'gaba_user', label: 'GABA · user', color: '#ec4899', dash: false },
+  { key: 'da_sys',    label: 'DA · sys',    color: '#10b981', dash: true },
+  { key: 's_sys',     label: '5HT · sys',   color: '#a78bfa', dash: true },
+  { key: 'ne_sys',    label: 'NE · sys',    color: '#f59e0b', dash: true },
+  { key: 'ach_sys',   label: 'ACh · sys',   color: '#06b6d4', dash: true },
+  { key: 'gaba_sys',  label: 'GABA · sys',  color: '#ec4899', dash: true },
+];
+
+function _renderOutcomeChem(d) {
+  const svg = document.getElementById('outcome-chem-svg');
+  const legend = document.getElementById('outcome-chem-legend');
+  if (!svg) return;
+  const days = d.daily_chem || [];
+  if (!days.length) {
+    svg.innerHTML = '<text x="180" y="68" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов с chem полями</text>';
+    if (legend) legend.innerHTML = '';
+    return;
+  }
+  const W = 360, H = 130, pad = 6;
+  const n = days.length;
+  const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+  // Все 5 chem axes в [0, 1] → фикс. шкала
+  const yOf = (val) => pad + (1 - Math.max(0, Math.min(1, val || 0))) * (H - 2*pad - 12);
+  let body = '';
+  // Сетка: 0 / 0.5 / 1.0 horizontal lines
+  for (const v of [0, 0.5, 1]) {
+    const y = yOf(v);
+    body += `<line x1="${pad}" x2="${W-pad}" y1="${y}" y2="${y}" stroke="#27272a" stroke-width="0.4"/>`;
+    body += `<text x="${pad-1}" y="${y+3}" text-anchor="end" fill="#3f3f46" font-size="7">${v}</text>`;
+  }
+  for (const ln of _CHEM_LINES) {
+    const pts = days
+      .map((b, i) => {
+        const v = b['mean_' + ln.key];
+        if (v == null) return null;
+        return `${(pad + i*stepX).toFixed(1)},${yOf(v).toFixed(1)}`;
+      })
+      .filter(Boolean)
+      .join(' ');
+    if (!pts) continue;
+    const dashAttr = ln.dash ? ' stroke-dasharray="2,2"' : '';
+    body += `<polyline fill="none" stroke="${ln.color}" stroke-width="1.1" points="${pts}"${dashAttr} opacity="0.85"/>`;
+  }
+  body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)} · solid=user, dashed=system</text>`;
+  svg.innerHTML = body;
+  if (legend) {
+    legend.innerHTML = _CHEM_LINES.slice(0, 5).map(ln =>
+      `<span class="outcome-legend-item" style="color:${ln.color}">— ${_esc(ln.label.split(' · ')[0])}</span>`
+    ).join('');
+  }
+}
+
+const _PE_CHANNELS = [
+  { key: 'user_imbalance', label: 'user', color: '#10b981',
+    title: '‖user PE_vec‖/√3 — наблюдаемое поведение vs ожидание' },
+  { key: 'self_imbalance', label: 'self', color: '#a78bfa',
+    title: 'Baddle PE на самой себе (self-prediction error)' },
+  { key: 'agency_gap',     label: 'agency', color: '#f59e0b',
+    title: '1 − agency: разрыв между сделанным и запланированным' },
+  { key: 'hrv_surprise',   label: 'hrv',  color: '#06b6d4',
+    title: 'Physical PE: реальный HRV vs Polar baseline' },
+];
+
+function _renderOutcomePE(d) {
+  // Stacked bar: mean_pe_user/_self/_agency/_hrv
+  const bar = document.getElementById('outcome-pe-bar');
+  if (bar) {
+    const vals = _PE_CHANNELS.map(c => Math.max(0, Number(d['mean_pe_' + c.label] || 0)));
+    const total = vals.reduce((s, v) => s + v, 0);
+    if (total < 1e-6) {
+      bar.innerHTML = '<span class="outcome-dist-empty">все каналы ≈0 (Polar не подключен / нет surprise) — подождать данных</span>';
+    } else {
+      bar.innerHTML = _PE_CHANNELS.map((c, i) => {
+        const pct = (vals[i] / total) * 100;
+        return `<span class="outcome-pe-seg" style="width:${pct.toFixed(1)}%;background:${c.color}" title="${c.label} · ${vals[i].toFixed(3)} (${pct.toFixed(0)}%) — ${c.title}">${c.label} ${pct.toFixed(0)}%</span>`;
+      }).join('');
+    }
+  }
+  // Daily breakdown — линии 4 каналов по дням
+  const svg = document.getElementById('outcome-pe-svg');
+  if (svg) {
+    const days = d.daily_pe || [];
+    if (!days.length) {
+      svg.innerHTML = '<text x="180" y="48" text-anchor="middle" fill="#52525b" font-size="10">нет PE snapshot\'ов в окне</text>';
+    } else {
+      const W = 360, H = 90, pad = 6;
+      const n = days.length;
+      const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+      const allVals = days.flatMap(b => _PE_CHANNELS.map(c => b['mean_' + c.key] || 0));
+      const maxY = Math.max(0.1, ...allVals) * 1.2;
+      const yOf = (val) => pad + (1 - Math.max(0, Math.min(maxY, val || 0)) / maxY) * (H - 2*pad - 12);
+      let body = '';
+      for (const c of _PE_CHANNELS) {
+        const pts = days.map((b, i) => {
+          const v = b['mean_' + c.key];
+          if (v == null) return null;
+          return `${(pad + i*stepX).toFixed(1)},${yOf(v).toFixed(1)}`;
+        }).filter(Boolean).join(' ');
+        if (!pts) continue;
+        body += `<polyline fill="none" stroke="${c.color}" stroke-width="1.2" points="${pts}" opacity="0.9"/>`;
+      }
+      body += `<text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)}</text>`;
+      svg.innerHTML = body;
+    }
+  }
+  const legend = document.getElementById('outcome-pe-legend');
+  if (legend) {
+    legend.innerHTML = _PE_CHANNELS.map(c =>
+      `<span class="outcome-legend-item" style="color:${c.color}" title="${c.title}">— ${_esc(c.label)}</span>`
+    ).join('');
   }
 }
 

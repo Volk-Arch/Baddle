@@ -1516,6 +1516,67 @@ select {
   margin: 6px 0 4px;
   font-weight: 600;
 }
+.outcome-section-title-sub {
+  margin-top: 12px;
+}
+/* Tabs row inside Outcome panel */
+.outcome-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 6px 0 8px;
+  border-bottom: 1px solid #27272a;
+}
+.outcome-tab {
+  background: transparent;
+  border: none;
+  color: #71717a;
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  letter-spacing: 0.2px;
+  font-weight: 500;
+  transition: color 0.15s, border-color 0.15s;
+}
+.outcome-tab:hover { color: #d4d4d8; }
+.outcome-tab.active {
+  color: #a5b4fc;
+  border-bottom-color: #a5b4fc;
+}
+/* Chem legend / PE legend (compact inline list) */
+.outcome-chem-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.3px;
+}
+.outcome-legend-item {
+  white-space: nowrap;
+}
+/* PE stacked bar (single horizontal bar) */
+.outcome-pe-bar {
+  display: flex;
+  height: 26px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #27272a;
+  margin-top: 4px;
+}
+.outcome-pe-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #18181b;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+}
 .outcome-dashboard svg {
   width: 100%;
   height: 90px;

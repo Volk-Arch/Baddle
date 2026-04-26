@@ -229,26 +229,52 @@
         Outcome <span id="outcome-meta" class="dash-count"></span>
         <span id="outcome-verdict" class="outcome-verdict"></span>
       </div>
-      <!-- Sync_error trend (главное — прайм-директива) -->
-      <div class="outcome-section-title">sync_error EMA · daily</div>
-      <svg id="outcome-sync-svg" viewBox="0 0 360 90" preserveAspectRatio="none"></svg>
-      <!-- Distributions: capacity zones + frequency regime + R/C bit -->
-      <div class="outcome-dist-grid">
-        <div class="outcome-dist-cell" title="Phase C: время в каждой capacity zone (физо/эмо/когн composite)">
-          <div class="outcome-dist-label">Capacity zone</div>
-          <div class="outcome-dist-bar" id="outcome-capacity-bar"></div>
-        </div>
-        <div class="outcome-dist-cell" title="HRV-derived: short_wave (тахикардия / симпатика) / flat / long_wave (когерентность / парасимпатика)">
-          <div class="outcome-dist-label">Frequency regime</div>
-          <div class="outcome-dist-bar" id="outcome-regime-bar"></div>
-        </div>
-        <div class="outcome-dist-cell" title="Counter-wave bit (Правило 7): R = passive resonance, C = active counter-wave при desync >0.15">
-          <div class="outcome-dist-label">Mode (R/C)</div>
-          <div class="outcome-dist-bar" id="outcome-mode-bar"></div>
-        </div>
+      <!-- Tabs: Sync / Chem / PE — переключение разных аспектов одних и тех же snapshot'ов. -->
+      <div class="outcome-tabs" role="tablist">
+        <button type="button" class="outcome-tab active" data-tab="sync"
+                onclick="assistOutcomeTab('sync')" title="sync_error EMA + capacity/regime/mode распределения">🌊 Sync</button>
+        <button type="button" class="outcome-tab" data-tab="chem"
+                onclick="assistOutcomeTab('chem')" title="История 10 chem axis (DA/5HT/NE/ACh/GABA × user+system) — daily means">🧪 Chem</button>
+        <button type="button" class="outcome-tab" data-tab="pe"
+                onclick="assistOutcomeTab('pe')" title="Decomposition imbalance_pressure на 4 PE-канала (user/self/agency/hrv) — какой реально двигает">⚡ PE</button>
       </div>
-      <!-- Mean balance + sync EMA числа -->
-      <div class="outcome-stats" id="outcome-stats"></div>
+
+      <!-- Sync tab content (default visible) -->
+      <div class="outcome-tab-panel" data-tab-panel="sync">
+        <div class="outcome-section-title">sync_error EMA · daily</div>
+        <svg id="outcome-sync-svg" viewBox="0 0 360 90" preserveAspectRatio="none"></svg>
+        <div class="outcome-dist-grid">
+          <div class="outcome-dist-cell" title="Phase C: время в каждой capacity zone (физо/эмо/когн composite)">
+            <div class="outcome-dist-label">Capacity zone</div>
+            <div class="outcome-dist-bar" id="outcome-capacity-bar"></div>
+          </div>
+          <div class="outcome-dist-cell" title="HRV-derived: short_wave (тахикардия / симпатика) / flat / long_wave (когерентность / парасимпатика)">
+            <div class="outcome-dist-label">Frequency regime</div>
+            <div class="outcome-dist-bar" id="outcome-regime-bar"></div>
+          </div>
+          <div class="outcome-dist-cell" title="Counter-wave bit (Правило 7): R = passive resonance, C = active counter-wave при desync >0.15">
+            <div class="outcome-dist-label">Mode (R/C)</div>
+            <div class="outcome-dist-bar" id="outcome-mode-bar"></div>
+          </div>
+        </div>
+        <div class="outcome-stats" id="outcome-stats"></div>
+      </div>
+
+      <!-- Chem tab content -->
+      <div class="outcome-tab-panel" data-tab-panel="chem" style="display:none">
+        <div class="outcome-section-title">5 axes × user/system · daily mean</div>
+        <svg id="outcome-chem-svg" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
+        <div class="outcome-chem-legend" id="outcome-chem-legend"></div>
+      </div>
+
+      <!-- PE decomposition tab content -->
+      <div class="outcome-tab-panel" data-tab-panel="pe" style="display:none">
+        <div class="outcome-section-title">PE channels · mean over window</div>
+        <div class="outcome-pe-bar" id="outcome-pe-bar"></div>
+        <div class="outcome-section-title outcome-section-title-sub">PE channels · daily</div>
+        <svg id="outcome-pe-svg" viewBox="0 0 360 90" preserveAspectRatio="none"></svg>
+        <div class="outcome-chem-legend" id="outcome-pe-legend"></div>
+      </div>
     </div>
     <div id="neuro-timeline" class="neuro-timeline" style="display:none">
       <div class="neuro-timeline-header">

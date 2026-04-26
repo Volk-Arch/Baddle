@@ -1295,8 +1295,11 @@ def assist_prime_directive():
 
     summary = aggregate(window_days=window_days)
     if include_daily:
+        from .prime_directive import _CHEM_DAILY_FIELDS, _PE_DAILY_FIELDS
         days = int(window_days) if window_days else 30
-        summary["daily"] = daily_bins(window_days=days)
+        summary["daily"] = daily_bins(window_days=days)  # sync EMA fast/slow
+        summary["daily_chem"] = daily_bins(window_days=days, fields=_CHEM_DAILY_FIELDS)
+        summary["daily_pe"]   = daily_bins(window_days=days, fields=_PE_DAILY_FIELDS)
     return jsonify({"ok": True, **summary})
 
 
