@@ -70,12 +70,20 @@ def stub_loop():
 
 @pytest.fixture
 def ctx(stub_loop):
-    """DetectorContext с минимальными stubs."""
-    user = SimpleNamespace(_last_input_ts=None, hrv_surprise=0.0)
-    # neuro field удалён в W4
-    rgk = SimpleNamespace(silence_press=0.0)
+    """DetectorContext с минимальными stubs.
+
+    rgk mock с пустым capacity (по умолчанию). Per-test setup capacity через
+    `_ctx_with_capacity` ниже устанавливает `_capacity` атрибут, и `project`
+    возвращает его."""
+    rgk = SimpleNamespace(
+        silence_press=0.0,
+        _last_input_ts=None,
+        _capacity={"zone": "green", "reasons": []},
+        hrv_surprise=lambda: 0.0,
+    )
+    rgk.project = lambda dom: rgk._capacity if dom == "capacity" else {}
     return DetectorContext(
-        now=1_000_000.0, user=user,
+        now=1_000_000.0,
         rgk=rgk, loop=stub_loop,
     )
 
@@ -136,9 +144,8 @@ def test_coherence_crit_none_when_no_data(ctx):
 # ── detect_low_capacity_heavy (Phase C: capacity_zone gate) ───────────────
 
 def _ctx_with_capacity(ctx, zone, reasons):
-    """Helper: устанавливает capacity_zone + capacity_reason на user mock."""
-    ctx.user.capacity_zone = zone
-    ctx.user.capacity_reason = reasons
+    """Helper: устанавливает capacity на rgk mock."""
+    ctx.rgk._capacity = {"zone": zone, "reasons": reasons}
 
 
 def test_low_capacity_emits_with_heavy_goal(ctx):
@@ -295,7 +302,7 @@ def test_recurring_lag_none_when_empty(ctx):
 
 def test_sync_seeking_emits_when_silence_high_and_idle(ctx):
     ctx.rgk.silence_press = 0.6
-    ctx.user._last_input_ts = ctx.now - 3 * 3600   # 3h idle
+    ctx.rgk._last_input_ts = ctx.now - 3 * 3600   # 3h idle
     with patch("random.random", return_value=0.5):  # not counterfactual
         sig = detect_sync_seeking(ctx)
     assert sig is not None
@@ -307,20 +314,20 @@ def test_sync_seeking_emits_when_silence_high_and_idle(ctx):
 
 def test_sync_seeking_none_when_silence_low(ctx):
     ctx.rgk.silence_press = 0.2   # below threshold
-    ctx.user._last_input_ts = ctx.now - 3 * 3600
+    ctx.rgk._last_input_ts = ctx.now - 3 * 3600
     assert detect_sync_seeking(ctx) is None
 
 
 def test_sync_seeking_none_when_idle_short(ctx):
     ctx.rgk.silence_press = 0.6
-    ctx.user._last_input_ts = ctx.now - 600   # only 10 min idle
+    ctx.rgk._last_input_ts = ctx.now - 600   # only 10 min idle
     assert detect_sync_seeking(ctx) is None
 
 
 def test_sync_seeking_counterfactual_skip_records_action(ctx):
     """10% случаев → None но action_memory записан."""
     ctx.rgk.silence_press = 0.6
-    ctx.user._last_input_ts = ctx.now - 3 * 3600
+    ctx.rgk._last_input_ts = ctx.now - 3 * 3600
     with patch("random.random", return_value=0.05):   # < 0.1 → counterfactual
         sig = detect_sync_seeking(ctx)
     assert sig is None
@@ -331,7 +338,7 @@ def test_sync_seeking_counterfactual_skip_records_action(ctx):
 
 def test_sync_seeking_urgency_scales_with_silence(ctx):
     """Higher silence → higher urgency."""
-    ctx.user._last_input_ts = ctx.now - 3 * 3600
+    ctx.rgk._last_input_ts = ctx.now - 3 * 3600
 
     ctx.rgk.silence_press = 0.4
     with patch("random.random", return_value=0.5):
@@ -484,7 +491,7 @@ def test_observation_caps_at_max_per_day(ctx):
 
 def test_observation_skipped_when_user_active(ctx):
     """user_active < 10 min → silent skip без update _last_suggestions_check."""
-    ctx.user._last_input_ts = ctx.now - 60   # 1 min ago
+    ctx.rgk._last_input_ts = ctx.now - 60   # 1 min ago
     with patch("src.suggestions.collect_suggestions") as mock_collect:
         result = list(detect_observation_suggestions(ctx))
     assert result == []

@@ -432,17 +432,17 @@ def _current_snapshot() -> dict:
     except Exception:
         pass
 
-    # User state (4 скаляра + agency + valence)
+    # User state (4 скаляра + agency + valence) — read directly from РГК
     try:
-        from .user_state import get_user_state
-        u = get_user_state()
+        from .rgk import get_global_rgk
+        r = get_global_rgk()
         snap["user_state_before"] = {
-            "dopamine":        round(u.dopamine, 3),
-            "serotonin":       round(u.serotonin, 3),
-            "norepinephrine":  round(u.norepinephrine, 3),
-            "burnout":         round(u.burnout, 3),
-            "agency":          round(u.agency, 3),
-            "valence":         round(u.valence, 3),
+            "dopamine":        round(float(r.user.gain.value), 3),
+            "serotonin":       round(float(r.user.hyst.value), 3),
+            "norepinephrine":  round(float(r.user.aperture.value), 3),
+            "burnout":         round(float(r.burnout.value), 3),
+            "agency":          round(float(r.agency.value), 3),
+            "valence":         round(float(r.valence.value), 3),
         }
     except Exception:
         pass
@@ -466,10 +466,10 @@ def _current_snapshot() -> dict:
     except Exception:
         pass
 
-    # HRV regime (activity_zone из UserState)
+    # HRV regime (activity_zone из РГК)
     try:
-        from .user_state import get_user_state
-        snap["hrv_regime"] = get_user_state().activity_zone
+        from .rgk import get_global_rgk
+        snap["hrv_regime"] = get_global_rgk().activity_zone()
     except Exception:
         pass
 
@@ -519,9 +519,9 @@ def record_action(actor: str, action_kind: str, text: str,
     # Вне graph_lock — bump_focus_residue сама thread-safe (atomic float ops).
     if str(actor or "") == "user":
         try:
-            from .user_state import get_user_state
+            from .rgk import get_global_rgk
             mode_id = (extras or {}).get("mode_id") if extras else None
-            get_user_state().bump_focus_residue(mode_id)
+            get_global_rgk().u_focus_bump(mode_id)
         except Exception as e:
             log.debug(f"[focus_residue] bump failed: {e}")
 

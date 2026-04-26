@@ -1874,8 +1874,8 @@ def hrv_metrics():
 
     # Push to UserState — HRV — сигнал тела пользователя, не системы.
     # Системная нейрохимия эволюционирует по собственным сигналам графа.
-    from .user_state import get_user_state
-    get_user_state().update_from_hrv(
+    from .rgk import get_global_rgk
+    get_global_rgk().u_hrv(
         coherence=state.get("coherence"),
         rmssd=state.get("rmssd"),
         stress=state.get("stress"),

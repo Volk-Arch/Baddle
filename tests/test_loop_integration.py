@@ -44,7 +44,6 @@ def test_build_context_works(tmp_path, monkeypatch):
         ctx = build_detector_context(loop, time.time())
 
     assert ctx.now > 0
-    assert ctx.user is not None
     assert ctx.rgk is not None
     assert ctx.loop is loop
     # dmn_eligible should be True at fresh init (idle, no foreground tick)
@@ -91,7 +90,7 @@ def test_dmn_eligible_gates_heavy_detectors(tmp_path):
     # neuro field удалён в W4
     rgk = SimpleNamespace(silence_press=0.0)
     loop = SimpleNamespace()
-    ctx = DetectorContext(now=1_000_000.0, user=user,
+    ctx = DetectorContext(now=1_000_000.0,
                             rgk=rgk, loop=loop, dmn_eligible=False)
 
     # Все 5 должны вернуть None если dmn_eligible=False

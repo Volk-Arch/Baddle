@@ -225,9 +225,9 @@ def test_update_cognitive_load_aggregates_from_activity_log(tmp_path, monkeypatc
 
     # Фиксированные surprise значения через mock UserState.imbalance
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.5)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.5} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     fake_state = MagicMock()
     fake_state.rgk.sync_slow.value = 0.1
@@ -313,9 +313,9 @@ def test_activity_log_records_surprise_at_start(tmp_path, monkeypatch):
     monkeypatch.setattr(activity_log, "_ACTIVITY_FILE", tmp_path / "act.jsonl")
 
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.42)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.42} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     aid = activity_log.start_activity("Test task", category="work")
     rec = activity_log.get_active()
@@ -330,12 +330,12 @@ def test_activity_log_computes_surprise_delta(tmp_path, monkeypatch):
     monkeypatch.setattr(activity_log, "_ACTIVITY_FILE", tmp_path / "act.jsonl")
 
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.3)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.3} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     activity_log.start_activity("Test", category="work")
-    mock_user.imbalance = 0.8   # surprise grew
+    mock_rgk.project = lambda dom: {"imbalance": 0.8} if dom == "user_state" else {}   # surprise grew
     done = activity_log.stop_activity()
     assert done["surprise_at_start"] == pytest.approx(0.3, abs=1e-3)
     assert done["surprise_at_stop"] == pytest.approx(0.8, abs=1e-3)
@@ -402,12 +402,12 @@ def test_activity_log_auto_switch_records_surprise(tmp_path, monkeypatch):
     monkeypatch.setattr(activity_log, "_ACTIVITY_FILE", tmp_path / "act.jsonl")
 
     from unittest.mock import MagicMock
-    mock_user = MagicMock(imbalance=0.2)
-    monkeypatch.setattr("src.user_state.get_user_state",
-                         lambda: mock_user)
+    mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.2} if dom == "user_state" else {}
+    monkeypatch.setattr("src.rgk.get_global_rgk",
+                         lambda: mock_rgk)
 
     aid1 = activity_log.start_activity("First", category="work")
-    mock_user.imbalance = 0.7
+    mock_rgk.project = lambda dom: {"imbalance": 0.7} if dom == "user_state" else {}
     aid2 = activity_log.start_activity("Second", category="meeting")
 
     # Replay — first task должна быть done с surprise_delta

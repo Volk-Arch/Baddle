@@ -172,22 +172,17 @@ def apply_to_user_state(entry: dict):
     корректировать модель сильнее чем автоматические feeders.
     """
     try:
-        from .user_state import get_user_state
-        user = get_user_state()
-
-        # Stress/focus/reality → NE/serotonin/valence через explicit apply_checkin
-        # (Phase D Step 3c). Каждая метрика получает per-event decay_override
-        # из Decays.CHECKIN_* — реализация в UserState.apply_checkin.
-        user.apply_checkin(
+        from .rgk import get_global_rgk
+        r = get_global_rgk()
+        # Stress/focus/reality → NE/serotonin/valence (per-event decay_override).
+        r.u_apply_checkin(
             stress=entry.get("stress"),
             focus=entry.get("focus"),
             reality=entry.get("reality"),
         )
-
-        # Subjective surprise → nudge expectation (bridge от старого сломанного
-        # `user.surprise = ...` к правильному baseline-nudge).
+        # Subjective surprise → nudge expectation baseline.
         if entry.get("expected") is not None and entry.get("reality") is not None:
             subjective_surprise = (float(entry["reality"]) - float(entry["expected"])) / 4.0
-            user.apply_subjective_surprise(subjective_surprise, blend=0.4)
+            r.u_apply_surprise(subjective_surprise, blend=0.4)
     except Exception as e:
         log.warning(f"[checkins] apply_to_user_state failed: {e}")

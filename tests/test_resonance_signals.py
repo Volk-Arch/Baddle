@@ -163,7 +163,7 @@ def test_observation_suggestions_skipped_on_high_residue():
         SUGGESTIONS_MAX_PER_DAY=2,
         _throttled=MagicMock(return_value=True),
     )
-    ctx = DetectorContext(now=1_000_000.0, user=user,
+    ctx = DetectorContext(now=1_000_000.0,
                            
                            rgk=SimpleNamespace(silence_press=0.0),
                            loop=loop)

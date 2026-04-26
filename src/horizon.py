@@ -204,42 +204,30 @@ class CognitiveState:
     @property
     def sync_error(self) -> float:
         try:
-            from .user_state import get_user_state, compute_sync_error
-            return compute_sync_error(get_user_state(), self.rgk, None)
+            from .user_state import compute_sync_error
+            return compute_sync_error(self.rgk)
         except Exception:
             return 0.0
 
     @property
     def sync_regime(self) -> str:
         try:
-            from .user_state import get_user_state, compute_sync_regime
-            return compute_sync_regime(get_user_state(), self.rgk, None)
+            from .user_state import compute_sync_regime
+            return compute_sync_regime(self.rgk)
         except Exception:
             return "flow"
 
     @property
     def hrv_coherence(self):
-        try:
-            from .user_state import get_user_state
-            return get_user_state().hrv_coherence
-        except Exception:
-            return None
+        return self.rgk.hrv_coherence
 
     @property
     def hrv_stress(self):
-        try:
-            from .user_state import get_user_state
-            return get_user_state().hrv_stress
-        except Exception:
-            return None
+        return self.rgk.hrv_stress
 
     @property
     def hrv_rmssd(self):
-        try:
-            from .user_state import get_user_state
-            return get_user_state().hrv_rmssd
-        except Exception:
-            return None
+        return self.rgk.hrv_rmssd
 
     # ── Chem + freeze: делегируем в self.rgk ───────────────────────────────
 
@@ -427,10 +415,9 @@ class CognitiveState:
                 entropy -= w * math.log2(w)
 
         neuro_dict = self.rgk.serialize_system()
-        # Pull user-side from global UserState for full symbiosis picture
+        # Pull user-side from РГК (раньше через UserState.to_dict)
         try:
-            from .user_state import get_user_state
-            user_dict = get_user_state().to_dict()
+            user_dict = self.rgk.serialize_user()
         except Exception:
             user_dict = None
         eff_p = self.effective_precision

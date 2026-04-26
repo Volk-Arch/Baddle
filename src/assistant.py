@@ -91,14 +91,13 @@ def _load_state() -> dict:
                 "streaks": {},       # habit_name → consecutive_days
                 "history": [],       # last 100 interactions (trimmed)
             }
-        # Восстановим UserState ТОЛЬКО ОДИН раз за процесс — иначе каждый
-        # /assist request будет затирать runtime-апдейты от /hrv/metrics etc.
+        # Восстановим user-side РГК ТОЛЬКО ОДИН раз за процесс.
         if not _user_state_restored:
             try:
-                from .user_state import UserState, set_user_state
+                from .rgk import get_global_rgk
                 us_dump = data.get("user_state_dump")
                 if isinstance(us_dump, dict):
-                    set_user_state(UserState.from_dict(us_dump))
+                    get_global_rgk().load_user(us_dump)
             except Exception as e:
                 print(f"[assistant] user_state restore error: {e}")
             _user_state_restored = True
@@ -109,8 +108,8 @@ def _save_state(state: dict):
     with _state_lock:
         # Сериализуем текущий UserState вместе с остальным для continuity
         try:
-            from .user_state import get_user_state
-            state["user_state_dump"] = get_user_state().to_dict()
+            from .rgk import get_global_rgk
+            state["user_state_dump"] = get_global_rgk().serialize_user()
         except Exception:
             pass
         try:
@@ -169,12 +168,13 @@ def _ensure_daily_reset(state: dict) -> dict:
         state["last_reset_date"] = today
         if prev_date:
             try:
-                from .user_state import get_user_state
+                from .rgk import get_global_rgk
+                from .user_dynamics import rollover_day
                 hrv_mgr = get_hrv_manager()
                 rec = None
                 if hrv_mgr.is_running:
                     rec = (hrv_mgr.get_baddle_state() or {}).get("energy_recovery")
-                get_user_state().rollover_day(hrv_recovery=rec)
+                rollover_day(get_global_rgk(), hrv_recovery=rec)
             except Exception as e:
                 print(f"[assistant] overnight rollover error: {e}")
     return state
@@ -221,16 +221,16 @@ def _get_context(reset_daily: bool = True) -> Dict:
     hrv_state = hrv_mgr.get_baddle_state() if hrv_mgr.is_running else None
 
     # Capacity — Phase C decision-gate model (3-zone)
-    from .user_state import get_user_state
-    us = get_user_state()
-    indicators = us.capacity_indicators
+    from .rgk import get_global_rgk
+    r = get_global_rgk()
+    indicators = r.project("capacity")
     capacity = {
-        "zone": us.capacity_zone,
+        "zone": indicators["zone"],
         "reason": indicators["reasons"],
         "phys_ok": indicators["phys_ok"],
         "affect_ok": indicators["affect_ok"],
         "cogload_ok": indicators["cogload_ok"],
-        "cognitive_load_today": round(us.cognitive_load_today, 3),
+        "cognitive_load_today": round(float(r.cognitive_load_today), 3),
     }
 
     return {"state": state, "hrv": hrv_state, "capacity": capacity}
@@ -628,9 +628,9 @@ def assist():
         from .chat_commands import try_handle
         cmd_res = try_handle(message, lang=lang)
         if cmd_res is not None:
-            # Минимальный engagement-ping чтобы UserState видел что юзер активен
-            from .user_state import get_user_state
-            get_user_state().register_input()
+            # Минимальный engagement-ping — РГК видит что юзер активен
+            from .rgk import get_global_rgk
+            get_global_rgk().u_register_input()
             # Привязываем capacity+hrv к ответу (UI ожидает эти поля)
             ctx = _get_context()
             cmd_res.setdefault("capacity", ctx.get("capacity"))
@@ -672,21 +672,21 @@ def assist():
 
     # Inject NE spike — user engagement = Horizon takes budget from DMN
     from .horizon import get_global_state
-    from .user_state import get_user_state
+    from .rgk import get_global_rgk
     cs = get_global_state()
     cs.inject_ne(0.4)
 
     # User signal: timestamp + мягкий engagement-feeder в dopamine (0.65 EMA).
     # Без него dopamine юзера не менялся бы вообще между click-feedback'ами,
     # что делает sync_error статичным (было видно в «метрики не меняются»).
-    user = get_user_state()
-    user.register_input()
-    user.update_from_engagement()
+    rgk = get_global_rgk()
+    rgk.u_register_input()
+    rgk.u_engage()
 
     ctx = _get_context()
     state, hrv_state = ctx["state"], ctx["hrv"]
     capacity = ctx.get("capacity") or {}
-    user.update_from_energy(state.get("decisions_today", 0))
+    rgk.u_energy(state.get("decisions_today", 0))
 
     # Build state hint for classifier (brief CognitiveState summary)
     neuro = cs.get_metrics().get("neurochem", {})
@@ -1040,9 +1040,9 @@ def assist_feedback():
     d_val = d_map.get(kind)
     if d_val is not None:
         cs.update_neurochem(d=d_val)
-    # Mirror signal into UserState (accept ↑ dopamine, reject ↑ burnout)
-    from .user_state import get_user_state
-    get_user_state().update_from_feedback(kind)
+    # Mirror signal into РГК (accept ↑ dopamine, reject ↑ burnout)
+    from .rgk import get_global_rgk
+    get_global_rgk().u_feedback(kind)
     # Action Memory: user_accept / user_reject — закрывают открытые
     # baddle-actions (suggestion_*) через `_check_action_outcomes`.
     if kind in ("accepted", "rejected"):
@@ -1114,21 +1114,20 @@ def assist_chemistry():
     """
     import yaml
     from .horizon import get_global_state
-    from .user_state import get_user_state
 
-    user = get_user_state()
-    sys = get_global_state().rgk.system
     rgk = get_global_state().rgk
+    sys = rgk.system
+    usr = rgk.user
     snap = {
         "session_chemistry": {
             "user": {
-                "dopamine_gain":           round(user.dopamine, 3),
-                "serotonin_hysteresis":    round(user.serotonin, 3),
-                "norepinephrine_aperture": round(user.norepinephrine, 3),
-                "acetylcholine_plasticity": round(user.acetylcholine, 3),
-                "gaba_damping":            round(user.gaba, 3),
-                "balance":                 round(user.balance(), 3),
-                "named_state":             user.named_state.get("key"),
+                "dopamine_gain":           round(float(usr.gain.value), 3),
+                "serotonin_hysteresis":    round(float(usr.hyst.value), 3),
+                "norepinephrine_aperture": round(float(usr.aperture.value), 3),
+                "acetylcholine_plasticity": round(float(usr.plasticity.value), 3),
+                "gaba_damping":            round(float(usr.damping.value), 3),
+                "balance":                 round(usr.balance(), 3),
+                "named_state":             rgk.project("named_state").get("key"),
             },
             "system": {
                 "dopamine_gain":           round(float(sys.gain.value), 3),
@@ -2038,13 +2037,13 @@ def plans_complete():
     # Правильный fix: nudge expectation baseline через shared helper.
     try:
         from .plans import get_plan
-        from .user_state import get_user_state
+        from .rgk import get_global_rgk
         p = get_plan(pid)
         if p and p.get("expected_difficulty") and d.get("actual_difficulty"):
             exp = int(p["expected_difficulty"])
             act = int(d["actual_difficulty"])
             s = (act - exp) / 4.0  # norm в [-1, 1]
-            get_user_state().apply_subjective_surprise(s, blend=0.4)
+            get_global_rgk().u_apply_surprise(s, blend=0.4)
     except Exception:
         pass
     resp = {"ok": True}
@@ -2620,10 +2619,10 @@ def assist_chat_append():
                 # от самого факта вовлечённости. Вместе дают движение метрик
                 # при каждом сообщении, чтобы sync_error был живой.
                 try:
-                    from .user_state import get_user_state
-                    us = get_user_state()
-                    us.update_from_chat_sentiment(sentiment)
-                    us.update_from_engagement()
+                    from .rgk import get_global_rgk
+                    r = get_global_rgk()
+                    r.u_chat(sentiment)
+                    r.u_engage()
                 except Exception as e:
                     log.debug(f"[sentiment] ema update failed: {e}")
                 # 3. Action Memory: user_chat action со sentiment в context
@@ -3049,8 +3048,8 @@ def assist_alerts():
 
     # Activity-zone alerts (4-зонная классификация HRV × движение)
     try:
-        from .user_state import get_user_state
-        az = get_user_state().activity_zone
+        from .rgk import get_global_rgk
+        az = get_global_rgk().activity_zone()
         if az.get("key") == "overload":
             alerts.append({
                 "type": "zone_overload",

@@ -191,11 +191,11 @@ def start_activity(name: str,
     if not name:
         raise ValueError("name_required")
 
-    # Snapshot surprise (модуль UserState.imbalance) — для complexity tracking
+    # Snapshot surprise (РГК.project("user_state")["imbalance"]) — complexity tracking
     surprise_at_start = 0.0
     try:
-        from .user_state import get_user_state
-        surprise_at_start = float(get_user_state().imbalance)
+        from .rgk import get_global_rgk
+        surprise_at_start = float(get_global_rgk().project("user_state")["imbalance"])
     except Exception:
         pass
 
@@ -310,8 +310,8 @@ def stop_activity(reason: str = "manual") -> Optional[dict]:
         return None
     surprise_at_stop = 0.0
     try:
-        from .user_state import get_user_state
-        surprise_at_stop = float(get_user_state().imbalance)
+        from .rgk import get_global_rgk
+        surprise_at_stop = float(get_global_rgk().project("user_state")["imbalance"])
     except Exception:
         pass
     _append({

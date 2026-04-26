@@ -854,23 +854,17 @@ def system_state_level(rgk_or_neuro) -> float:
     return (da + s) / 2.0
 
 
-def compute_sync_error(user: UserState, rgk_or_neuro, freeze=None) -> float:
+def compute_sync_error(rgk) -> float:
     """‖user_vec − system_vec‖ (L2, 3D). Max ≈ √3 ≈ 1.732."""
-    diff = user.vector() - system_vector(rgk_or_neuro, freeze)
+    diff = rgk.user.vector() - system_vector(rgk)
     return float(np.linalg.norm(diff))
 
 
-def compute_sync_regime(user: UserState, rgk_or_neuro, freeze=None) -> str:
-    """4 режима симбиоза — см. TODO.md «Симбиоз».
-
-    FLOW    — sync высокий, оба state высокие → полный объём
-    REST    — sync высокий, оба state низкие → предлагаем паузу
-    PROTECT — sync низкий, user low, system high → система берёт на себя
-    CONFESS — sync низкий, user high, system low → «дай мне время»
-    """
-    err = compute_sync_error(user, rgk_or_neuro, freeze)
-    u_level = user.state_level()
-    s_level = system_state_level(rgk_or_neuro)
+def compute_sync_regime(rgk) -> str:
+    """4 режима симбиоза — см. TODO.md «Симбиоз»."""
+    err = compute_sync_error(rgk)
+    u_level = (float(rgk.user.gain.value) + float(rgk.user.hyst.value)) / 2.0
+    s_level = system_state_level(rgk)
 
     sync_high = err < SYNC_HIGH_THRESHOLD
 

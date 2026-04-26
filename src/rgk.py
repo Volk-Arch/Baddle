@@ -250,6 +250,11 @@ class РГК:
 
     # ── User bespoke (focus residue, checkin, ACh/GABA feeders, boost) ─────
 
+    def u_register_input(self, now=None):
+        """User-event timestamp save. Используется для idle-timer / sync-seeking."""
+        import time as _t
+        self._last_input_ts = now if now is not None else _t.time()
+
     def u_focus_bump(self, mode_id, now=None):
         """+0.05 если rapid input (<30 сек) + 0.15 если mode switch.
         Tracking timer в _last_focus_input_ts, _last_focus_mode_id."""
@@ -503,6 +508,118 @@ class РГК:
                 self.s_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
             except Exception:
                 pass
+
+    def serialize_user(self) -> dict:
+        """User layer snapshot для state.json. Симметрично старому
+        UserState.to_dict — keys preserved (incl. derived projections)."""
+        proj = self.project("user_state")
+        named = self.project("named_state")
+        az = self.activity_zone()
+        return {
+            "dopamine":       round(float(self.user.gain.value), 3),
+            "serotonin":      round(float(self.user.hyst.value), 3),
+            "norepinephrine": round(float(self.user.aperture.value), 3),
+            "acetylcholine":  round(float(self.user.plasticity.value), 3),
+            "gaba":           round(float(self.user.damping.value), 3),
+            "balance":        round(self.user.balance(), 3),
+            "mode":           self.user.mode,
+            "burnout":        round(float(self.burnout.value), 3),
+            "agency":         round(float(self.agency.value), 3),
+            "valence":        round(float(self.valence.value), 3),
+            "expectation":    round(float(self.u_exp.value), 3),
+            "expectation_by_tod": {t: round(float(self.u_exp_tod[t].value), 3) for t in _TOD},
+            "expectation_vec": [round(float(x), 3) for x in self.u_exp_vec.value.tolist()],
+            "hrv_baseline_by_tod": {t: (round(float(self.hrv_base_tod[t].value), 3)
+                                          if self.hrv_base_tod[t]._seeded else None)
+                                      for t in _TOD},
+            "reality":   round((proj["dopamine"] + proj["serotonin"]) / 2.0, 3),
+            "surprise":  round(float(proj["surprise"]), 3),
+            "imbalance": round(float(proj["imbalance"]), 3),
+            "attribution":            proj["attribution"],
+            "attribution_magnitude":  round(float(proj["attribution_magnitude"]), 3),
+            "attribution_signed":     round(float(proj["attribution_signed"]), 3),
+            "agency_gap":             round(float(proj["agency_gap"]), 3),
+            "hrv_surprise":           round(float(proj["hrv_surprise"]), 3),
+            "activity_magnitude":     round(float(self.activity_magnitude), 3),
+            "activity_zone":          az,
+            "named_state":            {"key": named["key"], "label": named["label"],
+                                          "advice": named["advice"], "emoji": named.get("emoji", "")},
+            "frequency_regime":       self.frequency_regime(),
+            "focus_residue":          round(float(self.focus_residue), 3),
+            "cognitive_load_today":   round(float(self.cognitive_load_today), 3),
+            "capacity_zone":          self.project("capacity")["zone"],
+            "capacity_reason":        self.project("capacity")["reasons"],
+            "day_summary":            self.day_summary,
+            "hrv":                    {"coherence": self.hrv_coherence,
+                                         "stress":    self.hrv_stress,
+                                         "rmssd":     self.hrv_rmssd}
+                                     if self.hrv_coherence is not None else None,
+            "_fb":                    dict(self._fb),
+        }
+
+    def load_user(self, d: dict) -> None:
+        """Restore user layer из state.json dump. Симметрично UserState.from_dict."""
+        self.user.gain.value     = max(0.0, min(1.0, float(d.get("dopamine", 0.5))))
+        self.user.hyst.value     = max(0.0, min(1.0, float(d.get("serotonin", 0.5))))
+        self.user.aperture.value = max(0.0, min(1.0, float(d.get("norepinephrine", 0.5))))
+        self.user.plasticity.value = max(0.0, min(1.0, float(d.get("acetylcholine", 0.5))))
+        self.user.damping.value  = max(0.0, min(1.0, float(d.get("gaba", 0.5))))
+        self.burnout.value       = max(0.0, min(1.0, float(d.get("burnout", 0.0))))
+        self.agency.value        = max(0.0, min(1.0, float(d.get("agency", 0.5))))
+        self.valence.value       = max(-1.0, min(1.0, float(d.get("valence", 0.0))))
+        self.u_exp.value         = max(0.0, min(1.0, float(d.get("expectation", 0.5))))
+        self.activity_magnitude  = float(d.get("activity_magnitude", 0.0))  # clamp в setter
+        self.focus_residue       = max(0.0, min(1.0, float(d.get("focus_residue", 0.0))))
+        self.cognitive_load_today = max(0.0, min(1.0, float(d.get("cognitive_load_today", 0.0))))
+        ds = d.get("day_summary")
+        if isinstance(ds, dict):
+            self.day_summary = {str(k): dict(v) for k, v in ds.items()
+                                  if isinstance(v, dict)}
+        # TOD-scoped baselines (optional; legacy без них = defaults)
+        tod_map = d.get("expectation_by_tod") or {}
+        if isinstance(tod_map, dict):
+            for t in _TOD:
+                if t in tod_map:
+                    try:
+                        self.u_exp_tod[t].value = max(0.0, min(1.0, float(tod_map[t])))
+                    except Exception:
+                        pass
+        vec = d.get("expectation_vec")
+        if isinstance(vec, (list, tuple)) and len(vec) == 3:
+            try:
+                arr = np.array([float(x) for x in vec], dtype=np.float32)
+                self.u_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
+            except Exception:
+                pass
+        hrv_base = d.get("hrv_baseline_by_tod") or {}
+        if isinstance(hrv_base, dict):
+            for t in _TOD:
+                if t not in hrv_base:
+                    continue
+                v = hrv_base[t]
+                ema = self.hrv_base_tod[t]
+                if v is None:
+                    ema.value = 0.0
+                    ema._seeded = False
+                else:
+                    try:
+                        ema.value = max(0.0, min(1.0, float(v)))
+                        ema._seeded = True
+                    except Exception:
+                        pass
+        hrv = d.get("hrv") or {}
+        self.hrv_coherence = hrv.get("coherence")
+        self.hrv_stress    = hrv.get("stress")
+        self.hrv_rmssd     = hrv.get("rmssd")
+        # Feedback counter restore
+        fb_dump = d.get("_fb")
+        if isinstance(fb_dump, dict):
+            for k in self._FB_KINDS:
+                if k in fb_dump:
+                    try:
+                        self._fb[k] = int(fb_dump[k])
+                    except (TypeError, ValueError):
+                        pass
 
     # ── Coupling + projections ────────────────────────────────────────────
 

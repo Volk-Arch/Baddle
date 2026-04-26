@@ -43,7 +43,6 @@ DetectorReturn = Union[None, Signal, Iterable[Signal]]
 if TYPE_CHECKING:
     from .cognitive_loop import CognitiveLoop
     from .rgk import РГК
-    from .user_state import UserState
 
 
 @dataclass
@@ -63,17 +62,13 @@ class DetectorContext:
 
     Поля:
         now: unix ts текущего tick
-        user/rgk: per-class ссылки на state объекты
+        rgk: substrate (chem/freeze/sync) — единственная ссылка на state
         loop: CognitiveLoop для доступа к graph/_recent_bridges/etc
         dmn_eligible: gate из _loop — True если `not_frozen AND ne_quiet
-            AND idle_enough`. DMN-эвристические детекторы (dmn_bridge,
-            dmn_deep, dmn_converge, state_walk, night_cycle) проверяют это
-            в первой строке и возвращают None если False — heavy work не
-            запускается во время foreground / freeze / high-NE.
+            AND idle_enough`.
     """
 
     now: float
-    user: "UserState"
     rgk: "РГК"
     loop: "CognitiveLoop"   # для доступа к graph, activity_log, plans, etc.
     dmn_eligible: bool = True
@@ -89,10 +84,8 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
     Lazy-import объектов state — не тащим их в module-level чтобы избежать
     circular import (cognitive_loop ← signals ← detectors ← cognitive_loop).
     """
-    from .user_state import get_user_state
     from .horizon import get_global_state, PROTECTIVE_FREEZE
 
-    user = get_user_state()
     gs = get_global_state()
 
     # DMN gate
@@ -105,7 +98,7 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
         dmn_eligible = False
 
     return DetectorContext(
-        now=now, user=user, rgk=gs.rgk, loop=loop,
+        now=now, rgk=gs.rgk, loop=loop,
         dmn_eligible=dmn_eligible,
     )
 
@@ -177,7 +170,7 @@ def detect_low_capacity_heavy(ctx: DetectorContext) -> Optional[Signal]:
     Defensive: external calls могут упасть → None.
     """
     try:
-        if ctx.user.capacity_zone != "red":
+        if ctx.rgk.project("capacity")["zone"] != "red":
             return None
 
         from .goals_store import list_goals
@@ -189,13 +182,13 @@ def detect_low_capacity_heavy(ctx: DetectorContext) -> Optional[Signal]:
         txt = (g0.get("text") or "")[:80]
 
         # urgency: чем больше fail'ов тем выше. capacity_reason — list строк.
-        n_fails = len(ctx.user.capacity_reason or [])
+        n_fails = len(ctx.rgk.project("capacity")["reasons"] or [])
         urgency = 0.6 + 0.1 * min(3, n_fails)   # 0.6..0.9
         if n_fails >= 4:
             urgency = 0.95   # critical: physical+emotional+cognitive все провисают
 
         # Reason для UI — переводим первые 2 reason'а в человеческую строку
-        reason_tags = ctx.user.capacity_reason or []
+        reason_tags = ctx.rgk.project("capacity")["reasons"] or []
         from .assistant import _capacity_reason_text
         reason_ru = _capacity_reason_text(reason_tags[:2], "ru")
         reason_en = _capacity_reason_text(reason_tags[:2], "en")
@@ -372,7 +365,7 @@ def detect_sync_seeking(ctx: DetectorContext) -> Optional[Signal]:
         if silence < 0.3:   # SYNC_SEEKING_SILENCE_MIN
             return None
 
-        last_input_ts = ctx.user._last_input_ts or 0.0
+        last_input_ts = ctx.rgk._last_input_ts or 0.0
         idle_seconds = ctx.now - last_input_ts if last_input_ts else float("inf")
         if idle_seconds < 7200.0:   # SYNC_SEEKING_IDLE_SECONDS (2ч)
             return None
@@ -402,7 +395,7 @@ def detect_sync_seeking(ctx: DetectorContext) -> Optional[Signal]:
 
         # urgency: 0.3 floor + scale by silence (above min) + bonus from hrv_surprise
         try:
-            hrv_surprise = float(ctx.user.hrv_surprise)
+            hrv_surprise = float(ctx.rgk.hrv_surprise())
         except Exception:
             hrv_surprise = 0.0
         urgency = min(1.0, 0.3 + 0.5 * (silence - 0.3) / 0.7
@@ -597,13 +590,13 @@ def detect_observation_suggestions(ctx: DetectorContext) -> Iterable[Signal]:
     """
     try:
         # Skip если юзер активен — не долбим во время работы (без update throttle)
-        last_ts = ctx.user._last_input_ts
+        last_ts = ctx.rgk._last_input_ts
         if last_ts and (ctx.now - last_ts) < 600:
             return []
 
         # Skip при высоком focus_residue — юзер в хаосе переключений, не
         # добавляем новых сигналов (Counter-wave: пауза вместо давления).
-        if getattr(ctx.user, "focus_residue", 0.0) > 0.5:
+        if getattr(ctx.rgk, "focus_residue", 0.0) > 0.5:
             return []
 
         # Compute throttle daily

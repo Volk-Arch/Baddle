@@ -290,38 +290,31 @@ def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "CHECKINS_FILE", tmp_path / "checkins.jsonl")
     from src import checkins
     monkeypatch.setattr(checkins, "_CHECKIN_FILE", tmp_path / "checkins.jsonl")
-    from src.rgk import РГК
+    from src.rgk import РГК, reset_global_rgk
     monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
-    from src.user_state import set_user_state, get_user_state
-    from src.ema import Decays
+    # Reset global РГК — checkins.apply_to_user_state работает с singleton
+    r = reset_global_rgk()
+    r.u_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
+    r.u_engage(0.65)
+    r.tick_u_pred()
 
-    # Prepare fresh user
-    fresh = UserState()
-    fresh.update_from_hrv(coherence=0.6, stress=0.3, rmssd=40.0)
-    fresh.update_from_engagement(0.65)
-    fresh.tick_expectation()
-    set_user_state(fresh)
-
-    # Apply checkin with all fields. Phase C: `energy` field больше не
-    # обрабатывается checkins (long_reserve удалён) — checkin отдаёт только
-    # stress/focus/reality/expected.
     entry = {"energy": 40, "stress": 70, "focus": 80,
              "expected": 1, "reality": -1}
     checkins.apply_to_user_state(entry)
 
-    u = get_user_state()
+    # Read через РГК напрямую (UserState constructor resets defaults).
 
     # stress 70 → target_ne 0.7, decay CHECKIN_STRESS (0.7)
     # cur_ne after hrv_update(stress=0.3) = 0.9*0.5 + 0.1*0.3 = 0.48
     # new_ne = 0.7*0.48 + 0.3*0.7 = 0.546
-    assert u.norepinephrine == pytest.approx(0.546, abs=1e-3)
+    assert float(r.user.aperture.value) == pytest.approx(0.546, abs=1e-3)
 
     # focus 80 → target_s 0.8, decay CHECKIN_FOCUS (0.7)
     # cur_s after hrv_update(coh=0.6) = 0.9*0.5 + 0.1*0.6 = 0.51
     # new_s = 0.7*0.51 + 0.3*0.8 = 0.597
-    assert u.serotonin == pytest.approx(0.597, abs=1e-3)
+    assert float(r.user.hyst.value) == pytest.approx(0.597, abs=1e-3)
 
     # reality -1 → valence target -0.5, decay CHECKIN_VALENCE (0.6)
     # cur_v = 0 → 0.6*0 + 0.4*(-0.5) = -0.2
-    assert u.valence == pytest.approx(-0.2, abs=1e-3)
+    assert float(r.valence.value) == pytest.approx(-0.2, abs=1e-3)

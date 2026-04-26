@@ -720,8 +720,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # 8-region РГК-карта (named_state) определяет когнитивный режим юзера,
     # из РГК v1.0 §«Влияние на промпт-роутинг». Тонкий hint, не override.
     try:
-        from .user_state import get_user_state
-        ns = (get_user_state().named_state or {})
+        from .rgk import get_global_rgk
+        ns = (get_global_rgk().project("named_state") or {})
         ns_key = ns.get("key")
         if ns_key:
             from .prompts import _p
