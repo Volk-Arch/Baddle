@@ -834,6 +834,15 @@ select {
   letter-spacing: 0.2px;
   min-width: 78px;
 }
+.aperture-inline-scope {
+  font-size: 9px;
+  color: #52525b;
+  font-family: ui-monospace, monospace;
+  padding: 1px 5px;
+  background: #18181b;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+}
 .mode-chip-btn.forced {
   background: #1e1b4b;
   border-color: #4338ca;
