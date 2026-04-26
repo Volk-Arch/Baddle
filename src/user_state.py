@@ -1057,6 +1057,10 @@ class UserState:
                 "stress": self.hrv_stress,
                 "rmssd": self.hrv_rmssd,
             } if self.hrv_coherence is not None else None,
+            # Feedback counter (accept/reject/ignore) — раньше не сериализовался,
+            # streak counter обнулялся при restart. Persist для streak-bias через
+            # перезагрузки. Field живёт в _rgk._fb (single source).
+            "_fb": dict(self._rgk._fb),
         }
 
     @classmethod
@@ -1117,6 +1121,15 @@ class UserState:
         u.hrv_coherence = hrv.get("coherence")
         u.hrv_stress = hrv.get("stress")
         u.hrv_rmssd = hrv.get("rmssd")
+        # Feedback counter restore (default keys preserved)
+        fb_dump = d.get("_fb")
+        if isinstance(fb_dump, dict):
+            for k in u._rgk._FB_KINDS:
+                if k in fb_dump:
+                    try:
+                        u._rgk._fb[k] = int(fb_dump[k])
+                    except (TypeError, ValueError):
+                        pass
         return u
 
 
