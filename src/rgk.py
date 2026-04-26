@@ -192,14 +192,23 @@ class РГК:
 
     # ── User feeds ────────────────────────────────────────────────────────
 
-    def u_hrv(self, coherence=None, stress=None, rmssd=None):
-        if rmssd is not None and stress is None:
-            stress = max(0.0, min(1.0, 1.0 - float(rmssd) / 80.0))
+    def u_hrv(self, coherence=None, stress=None, rmssd=None, activity=None):
+        # Save raw values на self (single source — раньше дублировано в
+        # UserState.update_from_hrv через @property proxies). Без storage
+        # frequency_regime() / activity_zone() возвращали бы flat / None.
+        if rmssd is not None:
+            self.hrv_rmssd = float(rmssd)
+            if stress is None:
+                stress = max(0.0, min(1.0, 1.0 - float(rmssd) / 80.0))
         if coherence is not None:
-            self.user.hyst.feed(float(coherence))
-            self.hrv_base_tod[self._current_tod()].feed(float(coherence))
+            self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
+            self.user.hyst.feed(self.hrv_coherence)
+            self.hrv_base_tod[self._current_tod()].feed(self.hrv_coherence)
         if stress is not None:
-            self.user.aperture.feed(float(stress))
+            self.hrv_stress = max(0.0, min(1.0, float(stress)))
+            self.user.aperture.feed(self.hrv_stress)
+        if activity is not None:
+            self.activity_magnitude = float(activity)  # clamp в setter
         self.tick_u_pred()
 
     def u_engage(self, signal: float = 0.65):

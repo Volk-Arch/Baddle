@@ -485,36 +485,10 @@ class UserState:
                         stress: Optional[float] = None,
                         rmssd: Optional[float] = None,
                         activity: Optional[float] = None):
-        """HRV → serotonin (coherence) + norepinephrine (stress) + activity passthrough.
-
-        coherence ∈ [0,1] → serotonin EMA (спокойствие = стабильность)
-        stress ∈ [0,1] → norepinephrine EMA (напряжение)
-        rmssd mapped to stress if stress отсутствует (lower RMSSD = higher stress).
-        activity ∈ [0, 5] — L2 magnitude движения от акселерометра. Отдельный
-        канал для 4-зонной классификации (см. `activity_zone`).
-
-        Side-effect: если coherence не None, обновляет
-        `hrv_baseline_by_tod[current_tod]` — per-TOD HRV baseline для PE.
-        """
-        # Derive stress from rmssd if needed
-        if rmssd is not None:
-            self.hrv_rmssd = float(rmssd)
-            if stress is None:
-                stress = max(0.0, min(1.0, 1.0 - (self.hrv_rmssd / 80.0)))
-
-        if coherence is not None:
-            self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
-            self._rgk.user.hyst.feed(self.hrv_coherence)
-            self._rgk.hrv_base_tod[self._rgk._current_tod()].feed(self.hrv_coherence)
-
-        if stress is not None:
-            self.hrv_stress = max(0.0, min(1.0, float(stress)))
-            self._rgk.user.aperture.feed(self.hrv_stress)
-
-        if activity is not None:
-            self.activity_magnitude = max(0.0, min(5.0, float(activity)))
-
-        self.tick_expectation()
+        """HRV → serotonin (coherence) + norepinephrine (stress) + activity.
+        Trivial delegate в РГК.u_hrv — single source формул."""
+        self._rgk.u_hrv(coherence=coherence, stress=stress,
+                         rmssd=rmssd, activity=activity)
 
     # ── Timing / engagement ────────────────────────────────────────────────
 
