@@ -44,7 +44,9 @@
 
 **Что коллапсируется (условно — правило спорное):** часть `goals_store.py` / `recurring.py` / `activity_log.py` / `patterns.jsonl` могла бы стать filter'ами над графом. Trade-off: goals имеют transactional семантику (atomic `record_instance`) — append-only граф при crash даёт half-states. Компромисс — `goal_instance` как нода с ref в goals_store, не замена store'а. Параллельные хранилища допустимы там, где transactional семантика реально нужна.
 
-**Связано:** [ontology.md](ontology.md) — схемы node-типов.
+**Beta-prior sidecar на confidence:** каждая нода держит `alpha/beta` (Beta-distribution) рядом со scalar `confidence`. Confidence остаётся authoritative из `_bayesian_update_distinct` (γ-modulation + RPE feedback). alpha/beta — independent evidence accumulator: total = alpha+beta растёт монотонно с каждым observation через `_bump_evidence(node, supports, strength)`. UI получает `confidence_total` + `confidence_ci` (95% credible interval) — отличает «пусто 0.5» от «conflicting 0.5». См. [src/graph_logic.py](../src/graph_logic.py) `_beta_*` helpers + Outcome Calib tab.
+
+**Связано:** [ontology.md](ontology.md) — схемы node-типов; [storage.md](storage.md) — persistence формат.
 
 ---
 
