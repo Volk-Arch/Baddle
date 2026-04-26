@@ -208,23 +208,6 @@ def compute_capacity_indicators(user) -> dict:
     return user._rgk.project("capacity")
 
 
-def compute_capacity_zone(indicators: dict) -> str:
-    """3-zone derived из 3 ok-индикаторов.
-
-    Returns: "green" (все 3 ok), "yellow" (один fail), "red" (≥2 fail).
-    """
-    n_ok = sum([
-        bool(indicators.get("phys_ok")),
-        bool(indicators.get("affect_ok")),
-        bool(indicators.get("cogload_ok")),
-    ])
-    if n_ok == 3:
-        return "green"
-    if n_ok == 2:
-        return "yellow"
-    return "red"
-
-
 # Phase D Step 3c: extractors + _build_user_registry удалены.
 # Все EMA UserState'а живут в self._rgk (см. src/rgk.py); fire_event
 # абстракция заменена прямыми вызовами в update_from_*/apply_checkin/
@@ -945,7 +928,7 @@ class UserState:
 
         Spec: docs/capacity-design.md §Capacity-зона.
         """
-        return compute_capacity_zone(compute_capacity_indicators(self))
+        return self._rgk.project("capacity")["zone"]
 
     @property
     def capacity_reason(self) -> list[str]:

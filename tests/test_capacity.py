@@ -11,7 +11,6 @@ from src.user_state import (
     UserState,
     compute_cognitive_load,
     compute_capacity_indicators,
-    compute_capacity_zone,
     CAPACITY_PHYS_COHERENCE_MIN,
     CAPACITY_PHYS_BURNOUT_MAX,
     CAPACITY_AFFECT_SEROTONIN_MIN,
@@ -133,24 +132,9 @@ def test_indicators_high_cogload_fail():
     assert "cogload_high" in ind["reasons"]
 
 
-# ── compute_capacity_zone ─────────────────────────────────────────────────
-
-@pytest.mark.parametrize("phys,affect,cogload,expected", [
-    (True,  True,  True,  "green"),
-    (False, True,  True,  "yellow"),
-    (True,  False, True,  "yellow"),
-    (True,  True,  False, "yellow"),
-    (False, False, True,  "red"),
-    (False, True,  False, "red"),
-    (True,  False, False, "red"),
-    (False, False, False, "red"),
-])
-def test_zone_from_indicators(phys, affect, cogload, expected):
-    ind = {"phys_ok": phys, "affect_ok": affect, "cogload_ok": cogload}
-    assert compute_capacity_zone(ind) == expected
-
-
 # ── UserState properties ──────────────────────────────────────────────────
+# zone derivation 3-bool→{green,yellow,red} тестируется неявно через
+# UserState.capacity_zone ниже + полный матрикс в test_rgk_properties.
 
 def test_userstate_capacity_zone_green_default():
     us = UserState()
