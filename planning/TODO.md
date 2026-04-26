@@ -5,7 +5,6 @@
 > - [docs/](../docs/) — как код работает (по подсистемам).
 > - [docs/architecture-rules.md](../docs/architecture-rules.md) — 7 правил архитектуры + фильтр для новых фич.
 > - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
-> - [cleanup-plan.md](cleanup-plan.md) — Track A + B оставшегося cleanup.
 > - [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---
@@ -105,12 +104,6 @@
 ## 🛠 Tool-use (отдельная сессия)
 
 - [ ] Слой действий (calendar / weather / web.search / file / rag / permission model) — отдельная сессия когда появится необходимость.
-
----
-
-## 🧹 Line-count cleanup
-
-Опциональный план Phase E-I (5 фаз, −2000..−3200 строк, 15-25ч) — отдельный документ [cleanup-plan.md](cleanup-plan.md). Не делается по умолчанию.
 
 ---
 

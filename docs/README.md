@@ -134,7 +134,6 @@ imbalance_pressure без контекста.
 
 **Планирование** — [../planning/](../planning/):
 [TODO.md](../planning/TODO.md) (все задачи + открытые архитектурные вопросы),
-[cleanup-plan.md](../planning/cleanup-plan.md) (Track A + B оставшегося cleanup),
 [breathing-mode.md](../planning/breathing-mode.md) (guided дыхательная сессия),
 [resonance-prompt-preset.md](../planning/resonance-prompt-preset.md) (chat UI 🔵/🔴 preset).
 
