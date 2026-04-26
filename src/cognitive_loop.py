@@ -741,39 +741,35 @@ class CognitiveLoop:
             return
         try:
             from .prime_directive import record_tick
-            gs = get_global_state()
-            u = get_user_state()
+            from .rgk import get_global_rgk
+            r = get_global_rgk()
+            us, sys_, cap = r.project("user_state"), r.project("system"), r.project("capacity")
+            # B1: payload собран из projectors — facades в этом блоке больше не нужны.
+            # Sync_error остаётся на gs (deriv через CognitiveState.sync_error property).
             record_tick(
-                sync_error=float(gs.sync_error),
+                sync_error=float(get_global_state().sync_error),
                 sync_error_ema_fast=float(fz.sync_error_ema_fast),
                 sync_error_ema_slow=float(fz.sync_error_ema_slow),
                 imbalance_pressure=float(fz.imbalance_pressure),
                 silence_pressure=float(fz.silence_pressure),
                 conflict_accumulator=float(fz.conflict_accumulator),
-                user_imbalance=float(u.imbalance),
-                self_imbalance=float(gs.neuro.self_imbalance),
-                agency_gap=float(u.agency_gap),
-                hrv_surprise=float(u.hrv_surprise),
-                # Outcome dashboard snapshots (Phase D + Counter-wave)
-                balance_user=float(u.balance()),
-                balance_system=float(gs.neuro.balance()),
-                capacity_zone=u.capacity_zone,
-                frequency_regime=u.frequency_regime,
-                mode_user=u.mode,
-                mode_system=gs.neuro.mode,
-                # Chem timeline: 5 axes × user/system. Pump'ить хотя бы раз в час
-                # чтобы Outcome > Chem tab построил daily trend по 10 линиям.
+                user_imbalance=us["imbalance"],
+                self_imbalance=sys_["self_imbalance"],
+                agency_gap=us["agency_gap"],
+                hrv_surprise=us["hrv_surprise"],
+                balance_user=us["balance"],
+                balance_system=sys_["balance"],
+                capacity_zone=cap["zone"],
+                frequency_regime=us["frequency_regime"],
+                mode_user=us["mode"],
+                mode_system=sys_["mode"],
                 chem={
-                    "da_user":   float(u.dopamine),
-                    "s_user":    float(u.serotonin),
-                    "ne_user":   float(u.norepinephrine),
-                    "ach_user":  float(u.acetylcholine),
-                    "gaba_user": float(u.gaba),
-                    "da_sys":    float(gs.neuro.dopamine),
-                    "s_sys":     float(gs.neuro.serotonin),
-                    "ne_sys":    float(gs.neuro.norepinephrine),
-                    "ach_sys":   float(gs.neuro.acetylcholine),
-                    "gaba_sys":  float(gs.neuro.gaba),
+                    "da_user":   us["dopamine"],   "s_user":    us["serotonin"],
+                    "ne_user":   us["norepinephrine"],
+                    "ach_user":  us["acetylcholine"], "gaba_user": us["gaba"],
+                    "da_sys":    sys_["dopamine"], "s_sys":     sys_["serotonin"],
+                    "ne_sys":    sys_["norepinephrine"],
+                    "ach_sys":   sys_["acetylcholine"], "gaba_sys":  sys_["gaba"],
                 },
             )
         except Exception as e:

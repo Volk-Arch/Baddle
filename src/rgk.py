@@ -501,11 +501,14 @@ class РГК:
             if not da_ok:   reasons.append("dopamine_low")
             cogload_ok = cogload < CAPACITY_COGLOAD_MAX
             if not cogload_ok: reasons.append("cogload_high")
+            n_ok = sum([phys_ok, affect_ok, cogload_ok])
+            zone = "green" if n_ok == 3 else "yellow" if n_ok == 2 else "red"
             return {
                 "phys_ok": phys_ok,
                 "affect_ok": affect_ok,
                 "cogload_ok": cogload_ok,
                 "reasons": reasons,
+                "zone": zone,
             }
         return {}
 

@@ -913,7 +913,7 @@ class TestWave3Projectors:
         cap = u._rgk.project("capacity")
         assert cap == {
             "phys_ok": True, "affect_ok": True, "cogload_ok": True,
-            "reasons": [],
+            "reasons": [], "zone": "green",
         }
 
     def test_capacity_failures_match_old_compute(self):
