@@ -1,156 +1,52 @@
-"""UserState — зеркальный вектор пользователя для прайм-директивы.
+"""UserState — backward-compat shim над РГК (ужат в B5 W5 final).
 
-SystemState (src/neurochem.py) эволюционирует по динамике графа.
-UserState эволюционирует по наблюдаемым сигналам юзера.
-Прайм-директива — минимизировать ‖user − system‖ в 3D.
+После B5 (W0-W5) substrate всех state+dynamics — `src.rgk.РГК`. UserState
+оставлен как тонкий facade для тестов и historical API: все методы — 1-line
+delegates на `_rgk.X`, properties читают `_rgk.user/system/etc.` напрямую.
 
-Структура зеркальна Neurochem (3 соизмеримых скаляра):
+Production code больше не использует UserState — мигрирован в W5. Этот файл
+существует для:
+  • `tests/test_*` которые делают `UserState()` или `us.dopamine` для convenience
+  • module-level helpers (`compute_sync_error`, `compute_capacity_indicators`,
+    `compute_cognitive_load`) — используются user_dynamics + tests
 
-    dopamine       — интерес: принятые предложения (accept feedback)
-    serotonin      — спокойствие/стабильность: HRV coherence
-    norepinephrine — напряжение: HRV stress
-
-Плюс две отдельные оси накопления (не в sync_error — физически
-несоизмеримы между user и system):
-
-    burnout        — usage-нагрузка на юзера (decisions_today + rejects).
-                     Feed'ит `_idle_multiplier` через `combined_burnout`
-                     — если юзер устал, Baddle тоже замедляется.
-    agency         — 5-я ось (OQ #2), в measurements.
-
-Все скаляры в [0, 1]. EMA с decay, как в Neurochem.
-
-История 2026-04-20: ранее были feeders через «длину сообщений» (variance →
-serotonin) и «скорость ввода» (quick/pause → dopamine + valence). Убраны:
-- length variance шумит (разные задачи = разная длина, не «нестабильность»)
-- pause 5+ мин → negative valence ложно (юзер работал/думал, не «неприятно»)
-- quick <30с → dopamine ложно (быстрый ввод ≠ интерес, часто нервный)
-Оставлены объективные feeders: HRV (тело) + feedback (явное действие) +
-decisions_today (счётчик).
-
-sync_error = ‖user_vec − system_vec‖ (L2, 3D, max ≈ √3 ≈ 1.732)
-sync_regime ∈ {FLOW, REST, PROTECT, CONFESS} — derived из (sync_error, оба state).
-
-До 2026-04-23 vector был 4D (с burnout как 4-й осью). Ось удалена из
-sync_error: user.burnout питался decisions+rejects, system.burnout —
-графовыми конфликтами. Разные физические явления в одной оси → шум.
-Burnout остаётся как отдельное поле для UI и empathy-замедления, но
-из метрики резонанса исключён.
-
-HRV живёт здесь, не в CognitiveState. Это сигнал тела **пользователя**.
-
-## Predictive layer (Friston-style active inference)
-
-Prediction error питает `ProtectiveFreeze.imbalance_pressure` — одну из
-трёх feeder'ов display_burnout. Сам PE складывается из нескольких
-источников (все нормализованы в [0,1] и агрегируются в cognitive_loop):
-
-1. **3D state PE** — `‖vector() − expectation_vec‖` (behaviour prediction).
-   Ожидание — baseline EMA в том же 3D пространстве что и `vector()`.
-
-2. **TOD-scoped state PE** — `|state_level − expectation_by_tod[current]|`.
-   У Baddle есть 4 baseline'а (morning/day/evening/night) — если юзер
-   ведёт себя не так, как обычно в это время суток, surprise всплывает
-   специфично. Без TOD-scoping утренняя и вечерняя apathy сливались в
-   один averaged baseline → PE терял остроту.
-
-3. **Goal PE / agency_gap** — `1 − agency`. Юзер не выполнил запланированное
-   → прямой сигнал «ожидание не совпало с реальностью», прямее чем
-   state_level-EMA.
-
-4. **HRV PE** — `|hrv_coherence − hrv_baseline_by_tod[current]|`. С реальным
-   Polar это физический канал PE, не просто нейрохимический EMA.
-
-Плюс **self-prediction** живёт в Neurochem (`Neurochem.expectation_vec`):
-Baddle предсказывает собственную нейрохимию и меряет self-surprise. Пятый
-источник в `imbalance_pressure`. Симметричная Friston-loop: user PE +
-self PE, одна метрика давления.
-
-Legacy `expectation` (scalar EMA state_level) и `surprise` (scalar)
-сохранены для backward-compat — UI их всё ещё потребляет.
-
-## Implementation note
-
-EMA-метрики живут в `self._rgk` (см. src/rgk.py). UserState — thin facade
-над _rgk: 15 @property proxies (HRV/activity/day_summary/focus_residue/
-timestamps), 9 chem properties (DA/5HT/NE/ACh/GABA/valence/agency/burnout/
-expectation). Правило 2 + Правило 6 из docs/architecture-rules.md.
-
-Updates через explicit methods:
-  - `update_from_hrv` → serotonin, norepinephrine, hrv_baseline
-  - `update_from_engagement` / `update_from_feedback` → dopamine, valence
-  - `update_from_chat_sentiment` → valence
-  - `update_from_plan_completion` → agency
-  - `update_from_energy` → burnout
-  - `tick_expectation` → expectation_by_tod, expectation_vec
-  - `feed_acetylcholine` (на surprise) / `feed_gaba` (на focus_residue)
-
-Bespoke остаются: burnout-bump (+0.05 на reject), streak-bias valence
-(дискретные additive bumps, не EMA).
+Если class станет отбалластом — удалить вместе с `from .user_state import …`
+в test fixtures.
 """
-import time
 from typing import Optional
 
 import numpy as np
 
-from .ema import Decays
-from .rgk import РГК
+from .rgk import РГК, get_global_rgk
 
 
-# ── Sync regime constants ───────────────────────────────────────────────────
+# ── Sync regime constants (compute_sync_regime returns) ───────────────────
 
-FLOW = "flow"           # оба высокие + sync высокий → полный объём
-REST = "rest"           # оба низкие + sync высокий → предлагаем паузу
-PROTECT = "protect"     # user low, system high → система берёт на себя
-CONFESS = "confess"     # user high, system low → «дай мне время»
+FLOW = "flow"
+REST = "rest"
+PROTECT = "protect"
+CONFESS = "confess"
 
-# Пороги из TODO «Симбиоз»
-SYNC_HIGH_THRESHOLD = 0.3      # error < 0.3 → sync высокий (L2 в 3D, max ≈ √3 ≈ 1.73)
-STATE_HIGH_THRESHOLD = 0.55    # mean(D,S) > 0.55 → state высокий
-STATE_LOW_THRESHOLD = 0.35     # mean(D,S) < 0.35 → state низкий
+SYNC_HIGH_THRESHOLD = 0.3       # err < 0.3 → sync высокий (max √3 ≈ 1.73)
+STATE_HIGH_THRESHOLD = 0.55     # mean(D,S) > 0.55 → state высокий
+STATE_LOW_THRESHOLD = 0.35
 
-# Параметры предиктивной модели — в src/ema.py::Decays (2026-04-23).
-# Экспортируем локальные алиасы для backward-compat с тестами / импортами.
-EXPECTATION_EMA_DECAY = Decays.EXPECTATION             # 0.98
-EXPECTATION_VEC_DECAY = Decays.EXPECTATION_VEC         # 0.97
-HRV_BASELINE_DECAY = Decays.HRV_BASELINE                # 0.99
-EXPECTATION_EMA_DECAY_FAST = Decays.EXPECTATION_FAST    # 0.85
-EXPECTATION_VEC_DECAY_FAST = Decays.EXPECTATION_VEC_FAST  # 0.80
-
-# Surprise boost: когда юзер detect'ится как удивлённый (OQ #7), ускоряем
-# EMA decay на N tick'ов — его модель мира изменилась.
-SURPRISE_BOOST_DEFAULT_TICKS = 3
-# Phase C Шаг 6: dual-pool константы (LONG_RESERVE_MAX/DEFAULT/TAP_THRESHOLD,
-# DAILY_ENERGY_MAX) удалены — заменены 3-zone capacity model.
-
-# Activity zone параметры (из прототипа HRV × акселерометр)
-ACTIVITY_THRESHOLD = 0.5       # magnitude выше которого юзер считается «активным»
-COHERENCE_HEALTHY = 0.5        # coherence выше → HRV в норме (HIGH HRV)
-# 4 зоны из 2×2 грида (hrv_ok, active):
-ZONE_RECOVERY = "recovery"         # !active + hrv_ok    → 🟢 здоровое восстановление
-ZONE_STRESS_REST = "stress_rest"   # !active + !hrv_ok   → 🟡 беспокойство в покое
-ZONE_HEALTHY_LOAD = "healthy_load" #  active + hrv_ok    → 🔵 здоровая нагрузка
-ZONE_OVERLOAD = "overload"         #  active + !hrv_ok   → 🔴 перегрузка / overtraining
-
-_TOD_NAMES = ("morning", "day", "evening", "night")
-
-
-# ── Capacity helpers (Phase C) ─────────────────────────────────────────────
-#
-# 3-zone capacity model — из docs/capacity-design.md. Заменяет dual-pool
-# `daily_spent + long_reserve` на 3 параллельных контура (физио / эмо /
-# когнитивный) с явными зонами green/yellow/red.
-
-# Capacity thresholds (per docs/capacity-design.md §Формулы)
+# Capacity thresholds (per docs/capacity-design.md §Формулы) — читаются из
+# rgk.project("capacity"), но импортируются также для теста compute_cognitive_load.
 CAPACITY_PHYS_COHERENCE_MIN = 0.5
 CAPACITY_PHYS_BURNOUT_MAX = 0.3
 CAPACITY_AFFECT_SEROTONIN_MIN = 0.4
 CAPACITY_AFFECT_DOPAMINE_MIN = 0.35
 CAPACITY_COGLOAD_MAX = 0.6
 
+SURPRISE_BOOST_DEFAULT_TICKS = 3   # default в UserState.apply_surprise_boost
+
+_TOD_NAMES = ("morning", "day", "evening", "night")
+
+
+# ── Module-level helpers (используются user_dynamics + tests) ─────────────
 
 def _normalize(value, cap):
-    """Нормализация v/cap в [0, 1]."""
     if cap is None or cap <= 0:
         return 0.0
     try:
@@ -161,683 +57,23 @@ def _normalize(value, cap):
 
 def compute_cognitive_load(day_summary_today: dict, progress_delta: float) -> float:
     """Дневная когнитивная нагрузка [0, 1] из 6 observable.
-
-    Formula per docs/capacity-design.md §Формулы:
-        + 0.20 · normalize(tasks_started, cap=8)
-        + 0.30 · normalize(context_switches, cap=10)
-        + 0.30 · normalize(complexity_sum, cap=3.0)
-        − 0.25 · normalize(tasks_completed, cap=5)
-        − 0.25 · max(0, -progress_delta)        # good day reduces load
-
-    NOTE: progress_delta = sync_error_now − sync_error_at_dawn.
-    Negative = improvement (resonance улучшился) → "good progress"
-    → reduces cognitive_load. Docs literal `max(0, progress_delta)`
-    inconsistent with comment «положительный прогресс снижает» —
-    implementing semantic interpretation.
-
-    Коэффициенты калибруются по 2-недельному окну данных (через 2 нед
-    after merge сравнить cognitive_load распределение с реальным состоянием).
-
-    Args:
-        day_summary_today: dict с ключами `tasks_started`, `tasks_completed`,
-            `context_switches`, `complexity_sum` (defaults 0).
-        progress_delta: float, sync_error change за день (negative = improved).
-
-    Returns: float в [0, 1].
-    """
+    Spec: docs/capacity-design.md §Формулы. Используется user_dynamics."""
     s = day_summary_today or {}
-    load = (
+    return max(0.0, min(1.0,
         0.20 * _normalize(s.get("tasks_started", 0), cap=8)
         + 0.30 * _normalize(s.get("context_switches", 0), cap=10)
         + 0.30 * _normalize(s.get("complexity_sum", 0.0), cap=3.0)
         - 0.25 * _normalize(s.get("tasks_completed", 0), cap=5)
-        - 0.25 * max(0.0, -float(progress_delta or 0.0))
-    )
-    return max(0.0, min(1.0, load))
+        - 0.25 * max(0.0, -float(progress_delta or 0.0))))
 
 
 def compute_capacity_indicators(user) -> dict:
-    """Thin shim к `RGK.project("capacity")`. Wave 3 cleanup: вычисление
-    логики переехало в `rgk.py` (single source). Здесь — backward-compat
-    wrapper для существующих callers + tests.
-
-    Returns:
-        {phys_ok, affect_ok, cogload_ok, reasons[]} — booleans + list of
-        failed-condition tags для capacity_reason property.
-    """
+    """Thin shim к `RGK.project("capacity")` — backward-compat для tests."""
     return user._rgk.project("capacity")
 
 
-# Phase D Step 3c: extractors + _build_user_registry удалены.
-# Все EMA UserState'а живут в self._rgk (см. src/rgk.py); fire_event
-# абстракция заменена прямыми вызовами в update_from_*/apply_checkin/
-# tick_expectation/apply_subjective_surprise.
-
-
-class UserState:
-    """Зеркало Neurochem для пользователя. Питается наблюдаемыми сигналами."""
-
-    def __init__(self,
-                 dopamine: float = 0.5,
-                 serotonin: float = 0.5,
-                 norepinephrine: float = 0.5,
-                 burnout: float = 0.0,
-                 agency: float = 0.5,
-                 *,
-                 rgk: "Optional[РГК]" = None):
-        # B0: optional shared RGK (production bootstrap передаёт singleton
-        # через get_global_rgk() — каскад зеркал работает на одном объекте).
-        # Default rgk=None → создаётся новый РГК (backward-compat для тестов).
-        # B4 Wave 2: bespoke user-side state (HRV/activity/day_summary/focus_residue/
-        # _last_*_ts) перемещён в РГК.__init__ — UserState теперь thin facade
-        # с @property proxies (см. ниже). Default values те же.
-        self._rgk = rgk if rgk is not None else РГК()
-        self._rgk.user.gain.value = dopamine
-        self._rgk.user.hyst.value = serotonin
-        self._rgk.user.aperture.value = norepinephrine
-        self._rgk.burnout.value = burnout
-        self._rgk.agency.value = agency
-
-        # _feedback_counts живёт в `_rgk._fb` (shared с u_feedback). Здесь
-        # не дублируем — `apply_feedback` читает/пишет напрямую туда.
-
-    # ── Neurochemical mirrors (read/write через _rgk) ──────────────────────
-
-    @property
-    def dopamine(self) -> float:
-        return float(self._rgk.user.gain.value)
-
-    @dopamine.setter
-    def dopamine(self, v: float):
-        self._rgk.user.gain.value = max(0.0, min(1.0, float(v)))
-
-    @property
-    def serotonin(self) -> float:
-        return float(self._rgk.user.hyst.value)
-
-    @serotonin.setter
-    def serotonin(self, v: float):
-        self._rgk.user.hyst.value = max(0.0, min(1.0, float(v)))
-
-    @property
-    def norepinephrine(self) -> float:
-        return float(self._rgk.user.aperture.value)
-
-    @norepinephrine.setter
-    def norepinephrine(self, v: float):
-        self._rgk.user.aperture.value = max(0.0, min(1.0, float(v)))
-
-    @property
-    def valence(self) -> float:
-        return float(self._rgk.valence.value)
-
-    @valence.setter
-    def valence(self, v: float):
-        self._rgk.valence.value = max(-1.0, min(1.0, float(v)))
-
-    @property
-    def burnout(self) -> float:
-        return float(self._rgk.burnout.value)
-
-    @burnout.setter
-    def burnout(self, v: float):
-        self._rgk.burnout.value = max(0.0, min(1.0, float(v)))
-
-    @property
-    def agency(self) -> float:
-        return float(self._rgk.agency.value)
-
-    @agency.setter
-    def agency(self, v: float):
-        self._rgk.agency.value = max(0.0, min(1.0, float(v)))
-
-    # ── Phase D: 5-axis chem (ACh + GABA доступны как property) ─────────────
-    # Default 0.5 без feeders. Feeders подключены в cognitive_loop (Step 5c/d).
-    # См. docs/neurochem-design.md §6 «User-side ACh + GABA feeders».
-
-    @property
-    def acetylcholine(self) -> float:
-        """Plasticity (текучесть ткани, открытость новому).
-        Fed by feed_acetylcholine(novelty, boost) — message novelty + surprise."""
-        return float(self._rgk.user.plasticity.value)
-
-    @acetylcholine.setter
-    def acetylcholine(self, v: float):
-        self._rgk.user.plasticity.value = max(0.0, min(1.0, float(v)))
-
-    @property
-    def gaba(self) -> float:
-        """Damping (стенки стоячей волны, чёткость границ).
-        Fed by feed_gaba() — производная от focus_residue (existing field)."""
-        return float(self._rgk.user.damping.value)
-
-    @gaba.setter
-    def gaba(self, v: float):
-        self._rgk.user.damping.value = max(0.0, min(1.0, float(v)))
-
-    def balance(self) -> float:
-        """5-axis резонансный баланс юзера: (DA·NE·ACh) / (5HT·GABA).
-        ≈1.0 = резонанс; >1.5 гиперрезонанс; <0.5 гипостабильность.
-        До интеграции feeders ACh/GABA = 0.5, формула эквивалентна (DA·NE)/5HT.
-        См. docs/neurochem-design.md § Балансовая формула."""
-        return self._rgk.user.balance()
-
-    @property
-    def mode(self) -> str:
-        """R/C bit (Правило 7 — Counter-wave). 'R' = passive resonance,
-        'C' = counter-wave generation. Updated by cognitive_loop._advance_tick
-        from sync_error через гистерезис ACT=0.15 / REC=0.08."""
-        return self._rgk.user.mode
-
-    def update_mode(self, perturbation: float) -> str:
-        """Update R/C mode by current perturbation (sync_error). Hysteresis."""
-        return self._rgk.user.update_mode(float(perturbation))
-
-    # ── Predictive layer accessors ─────────────────────────────────────────
-
-    @property
-    def expectation(self) -> float:
-        return float(self._rgk.u_exp.value)
-
-    @expectation.setter
-    def expectation(self, v: float):
-        self._rgk.u_exp.value = max(0.0, min(1.0, float(v)))
-
-    @property
-    def expectation_by_tod(self) -> dict:
-        """Snapshot-копия 4 TOD-baselines. Для мутации — через tick_expectation()."""
-        return {tod: float(self._rgk.u_exp_tod[tod].value) for tod in _TOD_NAMES}
-
-    @property
-    def expectation_vec(self) -> np.ndarray:
-        return self._rgk.u_exp_vec.value
-
-    @expectation_vec.setter
-    def expectation_vec(self, v):
-        arr = np.asarray(v, dtype=np.float32)
-        ema = self._rgk.u_exp_vec
-        if arr.shape == ema.value.shape:
-            ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
-
-    @property
-    def hrv_baseline_by_tod(self) -> dict:
-        """Snapshot-копия. None за TOD где baseline ещё не seeded."""
-        result = {}
-        for tod in _TOD_NAMES:
-            ema = self._rgk.hrv_base_tod[tod]
-            result[tod] = float(ema.value) if ema._seeded else None
-        return result
-
-    # ── B4 Wave 2: user-side bespoke state (proxy на _rgk) ──────────────────
-    # Переехало из UserState fields в РГК.__init__. UserState facade — thin
-    # @property proxies. Сохранено backward-compat: read/write через те же
-    # имена (50+ callers не трогаются). Default values, init и сериализация
-    # работают через РГК.
-
-    @property
-    def hrv_coherence(self):
-        return self._rgk.hrv_coherence
-
-    @hrv_coherence.setter
-    def hrv_coherence(self, v):
-        self._rgk.hrv_coherence = v
-
-    @property
-    def hrv_stress(self):
-        return self._rgk.hrv_stress
-
-    @hrv_stress.setter
-    def hrv_stress(self, v):
-        self._rgk.hrv_stress = v
-
-    @property
-    def hrv_rmssd(self):
-        return self._rgk.hrv_rmssd
-
-    @hrv_rmssd.setter
-    def hrv_rmssd(self, v):
-        self._rgk.hrv_rmssd = v
-
-    @property
-    def activity_magnitude(self) -> float:
-        return self._rgk.activity_magnitude
-
-    @activity_magnitude.setter
-    def activity_magnitude(self, v):
-        self._rgk.activity_magnitude = float(v)
-
-    @property
-    def last_sleep_duration_h(self):
-        return self._rgk.last_sleep_duration_h
-
-    @last_sleep_duration_h.setter
-    def last_sleep_duration_h(self, v):
-        self._rgk.last_sleep_duration_h = v
-
-    @property
-    def cognitive_load_today(self) -> float:
-        return self._rgk.cognitive_load_today
-
-    @cognitive_load_today.setter
-    def cognitive_load_today(self, v):
-        self._rgk.cognitive_load_today = float(v)
-
-    @property
-    def day_summary(self) -> dict:
-        return self._rgk.day_summary
-
-    @day_summary.setter
-    def day_summary(self, v):
-        self._rgk.day_summary = v
-
-    @property
-    def focus_residue(self) -> float:
-        return self._rgk.focus_residue
-
-    @focus_residue.setter
-    def focus_residue(self, v):
-        self._rgk.focus_residue = float(v)
-
-    @property
-    def _last_focus_input_ts(self):
-        return self._rgk._last_focus_input_ts
-
-    @_last_focus_input_ts.setter
-    def _last_focus_input_ts(self, v):
-        self._rgk._last_focus_input_ts = v
-
-    @property
-    def _last_focus_mode_id(self):
-        return self._rgk._last_focus_mode_id
-
-    @_last_focus_mode_id.setter
-    def _last_focus_mode_id(self, v):
-        self._rgk._last_focus_mode_id = v
-
-    @property
-    def _last_input_ts(self):
-        return self._rgk._last_input_ts
-
-    @_last_input_ts.setter
-    def _last_input_ts(self, v):
-        self._rgk._last_input_ts = v
-
-    @property
-    def _surprise_boost_remaining(self) -> int:
-        return self._rgk._surprise_boost_remaining
-
-    @_surprise_boost_remaining.setter
-    def _surprise_boost_remaining(self, v):
-        self._rgk._surprise_boost_remaining = int(v)
-
-    @property
-    def _last_user_surprise_ts(self):
-        return self._rgk._last_user_surprise_ts
-
-    @_last_user_surprise_ts.setter
-    def _last_user_surprise_ts(self, v):
-        self._rgk._last_user_surprise_ts = v
-
-    # ── HRV signal ─────────────────────────────────────────────────────────
-
-    def update_from_hrv(self,
-                        coherence: Optional[float] = None,
-                        stress: Optional[float] = None,
-                        rmssd: Optional[float] = None,
-                        activity: Optional[float] = None):
-        """HRV → serotonin (coherence) + norepinephrine (stress) + activity.
-        Trivial delegate в РГК.u_hrv — single source формул."""
-        self._rgk.u_hrv(coherence=coherence, stress=stress,
-                         rmssd=rmssd, activity=activity)
-
-    # ── Timing / engagement ────────────────────────────────────────────────
-
-    def register_input(self, now: Optional[float] = None):
-        """Просто запоминает timestamp последнего user input.
-
-        Раньше здесь были EMA-вклады в dopamine и valence от timing gap
-        (см. docstring модуля). Убраны — gap не отражает «интерес» или
-        «приятно», чаще это просто режим работы юзера. Таймстамп остаётся
-        для UI «давно ли писал» и будущего Active sync-seeking.
-        """
-        self._last_input_ts = now or time.time()
-
-    # ── Focus residue (см. docs/resonance-model.md) ───────────────────────
-
-    def bump_focus_residue(self, mode_id: Optional[str], now: Optional[float] = None):
-        """Trivial delegate в _rgk.u_focus_bump."""
-        self._rgk.u_focus_bump(mode_id, now)
-
-    def decay_focus_residue(self, dt_seconds: float):
-        """Trivial delegate в _rgk.u_focus_decay."""
-        self._rgk.u_focus_decay(dt_seconds)
-
-    def update_from_engagement(self, signal: float = 0.65):
-        """User вовлечённость → dopamine EMA. Trivial delegate."""
-        self._rgk.u_engage(signal)
-
-    def update_from_feedback(self, kind: str):
-        """Accept/reject/ignore → dopamine + valence (+ burnout/streak на reject).
-        Trivial delegate. Бизнес-логика (kind filter, streak, tick) в РГК."""
-        self._rgk.u_feedback(kind)
-
-    def update_from_chat_sentiment(self, sentiment: float):
-        """Sentiment ∈ [−1, 1] → valence EMA. Trivial delegate."""
-        self._rgk.u_chat(sentiment)
-
-    def update_from_plan_completion(self, completed: int, planned: int):
-        """Daily completion ratio → agency EMA. Trivial delegate."""
-        self._rgk.u_plan(completed or 0, planned or 0)
-
-    def update_from_energy(self, decisions_today: int, max_budget: float = 100.0):
-        """Decisions counter → burnout EMA. Trivial delegate."""
-        self._rgk.u_energy(decisions_today, max_budget=max_budget or 100.0)
-
-    # ── Helpers ────────────────────────────────────────────────────────────
-
-    def vector(self) -> np.ndarray:
-        """3D точка состояния для sync-метрики. Burnout отдельно (см. module doc)."""
-        return self._rgk.user.vector()
-
-    def state_level(self) -> float:
-        """Агрегированный «уровень» юзера — mean(dopamine, serotonin).
-
-        Используется в пороге sync_regime (см. STATE_HIGH/LOW_THRESHOLD).
-        """
-        return float((self.dopamine + self.serotonin) / 2.0)
-
-    # ── Предиктивная модель: expectation EMA + surprise ────────────────────
-
-    def tick_expectation(self):
-        """Обновить три baseline'а: global scalar, TOD-scoped scalar, 3D vector.
-        Boost handling (fast-decay при _surprise_boost_remaining > 0) теперь
-        в РГК.tick_u_pred — single source.
-        """
-        self._rgk.tick_u_pred()
-
-    def apply_subjective_surprise(self, signed_surprise: float, blend: float = 0.4):
-        """Trivial delegate в _rgk.u_apply_surprise."""
-        self._rgk.u_apply_surprise(signed_surprise, blend)
-
-    def apply_checkin(self,
-                       stress: Optional[float] = None,
-                       focus: Optional[float] = None,
-                       reality: Optional[float] = None):
-        """Trivial delegate в _rgk.u_apply_checkin."""
-        self._rgk.u_apply_checkin(stress, focus, reality)
-
-    def apply_surprise_boost(self, n_ticks: int = SURPRISE_BOOST_DEFAULT_TICKS):
-        """Trivial delegate в _rgk.u_apply_boost."""
-        self._rgk.u_apply_boost(n_ticks)
-
-    def feed_acetylcholine(self, novelty: float, boost: bool = False):
-        """Trivial delegate в _rgk.u_ach_feed."""
-        self._rgk.u_ach_feed(novelty, boost)
-
-    def feed_gaba(self):
-        """Trivial delegate в _rgk.u_gaba_feed."""
-        self._rgk.u_gaba_feed()
-
-    @property
-    def reality(self) -> float:
-        """Current observed state_level (для симметрии с MindBalance ID/IP)."""
-        return self.state_level()
-
-    @property
-    def surprise(self) -> float:
-        """Signed prediction error: reality − expectation_by_tod[current].
-
-        Положительный → реальность лучше ожиданий (подъём).
-        Отрицательный → реальность хуже (спад, разочарование).
-        TOD-scoped: утренняя apathy не маскирует вечернюю. Если TOD baseline
-        ещё в default (0.5) — fallback на global expectation.
-        """
-        tod = self._rgk._current_tod()
-        ref = float(self._rgk.u_exp_tod[tod].value)
-        if ref == 0.5:
-            ref = float(self._rgk.u_exp.value)
-        return float(self.reality - ref)
-
-    @property
-    def surprise_vec(self) -> np.ndarray:
-        """3D PE-вектор: vector() − expectation_vec. По-осевой signed error."""
-        return self.vector() - self.expectation_vec
-
-    @property
-    def imbalance(self) -> float:
-        """‖surprise_vec‖ — 3D магнитуда PE. [0, √3≈1.732].
-
-        До 2026-04-23 был |scalar surprise| в [0, 1] — теряла информацию
-        когда оси двигались разнонаправленно. 3D L2 честнее: падение DA
-        при стабильном S/NE ≠ падение S при стабильных DA/NE.
-        """
-        return float(np.linalg.norm(self.surprise_vec))
-
-    # ── PE attribution ────────────────────────────────────────────────────
-    # B4 Wave 1: формулы переехали в РГК.project("user_state"). Properties —
-    # тонкие delegates (один dict за access; для UI/diagnostic нагрузки ОК).
-
-    AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine")
-
-    @property
-    def attribution(self) -> str:
-        """Какая ось доминирует в surprise_vec — 'dopamine'/'serotonin'/
-        'norepinephrine' либо 'none' при |vec| < 0.05."""
-        return self._rgk.project("user_state")["attribution"]
-
-    @property
-    def attribution_magnitude(self) -> float:
-        return self._rgk.project("user_state")["attribution_magnitude"]
-
-    @property
-    def attribution_signed(self) -> float:
-        """Signed amount по доминирующей оси. Positive = reality выше ожиданий."""
-        return self._rgk.project("user_state")["attribution_signed"]
-
-    @property
-    def agency_gap(self) -> float:
-        """1 − agency. Goal-prediction-error (complementary к state_level PE)."""
-        return self._rgk.project("user_state")["agency_gap"]
-
-    @property
-    def hrv_surprise(self) -> float:
-        """|hrv_coherence − baseline[current_tod]|. B4 Wave 2: формула в РГК."""
-        return self._rgk.hrv_surprise()
-
-    # ── Frequency regime (resonance несущая частота) ───────────────────────
-
-    @property
-    def frequency_regime(self) -> str:
-        """Несущая частота: long_wave/short_wave/mixed/flat. Формула в РГК.
-        См. docs/hrv-design.md § Frequency regime."""
-        return self._rgk.frequency_regime()
-
-    # ── Capacity zone (Phase C, 3-зона) ───────────────────────────────────
-
-    @property
-    def capacity_zone(self) -> str:
-        """green/yellow/red зона из 3 индикаторов (физио / эмо / когнитивный).
-
-        Заменяет dual-pool «энергия 0..100». Decision gate в assistant.py
-        читает эту property + capacity_reason для explanation при отказе.
-
-        Spec: docs/capacity-design.md §Capacity-зона.
-        """
-        return self._rgk.project("capacity")["zone"]
-
-    @property
-    def capacity_reason(self) -> list[str]:
-        """Причины не-зелёной зоны (tags для UI и decision gate explanation).
-
-        Возможные tags: "hrv_coherence_low", "burnout_high",
-        "serotonin_low", "dopamine_low", "cogload_high".
-        Пустой list когда все 3 ok (зона green).
-        """
-        return compute_capacity_indicators(self)["reasons"]
-
-    @property
-    def capacity_indicators(self) -> dict:
-        """Полный snapshot для UI: 3 boolean + reasons."""
-        return compute_capacity_indicators(self)
-
-    def update_cognitive_load(self) -> None:
-        """Trivial delegate в src.user_dynamics.update_cognitive_load."""
-        from .user_dynamics import update_cognitive_load
-        update_cognitive_load(self._rgk)
-
-    def rollover_day(self, hrv_recovery: Optional[float] = None) -> None:
-        """Trivial delegate в src.user_dynamics.rollover_day."""
-        from .user_dynamics import rollover_day
-        rollover_day(self._rgk, hrv_recovery)
-
-    # ── Activity zone (4 региона HRV × акселерометр) ───────────────────────
-
-    @property
-    def activity_zone(self) -> dict:
-        """4-зонная classification (HRV coherence × activity_magnitude).
-        recovery/stress_rest/healthy_load/overload. B4 Wave 2: формула в РГК."""
-        return self._rgk.activity_zone()
-
-    # ── Named state (8-region РГК-карта) ──────────────────────────────────
-
-    @property
-    def named_state(self) -> dict:
-        """Ближайший регион РГК-карты по 5D chem-профилю (Wave 3: проектор
-        на РГК). Возвращает {key, label, advice, emoji, distance, coord} —
-        emoji даёт визуальную метку для UI (🔵🟢🟠🟡🔴⚫⚪✨).
-        См. [user_state_map.py](user_state_map.py) для координат регионов."""
-        return self._rgk.project("named_state")
-
-    # Phase C Шаг 6: dual-pool energy methods (energy_snapshot,
-    # debit_energy, recover_long_reserve) удалены — заменены 3-zone capacity
-    # model. capacity_zone / capacity_indicators properties выше.
-
-    def to_dict(self) -> dict:
-        ns = self.named_state
-        az = self.activity_zone
-        return {
-            "dopamine": round(self.dopamine, 3),
-            "serotonin": round(self.serotonin, 3),
-            "norepinephrine": round(self.norepinephrine, 3),
-            # Phase D: 5-axis chem + balance diagnostic
-            "acetylcholine": round(self.acetylcholine, 3),
-            "gaba": round(self.gaba, 3),
-            "balance": round(self.balance(), 3),
-            "mode": self.mode,
-            "burnout": round(self.burnout, 3),
-            "agency": round(self.agency, 3),
-            "valence": round(self.valence, 3),
-            "expectation": round(self.expectation, 3),
-            "expectation_by_tod": {k: round(float(v), 3)
-                                    for k, v in self.expectation_by_tod.items()},
-            "expectation_vec": [round(float(x), 3) for x in self.expectation_vec.tolist()],
-            "hrv_baseline_by_tod": {k: (round(float(v), 3) if v is not None else None)
-                                      for k, v in self.hrv_baseline_by_tod.items()},
-            "reality": round(self.reality, 3),
-            "surprise": round(self.surprise, 3),
-            "imbalance": round(self.imbalance, 3),
-            "attribution": self.attribution,
-            "attribution_magnitude": round(self.attribution_magnitude, 3),
-            "attribution_signed": round(self.attribution_signed, 3),
-            "agency_gap": round(self.agency_gap, 3),
-            "hrv_surprise": round(self.hrv_surprise, 3),
-            "activity_magnitude": round(self.activity_magnitude, 3),
-            "activity_zone": az,
-            "named_state": {"key": ns["key"], "label": ns["label"],
-                            "advice": ns["advice"],
-                            "emoji": ns.get("emoji", "")},
-            "frequency_regime": self.frequency_regime,
-            "focus_residue": round(self.focus_residue, 3),
-            "cognitive_load_today": round(self.cognitive_load_today, 3),
-            "capacity_zone": self.capacity_zone,
-            "capacity_reason": self.capacity_reason,
-            "day_summary": self.day_summary,
-            "hrv": {
-                "coherence": self.hrv_coherence,
-                "stress": self.hrv_stress,
-                "rmssd": self.hrv_rmssd,
-            } if self.hrv_coherence is not None else None,
-            # Feedback counter (accept/reject/ignore) — раньше не сериализовался,
-            # streak counter обнулялся при restart. Persist для streak-bias через
-            # перезагрузки. Field живёт в _rgk._fb (single source).
-            "_fb": dict(self._rgk._fb),
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "UserState":
-        u = cls(
-            dopamine=d.get("dopamine", 0.5),
-            serotonin=d.get("serotonin", 0.5),
-            norepinephrine=d.get("norepinephrine", 0.5),
-            burnout=d.get("burnout", 0.0),
-            agency=d.get("agency", 0.5),
-        )
-        # Phase D: 5-axis ACh+GABA. Default 0.5 если поле отсутствует
-        # (backward-compat для legacy state.json до Phase D).
-        u.acetylcholine = float(d.get("acetylcholine", 0.5))
-        u.gaba = float(d.get("gaba", 0.5))
-        u.expectation = float(d.get("expectation", 0.5))
-        u.valence = float(d.get("valence", 0.0))
-        u.activity_magnitude = float(d.get("activity_magnitude", 0.0))
-        u.focus_residue = max(0.0, min(1.0,
-            float(d.get("focus_residue", 0.0))))
-        u.cognitive_load_today = max(0.0, min(1.0,
-            float(d.get("cognitive_load_today", 0.0))))
-        ds = d.get("day_summary")
-        if isinstance(ds, dict):
-            u.day_summary = {str(k): dict(v) for k, v in ds.items()
-                              if isinstance(v, dict)}
-        # Predictive layer (TOD scalar + vector + HRV baseline). Все
-        # optional — если legacy dump не имеет их, defaults из __init__.
-        tod_map = d.get("expectation_by_tod") or {}
-        if isinstance(tod_map, dict):
-            for k in _TOD_NAMES:
-                if k in tod_map:
-                    try:
-                        ema = u._rgk.u_exp_tod[k]
-                        ema.value = max(0.0, min(1.0, float(tod_map[k])))
-                    except Exception:
-                        pass
-        vec = d.get("expectation_vec")
-        if isinstance(vec, (list, tuple)) and len(vec) == 3:
-            u.expectation_vec = np.array([float(x) for x in vec], dtype=np.float32)
-        hrv_base = d.get("hrv_baseline_by_tod") or {}
-        if isinstance(hrv_base, dict):
-            for k in _TOD_NAMES:
-                if k not in hrv_base:
-                    continue
-                v = hrv_base[k]
-                ema = u._rgk.hrv_base_tod[k]
-                if v is None:
-                    ema.value = 0.0
-                    ema._seeded = False
-                else:
-                    try:
-                        ema.value = max(0.0, min(1.0, float(v)))
-                        ema._seeded = True
-                    except Exception:
-                        pass
-        hrv = d.get("hrv") or {}
-        u.hrv_coherence = hrv.get("coherence")
-        u.hrv_stress = hrv.get("stress")
-        u.hrv_rmssd = hrv.get("rmssd")
-        # Feedback counter restore (default keys preserved)
-        fb_dump = d.get("_fb")
-        if isinstance(fb_dump, dict):
-            for k in u._rgk._FB_KINDS:
-                if k in fb_dump:
-                    try:
-                        u._rgk._fb[k] = int(fb_dump[k])
-                    except (TypeError, ValueError):
-                        pass
-        return u
-
-
-# ── System vector + sync helpers (read directly from РГК) ─────────────────
-
 def system_vector(rgk_or_neuro, freeze=None) -> np.ndarray:
-    """3D system vector. После W4 принимает РГК; legacy сигнатура
-    (Neurochem, freeze) deprecated — используется через `gs.rgk`."""
+    """3D system vector. Принимает РГК (production) или legacy Neurochem (deprecated)."""
     sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
     return np.array([
         float(sys.gain.value)     if hasattr(sys, "gain") else float(sys.dopamine),
@@ -847,7 +83,7 @@ def system_vector(rgk_or_neuro, freeze=None) -> np.ndarray:
 
 
 def system_state_level(rgk_or_neuro) -> float:
-    """mean(DA, 5HT). Принимает РГК или legacy Neurochem."""
+    """mean(DA, 5HT). Полиморфно — РГК или Neurochem."""
     sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
     da = float(sys.gain.value) if hasattr(sys, "gain") else float(sys.dopamine)
     s  = float(sys.hyst.value) if hasattr(sys, "hyst") else float(sys.serotonin)
@@ -861,48 +97,297 @@ def compute_sync_error(rgk) -> float:
 
 
 def compute_sync_regime(rgk) -> str:
-    """4 режима симбиоза — см. TODO.md «Симбиоз»."""
+    """4 режима симбиоза. Spec: TODO «Симбиоз»."""
     err = compute_sync_error(rgk)
     u_level = (float(rgk.user.gain.value) + float(rgk.user.hyst.value)) / 2.0
     s_level = system_state_level(rgk)
-
     sync_high = err < SYNC_HIGH_THRESHOLD
-
     if sync_high:
         if u_level > STATE_HIGH_THRESHOLD and s_level > STATE_HIGH_THRESHOLD:
             return FLOW
         if u_level < STATE_LOW_THRESHOLD and s_level < STATE_LOW_THRESHOLD:
             return REST
-        return FLOW  # оба около середины — всё равно работаем
-
-    # Low sync
+        return FLOW
     if u_level < STATE_LOW_THRESHOLD and s_level > STATE_HIGH_THRESHOLD:
         return PROTECT
     if u_level > STATE_HIGH_THRESHOLD and s_level < STATE_LOW_THRESHOLD:
         return CONFESS
-
-    # Низкий sync без чёткого дисбаланса — по-умолчанию идём как FLOW,
-    # но метрика sync_error сама по себе = сигнал для advice слоя
     return FLOW
 
 
-# ── Global singleton ───────────────────────────────────────────────────────
+# ── UserState — thin facade над _rgk ──────────────────────────────────────
 
-_global_user: Optional[UserState] = None
+class UserState:
+    """Backward-compat facade. Все state в self._rgk, методы — 1-line delegates."""
+
+    def __init__(self, dopamine=0.5, serotonin=0.5, norepinephrine=0.5,
+                 burnout=0.0, agency=0.5, *, rgk: "Optional[РГК]" = None):
+        self._rgk = rgk if rgk is not None else РГК()
+        self._rgk.user.gain.value = dopamine
+        self._rgk.user.hyst.value = serotonin
+        self._rgk.user.aperture.value = norepinephrine
+        self._rgk.burnout.value = burnout
+        self._rgk.agency.value = agency
+
+    # ── Chem (5 axes) read/write ──────────────────────────────────────────
+
+    @property
+    def dopamine(self): return float(self._rgk.user.gain.value)
+    @dopamine.setter
+    def dopamine(self, v): self._rgk.user.gain.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def serotonin(self): return float(self._rgk.user.hyst.value)
+    @serotonin.setter
+    def serotonin(self, v): self._rgk.user.hyst.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def norepinephrine(self): return float(self._rgk.user.aperture.value)
+    @norepinephrine.setter
+    def norepinephrine(self, v): self._rgk.user.aperture.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def acetylcholine(self): return float(self._rgk.user.plasticity.value)
+    @acetylcholine.setter
+    def acetylcholine(self, v): self._rgk.user.plasticity.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def gaba(self): return float(self._rgk.user.damping.value)
+    @gaba.setter
+    def gaba(self, v): self._rgk.user.damping.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def valence(self): return float(self._rgk.valence.value)
+    @valence.setter
+    def valence(self, v): self._rgk.valence.value = max(-1.0, min(1.0, float(v)))
+
+    @property
+    def burnout(self): return float(self._rgk.burnout.value)
+    @burnout.setter
+    def burnout(self, v): self._rgk.burnout.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def agency(self): return float(self._rgk.agency.value)
+    @agency.setter
+    def agency(self, v): self._rgk.agency.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def mode(self): return self._rgk.user.mode
+
+    def balance(self): return self._rgk.user.balance()
+
+    def update_mode(self, perturbation): return self._rgk.user.update_mode(float(perturbation))
+
+    # ── Predictive layer ──────────────────────────────────────────────────
+
+    @property
+    def expectation(self): return float(self._rgk.u_exp.value)
+    @expectation.setter
+    def expectation(self, v): self._rgk.u_exp.value = max(0.0, min(1.0, float(v)))
+
+    @property
+    def expectation_by_tod(self):
+        return {t: float(self._rgk.u_exp_tod[t].value) for t in _TOD_NAMES}
+
+    @property
+    def expectation_vec(self): return self._rgk.u_exp_vec.value
+    @expectation_vec.setter
+    def expectation_vec(self, v):
+        arr = np.asarray(v, dtype=np.float32)
+        ema = self._rgk.u_exp_vec
+        if arr.shape == ema.value.shape:
+            ema.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
+
+    @property
+    def hrv_baseline_by_tod(self):
+        return {t: (float(self._rgk.hrv_base_tod[t].value)
+                     if self._rgk.hrv_base_tod[t]._seeded else None)
+                for t in _TOD_NAMES}
+
+    # ── Aux state (HRV, activity, focus, day_summary, timestamps) ─────────
+
+    @property
+    def hrv_coherence(self): return self._rgk.hrv_coherence
+    @hrv_coherence.setter
+    def hrv_coherence(self, v): self._rgk.hrv_coherence = v
+
+    @property
+    def hrv_stress(self): return self._rgk.hrv_stress
+    @hrv_stress.setter
+    def hrv_stress(self, v): self._rgk.hrv_stress = v
+
+    @property
+    def hrv_rmssd(self): return self._rgk.hrv_rmssd
+    @hrv_rmssd.setter
+    def hrv_rmssd(self, v): self._rgk.hrv_rmssd = v
+
+    @property
+    def activity_magnitude(self): return self._rgk.activity_magnitude
+    @activity_magnitude.setter
+    def activity_magnitude(self, v): self._rgk.activity_magnitude = float(v)
+
+    @property
+    def last_sleep_duration_h(self): return self._rgk.last_sleep_duration_h
+    @last_sleep_duration_h.setter
+    def last_sleep_duration_h(self, v): self._rgk.last_sleep_duration_h = v
+
+    @property
+    def cognitive_load_today(self): return self._rgk.cognitive_load_today
+    @cognitive_load_today.setter
+    def cognitive_load_today(self, v): self._rgk.cognitive_load_today = float(v)
+
+    @property
+    def day_summary(self): return self._rgk.day_summary
+    @day_summary.setter
+    def day_summary(self, v): self._rgk.day_summary = v
+
+    @property
+    def focus_residue(self): return self._rgk.focus_residue
+    @focus_residue.setter
+    def focus_residue(self, v): self._rgk.focus_residue = float(v)
+
+    @property
+    def _last_focus_input_ts(self): return self._rgk._last_focus_input_ts
+    @_last_focus_input_ts.setter
+    def _last_focus_input_ts(self, v): self._rgk._last_focus_input_ts = v
+
+    @property
+    def _last_focus_mode_id(self): return self._rgk._last_focus_mode_id
+    @_last_focus_mode_id.setter
+    def _last_focus_mode_id(self, v): self._rgk._last_focus_mode_id = v
+
+    @property
+    def _last_input_ts(self): return self._rgk._last_input_ts
+    @_last_input_ts.setter
+    def _last_input_ts(self, v): self._rgk._last_input_ts = v
+
+    @property
+    def _surprise_boost_remaining(self): return self._rgk._surprise_boost_remaining
+    @_surprise_boost_remaining.setter
+    def _surprise_boost_remaining(self, v): self._rgk._surprise_boost_remaining = int(v)
+
+    @property
+    def _last_user_surprise_ts(self): return self._rgk._last_user_surprise_ts
+    @_last_user_surprise_ts.setter
+    def _last_user_surprise_ts(self, v): self._rgk._last_user_surprise_ts = v
+
+    # ── Update methods (1-line delegates на _rgk.u_X) ──────────────────────
+
+    def update_from_hrv(self, coherence=None, stress=None, rmssd=None, activity=None):
+        self._rgk.u_hrv(coherence=coherence, stress=stress, rmssd=rmssd, activity=activity)
+
+    def update_from_engagement(self, signal=0.65): self._rgk.u_engage(signal)
+    def update_from_feedback(self, kind): self._rgk.u_feedback(kind)
+    def update_from_chat_sentiment(self, sentiment): self._rgk.u_chat(sentiment)
+    def update_from_plan_completion(self, completed, planned):
+        self._rgk.u_plan(completed or 0, planned or 0)
+    def update_from_energy(self, decisions_today, max_budget=100.0):
+        self._rgk.u_energy(decisions_today, max_budget=max_budget or 100.0)
+
+    def register_input(self, now=None):
+        self._rgk.u_register_input(now)
+
+    def bump_focus_residue(self, mode_id, now=None):
+        self._rgk.u_focus_bump(mode_id, now)
+
+    def decay_focus_residue(self, dt_seconds):
+        self._rgk.u_focus_decay(dt_seconds)
+
+    def tick_expectation(self): self._rgk.tick_u_pred()
+
+    def apply_subjective_surprise(self, signed_surprise, blend=0.4):
+        self._rgk.u_apply_surprise(signed_surprise, blend)
+
+    def apply_checkin(self, stress=None, focus=None, reality=None):
+        self._rgk.u_apply_checkin(stress, focus, reality)
+
+    def apply_surprise_boost(self, n_ticks=SURPRISE_BOOST_DEFAULT_TICKS):
+        self._rgk.u_apply_boost(n_ticks)
+
+    def feed_acetylcholine(self, novelty, boost=False):
+        self._rgk.u_ach_feed(novelty, boost)
+
+    def feed_gaba(self): self._rgk.u_gaba_feed()
+
+    def update_cognitive_load(self):
+        from .user_dynamics import update_cognitive_load
+        update_cognitive_load(self._rgk)
+
+    def rollover_day(self, hrv_recovery=None):
+        from .user_dynamics import rollover_day
+        rollover_day(self._rgk, hrv_recovery)
+
+    # ── Vector + derived properties (delegate в _rgk.project) ─────────────
+
+    def vector(self): return self._rgk.user.vector()
+    def state_level(self): return float((self.dopamine + self.serotonin) / 2.0)
+
+    @property
+    def reality(self): return self.state_level()
+
+    @property
+    def surprise(self):
+        tod = self._rgk._current_tod()
+        ref = float(self._rgk.u_exp_tod[tod].value)
+        if ref == 0.5:
+            ref = float(self._rgk.u_exp.value)
+        return float(self.reality - ref)
+
+    @property
+    def surprise_vec(self): return self.vector() - self.expectation_vec
+
+    @property
+    def imbalance(self): return float(np.linalg.norm(self.surprise_vec))
+
+    @property
+    def attribution(self): return self._rgk.project("user_state")["attribution"]
+    @property
+    def attribution_magnitude(self): return self._rgk.project("user_state")["attribution_magnitude"]
+    @property
+    def attribution_signed(self): return self._rgk.project("user_state")["attribution_signed"]
+    @property
+    def agency_gap(self): return self._rgk.project("user_state")["agency_gap"]
+    @property
+    def hrv_surprise(self): return self._rgk.hrv_surprise()
+    @property
+    def frequency_regime(self): return self._rgk.frequency_regime()
+    @property
+    def activity_zone(self): return self._rgk.activity_zone()
+    @property
+    def named_state(self): return self._rgk.project("named_state")
+
+    @property
+    def capacity_zone(self): return self._rgk.project("capacity")["zone"]
+    @property
+    def capacity_reason(self): return self._rgk.project("capacity")["reasons"]
+    @property
+    def capacity_indicators(self): return self._rgk.project("capacity")
+
+    # ── Serialization (delegates на _rgk.serialize_user/load_user) ────────
+
+    def to_dict(self): return self._rgk.serialize_user()
+
+    @classmethod
+    def from_dict(cls, d):
+        u = cls()
+        u._rgk.load_user(d)
+        return u
+
+
+# ── Global singleton ──────────────────────────────────────────────────────
+
+_global_user: "Optional[UserState]" = None
 
 
 def get_user_state() -> UserState:
-    """Глобальный UserState — один на человека, shared across workspaces.
-    B0: использует singleton РГК, чтобы каскад зеркал (UserState/Neurochem/
-    ProtectiveFreeze) работал на одном объекте."""
+    """Singleton, привязанный к global РГК (каскад зеркал)."""
     global _global_user
-    if _global_user is None:
-        from .rgk import get_global_rgk
+    if _global_user is None or _global_user._rgk is not get_global_rgk():
         _global_user = UserState(rgk=get_global_rgk())
     return _global_user
 
 
 def set_user_state(state: UserState):
-    """Replace global user state (for tests or restart)."""
+    """Replace global user state (for tests / restart)."""
     global _global_user
     _global_user = state
