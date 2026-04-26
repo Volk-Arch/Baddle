@@ -29,6 +29,11 @@ from .ema import EMA, VectorEMA, Decays, TimeConsts
 
 _TOD = ("morning", "day", "evening", "night")
 
+# RPE (reward prediction error) — параметры s_outcome.
+# Раньше дублировались в Neurochem.RPE_GAIN/RPE_WINDOW. Single source — здесь.
+RPE_GAIN = 0.15      # как сильно dopamine сдвигается на единицу RPE
+RPE_WINDOW = 20      # скользящее окно для baseline Δconfidence
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # 1. Resonator — один зеркальный контур
@@ -258,11 +263,11 @@ class РГК:
         rpe = actual - predicted
         # Bespoke additive (не EMA — discrete bump)
         self.system.gain.value = max(0.0, min(1.0,
-            self.system.gain.value + 0.15 * rpe))
+            self.system.gain.value + RPE_GAIN * rpe))
         self.recent_rpe = rpe
         self._rpe_hist.append(actual)
-        if len(self._rpe_hist) > 20:
-            self._rpe_hist = self._rpe_hist[-20:]
+        if len(self._rpe_hist) > RPE_WINDOW:
+            self._rpe_hist = self._rpe_hist[-RPE_WINDOW:]
         return rpe
 
     # ── Pressure ──────────────────────────────────────────────────────────

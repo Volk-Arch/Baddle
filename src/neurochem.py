@@ -38,7 +38,7 @@ from typing import Optional
 import numpy as np
 
 from .ema import TimeConsts
-from .rgk import РГК
+from .rgk import RPE_GAIN, RPE_WINDOW, РГК
 
 
 # Phase D Step 4c: Neurochem extractors + _build_neurochem_registry удалены.
@@ -60,9 +60,6 @@ class Neurochem:
     `tick_expectation()` (self-prediction baseline). Properties делегируют
     к `_rgk` — единый источник истины.
     """
-
-    RPE_WINDOW = 20    # скользящее окно для baseline Δconfidence
-    RPE_GAIN = 0.15    # как сильно dopamine сдвигается на единицу RPE
 
     def __init__(self,
                  dopamine: float = 0.5,
@@ -272,11 +269,11 @@ class Neurochem:
         rpe = actual - predicted
         # RPE — additive bump not EMA, direct value mutation + clamp.
         da = self._rgk.system.gain
-        da.value = max(0.0, min(1.0, da.value + self.RPE_GAIN * rpe))
+        da.value = max(0.0, min(1.0, da.value + RPE_GAIN * rpe))
         self.recent_rpe = rpe
         self._delta_history.append(actual)
-        if len(self._delta_history) > self.RPE_WINDOW:
-            self._delta_history = self._delta_history[-self.RPE_WINDOW:]
+        if len(self._delta_history) > RPE_WINDOW:
+            self._delta_history = self._delta_history[-RPE_WINDOW:]
         return rpe
 
     # ── Bayesian step через distinct ────────────────────────────────────
