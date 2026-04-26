@@ -171,7 +171,6 @@ class РГК:
         self._rpe_hist: list = []
         self.recent_rpe: float = 0.0
         self._fb = {"accepted": 0, "rejected": 0, "ignored": 0}
-        self._tod = "day"
 
         # B4 Wave 2: user-side bespoke state (sensor passthrough + aggregates).
         # Перемещено из UserState чтобы projectors имели полный access к
@@ -198,7 +197,7 @@ class РГК:
             stress = max(0.0, min(1.0, 1.0 - float(rmssd) / 80.0))
         if coherence is not None:
             self.user.hyst.feed(float(coherence))
-            self.hrv_base_tod[self._tod].feed(float(coherence))
+            self.hrv_base_tod[self._current_tod()].feed(float(coherence))
         if stress is not None:
             self.user.aperture.feed(float(stress))
         self.tick_u_pred()
@@ -243,7 +242,7 @@ class РГК:
     def tick_u_pred(self):
         sl = (float(self.user.gain.value) + float(self.user.hyst.value)) / 2.0
         self.u_exp.feed(sl)
-        self.u_exp_tod[self._tod].feed(sl)
+        self.u_exp_tod[self._current_tod()].feed(sl)
         self.u_exp_vec.feed(self.user.vector())
 
     # ── System feeds ──────────────────────────────────────────────────────
@@ -333,7 +332,10 @@ class РГК:
     # ── B4 Wave 2: non-chem derivations (HRV / activity bespoke в проекторах)
 
     def _current_tod(self) -> str:
-        """Time-of-day для TOD-scoped baselines. Mirror UserState._current_tod."""
+        """Time-of-day для TOD-scoped baselines. 4 окна:
+        morning [5,12), day [12,18), evening [18,23), night otherwise.
+        Single source — раньше дублировался в UserState._current_tod
+        с РАСХОЖДЕНИЕМ нарезки (5-11/11-17/17-23) — fix для h=11,17."""
         import datetime as _dt
         h = _dt.datetime.now().hour
         if 5 <= h < 12:
@@ -405,7 +407,7 @@ class РГК:
         """
         if domain == "user_state":
             ev = self.u_exp_vec.value
-            cur_tod = self.u_exp_tod[self._tod].value
+            cur_tod = self.u_exp_tod[self._current_tod()].value
             ref = cur_tod if abs(cur_tod - 0.5) > 1e-9 else self.u_exp.value
             sl = (self.user.gain.value + self.user.hyst.value) / 2.0
             vec = self.user.vector()
@@ -581,7 +583,8 @@ def _run_identity_sequence() -> "РГК":
     snapshot (зафиксирован 2026-04-24 на legacy-коде).
     """
     r = РГК()
-    r._tod = "day"
+    # Fixate TOD для repeatability (вместо реального datetime.now()).
+    r._current_tod = lambda: "day"
 
     # User events
     for _ in range(5):

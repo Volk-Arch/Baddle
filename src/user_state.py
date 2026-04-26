@@ -505,7 +505,7 @@ class UserState:
         if coherence is not None:
             self.hrv_coherence = max(0.0, min(1.0, float(coherence)))
             self._rgk.user.hyst.feed(self.hrv_coherence)
-            self._rgk.hrv_base_tod[self._current_tod()].feed(self.hrv_coherence)
+            self._rgk.hrv_base_tod[self._rgk._current_tod()].feed(self.hrv_coherence)
 
         if stress is not None:
             self.hrv_stress = max(0.0, min(1.0, float(stress)))
@@ -515,18 +515,6 @@ class UserState:
             self.activity_magnitude = max(0.0, min(5.0, float(activity)))
 
         self.tick_expectation()
-
-    @staticmethod
-    def _current_tod() -> str:
-        """Одинаковая нарезка что в graph_logic._current_snapshot и
-        cognitive_loop._generate_sync_seeking_message: 4 окна по 6 часов.
-        """
-        import datetime as _dt
-        h = _dt.datetime.now().hour
-        if 5 <= h < 11:   return "morning"
-        if 11 <= h < 17:  return "day"
-        if 17 <= h < 23:  return "evening"
-        return "night"
 
     # ── Timing / engagement ────────────────────────────────────────────────
 
@@ -724,7 +712,7 @@ class UserState:
             vec_override = None
 
         sl = self.state_level()
-        tod = self._current_tod()
+        tod = self._rgk._current_tod()
         v = self.vector()
 
         if scalar_override is None:
@@ -760,7 +748,7 @@ class UserState:
             self.state_level() - float(signed_surprise)))
         override = max(0.001, min(0.999, 1.0 - float(blend)))
         self._rgk.u_exp.feed(target, decay_override=override)
-        tod = self._current_tod()
+        tod = self._rgk._current_tod()
         self._rgk.u_exp_tod[tod].feed(target, decay_override=override)
 
     def apply_checkin(self,
@@ -852,7 +840,7 @@ class UserState:
         TOD-scoped: утренняя apathy не маскирует вечернюю. Если TOD baseline
         ещё в default (0.5) — fallback на global expectation.
         """
-        tod = self._current_tod()
+        tod = self._rgk._current_tod()
         ref = float(self._rgk.u_exp_tod[tod].value)
         if ref == 0.5:
             ref = float(self._rgk.u_exp.value)

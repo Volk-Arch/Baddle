@@ -86,7 +86,7 @@ def _emit_random_event(r: РГК, rng: random.Random) -> None:
 
 def _run_random_trace(seed: int, steps: int = 100) -> РГК:
     r = РГК()
-    r._tod = "day"
+    r._current_tod = lambda: "day"
     rng = random.Random(seed)
     for _ in range(steps):
         _emit_random_event(r, rng)

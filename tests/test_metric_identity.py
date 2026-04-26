@@ -72,8 +72,8 @@ def states(monkeypatch):
     TOD запинен в 'day' через monkeypatch — без этого tests на разных часах
     падают (`_current_tod` использует datetime.now()).
     """
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     us = UserState()
     nc = Neurochem()
@@ -220,8 +220,8 @@ def test_checkin_event_identity(monkeypatch):
     старом checkins.py (до миграции). Формулы не менялись, маршрут — apply_checkin
     после Phase D Step 3c.
     """
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
     from src.ema import Decays
 
     # Path A — ручной inline EMA через setters (semantics старого checkins)
@@ -253,8 +253,8 @@ def test_apply_subjective_surprise_identity(monkeypatch):
     """apply_subjective_surprise должен быть эквивалентен старому
     inline nudge `expectation.feed(reality - s, decay_override=0.6)`.
     """
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     # Path A — ручной nudge (то что делал старый checkins после fix'а)
     us_a = UserState()
@@ -290,8 +290,8 @@ def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "CHECKINS_FILE", tmp_path / "checkins.jsonl")
     from src import checkins
     monkeypatch.setattr(checkins, "_CHECKIN_FILE", tmp_path / "checkins.jsonl")
-    monkeypatch.setattr(UserState, "_current_tod",
-                         staticmethod(lambda: "day"))
+    from src.rgk import РГК
+    monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     from src.user_state import set_user_state, get_user_state
     from src.ema import Decays
