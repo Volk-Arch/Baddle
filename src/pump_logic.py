@@ -15,7 +15,6 @@ import numpy as np
 
 from .graph_logic import (
     _graph, _graph_generate, _clean_thought,
-    _ensure_embeddings, _get_texts, _add_node,
     cosine_similarity, touch_node,
 )
 from .prompts import _p

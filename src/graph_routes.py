@@ -1,28 +1,30 @@
 """baddle — graph Flask routes (Blueprint)."""
 
+import logging
 import random
-from collections import defaultdict, deque
-from datetime import datetime, timezone
+import re
+from collections import defaultdict
 
 import numpy as np
 
 from flask import Blueprint, request, jsonify
 
 from .prompts import _p
-from .main import cosine_similarity, distinct, distinct_decision
+from .main import cosine_similarity
 from .graph_logic import (
-    _graph, graph_lock, reset_graph,
+    _graph, reset_graph,
     _auto_type_and_confidence, _auto_evidence_relation,
     _bayesian_update_distinct, _d_from_relation,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
     _graph_generate, _clean_thought, _generate_thought,
-    _ensure_embeddings, _compute_edges, _find_clusters, _remap_edges,
+    _ensure_embeddings, _compute_edges, _find_clusters,
     _detect_traps, _compute_alpha_beta,
     sample_in_embedding_space,
-    touch_node, touch_nodes, TOUCH_BOOST_DEFAULT,
+    touch_node, TOUCH_BOOST_DEFAULT,
 )
 from .hrv_manager import get_manager as get_hrv_manager
-from .http_utils import APIError, json_endpoint
+
+log = logging.getLogger(__name__)
 
 graph_bp = Blueprint("graph", __name__)
 
@@ -1006,7 +1008,6 @@ def graph_horizon_params():
 @graph_bp.route("/graph/compare", methods=["POST"])
 def graph_compare():
     """LLM-as-judge: compare verified options and pick the best."""
-    from .prompts import _p
     d = _p_data()
     indices = d.get("indices", [])
     lang = d.get("lang", "ru")

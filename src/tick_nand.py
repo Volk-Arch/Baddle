@@ -14,9 +14,8 @@ convergence decided emergently by avg_d between subgoals.
 This is the single tick engine — exported as both `tick` and `tick_emergent`.
 """
 import logging
-from typing import Optional
 
-from .thinking import classify_nodes, _find_similar_group, _pick_target, _pick_distant_pair, _tick_force_collapse
+from .thinking import classify_nodes, _pick_target, _pick_distant_pair, _tick_force_collapse
 from .main import distinct, distinct_decision
 
 log = logging.getLogger(__name__)

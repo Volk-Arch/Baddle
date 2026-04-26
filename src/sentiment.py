@@ -14,7 +14,6 @@ LLM-вызов минимальный (max_tokens=5, temp=0) — не трати
 """
 import hashlib
 import logging
-from typing import Optional
 
 log = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 """baddle — graph thinking logic (nodes, edges, Bayes, similarity, generation)."""
 
 import re
-import random
 import logging
 import threading
 from collections import defaultdict, deque
@@ -430,7 +429,6 @@ def record_action(actor: str, action_kind: str, text: str,
     Нода получает: type='action', actor, action_kind, text, context,
     closed=False, outcome_idx=None, плюс стандартные fields через _make_node.
     """
-    from datetime import datetime, timezone as _tz
     ctx = dict(context) if context is not None else _current_snapshot()
     with graph_lock:
         nodes = _graph["nodes"]

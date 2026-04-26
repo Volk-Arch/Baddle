@@ -486,9 +486,7 @@ class ProtectiveFreeze:
     def from_dict(cls, d: dict) -> "ProtectiveFreeze":
         pf = cls()
         pf._rgk.conflict.value = float(d.get("conflict_accumulator", 0.0))
-        # Legacy fallback: до 2026-04-23 поле называлось `desync_pressure`.
-        pf.silence_pressure = float(
-            d.get("silence_pressure", d.get("desync_pressure", 0.0)))
+        pf.silence_pressure = float(d.get("silence_pressure", 0.0))
         pf._rgk.imbalance_press.value = float(d.get("imbalance_pressure", 0.0))
         pf._rgk.sync_fast.value = float(d.get("sync_error_ema_fast", 0.0))
         pf._rgk.sync_slow.value = float(d.get("sync_error_ema_slow", 0.0))

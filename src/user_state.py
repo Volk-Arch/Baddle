@@ -88,7 +88,6 @@ Updates через explicit methods:
 Bespoke остаются: burnout-bump (+0.05 на reject), streak-bias valence
 (дискретные additive bumps, не EMA).
 """
-import math
 import time
 from typing import Optional
 

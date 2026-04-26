@@ -20,7 +20,6 @@
 import json
 import logging
 import time
-from datetime import datetime
 from typing import Optional
 
 log = logging.getLogger(__name__)

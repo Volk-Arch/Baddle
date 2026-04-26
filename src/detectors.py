@@ -371,8 +371,6 @@ def detect_sync_seeking(ctx: DetectorContext) -> Optional[Signal]:
     вмешательством vs без.
     """
     try:
-        from .user_state import get_user_state
-
         silence = float(ctx.freeze.silence_pressure)
         if silence < 0.3:   # SYNC_SEEKING_SILENCE_MIN
             return None

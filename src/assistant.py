@@ -6,7 +6,7 @@ User sees conversation. Baddle runs the graph underneath.
 import json
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, Dict
 
 from flask import Blueprint, request, jsonify, Response
@@ -1201,8 +1201,7 @@ def assist_history():
       }
     """
     from .state_graph import get_state_graph
-    from datetime import datetime, timezone
-    import time as _t
+    from datetime import datetime
 
     try:
         limit = int(request.args.get("limit", 50))
@@ -2667,9 +2666,12 @@ def assist_morning():
     capacity = ctx.get("capacity") or {}
     recovery = (hrv_state or {}).get("energy_recovery") if hrv_state else None
 
-    # Compose greeting
+    # Compose greeting. Phase C cleanup (2026-04-26): убрана строка "Бюджет:
+    # {energy_val}/100" — Phase C перешёл на 3-zone capacity вместо single
+    # energy budget; `energy` variable не определялась → runtime NameError.
+    # Capacity zone live-обновляется через morning briefing sections (capacity),
+    # см. _briefing_capacity helper в cognitive_loop.py.
     recovery_pct = round((recovery or 0.7) * 100)
-    energy_val = energy["energy"]
 
     if lang == "ru":
         if recovery_pct >= 80:
@@ -2678,7 +2680,6 @@ def assist_morning():
             greeting = f"Доброе утро. Восстановление {recovery_pct}%. Средний день — начни с важного."
         else:
             greeting = f"Доброе утро. Восстановление {recovery_pct}%. Береги энергию, лёгкие задачи первыми."
-        greeting += f" Бюджет: {int(energy_val)}/100."
     else:
         if recovery_pct >= 80:
             greeting = f"Good morning. Recovery {recovery_pct}%. Great day for complex tasks."
@@ -2686,7 +2687,6 @@ def assist_morning():
             greeting = f"Good morning. Recovery {recovery_pct}%. Medium day — start with priorities."
         else:
             greeting = f"Good morning. Recovery {recovery_pct}%. Save energy, light tasks first."
-        greeting += f" Budget: {int(energy_val)}/100."
 
     _log_decision(state, kind="morning_briefing")
     _save_state(state)

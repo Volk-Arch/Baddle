@@ -664,8 +664,6 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     Возвращает `deep_research` card: trace шагов + final synthesis +
     список созданных нод (юзер видит реальную работу системы).
     """
-    from .prompts import _p
-    from .graph_routes import _add_node as _add_node_route  # same module
     from .graph_logic import _compute_edges
     from .api_backend import get_neural_defaults, get_mode_depth
 

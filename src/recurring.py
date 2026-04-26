@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, date as date_type
 from typing import Optional
 
-from .goals_store import _replay, list_goals
+from .goals_store import _replay
 
 log = logging.getLogger(__name__)
 

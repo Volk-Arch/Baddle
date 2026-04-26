@@ -22,8 +22,6 @@ identity check для регрессий формул. OK = совпало с TO
 """
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from .ema import EMA, VectorEMA, Decays, TimeConsts

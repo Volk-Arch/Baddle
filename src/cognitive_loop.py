@@ -21,7 +21,6 @@ NE-бюджет:
 Design: poll-based, non-blocking. UI дёргает /assist/alerts чтобы увидеть
 накопленные инсайты.
 """
-import json
 import threading
 import time
 import logging
