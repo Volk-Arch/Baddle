@@ -949,6 +949,22 @@ select {
 }
 .chat-cmd-btn:hover { background: #3f3f46; color: #e4e4e7; }
 .chat-cmd-btn.active { background: #4f46e5; color: white; border-color: #4f46e5; }
+/* ⭐ Insight bookmark — те же размеры что chat-cmd-btn, warm-акцент. */
+#assist-bookmark-btn {
+  background: #27272a;
+  color: #fb923c;
+  border: 1px solid #3f3f46;
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+#assist-bookmark-btn:hover {
+  background: #3f3f46;
+  transform: scale(1.05);
+}
 .chat-cmd-menu {
   position: absolute;
   bottom: calc(100% + 6px);

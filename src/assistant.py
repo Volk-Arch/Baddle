@@ -1310,6 +1310,64 @@ def assist_named_states():
     return jsonify({"states": list_named_states()})
 
 
+@assistant_bp.route("/assist/bookmark", methods=["POST"])
+def assist_bookmark():
+    """Insight bookmark — субъективный «эта мысль повлияла» маркер.
+
+    Action Memory ловит actions/outcomes, episodic memory — nodes, но
+    subjective marker отсутствовал. Пользователь жмёт ⭐ → нода в графе
+    с типом "insight_bookmark", полным контекстом (capacity_zone,
+    mode, balance, frequency_regime, named_state) и опц. session_indices.
+
+    Через год: distinct(query) на insight bookmarks → найти «где сегодня
+    случился сдвиг похожий на текущий». Бесплатно для long-term self-research.
+
+    Body:
+        {text: str, session_indices?: list[int]}
+    Returns:
+        {ok: True, node_id: int, context: dict}
+    """
+    from .graph_logic import _add_node, _graph
+    from .rgk import get_global_rgk
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "text required"}), 400
+
+    # Snapshot текущего контекста — что было в моменте сдвига.
+    try:
+        r = get_global_rgk()
+        us  = r.project("user_state")
+        cap = r.project("capacity")
+        ns  = r.project("named_state")
+        context = {
+            "capacity_zone":    cap.get("zone"),
+            "frequency_regime": us.get("frequency_regime"),
+            "mode_user":        us.get("mode"),
+            "balance_user":     us.get("balance"),
+            "named_state":      {"key": ns.get("key"), "label": ns.get("label")},
+        }
+    except Exception as e:
+        log.debug(f"[bookmark] context snapshot failed: {e}")
+        context = {}
+
+    session_indices = data.get("session_indices") or []
+
+    node_id = _add_node(text, depth=0, topic="insight",
+                        confidence=1.0, node_type="insight_bookmark")
+    # Прикрепляем context как extra fields на ноде (не в _make_node signature).
+    try:
+        node = _graph["nodes"][node_id]
+        node["bookmark_context"] = context
+        if session_indices:
+            node["session_indices"] = list(session_indices)
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "node_id": node_id, "context": context})
+
+
 # ── User Profile endpoints ─────────────────────────────────────────────
 
 @assistant_bp.route("/profile", methods=["GET"])

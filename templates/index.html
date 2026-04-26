@@ -651,19 +651,46 @@
       <div id="mode-chip-menu" class="mode-chip-menu" style="display:none" onclick="event.stopPropagation()"></div>
     </div>
 
-    <!-- Input (textarea + / команды + Continue + Send) -->
+    <!-- Input (textarea + / команды + ⭐ Bookmark + Continue + Send) -->
     <div class="assist-input-row">
       <textarea id="assist-input" placeholder="Спроси или поставь задачу..." rows="1"></textarea>
       <div class="chat-cmd-wrap">
         <button id="chat-cmd-btn" class="chat-cmd-btn" onclick="toggleCmdMenu(event)" aria-label="Команды" title="Быстрые команды">/</button>
         <div id="chat-cmd-menu" class="chat-cmd-menu" style="display:none" onclick="event.stopPropagation()"></div>
       </div>
+      <!-- ⭐ Insight bookmark: пометить «эта мысль повлияла» с context-снимком. -->
+      <button id="assist-bookmark-btn" onclick="assistOpenBookmark()"
+              aria-label="Bookmark insight"
+              title="Insight bookmark: сохранить мысль вместе со снимком текущего состояния (capacity, mode, balance, regime). Через год можно найти где сегодня был сдвиг.">⭐</button>
       <!-- ↳ Продолжить: показывается только если есть предыдущая сессия -->
       <button id="assist-continue-btn" onclick="assistSend(true)"
               aria-label="Продолжить тему"
               title="Включить мысли предыдущего ответа в финальный synthesis. Полезно когда развиваешь тему."
               style="display:none;background:#1e1b4b;color:#a5b4fc;border:1px solid #4338ca">↳</button>
       <button id="assist-send-btn" onclick="assistSend(false)" aria-label="Send">→</button>
+    </div>
+
+    <!-- Insight bookmark modal: textarea + автоматический context snapshot. -->
+    <div id="bookmark-modal" class="weekly-modal" style="display:none" onclick="bookmarkClose(event)">
+      <div class="weekly-content" onclick="event.stopPropagation()" style="max-width:480px">
+        <div class="weekly-header">
+          ⭐ Insight bookmark
+          <button class="weekly-close" onclick="bookmarkClose()">×</button>
+        </div>
+        <div style="padding:12px 16px">
+          <div style="font-size:11px;color:#71717a;margin-bottom:6px">
+            Что зацепило? Состояние сохранится автоматически (capacity, mode, balance, regime).
+          </div>
+          <textarea id="bookmark-text" rows="3" maxlength="500"
+                    placeholder="Например: «осознал что переключаюсь на лёгкое когда устал — закономерно»"
+                    style="width:100%;background:#18181b;color:#e4e4e7;border:1px solid #27272a;border-radius:6px;padding:8px;font-size:13px;font-family:inherit;resize:vertical"></textarea>
+          <div id="bookmark-context-preview" style="margin-top:8px;font-size:10px;color:#52525b;font-family:ui-monospace,monospace"></div>
+          <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
+            <button onclick="bookmarkClose()" style="background:transparent;color:#71717a;border:1px solid #3f3f46;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">Отмена</button>
+            <button id="bookmark-save-btn" onclick="assistSaveBookmark()" style="background:#fb923c;color:#18181b;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Сохранить</button>
+          </div>
+        </div>
+      </div>
     </div>
     </div>
     <!-- ═══ /Sub-page: Chat ═══ -->

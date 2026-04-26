@@ -4741,3 +4741,81 @@ if (document.readyState === 'loading') {
 } else {
   assistInit(); activityInit(); _initSubtabs(); _initModes();
 }
+
+
+// ── Insight bookmark (⭐) ─────────────────────────────────────────────
+//
+// Открывает modal с textarea + автоматический snapshot текущего state
+// (capacity_zone / mode / balance / frequency_regime / named_state).
+// POST /assist/bookmark создаёт ноду type="insight_bookmark" в графе.
+
+async function assistOpenBookmark() {
+  const modal = document.getElementById('bookmark-modal');
+  const ta    = document.getElementById('bookmark-text');
+  const prev  = document.getElementById('bookmark-context-preview');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  if (ta) { ta.value = ''; setTimeout(() => ta.focus(), 50); }
+  // Сразу подтягиваем context для preview (живой snapshot)
+  if (prev) {
+    prev.textContent = '· загружаю снимок состояния…';
+    try {
+      const r = await fetch('/assist/state').then(x => x.json());
+      const us = r.user_state || {};
+      const cap = us.capacity_zone || '—';
+      const mode = us.mode || '—';
+      const balance = typeof us.balance === 'number' ? us.balance.toFixed(2) : '—';
+      const regime = us.frequency_regime || '—';
+      const ns = (us.named_state || {}).label || (us.named_state || {}).key || '—';
+      prev.textContent = `📸 zone=${cap} · mode=${mode} · balance=${balance} · regime=${regime} · state=${ns}`;
+    } catch (e) {
+      prev.textContent = '⚠ state snapshot не доступен';
+    }
+  }
+}
+
+function bookmarkClose(ev) {
+  if (ev && ev.target.id !== 'bookmark-modal') return;
+  const modal = document.getElementById('bookmark-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function assistSaveBookmark() {
+  const ta = document.getElementById('bookmark-text');
+  const btn = document.getElementById('bookmark-save-btn');
+  const text = (ta?.value || '').trim();
+  if (!text) {
+    ta?.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Сохраняю…'; }
+  try {
+    const res = await fetch('/assist/bookmark', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      bookmarkClose();
+      // Лёгкий toast — переиспользуем title attribute через alert? Лучше
+      // мини-визуальный feedback на самой ⭐ кнопке.
+      const star = document.getElementById('assist-bookmark-btn');
+      if (star) {
+        const orig = star.textContent;
+        star.textContent = '✓';
+        star.style.color = '#10b981';
+        setTimeout(() => {
+          star.textContent = orig;
+          star.style.color = '';
+        }, 1200);
+      }
+    } else {
+      console.warn('bookmark save failed', data);
+    }
+  } catch (e) {
+    console.warn('bookmark save error', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Сохранить'; }
+  }
+}
