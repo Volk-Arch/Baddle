@@ -278,6 +278,22 @@ def daily_bins(window_days: int = 30,
         bin_entry = {"date": date, "count": len(items)}
         for out_key, src_field in field_specs:
             vals = [float(it[src_field]) for it in items if it.get(src_field) is not None]
-            bin_entry[out_key] = round(sum(vals) / len(vals), 4) if vals else None
+            if not vals:
+                bin_entry[out_key] = None
+                bin_entry[out_key + "_ci"] = None
+                continue
+            mean = sum(vals) / len(vals)
+            bin_entry[out_key] = round(mean, 4)
+            # CI band per-day: ±1.96·std/√n classical confidence interval.
+            # n=1 → CI degenerate (точка); n≥2 → честный 95%.
+            if len(vals) >= 2:
+                var = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+                std_err = (var ** 0.5) / (len(vals) ** 0.5)
+                bin_entry[out_key + "_ci"] = [
+                    round(max(0.0, mean - 1.96 * std_err), 4),
+                    round(mean + 1.96 * std_err, 4),
+                ]
+            else:
+                bin_entry[out_key + "_ci"] = None
         out.append(bin_entry)
     return out

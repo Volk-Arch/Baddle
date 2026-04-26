@@ -56,7 +56,7 @@
 
 - [ ] **RAG в `execute_deep` и `_fastpath_chat`** — similar past nodes/outcomes через `distinct()` к query, инжект в prompt. Pump/DMN частично делают это, нужно довести до всех путей. **~3-5ч**.
 - [ ] **META-вопросы — ночная генерация «что ты не заметил»** — два scout-моста обнаруживают общий абстрактный паттерн → вопрос. Зависит от того что scout реально находит мосты. **~2-3ч**.
-- [ ] **Beta-prior на confidence (после данных)** — заменить single-scalar `confidence` на `(alpha, beta)` пару. Total `alpha+beta` = накопленный evidence weight (отличает «пусто 0.5» от «conflicting 0.5»); CI = диапазон. Use cases: (1) UI «степень уверенности в confidence», (2) Action Memory tone-scoring через CI overlap (не greedy winner), (3) Calibration трек прайм-директивы — CI сужение через 2 мес = система откалибровалась. Helpers `_beta_prior_update` + `_beta_mean_ci` были в коммите `e7834e6` (2026-04-17 «bays»), удалены 2026-04-26 как dead — `git show e7834e6 -- src/graph_logic.py` восстановит. **Блок:** 2 мес данных через прайм-директиву.
+- [x] ~~**Beta-prior на confidence**~~ ✅ done 2026-04-26. Sidecar Beta-prior на nodes: `alpha/beta` + cached `confidence_total` + `confidence_ci` рядом с scalar `confidence` (last остался authoritative из `_bayesian_update_distinct` + RPE feedback). `_bump_evidence(node, supports, strength)` обновляет alpha/beta параллельно в evidence path. UI: 5-й tab «📐 Calib» в Outcome dashboard — 95% CI band вокруг `sync_error_ema_slow` daily + verdict («CI узкий — калибровка установилась» / средний / широкий). 7 property tests. Через 2 мес use покажет сужение CI = реальная calibration.
 
 ### Sensors
 

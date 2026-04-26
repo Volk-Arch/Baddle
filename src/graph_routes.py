@@ -14,7 +14,7 @@ from .main import cosine_similarity
 from .graph_logic import (
     _graph, reset_graph,
     _auto_type_and_confidence, _auto_evidence_relation,
-    _bayesian_update_distinct, _d_from_relation,
+    _bayesian_update_distinct, _d_from_relation, _bump_evidence,
     _make_node, _ensure_node_fields, _get_texts, _add_node, _remove_node,
     _graph_generate, _clean_thought, _generate_thought,
     _ensure_embeddings, _compute_edges, _find_clusters,
@@ -601,6 +601,8 @@ def graph_expand():
                 old_conf = nodes[idx]["confidence"]
                 d_val = _d_from_relation(rel, strength)
                 nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                # Sidecar Beta-prior: tracks evidence weight для CI calibration.
+                _bump_evidence(nodes[idx], supports=(rel == "supports"), strength=strength)
                 print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] expand #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
@@ -695,6 +697,7 @@ def graph_elaborate():
                 old_conf = nodes[idx]["confidence"]
                 d_val = _d_from_relation(rel, strength)
                 nodes[idx]["confidence"] = _bayesian_update_distinct(old_conf, d_val)
+                _bump_evidence(nodes[idx], supports=(rel == "supports"), strength=strength)
                 print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} d={d_val:.2f} conf {old_conf:.2f}→{nodes[idx]['confidence']:.2f}")
             else:
                 print(f"[auto-evidence] elaborate #{idx}→#{new_idx}: {rel} str={strength} (conf unchanged at {nodes[idx]['confidence']:.2f})")
@@ -1489,9 +1492,10 @@ def graph_add_evidence():
     d_val = _d_from_relation(relation, strength)
     posterior = _bayesian_update_distinct(prior, d_val)
 
-    # Update hypothesis confidence
+    # Update hypothesis confidence + sidecar Beta-prior (CI tracking)
     old_conf = hyp["confidence"]
     hyp["confidence"] = posterior
+    _bump_evidence(hyp, supports=(relation == "supports"), strength=strength)
 
     # Add evidence node
     parent_topic = hyp.get("topic", "")
