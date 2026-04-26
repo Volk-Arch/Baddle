@@ -72,10 +72,10 @@ def stub_loop():
 def ctx(stub_loop):
     """DetectorContext с минимальными stubs."""
     user = SimpleNamespace(_last_input_ts=None, hrv_surprise=0.0)
-    neuro = SimpleNamespace()
+    # neuro field удалён в W4
     rgk = SimpleNamespace(silence_press=0.0)
     return DetectorContext(
-        now=1_000_000.0, user=user, neuro=neuro,
+        now=1_000_000.0, user=user,
         rgk=rgk, loop=stub_loop,
     )
 

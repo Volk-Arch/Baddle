@@ -164,7 +164,7 @@ def test_observation_suggestions_skipped_on_high_residue():
         _throttled=MagicMock(return_value=True),
     )
     ctx = DetectorContext(now=1_000_000.0, user=user,
-                           neuro=SimpleNamespace(),
+                           
                            rgk=SimpleNamespace(silence_press=0.0),
                            loop=loop)
     with patch("src.suggestions.collect_suggestions") as mock_collect:

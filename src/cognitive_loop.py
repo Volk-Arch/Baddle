@@ -111,7 +111,7 @@ def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
 
     # Dopamine → sampling temperature
     try:
-        dopamine = float(get_global_state().neuro.dopamine)
+        dopamine = float(get_global_state().rgk.system.gain.value)
     except Exception:
         dopamine = 0.5
     T = max(0.1, 1.1 - dopamine)   # DA=0 → T=1.1 (flat); DA=1 → T=0.1 (sharp)
@@ -553,12 +553,12 @@ class CognitiveLoop:
             sync_err = float(gs.sync_error)
 
             # Self-prediction: Baddle предсказывает собственную нейрохимию
-            gs.neuro.tick_expectation()
+            gs.rgk.tick_s_pred()
 
             # 4 PE-канала, все в [0, 1]
             sqrt3 = 1.7320508
             user_pe = float(u.imbalance) / sqrt3              # ‖3D PE_vec‖ / √3
-            self_pe = float(gs.neuro.self_imbalance) / sqrt3  # self ‖PE_vec‖ / √3
+            self_pe = float(gs.rgk.project("system")["self_imbalance"]) / sqrt3  # self ‖PE_vec‖ / √3
             agency_gap = float(u.agency_gap)
             hrv_pe = float(u.hrv_surprise)
             combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)
@@ -574,7 +574,7 @@ class CognitiveLoop:
         # urgency push-style сигналов понижается на 0.3.
         try:
             u.update_mode(sync_err)
-            gs.neuro.update_mode(combined_imbalance)
+            gs.rgk.system.update_mode(combined_imbalance)
         except Exception as e:
             log.debug(f"[advance_tick] counter-wave update_mode failed: {e}")
 
@@ -589,13 +589,13 @@ class CognitiveLoop:
         try:
             from .graph_logic import nodes_created_within
             rate = min(1.0, nodes_created_within(3600) / 10.0)
-            gs.neuro.feed_acetylcholine(node_creation_rate=rate)
+            gs.rgk.s_ach_feed(node_creation_rate=rate)
             recent_bridge_count = sum(
                 1 for b in self._recent_bridges
                 if now - float(b.get("ts", 0)) < 3600.0
             )
             scattering = min(1.0, recent_bridge_count / 5.0)
-            gs.neuro.feed_gaba(freeze_active=r.freeze_active,
+            gs.rgk.s_gaba_feed(freeze_active=r.freeze_active,
                                 embedding_scattering=scattering)
             u.feed_gaba()
         except Exception as e:
@@ -879,8 +879,8 @@ class CognitiveLoop:
                 self._advance_tick()
 
                 # 1. NE homeostasis (decay в сторону baseline)
-                ne = state.neuro.norepinephrine
-                state.neuro.norepinephrine = (
+                ne = state.rgk.system.aperture.value
+                state.rgk.system.aperture.value = (
                     ne * (1 - self.NE_DECAY_PER_TICK)
                     + self.NE_BASELINE * self.NE_DECAY_PER_TICK
                 )
@@ -935,7 +935,7 @@ class CognitiveLoop:
             # 5. Adaptive sleep. Cap на HRV_PUSH_INTERVAL чтобы physical
             # state не устаревал.
             try:
-                ne = get_global_state().neuro.norepinephrine
+                ne = get_global_state().rgk.system.aperture.value
                 scaled = self.TICK_INTERVAL * max(0.5, 1.2 - ne)
             except Exception:
                 scaled = self.TICK_INTERVAL
@@ -1271,7 +1271,7 @@ class CognitiveLoop:
             try:
                 from .horizon import get_global_state
                 deep_quality = min(1.0, max(0.0, nodes_created / 10.0))
-                get_global_state().neuro.feed_acetylcholine(
+                get_global_state().rgk.s_ach_feed(
                     node_creation_rate=0.0, bridge_quality=deep_quality)
             except Exception as e:
                 log.debug(f"[dmn_deep] ACh feed failed: {e}")
@@ -1448,7 +1448,7 @@ class CognitiveLoop:
                         if b_quality > 0.5:
                             try:
                                 from .horizon import get_global_state
-                                get_global_state().neuro.feed_acetylcholine(
+                                get_global_state().rgk.s_ach_feed(
                                     node_creation_rate=0.0, bridge_quality=b_quality)
                             except Exception as e:
                                 log.debug(f"[dmn_converge] ACh feed failed: {e}")
@@ -1576,7 +1576,7 @@ class CognitiveLoop:
         # (этот канал кормится в _advance_tick).
         try:
             from .horizon import get_global_state
-            get_global_state().neuro.feed_acetylcholine(
+            get_global_state().rgk.s_ach_feed(
                 node_creation_rate=0.0, bridge_quality=quality)
         except Exception as e:
             log.debug(f"[dmn_bridge] ACh feed failed: {e}")
@@ -1679,10 +1679,10 @@ class CognitiveLoop:
         """
         from .graph_logic import _graph
         cs = get_global_state()
-        neuro = cs.neuro
+        sys = cs.rgk.system
         bits = [f"state:{cs.state}"]
-        bits.append(f"S={neuro.serotonin:.2f} NE={neuro.norepinephrine:.2f} "
-                    f"DA={neuro.dopamine:.2f}")
+        bits.append(f"S={sys.hyst.value:.2f} NE={sys.aperture.value:.2f} "
+                    f"DA={sys.gain.value:.2f}")
         bits.append(cs.state_origin_hint or "1_rest")
         # Topic / goal text если есть
         topic = (_graph.get("meta") or {}).get("topic", "")
@@ -2380,7 +2380,7 @@ class CognitiveLoop:
         """
         try:
             st = get_global_state()
-            ne = st.neuro.norepinephrine
+            ne = st.rgk.system.aperture.value
             state = st.state
             not_frozen = state != PROTECTIVE_FREEZE
         except Exception:

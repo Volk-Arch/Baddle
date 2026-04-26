@@ -468,6 +468,42 @@ class РГК:
         self.sync_slow.value     = float(d.get("sync_error_ema_slow", 0.0))
         self.freeze_active       = bool(d.get("active", False))
 
+    def serialize_system(self) -> dict:
+        """System (Neurochem) snapshot для state.json. Симметрично старому
+        Neurochem.to_dict — keys preserved."""
+        return {
+            "dopamine":       round(float(self.system.gain.value), 3),
+            "serotonin":      round(float(self.system.hyst.value), 3),
+            "norepinephrine": round(float(self.system.aperture.value), 3),
+            "acetylcholine":  round(float(self.system.plasticity.value), 3),
+            "gaba":           round(float(self.system.damping.value), 3),
+            "balance":        round(self.system.balance(), 3),
+            "mode":           self.system.mode,
+            "gamma":          round(self.gamma(), 3),
+            "recent_rpe":     round(float(self.recent_rpe), 3),
+            "expectation_vec": [round(float(x), 3) for x in self.s_exp_vec.value.tolist()],
+            "self_imbalance": round(self.project("system")["self_imbalance"], 3),
+            "_delta_history": [round(x, 3) for x in self._rpe_hist],
+        }
+
+    def load_system(self, d: dict) -> None:
+        """Restore system layer из state.json dump. Симметрично старому
+        Neurochem.from_dict (incl. Phase D 5-axis defaults для legacy)."""
+        self.system.gain.value     = max(0.0, min(1.0, float(d.get("dopamine", 0.5))))
+        self.system.hyst.value     = max(0.0, min(1.0, float(d.get("serotonin", 0.5))))
+        self.system.aperture.value = max(0.0, min(1.0, float(d.get("norepinephrine", 0.5))))
+        self.system.plasticity.value = max(0.0, min(1.0, float(d.get("acetylcholine", 0.5))))
+        self.system.damping.value  = max(0.0, min(1.0, float(d.get("gaba", 0.5))))
+        self.recent_rpe = float(d.get("recent_rpe", 0.0))
+        self._rpe_hist = list(d.get("_delta_history", []))
+        vec = d.get("expectation_vec")
+        if isinstance(vec, (list, tuple)) and len(vec) == 3:
+            try:
+                arr = np.array([float(x) for x in vec], dtype=np.float32)
+                self.s_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
+            except Exception:
+                pass
+
     # ── Coupling + projections ────────────────────────────────────────────
 
     def sync_error(self) -> float:

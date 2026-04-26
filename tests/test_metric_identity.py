@@ -8,7 +8,7 @@ Neurochem / ProtectiveFreeze должен давать тот же snapshot. EXP
 import pytest
 
 from src.user_state import UserState
-from src.neurochem import Neurochem
+from src.rgk import РГК
 
 
 # ── Expected snapshot (captured 2026-04-24, pre-migration) ─────────────────
@@ -76,7 +76,7 @@ def states(monkeypatch):
     monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     us = UserState()
-    nc = Neurochem()
+    nc = РГК()  # отдельный rgk для system events (раньше был Neurochem)
     r = РГК()  # отдельный rgk для pressure layer (раньше был ProtectiveFreeze)
 
     # UserState events
@@ -95,7 +95,7 @@ def states(monkeypatch):
     for _ in range(10):
         us.tick_expectation()
 
-    # Neurochem events
+    # System (Neurochem) events — теперь через РГК
     for d, wc, w in [
         (0.4,  [0.1, -0.05, 0.2],   [0.3,  0.4,  0.3]),
         (0.3,  [0.05, -0.02, 0.1],  [0.35, 0.3,  0.35]),
@@ -103,11 +103,11 @@ def states(monkeypatch):
         (0.2,  [-0.05, 0.1, -0.02], [0.4,  0.3,  0.3]),
         (0.45, [0.1, 0.05, -0.05],  [0.3,  0.3,  0.4]),
     ]:
-        nc.update(d=d, w_change=wc, weights=w)
+        nc.s_graph(d=d, w_change=wc, weights=w)
     for _ in range(3):
-        nc.tick_expectation()
-    nc.record_outcome(prior=0.5, posterior=0.7)
-    nc.record_outcome(prior=0.6, posterior=0.55)
+        nc.tick_s_pred()
+    nc.s_outcome(prior=0.5, posterior=0.7)
+    nc.s_outcome(prior=0.6, posterior=0.55)
 
     # Pressure layer events (раньше через ProtectiveFreeze, теперь через РГК)
     r.p_conflict(d=0.7, serotonin=0.4)
@@ -166,26 +166,26 @@ def test_user_state_vector_and_derived(states):
         EXPECTED_USER_STATE["imbalance"], abs=TOL)
 
 
-# ── Neurochem identity ─────────────────────────────────────────────────────
+# ── System chem identity (через РГК после W4) ──────────────────────────────
 
 def test_neurochem_scalars(states):
     _, nc, _ = states
-    assert nc.dopamine == pytest.approx(EXPECTED_NEUROCHEM["dopamine"], abs=TOL)
-    assert nc.serotonin == pytest.approx(EXPECTED_NEUROCHEM["serotonin"], abs=TOL)
-    assert nc.norepinephrine == pytest.approx(
+    assert nc.system.gain.value == pytest.approx(EXPECTED_NEUROCHEM["dopamine"], abs=TOL)
+    assert nc.system.hyst.value == pytest.approx(EXPECTED_NEUROCHEM["serotonin"], abs=TOL)
+    assert nc.system.aperture.value == pytest.approx(
         EXPECTED_NEUROCHEM["norepinephrine"], abs=TOL)
 
 
 def test_neurochem_predictive_and_derived(states):
     _, nc, _ = states
-    assert nc.expectation_vec.tolist() == pytest.approx(
+    assert nc.s_exp_vec.value.tolist() == pytest.approx(
         EXPECTED_NEUROCHEM["expectation_vec"], abs=TOL)
-    assert nc.gamma == pytest.approx(EXPECTED_NEUROCHEM["gamma"], abs=TOL)
+    assert nc.gamma() == pytest.approx(EXPECTED_NEUROCHEM["gamma"], abs=TOL)
     assert nc.recent_rpe == pytest.approx(
         EXPECTED_NEUROCHEM["recent_rpe"], abs=TOL)
-    assert nc.self_imbalance == pytest.approx(
+    assert nc.project("system")["self_imbalance"] == pytest.approx(
         EXPECTED_NEUROCHEM["self_imbalance"], abs=TOL)
-    assert nc.vector().tolist() == pytest.approx(
+    assert nc.system.vector().tolist() == pytest.approx(
         EXPECTED_NEUROCHEM["vector"], abs=TOL)
 
 

@@ -42,7 +42,6 @@ DetectorReturn = Union[None, Signal, Iterable[Signal]]
 
 if TYPE_CHECKING:
     from .cognitive_loop import CognitiveLoop
-    from .neurochem import Neurochem
     from .rgk import РГК
     from .user_state import UserState
 
@@ -64,7 +63,7 @@ class DetectorContext:
 
     Поля:
         now: unix ts текущего tick
-        user/neuro/rgk: per-class ссылки на state объекты
+        user/rgk: per-class ссылки на state объекты
         loop: CognitiveLoop для доступа к graph/_recent_bridges/etc
         dmn_eligible: gate из _loop — True если `not_frozen AND ne_quiet
             AND idle_enough`. DMN-эвристические детекторы (dmn_bridge,
@@ -75,7 +74,6 @@ class DetectorContext:
 
     now: float
     user: "UserState"
-    neuro: "Neurochem"
     rgk: "РГК"
     loop: "CognitiveLoop"   # для доступа к graph, activity_log, plans, etc.
     dmn_eligible: bool = True
@@ -96,19 +94,18 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
 
     user = get_user_state()
     gs = get_global_state()
-    neuro = gs.neuro
 
     # DMN gate
     try:
         idle_enough = (now - loop._last_foreground_tick) >= loop.FOREGROUND_COOLDOWN
-        ne_quiet = neuro.norepinephrine < loop.NE_HIGH_GATE
+        ne_quiet = float(gs.rgk.system.aperture.value) < loop.NE_HIGH_GATE
         not_frozen = gs.state != PROTECTIVE_FREEZE
         dmn_eligible = not_frozen and ne_quiet and idle_enough
     except Exception:
         dmn_eligible = False
 
     return DetectorContext(
-        now=now, user=user, neuro=neuro, rgk=gs.rgk, loop=loop,
+        now=now, user=user, rgk=gs.rgk, loop=loop,
         dmn_eligible=dmn_eligible,
     )
 

@@ -19,7 +19,7 @@ from src.rgk import (
     РГК, RPE_GAIN, RPE_WINDOW,
     FREEZE_TAU_STABLE, FREEZE_THETA_ACTIVE, FREEZE_THETA_RECOVERY,
 )
-from src.neurochem import Neurochem
+# Neurochem class удалён в W4 — все state и dynamics в РГК.
 from src.user_state import UserState
 
 
@@ -115,31 +115,34 @@ def test_fb_counter_persist_roundtrip():
 
 # #1 ─────────────────────────────────────────────────────────────────────────
 def test_rpe_history_single_source():
-    """Neurochem._delta_history → property alias на _rgk._rpe_hist."""
-    nc = Neurochem()
-    nc.record_outcome(prior=0.5, posterior=0.7)
-    nc.record_outcome(prior=0.6, posterior=0.65)
-    assert nc._delta_history is nc._rgk._rpe_hist
-    assert len(nc._rgk._rpe_hist) == 2
+    """RPE history живёт только в РГК._rpe_hist (Neurochem class удалён W4)."""
+    r = РГК()
+    r.s_outcome(prior=0.5, posterior=0.7)
+    r.s_outcome(prior=0.6, posterior=0.65)
+    assert len(r._rpe_hist) == 2
 
 
 def test_recent_rpe_single_source():
-    """Neurochem.recent_rpe → property alias на _rgk.recent_rpe."""
-    nc = Neurochem()
+    """recent_rpe accumulator на РГК (Neurochem class удалён)."""
+    r = РГК()
     # First outcome: rpe=0 (predicted=actual без history). Need 2+ for non-zero.
-    nc.record_outcome(prior=0.5, posterior=0.9)
-    nc.record_outcome(prior=0.5, posterior=0.55)
-    assert nc.recent_rpe == nc._rgk.recent_rpe
-    assert nc.recent_rpe != 0.0
+    r.s_outcome(prior=0.5, posterior=0.9)
+    r.s_outcome(prior=0.5, posterior=0.55)
+    assert r.recent_rpe != 0.0
 
 
-# #6 + #7 ────────────────────────────────────────────────────────────────────
+# #6 + #7 + W4 ──────────────────────────────────────────────────────────────
 def test_rpe_constants_single_source():
-    """Neurochem.RPE_* удалены, рgk module-level RPE_GAIN/RPE_WINDOW."""
-    assert not hasattr(Neurochem, "RPE_GAIN")
-    assert not hasattr(Neurochem, "RPE_WINDOW")
+    """RPE_GAIN/RPE_WINDOW в rgk module (single source)."""
     assert RPE_GAIN == 0.15
     assert RPE_WINDOW == 20
+
+
+def test_neurochem_class_removed():
+    """W4: class Neurochem удалён, остался stub-модуль с migration примечанием."""
+    import src.neurochem as nc_mod
+    assert not hasattr(nc_mod, "Neurochem")
+    assert not hasattr(nc_mod, "ProtectiveFreeze")
 
 
 def test_freeze_thresholds_single_source():

@@ -1117,7 +1117,8 @@ def assist_chemistry():
     from .user_state import get_user_state
 
     user = get_user_state()
-    neuro = get_global_state().neuro
+    sys = get_global_state().rgk.system
+    rgk = get_global_state().rgk
     snap = {
         "session_chemistry": {
             "user": {
@@ -1130,13 +1131,13 @@ def assist_chemistry():
                 "named_state":             user.named_state.get("key"),
             },
             "system": {
-                "dopamine_gain":           round(neuro.dopamine, 3),
-                "serotonin_hysteresis":    round(neuro.serotonin, 3),
-                "norepinephrine_aperture": round(neuro.norepinephrine, 3),
-                "acetylcholine_plasticity": round(neuro.acetylcholine, 3),
-                "gaba_damping":            round(neuro.gaba, 3),
-                "balance":                 round(neuro.balance(), 3),
-                "gamma":                   round(neuro.gamma, 3),
+                "dopamine_gain":           round(float(sys.gain.value), 3),
+                "serotonin_hysteresis":    round(float(sys.hyst.value), 3),
+                "norepinephrine_aperture": round(float(sys.aperture.value), 3),
+                "acetylcholine_plasticity": round(float(sys.plasticity.value), 3),
+                "gaba_damping":            round(float(sys.damping.value), 3),
+                "balance":                 round(sys.balance(), 3),
+                "gamma":                   round(rgk.gamma(), 3),
             },
             "coupling": {
                 "sync_error": round(float(get_global_state().sync_error), 3),

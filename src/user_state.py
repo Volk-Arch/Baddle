@@ -833,51 +833,44 @@ class UserState:
         return u
 
 
-# ── System vector from Neurochem + Freeze ──────────────────────────────────
+# ── System vector + sync helpers (read directly from РГК) ─────────────────
 
-def system_vector(neuro, freeze=None) -> np.ndarray:
-    """Зеркальное представление SystemState для sync-метрики.
-
-    3D выровнено с UserState.vector(). `freeze` параметр принят для
-    backward-compat (старые вызовы передавали 2 args), но не используется
-    — display_burnout живёт отдельно от sync_error.
-    """
+def system_vector(rgk_or_neuro, freeze=None) -> np.ndarray:
+    """3D system vector. После W4 принимает РГК; legacy сигнатура
+    (Neurochem, freeze) deprecated — используется через `gs.rgk`."""
+    sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
     return np.array([
-        neuro.dopamine,
-        neuro.serotonin,
-        neuro.norepinephrine,
+        float(sys.gain.value)     if hasattr(sys, "gain") else float(sys.dopamine),
+        float(sys.hyst.value)     if hasattr(sys, "hyst") else float(sys.serotonin),
+        float(sys.aperture.value) if hasattr(sys, "aperture") else float(sys.norepinephrine),
     ], dtype=np.float32)
 
 
-def system_state_level(neuro) -> float:
-    """Агрегированный уровень системы — mean(dopamine, serotonin)."""
-    return float((neuro.dopamine + neuro.serotonin) / 2.0)
+def system_state_level(rgk_or_neuro) -> float:
+    """mean(DA, 5HT). Принимает РГК или legacy Neurochem."""
+    sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
+    da = float(sys.gain.value) if hasattr(sys, "gain") else float(sys.dopamine)
+    s  = float(sys.hyst.value) if hasattr(sys, "hyst") else float(sys.serotonin)
+    return (da + s) / 2.0
 
 
-# ── Sync error + regime ────────────────────────────────────────────────────
-
-def compute_sync_error(user: UserState, neuro, freeze=None) -> float:
-    """‖user_vec − system_vec‖ (L2, 3D). Max ≈ √3 ≈ 1.732.
-
-    `freeze` — backward-compat аргумент, не влияет на результат.
-    """
-    diff = user.vector() - system_vector(neuro, freeze)
+def compute_sync_error(user: UserState, rgk_or_neuro, freeze=None) -> float:
+    """‖user_vec − system_vec‖ (L2, 3D). Max ≈ √3 ≈ 1.732."""
+    diff = user.vector() - system_vector(rgk_or_neuro, freeze)
     return float(np.linalg.norm(diff))
 
 
-def compute_sync_regime(user: UserState, neuro, freeze) -> str:
+def compute_sync_regime(user: UserState, rgk_or_neuro, freeze=None) -> str:
     """4 режима симбиоза — см. TODO.md «Симбиоз».
 
     FLOW    — sync высокий, оба state высокие → полный объём
     REST    — sync высокий, оба state низкие → предлагаем паузу
     PROTECT — sync низкий, user low, system high → система берёт на себя
     CONFESS — sync низкий, user high, system low → «дай мне время»
-
-    Fallback — FLOW (default при amb).
     """
-    err = compute_sync_error(user, neuro, freeze)
+    err = compute_sync_error(user, rgk_or_neuro, freeze)
     u_level = user.state_level()
-    s_level = system_state_level(neuro)
+    s_level = system_state_level(rgk_or_neuro)
 
     sync_high = err < SYNC_HIGH_THRESHOLD
 

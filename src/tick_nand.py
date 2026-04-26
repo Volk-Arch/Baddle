@@ -278,7 +278,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # Conditions: enough nodes exist, sync_error growing, not a FREEZE state
     try:
         from .horizon import PROTECTIVE_FREEZE
-        ne_low = horizon.neuro.norepinephrine < 0.35
+        ne_low = float(horizon.rgk.system.aperture.value) < 0.35
         high_sync_err = getattr(horizon, "sync_error", 0.0) > 0.6
         many_uncertain = len(unverified) >= 3 and len(verified) == 0
         not_frozen = horizon.state != PROTECTIVE_FREEZE

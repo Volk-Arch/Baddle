@@ -107,9 +107,9 @@ def _bayesian_update_distinct(prior: float, d: float) -> float:
     """
     from .horizon import get_global_state
     cs = get_global_state()
-    posterior = cs.apply_to_bayes(prior, d)
+    posterior = cs.rgk.bayes_step(prior, d)
     try:
-        cs.neuro.record_outcome(prior, posterior)
+        cs.rgk.s_outcome(prior, posterior)
     except Exception as e:
         log.debug(f"[bayes] RPE record failed: {e}")
     # Maturity drift: нода пересекла verified threshold → система взрослеет
@@ -452,9 +452,9 @@ def _current_snapshot() -> dict:
         from .horizon import get_global_state
         gs = get_global_state()
         snap["system_state_before"] = {
-            "dopamine":             round(gs.neuro.dopamine, 3),
-            "serotonin":            round(gs.neuro.serotonin, 3),
-            "norepinephrine":       round(gs.neuro.norepinephrine, 3),
+            "dopamine":             round(gs.rgk.system.gain.value, 3),
+            "serotonin":            round(gs.rgk.system.hyst.value, 3),
+            "norepinephrine":       round(gs.rgk.system.aperture.value, 3),
             "conflict_accumulator": round(gs.rgk.conflict.value, 3),
             "silence_pressure":     round(gs.rgk.silence_press, 3),
             "imbalance_pressure":   round(gs.rgk.imbalance_press.value, 3),

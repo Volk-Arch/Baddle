@@ -442,42 +442,30 @@ class TestPhaseDFeeders:
         assert us.gaba == pytest.approx(0.48, abs=TOL)
 
     def test_system_acetylcholine_node_rate(self):
-        from src.neurochem import Neurochem
-        nc = Neurochem()
+        r = РГК()
         # decay 0.9, signal=0.7 → 0.9*0.5 + 0.1*0.7 = 0.52
-        nc.feed_acetylcholine(node_creation_rate=0.7)
-        assert nc.acetylcholine == pytest.approx(0.52, abs=TOL)
+        r.s_ach_feed(node_creation_rate=0.7)
+        assert r.system.plasticity.value == pytest.approx(0.52, abs=TOL)
 
     def test_system_acetylcholine_with_bridge_quality(self):
-        from src.neurochem import Neurochem
-        nc = Neurochem()
-        # First feed: 0.9*0.5+0.1*0.5 = 0.5
-        # Second feed (decay_override=0.9): 0.9*0.5+0.1*0.8 = 0.53
-        nc.feed_acetylcholine(node_creation_rate=0.5, bridge_quality=0.8)
-        assert nc.acetylcholine == pytest.approx(0.53, abs=TOL)
+        r = РГК()
+        r.s_ach_feed(node_creation_rate=0.5, bridge_quality=0.8)
+        assert r.system.plasticity.value == pytest.approx(0.53, abs=TOL)
 
     def test_system_gaba_freeze_active(self):
-        from src.neurochem import Neurochem
-        nc = Neurochem()
-        # decay 0.95, signal=1.0 → 0.95*0.5+0.05*1.0 = 0.525
-        nc.feed_gaba(freeze_active=True)
-        assert nc.gaba == pytest.approx(0.525, abs=TOL)
+        r = РГК()
+        r.s_gaba_feed(freeze_active=True)
+        assert r.system.damping.value == pytest.approx(0.525, abs=TOL)
 
     def test_system_gaba_freeze_inactive(self):
-        from src.neurochem import Neurochem
-        nc = Neurochem()
-        nc.feed_gaba(freeze_active=False)
-        # 0.95*0.5+0.05*0.0 = 0.475
-        assert nc.gaba == pytest.approx(0.475, abs=TOL)
+        r = РГК()
+        r.s_gaba_feed(freeze_active=False)
+        assert r.system.damping.value == pytest.approx(0.475, abs=TOL)
 
     def test_system_gaba_with_scattering(self):
-        from src.neurochem import Neurochem
-        nc = Neurochem()
-        # First: feed(1.0): 0.475 (см. выше? actually freeze_active=True → 0.525)
-        # Wait — freeze_active=True → first feed=1.0, decay=0.95: 0.525
-        # Then scattering=0.2 → inv=0.8, decay_override=0.95: 0.95*0.525+0.05*0.8=0.5388
-        nc.feed_gaba(freeze_active=True, embedding_scattering=0.2)
-        assert nc.gaba == pytest.approx(0.5388, abs=1e-4)
+        r = РГК()
+        r.s_gaba_feed(freeze_active=True, embedding_scattering=0.2)
+        assert r.system.damping.value == pytest.approx(0.5388, abs=1e-4)
 
     def test_user_balance_method(self):
         from src.user_state import UserState
@@ -486,10 +474,12 @@ class TestPhaseDFeeders:
         assert us.balance() == pytest.approx(0.4667, abs=1e-3)
 
     def test_system_balance_method(self):
-        from src.neurochem import Neurochem
-        nc = Neurochem(dopamine=0.6, serotonin=0.5, norepinephrine=0.5)
+        r = РГК()
+        r.system.gain.value = 0.6
+        r.system.aperture.value = 0.5
+        # plasticity=damping=0.5 default, hyst=0.5 default
         # (0.6·0.5·0.5)/(0.5·0.5) = 0.15/0.25 = 0.6
-        assert nc.balance() == pytest.approx(0.6, abs=1e-3)
+        assert r.system.balance() == pytest.approx(0.6, abs=1e-3)
 
 
 # ── Phase D Step 5+: 8-region РГК-карта ────────────────────────────────────
@@ -634,9 +624,8 @@ class TestCounterWaveActivation:
         assert u.mode == "R"
 
     def test_neurochem_mode_default_R(self):
-        from src.neurochem import Neurochem
-        n = Neurochem()
-        assert n.mode == "R"
+        r = РГК()
+        assert r.system.mode == "R"
 
     def test_user_state_mode_flips_on_perturbation(self):
         """Гистерезис ACT=0.15 / REC=0.08."""
@@ -653,12 +642,11 @@ class TestCounterWaveActivation:
         assert u.mode == "R"
 
     def test_neurochem_mode_flips_on_perturbation(self):
-        from src.neurochem import Neurochem
-        n = Neurochem()
-        n.update_mode(0.20)
-        assert n.mode == "C"
-        n.update_mode(0.05)
-        assert n.mode == "R"
+        r = РГК()
+        r.system.update_mode(0.20)
+        assert r.system.mode == "C"
+        r.system.update_mode(0.05)
+        assert r.system.mode == "R"
 
     def test_user_state_to_dict_includes_mode(self):
         from src.user_state import UserState
@@ -668,9 +656,8 @@ class TestCounterWaveActivation:
         assert d["mode"] == "C"
 
     def test_neurochem_to_dict_includes_mode(self):
-        from src.neurochem import Neurochem
-        n = Neurochem()
-        d = n.to_dict()
+        r = РГК()
+        d = r.serialize_system()
         assert d["mode"] == "R"
 
 
@@ -706,12 +693,10 @@ class TestSingletonRGK:
     def test_user_state_with_explicit_rgk_shares(self):
         """Explicit rgk= sharing — production pattern."""
         from src.user_state import UserState
-        from src.neurochem import Neurochem
         from src.rgk import РГК
         rgk = РГК()
         u = UserState(rgk=rgk)
-        n = Neurochem(rgk=rgk)
-        assert u._rgk is n._rgk is rgk
+        assert u._rgk is rgk
 
     def test_production_bootstrap_shares_global(self):
         """get_user_state() + CognitiveState — каскад зеркал на одном РГК."""
@@ -728,7 +713,6 @@ class TestSingletonRGK:
         from src.horizon import get_global_state
         u = get_user_state()
         gs = get_global_state()
-        assert u._rgk is gs.neuro._rgk
         assert u._rgk is gs.rgk
 
 
