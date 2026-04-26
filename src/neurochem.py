@@ -38,7 +38,7 @@ from typing import Optional
 import numpy as np
 
 from .ema import TimeConsts
-from .rgk import RPE_GAIN, RPE_WINDOW, РГК
+from .rgk import РГК
 
 
 # Phase D Step 4c: Neurochem extractors + _build_neurochem_registry удалены.
@@ -73,10 +73,8 @@ class Neurochem:
         self._rgk.system.gain.value = dopamine
         self._rgk.system.hyst.value = serotonin
         self._rgk.system.aperture.value = norepinephrine
-
-        # RPE history: legacy bespoke (record_outcome).
-        self._delta_history: list = []
-        self.recent_rpe: float = 0.0
+        # RPE history + recent_rpe живут в _rgk (см. _rpe_hist / recent_rpe).
+        # Legacy `_delta_history` ключ в to_dict/from_dict для backward-compat.
 
     # ── Backward-compat read/write accessors ───────────────────────────────
 
@@ -248,33 +246,27 @@ class Neurochem:
 
     # ── RPE: автономный dopamine drift без юзера ────────────────────────
 
+    @property
+    def recent_rpe(self) -> float:
+        return float(self._rgk.recent_rpe)
+
+    @recent_rpe.setter
+    def recent_rpe(self, v: float):
+        self._rgk.recent_rpe = float(v)
+
+    @property
+    def _delta_history(self) -> list:
+        """Backward-compat alias для _rgk._rpe_hist (single source)."""
+        return self._rgk._rpe_hist
+
+    @_delta_history.setter
+    def _delta_history(self, v):
+        self._rgk._rpe_hist = list(v)
+
     def record_outcome(self, prior: float, posterior: float) -> float:
-        """Reward prediction error из Bayes-обновления.
-
-        actual    = |posterior − prior|  — сколько информации реально получили
-        predicted = mean(recent_deltas)   — сколько обычно получаем (baseline)
-        rpe       = actual − predicted
-
-        Положительный RPE (больше изменений чем обычно) → фазовый bump dopamine.
-        Отрицательный (меньше чем обычно) → dopamine слегка падает.
-        Это делает dopamine модуляцией **неожиданности**, а не просто новизны.
-
-        Возвращает RPE (для логов / метрик).
-        """
-        actual = abs(float(posterior) - float(prior))
-        if self._delta_history:
-            predicted = sum(self._delta_history) / len(self._delta_history)
-        else:
-            predicted = actual   # первый раз — RPE=0, просто записываем
-        rpe = actual - predicted
-        # RPE — additive bump not EMA, direct value mutation + clamp.
-        da = self._rgk.system.gain
-        da.value = max(0.0, min(1.0, da.value + RPE_GAIN * rpe))
-        self.recent_rpe = rpe
-        self._delta_history.append(actual)
-        if len(self._delta_history) > RPE_WINDOW:
-            self._delta_history = self._delta_history[-RPE_WINDOW:]
-        return rpe
+        """Trivial delegate в _rgk.s_outcome — single source формулы и
+        accumulator. Раньше тут жил duplicate с собственным _delta_history."""
+        return self._rgk.s_outcome(prior, posterior)
 
     # ── Bayesian step через distinct ────────────────────────────────────
 
