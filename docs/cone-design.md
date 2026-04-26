@@ -28,14 +28,12 @@
 
 | Slider | UI label | Format | Depth mult | Batched |
 |---|---|---|---|---|
-| 0.0–0.2 | 🎯 Фокус | brief | 0.5× base | False (один call) |
-| 0.2–0.25 | 🎯 Фокус | brief | 0.7× base | False |
-| 0.25–0.4 | 📘 Эссе | essay | 0.7× base | False |
-| 0.4–0.7 | 📘 Эссе | essay | 1.0× base | True (pyramidal) |
-| 0.7–0.9 | 📖 Статья | article | 1.5× base | True |
+| 0.0–0.25 | 🎯 Фокус | brief | 0.5–0.7× base | False (один call) |
+| 0.25–0.7 | 📘 Эссе | essay | 0.7–1.0× base | False до 0.4 / True после |
+| 0.7–0.9 | 📖 Статья | article | 1.5× base | True (pyramidal) |
 | 0.9–1.0 | 🌐 Панорама | article | 2.0× base | True |
 
-UI показывает 4 категории (Фокус / Эссе / Статья / Панорама), внутри каждой multiplier меняется sub-bucket'ами для smoother transition. Batched переключается на pyramidal collapse при aperture ≥ 0.4 (узкий фокус один call хватит, широкий нужен pyramidal). Source-of-truth: `_aperture_depth_mult()`, `get_deep_response_format()`, `is_deep_batched()` в [src/api_backend.py](../src/api_backend.py).
+UI показывает 4 категории — это что юзер выбирает. Внутри Фокуса и Эссе multiplier меняется sub-bucket'ами на 0.2 и 0.4 для smoother transition. Format у Статьи и Панорамы одинаковый (`article`) — разница только в depth (×1.5 vs ×2.0); Панорама = «Статья на удвоенной развёртке». Batched toggle ровно на 0.4 — точка перехода от single-call к pyramidal. Source-of-truth: `_aperture_depth_mult()`, `get_deep_response_format()`, `is_deep_batched()` в [src/api_backend.py](../src/api_backend.py).
 
 Дополнительно `get_aperture()` resonance-aware: при `user.frequency_regime == 'short_wave'` (симпатика, стресс) effective aperture капится до `min(0.4, raw)` — не запускать панорамное рассуждение когда юзер не может резонировать с длинной волной. Это применение [Counter-wave принципа](architecture-rules.md) на уровне UX: даже если slider стоит на 🌐 Панорама (0.95), в стрессовом режиме система автоматически сужается до 📘 Эссе. При `long_wave` или `mixed` — апертура работает как заданная.
 
