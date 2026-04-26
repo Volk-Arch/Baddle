@@ -458,6 +458,55 @@ class РГК:
                 "user_mode":   self.user.mode,
                 "system_mode": self.system.mode,
             }
+        if domain == "named_state":
+            # 8-region РГК-карта по 5D chem профилю. UserState.named_state
+            # property делегирует сюда. См. user_state_map.py.
+            from .user_state_map import nearest_named_state
+            return nearest_named_state(
+                da=float(self.user.gain.value),
+                s=float(self.user.hyst.value),
+                ne=float(self.user.aperture.value),
+                ach=float(self.user.plasticity.value),
+                gaba=float(self.user.damping.value),
+            )
+        if domain == "capacity":
+            # Phase C 3-zone модель: phys/affect/cogload индикаторы + reasons.
+            # UserState.capacity_* properties делегируют сюда; module-level
+            # compute_capacity_indicators(user) — thin shim к project("capacity").
+            from .user_state import (
+                CAPACITY_PHYS_COHERENCE_MIN, CAPACITY_PHYS_BURNOUT_MAX,
+                CAPACITY_AFFECT_SEROTONIN_MIN, CAPACITY_AFFECT_DOPAMINE_MIN,
+                CAPACITY_COGLOAD_MAX,
+            )
+            serotonin = float(self.user.hyst.value)
+            burnout   = float(self.burnout.value)
+            dopamine  = float(self.user.gain.value)
+            cogload   = float(self.cognitive_load_today)
+            coh       = self.hrv_coherence
+            reasons: list[str] = []
+            if coh is not None:
+                coh_ok = float(coh) > CAPACITY_PHYS_COHERENCE_MIN
+                burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
+                phys_ok = coh_ok and burnout_ok
+                if not coh_ok:    reasons.append("hrv_coherence_low")
+                if not burnout_ok: reasons.append("burnout_high")
+            else:
+                burnout_ok = burnout < CAPACITY_PHYS_BURNOUT_MAX
+                phys_ok = burnout_ok
+                if not burnout_ok: reasons.append("burnout_high")
+            sero_ok = serotonin > CAPACITY_AFFECT_SEROTONIN_MIN
+            da_ok   = dopamine  > CAPACITY_AFFECT_DOPAMINE_MIN
+            affect_ok = sero_ok and da_ok
+            if not sero_ok: reasons.append("serotonin_low")
+            if not da_ok:   reasons.append("dopamine_low")
+            cogload_ok = cogload < CAPACITY_COGLOAD_MAX
+            if not cogload_ok: reasons.append("cogload_high")
+            return {
+                "phys_ok": phys_ok,
+                "affect_ok": affect_ok,
+                "cogload_ok": cogload_ok,
+                "reasons": reasons,
+            }
         return {}
 
 
