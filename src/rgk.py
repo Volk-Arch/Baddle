@@ -248,6 +248,74 @@ class РГК:
             float(decisions) * 6.0 / float(max_budget))))
         self.tick_u_pred()
 
+    # ── User bespoke (focus residue, checkin, ACh/GABA feeders, boost) ─────
+
+    def u_focus_bump(self, mode_id, now=None):
+        """+0.05 если rapid input (<30 сек) + 0.15 если mode switch.
+        Tracking timer в _last_focus_input_ts, _last_focus_mode_id."""
+        import time as _t
+        if now is None:
+            now = _t.time()
+        if (self._last_focus_input_ts is not None
+                and (now - self._last_focus_input_ts) < 30):
+            self.focus_residue = min(1.0, self.focus_residue + 0.05)
+        if (mode_id and self._last_focus_mode_id
+                and mode_id != self._last_focus_mode_id):
+            self.focus_residue = min(1.0, self.focus_residue + 0.15)
+        self._last_focus_mode_id = mode_id or self._last_focus_mode_id
+        self._last_focus_input_ts = now
+
+    def u_focus_decay(self, dt_seconds: float):
+        """−0.05/мин естественное затухание. dt<=0 → no-op."""
+        if dt_seconds <= 0:
+            return
+        self.focus_residue = max(0.0,
+            self.focus_residue - 0.05 * (dt_seconds / 60.0))
+
+    def u_apply_surprise(self, signed_surprise: float, blend: float = 0.4):
+        """Nudge expectation baseline из субъективного surprise observation.
+        Алгебра: new_expectation = reality - signed_surprise (decay = 1-blend)."""
+        sl = (float(self.user.gain.value) + float(self.user.hyst.value)) / 2.0
+        target = max(0.0, min(1.0, sl - float(signed_surprise)))
+        override = max(0.001, min(0.999, 1.0 - float(blend)))
+        self.u_exp.feed(target, decay_override=override)
+        self.u_exp_tod[self._current_tod()].feed(target, decay_override=override)
+
+    def u_apply_checkin(self, stress=None, focus=None, reality=None):
+        """Manual checkin: stress (0-100)→NE, focus (0-100)→5HT, reality (-2..+2)→valence.
+        Aggressive decay overrides из Decays.CHECKIN_*."""
+        if stress is not None:
+            self.user.aperture.feed(float(stress) / 100.0,
+                                     decay_override=Decays.CHECKIN_STRESS)
+        if focus is not None:
+            self.user.hyst.feed(float(focus) / 100.0,
+                                 decay_override=Decays.CHECKIN_FOCUS)
+        if reality is not None:
+            self.valence.feed(float(reality) / 2.0,
+                               decay_override=Decays.CHECKIN_VALENCE)
+
+    def u_apply_boost(self, n_ticks: int = 3):
+        """Trigger fast-decay режим на N tick'ов (модель мира юзера изменилась).
+        Идемпотентно: продлевает счётчик если новое значение больше."""
+        import time as _t
+        n = max(0, int(n_ticks))
+        if n > self._surprise_boost_remaining:
+            self._surprise_boost_remaining = n
+        self._last_user_surprise_ts = _t.time()
+
+    def u_ach_feed(self, novelty: float, boost: bool = False):
+        """Plasticity feeder. boost=True → bump до 0.85 c override 0.85."""
+        sig = max(0.0, min(1.0, float(novelty)))
+        if boost:
+            self.user.plasticity.feed(max(sig, 0.85), decay_override=0.85)
+        else:
+            self.user.plasticity.feed(sig)
+
+    def u_gaba_feed(self):
+        """Damping feeder — derived из focus_residue (1.0 - focus_residue)."""
+        sig = max(0.0, min(1.0, 1.0 - float(self.focus_residue)))
+        self.user.damping.feed(sig)
+
     def tick_u_pred(self):
         # Surprise boost: если _surprise_boost_remaining > 0, fast-decay
         # override на N tick'ов (модель мира юзера изменилась). Раньше
@@ -311,6 +379,34 @@ class РГК:
             self._rpe_hist = self._rpe_hist[-RPE_WINDOW:]
         return rpe
 
+    def s_ach_feed(self, node_creation_rate: float = 0.0,
+                    bridge_quality: float = None):
+        """Plasticity feeder для system. node_creation_rate ∈ [0,1] cap=10/h.
+        bridge_quality ∈ [0,1] — если найден (override 0.9)."""
+        rate_norm = max(0.0, min(1.0, float(node_creation_rate)))
+        self.system.plasticity.feed(rate_norm)
+        if bridge_quality is not None:
+            bq = max(0.0, min(1.0, float(bridge_quality)))
+            self.system.plasticity.feed(bq, decay_override=0.9)
+
+    def s_gaba_feed(self, freeze_active: bool, embedding_scattering: float = None):
+        """Damping feeder для system. freeze_active=True → 1.0 sig.
+        embedding_scattering inverted (1 - scattering, override 0.95)."""
+        sig = 1.0 if freeze_active else 0.0
+        self.system.damping.feed(sig)
+        if embedding_scattering is not None:
+            inv = max(0.0, min(1.0, 1.0 - float(embedding_scattering)))
+            self.system.damping.feed(inv, decay_override=0.95)
+
+    def bayes_step(self, prior: float, d: float) -> float:
+        """Signed NAND-Bayes: logit(post) = logit(prior) + γ · (1 − 2d)."""
+        import math as _math
+        prior = max(0.01, min(0.99, prior))
+        log_prior = _math.log(prior / (1.0 - prior))
+        log_post = log_prior + self.gamma() * (1.0 - 2.0 * d)
+        posterior = 1.0 / (1.0 + _math.exp(-log_post))
+        return round(max(0.01, min(0.99, posterior)), 3)
+
     # ── Pressure ──────────────────────────────────────────────────────────
 
     def p_conflict(self, d: float, serotonin=None):
@@ -333,6 +429,19 @@ class РГК:
         snorm = max(0.0, min(1.0, float(sync_err) / 1.732))
         self.sync_fast.feed(snorm, dt=dt)
         self.sync_slow.feed(snorm, dt=dt)
+
+    def add_silence(self, delta: float):
+        """User-event input: snижение (−) при активности, рост (+) — редко."""
+        self.silence_press = max(0.0, min(1.0,
+            self.silence_press + float(delta)))
+
+    def combined_burnout(self, user_burnout: float = 0.0) -> float:
+        """max(display_burnout, user_burnout) для _idle_multiplier:
+        эмпатия к юзеру встроена. Если юзер устал, Baddle тоже тише."""
+        ub = max(0.0, min(1.0, float(user_burnout or 0.0)))
+        display = max(self.conflict.value, self.silence_press,
+                       self.imbalance_press.value)
+        return max(display, ub)
 
     # ── Coupling + projections ────────────────────────────────────────────
 

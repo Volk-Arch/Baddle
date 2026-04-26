@@ -505,41 +505,12 @@ class UserState:
     # ── Focus residue (см. docs/resonance-model.md) ───────────────────────
 
     def bump_focus_residue(self, mode_id: Optional[str], now: Optional[float] = None):
-        """Учесть переключение/rapid input в focus_residue.
-
-        Источники приращения:
-          • +0.05 если предыдущий user input был < 30 сек назад (rapid input)
-          • +0.15 если mode_id отличается от предыдущего (mode switch)
-
-        Тимer и mode tracking хранятся в `_last_focus_input_ts` и
-        `_last_focus_mode_id` отдельно от register_input'а — чтобы не было
-        race conditions с порядком вызова.
-
-        Вызывается из `record_action` при `actor=user`.
-        """
-        if now is None:
-            now = time.time()
-        # Rapid input bump
-        if (self._last_focus_input_ts is not None
-                and (now - self._last_focus_input_ts) < 30):
-            self.focus_residue = min(1.0, self.focus_residue + 0.05)
-        # Mode switch bump
-        if (mode_id and self._last_focus_mode_id
-                and mode_id != self._last_focus_mode_id):
-            self.focus_residue = min(1.0, self.focus_residue + 0.15)
-        self._last_focus_mode_id = mode_id or self._last_focus_mode_id
-        self._last_focus_input_ts = now
+        """Trivial delegate в _rgk.u_focus_bump."""
+        self._rgk.u_focus_bump(mode_id, now)
 
     def decay_focus_residue(self, dt_seconds: float):
-        """Естественное затухание focus_residue по времени.
-
-        −0.05 за минуту покоя. Вызывается из cognitive_loop._advance_tick
-        с реальным `dt` между tick'ами.
-        """
-        if dt_seconds <= 0:
-            return
-        self.focus_residue = max(0.0,
-            self.focus_residue - 0.05 * (dt_seconds / 60.0))
+        """Trivial delegate в _rgk.u_focus_decay."""
+        self._rgk.u_focus_decay(dt_seconds)
 
     def update_from_engagement(self, signal: float = 0.65):
         """User вовлечённость → dopamine EMA. Trivial delegate."""
@@ -584,107 +555,28 @@ class UserState:
         """
         self._rgk.tick_u_pred()
 
-    def apply_subjective_surprise(self,
-                                    signed_surprise: float,
-                                    blend: float = 0.4):
-        """Nudge `expectation` baseline из субъективного наблюдения surprise.
-
-        Используется когда у нас есть явный user-ввод вроде «ожидал лёгкий
-        день, вышел сложный» (checkin) или «plan_expected_difficulty vs
-        actual_difficulty» (plan complete) — semantic-preserving fix от
-        старого `user.surprise = blend * user.surprise + (1-blend) * s`
-        (broken после того как surprise стал derived @property).
-
-        Алгебра: хотим чтобы next-step `surprise = reality - expectation`
-        трендил к signed_surprise. Значит `new_expectation = reality -
-        signed_surprise`, feed expectation EMA с decay override = 1 - blend.
-
-        Args:
-            signed_surprise: нормированный сигнал в [-1, 1]. Positive →
-                реальность лучше ожиданий; negative → хуже.
-            blend: сколько веса у наблюдения (0..1). 0.4 = 40% влияния.
-        """
-        target = max(0.0, min(1.0,
-            self.state_level() - float(signed_surprise)))
-        override = max(0.001, min(0.999, 1.0 - float(blend)))
-        self._rgk.u_exp.feed(target, decay_override=override)
-        tod = self._rgk._current_tod()
-        self._rgk.u_exp_tod[tod].feed(target, decay_override=override)
+    def apply_subjective_surprise(self, signed_surprise: float, blend: float = 0.4):
+        """Trivial delegate в _rgk.u_apply_surprise."""
+        self._rgk.u_apply_surprise(signed_surprise, blend)
 
     def apply_checkin(self,
                        stress: Optional[float] = None,
                        focus: Optional[float] = None,
                        reality: Optional[float] = None):
-        """Process a manual check-in: stress (0-100) → NE, focus (0-100) → 5HT,
-        reality (-2..+2) → valence. Aggressive decay overrides из Decays.CHECKIN_*.
-
-        Заменяет legacy `metrics.fire_event("checkin", ...)` после Phase D
-        Step 3c. Identity сохраняется — те же EMAs, тот же decay, тот же signal.
-        """
-        if stress is not None:
-            self._rgk.user.aperture.feed(float(stress) / 100.0,
-                                          decay_override=Decays.CHECKIN_STRESS)
-        if focus is not None:
-            self._rgk.user.hyst.feed(float(focus) / 100.0,
-                                      decay_override=Decays.CHECKIN_FOCUS)
-        if reality is not None:
-            self._rgk.valence.feed(float(reality) / 2.0,
-                                    decay_override=Decays.CHECKIN_VALENCE)
+        """Trivial delegate в _rgk.u_apply_checkin."""
+        self._rgk.u_apply_checkin(stress, focus, reality)
 
     def apply_surprise_boost(self, n_ticks: int = SURPRISE_BOOST_DEFAULT_TICKS):
-        """Сигнал «юзер только что удивился чему-то» (OQ #7).
-
-        Переключает `tick_expectation` в fast-decay режим на N tick'ов.
-        Типичное N=3 → ~6 tick'ов до полного подстраивания expectation к
-        новому baseline (юзер увидел что-то что меняет его модель мира —
-        мы не должны продолжать опираться на старые предсказания).
-
-        Идемпотентно: повторный вызов во время активного boost только
-        **продлевает** счётчик если новое значение больше текущего.
-        """
-        n = max(0, int(n_ticks))
-        if n > self._surprise_boost_remaining:
-            self._surprise_boost_remaining = n
-        self._last_user_surprise_ts = time.time()
-
-    # ── Phase D Step 5: ACh + GABA feeders ─────────────────────────────────
+        """Trivial delegate в _rgk.u_apply_boost."""
+        self._rgk.u_apply_boost(n_ticks)
 
     def feed_acetylcholine(self, novelty: float, boost: bool = False):
-        """Plasticity feeder — открытость новому.
-
-        novelty ∈ [0, 1] — обычно `distinct(latest_msg, recent_5)` от
-        cognitive_loop. Высокая = темы юзера прыгают / новый паттерн →
-        ACh растёт → ткань становится более пластичной.
-
-        boost=True — детект user-side surprise (apply_surprise_boost
-        triggered) → принудительный bump до 0.85 с быстрым decay.
-
-        v1 ОГРАНИЧЕНИЕ: novelty считается через distinct() embedding-метрику
-        cognitive_loop'а, callers ответственны за качество. Если distinct
-        шумит — ACh шумит. Калибровка через 2 нед use, см. docs/world-model.md
-        и docs/neurochem-design.md §6.
-        """
-        sig = max(0.0, min(1.0, float(novelty)))
-        if boost:
-            self._rgk.user.plasticity.feed(max(sig, 0.85), decay_override=0.85)
-        else:
-            self._rgk.user.plasticity.feed(sig)
+        """Trivial delegate в _rgk.u_ach_feed."""
+        self._rgk.u_ach_feed(novelty, boost)
 
     def feed_gaba(self):
-        """Damping feeder — derived из focus_residue (existing field).
-
-        Высокий focus_residue = много переключений / rapid input →
-        низкий GABA (волна расползается).
-        Низкий focus_residue = стабильная работа → высокий GABA
-        (узкая чистая волна).
-
-        v1 ОГРАНИЧЕНИЕ: redirect existing focus_residue, не новый источник.
-        Breathing detection (low NE + high HRV coh + slow input rate) пока
-        не реализована — см. docs/neurochem-design.md §6 для opt-in
-        второго feeder.
-        """
-        sig = max(0.0, min(1.0, 1.0 - float(self.focus_residue)))
-        self._rgk.user.damping.feed(sig)
+        """Trivial delegate в _rgk.u_gaba_feed."""
+        self._rgk.u_gaba_feed()
 
     @property
     def reality(self) -> float:
