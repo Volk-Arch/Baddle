@@ -189,7 +189,5 @@ def apply_to_user_state(entry: dict):
         if entry.get("expected") is not None and entry.get("reality") is not None:
             subjective_surprise = (float(entry["reality"]) - float(entry["expected"])) / 4.0
             user.apply_subjective_surprise(subjective_surprise, blend=0.4)
-
-        user._clamp()
     except Exception as e:
         log.warning(f"[checkins] apply_to_user_state failed: {e}")

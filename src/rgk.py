@@ -180,7 +180,7 @@ class РГК:
         self.hrv_coherence = None        # type: float | None
         self.hrv_stress = None           # type: float | None
         self.hrv_rmssd = None            # type: float | None
-        self.activity_magnitude: float = 0.0
+        self._activity_magnitude: float = 0.0
         self.last_sleep_duration_h = None  # type: float | None
         self.cognitive_load_today: float = 0.0
         self.day_summary: dict = {}
@@ -318,6 +318,17 @@ class РГК:
         return 2.0 + 3.0 * ne * (1.0 - s)
 
     _AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine")
+
+    # ── B4 Wave 2: non-chem state with clamped setters ─────────────────────
+
+    @property
+    def activity_magnitude(self) -> float:
+        return self._activity_magnitude
+
+    @activity_magnitude.setter
+    def activity_magnitude(self, v):
+        # Clamp [0, 5] в setter — раньше через UserState._clamp() извне.
+        self._activity_magnitude = max(0.0, min(5.0, float(v)))
 
     # ── B4 Wave 2: non-chem derivations (HRV / activity bespoke в проекторах)
 

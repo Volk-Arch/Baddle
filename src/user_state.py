@@ -689,11 +689,6 @@ class UserState:
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
-    def _clamp(self):
-        """Safety net: EMA уже clamp'ит через bounds при feed, но дискретные
-        мутации `activity_magnitude = ...` не идут через EMA и требуют явного clamp."""
-        self.activity_magnitude = max(0.0, min(5.0, self.activity_magnitude))
-
     def vector(self) -> np.ndarray:
         """3D точка состояния для sync-метрики. Burnout отдельно (см. module doc)."""
         return self._rgk.user.vector()
