@@ -39,6 +39,7 @@
 
 - [x] ~~**Outcome tracking dashboard**~~ ✅ done 2026-04-26. `📊 Outcome` кнопка в Состоянии открывает panel с sync_error EMA daily chart (slow + fast) + 3 distribution bars (capacity_zone / frequency_regime / mode R/C) + trend verdict (improving/stable/worsening). Источник — `data/prime_directive.jsonl` (расширен полями balance_user/balance_system/capacity_zone/frequency_regime/mode). Заменил Sparkline + Sync-график (оба читали state_graph, который heartbeat без chem snapshot — графики были пустые).
 - [x] ~~**Insight bookmark**~~ ✅ done 2026-04-26. ⭐ кнопка между `/` и `→` в чат-вводе → modal с textarea + auto-context snapshot (capacity_zone/mode/balance/frequency_regime/named_state). POST `/assist/bookmark` создаёт ноду `type="insight_bookmark"` с `bookmark_context` field. Бесплатно для long-term self-research через год.
+- [ ] **Insight viewer (⭐ list)** — UI для просмотра сохранённых bookmarks. Без него фича — write-only: сохраняем но не возвращаемся. Spec: GET `/assist/bookmarks?limit=50` отдаёт ноды `type="insight_bookmark"` отсортированные `created_at` desc + полный `bookmark_context` + `session_indices`. UI — 5-й tab «⭐ Insights» в Outcome panel: timeline list, каждый item = textarea-style card с text + chip-row (`zone · mode · regime · state`) + дата. Опц.: filter по zone/mode, text-search, click → переход к ноде в графе. **~2-3ч.**
 
 ---
 
