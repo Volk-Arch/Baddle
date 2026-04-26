@@ -206,7 +206,12 @@ class РГК:
     def u_engage(self, signal: float = 0.65):
         self.user.gain.feed(max(0.0, min(1.0, float(signal))))
 
+    _FB_KINDS = ("accepted", "rejected", "ignored")
+
     def u_feedback(self, kind: str):
+        # Skip unknown kinds — раньше facade'ом, теперь в РГК (single source).
+        if kind not in self._FB_KINDS:
+            return
         self._fb[kind] = self._fb.get(kind, 0) + 1
         ov = Decays.USER_DOPAMINE_FEEDBACK
         if kind == "accepted":
