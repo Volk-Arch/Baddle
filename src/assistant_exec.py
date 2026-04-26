@@ -19,6 +19,7 @@ from typing import List, Dict, Optional
 
 from .graph_logic import _graph, _add_node, _graph_generate, _clean_thought, _ensure_embeddings
 from .modes import get_mode
+from .prompts import _p
 
 log = logging.getLogger(__name__)
 
@@ -112,14 +113,7 @@ def execute_tournament(message: str, lang: str = "ru") -> Dict:
 
     # Build comparison prompt (reuse /graph/compare logic directly)
     options_text = "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
-    if lang == "ru":
-        system = ("/no_think\nТы судья. Сравни варианты, выбери лучший. "
-                  "Ответь СТРОГО в формате:\nЛучший: [номер]\n"
-                  "Почему: [объяснение 2-3 предложения]\n"
-                  "Risk: [главный риск выбора, одно предложение]")
-    else:
-        system = ("/no_think\nYou are a judge. Compare, pick best. "
-                  "Format:\nBest: [number]\nWhy: [2-3 sentences]\nRisk: [main risk]")
+    system = _p(lang, "judge_system")
 
     result, _ = _graph_generate(
         [{"role": "system", "content": system},
@@ -173,13 +167,7 @@ def execute_tournament(message: str, lang: str = "ru") -> Dict:
 
 def execute_bayes(message: str, lang: str = "ru") -> Dict:
     """Bayesian: estimate initial prior, ask for observations."""
-    if lang == "ru":
-        system = ("/no_think\nОцени начальную вероятность гипотезы (0.01-0.99) "
-                  "на основе общих знаний, без наблюдений.\n"
-                  "Ответь СТРОГО в формате:\nprior: число\nпочему: одно предложение")
-    else:
-        system = ("/no_think\nEstimate initial probability (0.01-0.99).\n"
-                  "Format:\nprior: number\nwhy: one sentence")
+    system = _p(lang, "bayes_prior_system")
 
     result, _ = _graph_generate(
         [{"role": "system", "content": system},
@@ -862,14 +850,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                  ("как это сделать",  "how", 0.65)]
             )
             for prompt_tail, pol_label, base_conf in polarity_rounds:
-                if lang == "ru":
-                    p = (f"Тема: {message[:100]}\n"
-                         f"Вариант: «{h_text}»\n"
-                         f"Дай 2 конкретных аргумента {prompt_tail}. По одному на строке, "
-                         f"без нумерации.")
-                else:
-                    p = (f"Topic: {message[:100]}\nOption: «{h_text}»\n"
-                         f"Give 2 concrete arguments: {prompt_tail}. One per line.")
+                p = _p(lang, "hyp_args_user").format(
+                    message=message[:100], h_text=h_text, prompt_tail=prompt_tail)
                 try:
                     res, _ = _graph_generate(
                         [{"role": "system", "content": system},
@@ -910,16 +892,8 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
                 for b in added_hyp[i+1:]:
                     a_t = _graph["nodes"][a].get("text", "")[:100]
                     b_t = _graph["nodes"][b].get("text", "")[:100]
-                    if lang == "ru":
-                        pp = (f"Сравни в контексте «{message[:80]}»:\n"
-                              f"A: {a_t}\nB: {b_t}\n"
-                              f"Выдай:\n"
-                              f"WINNER: A или B\n"
-                              f"REASON: одна строка почему")
-                    else:
-                        pp = (f"Compare in context «{message[:80]}»:\n"
-                              f"A: {a_t}\nB: {b_t}\n"
-                              f"Output:\nWINNER: A or B\nREASON: one line")
+                    pp = _p(lang, "pairwise_compare_user").format(
+                        message=message[:80], a_t=a_t, b_t=b_t)
                     try:
                         pr, _ = _graph_generate(
                             [{"role": "system", "content": system},

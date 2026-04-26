@@ -40,29 +40,23 @@
 
 **Done 2026-04-25:** −14 LOC inline, +16 LOC prompts.py, single source of truth.
 
-### A3. Sync_seeking + retro text templates → prompts.py
+### A3. Sync_seeking + retro text templates → prompts.py ✅ done 2026-04-26
 
-**Scope:** `src/cognitive_loop._generate_sync_seeking_message` + retro text generation — шаблонная генерация с `if lang == "ru"` блоками. Перенести в prompts.py как именованные templates.
+`_generate_sync_seeking_message` system prompt + ctx labels + 3 fallback lists вынесены в `_PROMPTS["ru"]` с ключами `sync_seeking_*` (+ `_p()` теперь возвращает "" вместо exception если ключа нет в both langs). `detect_evening_retro` 3 retro строки → `retro_unfinished_one/many` + `retro_all_done`.
 
-**Estimated:** −80 LOC | **Время:** 30 мин | **Risk:** low
+### A4. Suggestions 5 sources → unified `_SUGGESTION_SOURCES` ✅ done 2026-04-26
 
-### A4. Suggestions 5 sources → unified `SOURCES` table
+5 inline `if include_X: try/except` блоков в `collect_suggestions` заменены на 5 collector-функций (`_collect_dmn/patterns/checkins/stress/weekly`) + единый dispatch loop. Каждый возвращает `list[dict]`. Добавление 6-го source = 1 функция + 1 строка в registry.
 
-**Scope:** `src/suggestions.py` — 5 detector wrappers `suggest_from_*` каждый со своим LLM hint + `try/except return None` boilerplate. Унифицировать в `SOURCES = [(name, collector_fn, draft_hint_fn), ...]`.
+### A5. Morning briefing 9 sections → `_BRIEFING_SECTIONS` registry ✅ done 2026-04-26
 
-**Estimated:** −150 LOC | **Время:** 1ч | **Risk:** medium
+`_build_morning_briefing_sections` (257 LOC body) сжат до 12 LOC dispatch. 9 module-level helpers (`_briefing_sleep/checkin/recovery/capacity/bridges/yesterday/open_goals/pattern/schedule/food`), каждый возвращает `dict | None`. Reorder/disable section = редактирование registry.
 
-### A5. Morning briefing 13 sections → registry
+### A6. Multi-line system prompts → prompts.py ✅ partially done 2026-04-26
 
-**Scope:** `src/cognitive_loop.py:1673-2065` — 13 sections (capacity/named_state/recurring/checkins/sleep/...) каждая ~30 LOC inline. Переписать как `SECTIONS = [(collector_fn, render_template, condition), ...]`.
+4 multi-line `if lang == "ru":` блока в `assistant_exec.py` (judge_system, bayes_prior_system, hyp_args_user, pairwise_compare_user) перенесены в prompts.py — RU + EN + .format() placeholders. Module-level `from .prompts import _p` импорт.
 
-**Estimated:** −150 LOC | **Время:** 1ч | **Risk:** medium
-
-### A6. Per-mode prompts (51 inline `if lang == "ru"` blocks) → prompts.py
-
-**Scope:** `src/assistant_exec.py` содержит 51 occurrence `if lang == "ru"` для prompt templates. Каждый — bespoke template inline. Перенести в `prompts.py` с осмысленными ключами.
-
-**Estimated:** −40 LOC | **Время:** 1-1.5ч | **Risk:** medium (user-facing prompts, неточный ключ ломает UX).
+39 mini-string ternary (`"Диалектический анализ:" if lang == "ru" else "..."`) **оставлены inline** — их перенос в prompts.py разрастает (`+86 LOC` ключей при `−43 inline`) без чистого LOC win. Audit estimate «−40 LOC» был оптимистичным.
 
 ---
 

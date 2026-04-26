@@ -38,6 +38,25 @@ _PROMPTS = {
         "ns_hint_apathy":   "\nUser in apathy — micro-steps ≤2min. Focus on 'start' not 'finish'.",
         "ns_hint_burnout":  "\nUser burned out — gentle, no pressure, recovery over tasks.",
         "ns_hint_insight":  "\nUser in insight — help capture/structure the new connection.",
+
+        # Multi-line system prompts (A6 cleanup) — assistant_exec.py
+        "judge_system": (
+            "/no_think\nYou are a judge. Compare, pick best. "
+            "Format:\nBest: [number]\nWhy: [2-3 sentences]\nRisk: [main risk]"
+        ),
+        "bayes_prior_system": (
+            "/no_think\nEstimate initial probability (0.01-0.99).\n"
+            "Format:\nprior: number\nwhy: one sentence"
+        ),
+        "hyp_args_user": (
+            "Topic: {message}\nOption: «{h_text}»\n"
+            "Give 2 concrete arguments: {prompt_tail}. One per line."
+        ),
+        "pairwise_compare_user": (
+            "Compare in context «{message}»:\n"
+            "A: {a_t}\nB: {b_t}\n"
+            "Output:\nWINNER: A or B\nREASON: one line"
+        ),
     },
     "ru": {
         "think":       "/no_think\nТы генерируешь ОДНУ короткую идею (1 предложение, максимум 15 слов). Без нумерации, без списков, только идея. Отвечай сразу.",
@@ -107,6 +126,32 @@ _PROMPTS = {
         "retro_unfinished_one":  "Ретро дня: {n} невыполнено. Откроем check-in?",
         "retro_unfinished_many": "Ретро дня: {n} невыполнены. Откроем check-in?",
         "retro_all_done":        "Ретро дня: всё по плану. Сделаем check-in?",
+
+        # Multi-line system prompts (A6 cleanup) — assistant_exec.py
+        "judge_system": (
+            "/no_think\nТы судья. Сравни варианты, выбери лучший. "
+            "Ответь СТРОГО в формате:\nЛучший: [номер]\n"
+            "Почему: [объяснение 2-3 предложения]\n"
+            "Risk: [главный риск выбора, одно предложение]"
+        ),
+        "bayes_prior_system": (
+            "/no_think\nОцени начальную вероятность гипотезы (0.01-0.99) "
+            "на основе общих знаний, без наблюдений.\n"
+            "Ответь СТРОГО в формате:\nprior: число\nпочему: одно предложение"
+        ),
+        "hyp_args_user": (
+            "Тема: {message}\n"
+            "Вариант: «{h_text}»\n"
+            "Дай 2 конкретных аргумента {prompt_tail}. По одному на строке, "
+            "без нумерации."
+        ),
+        "pairwise_compare_user": (
+            "Сравни в контексте «{message}»:\n"
+            "A: {a_t}\nB: {b_t}\n"
+            "Выдай:\n"
+            "WINNER: A или B\n"
+            "REASON: одна строка почему"
+        ),
     },
 }
 
