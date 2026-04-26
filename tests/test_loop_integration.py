@@ -46,7 +46,7 @@ def test_build_context_works(tmp_path, monkeypatch):
     assert ctx.now > 0
     assert ctx.user is not None
     assert ctx.neuro is not None
-    assert ctx.freeze is not None
+    assert ctx.rgk is not None
     assert ctx.loop is loop
     # dmn_eligible should be True at fresh init (idle, no foreground tick)
     assert ctx.dmn_eligible is True
@@ -90,10 +90,10 @@ def test_dmn_eligible_gates_heavy_detectors(tmp_path):
 
     user = SimpleNamespace(_last_input_ts=None, hrv_surprise=0.0)
     neuro = SimpleNamespace()
-    freeze = SimpleNamespace(silence_pressure=0.0)
+    rgk = SimpleNamespace(silence_press=0.0)
     loop = SimpleNamespace()
     ctx = DetectorContext(now=1_000_000.0, user=user, neuro=neuro,
-                            freeze=freeze, loop=loop, dmn_eligible=False)
+                            rgk=rgk, loop=loop, dmn_eligible=False)
 
     # Все 5 должны вернуть None если dmn_eligible=False
     assert detect_dmn_bridge(ctx) is None

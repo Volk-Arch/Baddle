@@ -468,47 +468,44 @@ class CognitiveLoop:
 
     # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
 
-    def _get_freeze(self):
-        """Helper: быстрый доступ к ProtectiveFreeze (носитель silence / imbalance /
-        sync_error EMA). Возвращает None если horizon недоступен — защита при
-        init race.
-        """
+    def _get_rgk(self):
+        """Helper: быстрый доступ к РГК через global state. Возвращает None
+        если horizon недоступен (init race)."""
         try:
-            return get_global_state().freeze
+            return get_global_state().rgk
         except Exception:
             return None
 
     def _idle_multiplier(self) -> float:
         """1.0 при полном resonance, MAX при max combined burnout.
 
-        Делегирует в `ProtectiveFreeze.combined_burnout(user_burnout)` —
-        единый расчёт для UI и замедления циклов. Эмпатия: если юзер
-        устал (decisions/rejects → `user.burnout`), Baddle тоже тише.
-        Это не отдельный check «предлагаем отдых», а встроенное молчание.
+        Делегирует в `_rgk.combined_burnout(user_burnout)` — единый расчёт
+        для UI и замедления циклов. Эмпатия: если юзер устал
+        (decisions/rejects → `user.burnout`), Baddle тоже тише.
         """
-        fz = self._get_freeze()
-        if fz is None:
+        r = self._get_rgk()
+        if r is None:
             return 1.0
         try:
             user_burnout = float(get_user_state().burnout)
         except Exception:
             user_burnout = 0.0
-        combined = fz.combined_burnout(user_burnout)
+        combined = r.combined_burnout(user_burnout)
         return 1.0 + combined * (self.IDLE_MULTIPLIER_MAX - 1.0)
 
     def _register_user_event(self, reason: str = ""):
         """User-event (сообщение, foreground tick, ручная правка графа).
-        Снижает `silence_pressure` на SILENCE_EVENT_DROP (не обнуляет).
+        Снижает `silence_press` на SILENCE_EVENT_DROP (не обнуляет).
         ~20 таких событий возвращают multiplier в 1.0 из максимума.
         """
-        fz = self._get_freeze()
-        if fz is None:
+        r = self._get_rgk()
+        if r is None:
             return
-        prev = fz.silence_pressure
-        fz.add_silence_pressure(-self.SILENCE_EVENT_DROP)
+        prev = r.silence_press
+        r.add_silence(-self.SILENCE_EVENT_DROP)
         if prev > 0.001:
             log.info(f"[cognitive_loop] silence_pressure {prev:.3f} -> "
-                     f"{fz.silence_pressure:.3f} (event: {reason}, "
+                     f"{r.silence_press:.3f} (event: {reason}, "
                      f"multiplier now {self._idle_multiplier():.2f}×)")
 
     def signal_user_input(self):
@@ -545,8 +542,8 @@ class CognitiveLoop:
         self._last_loop_tick_ts = now
         if dt <= 0:
             return
-        fz = self._get_freeze()
-        if fz is None:
+        r = self._get_rgk()
+        if r is None:
             return
         sync_err = 0.0
         combined_imbalance = 0.0
@@ -567,7 +564,7 @@ class CognitiveLoop:
             combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)
         except Exception:
             pass
-        fz.feed_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
+        r.p_tick(dt=dt, sync_err=sync_err, imbalance=combined_imbalance)
 
         # Counter-wave (Правило 7): R/C bit через гистерезис.
         # User mirror perturbation = sync_error (рассогласование с system).
@@ -598,7 +595,7 @@ class CognitiveLoop:
                 if now - float(b.get("ts", 0)) < 3600.0
             )
             scattering = min(1.0, recent_bridge_count / 5.0)
-            gs.neuro.feed_gaba(freeze_active=fz.active,
+            gs.neuro.feed_gaba(freeze_active=r.freeze_active,
                                 embedding_scattering=scattering)
             u.feed_gaba()
         except Exception as e:

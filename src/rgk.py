@@ -443,6 +443,31 @@ class РГК:
                        self.imbalance_press.value)
         return max(display, ub)
 
+    def serialize_freeze(self) -> dict:
+        """Freeze (pressure layer) snapshot для state.json. Симметрично
+        старому ProtectiveFreeze.to_dict — keys preserved для backward-compat."""
+        display = max(self.conflict.value, self.silence_press,
+                       self.imbalance_press.value)
+        return {
+            "conflict_accumulator": round(self.conflict.value, 3),
+            "silence_pressure":     round(self.silence_press, 3),
+            "imbalance_pressure":   round(self.imbalance_press.value, 3),
+            "sync_error_ema_fast":  round(self.sync_fast.value, 4),
+            "sync_error_ema_slow":  round(self.sync_slow.value, 4),
+            "display_burnout":      round(display, 3),
+            "active":               bool(self.freeze_active),
+        }
+
+    def load_freeze(self, d: dict) -> None:
+        """Restore freeze layer из state.json dump. Симметрично старому
+        ProtectiveFreeze.from_dict."""
+        self.conflict.value      = float(d.get("conflict_accumulator", 0.0))
+        self.silence_press       = max(0.0, min(1.0, float(d.get("silence_pressure", 0.0))))
+        self.imbalance_press.value = float(d.get("imbalance_pressure", 0.0))
+        self.sync_fast.value     = float(d.get("sync_error_ema_fast", 0.0))
+        self.sync_slow.value     = float(d.get("sync_error_ema_slow", 0.0))
+        self.freeze_active       = bool(d.get("active", False))
+
     # ── Coupling + projections ────────────────────────────────────────────
 
     def sync_error(self) -> float:

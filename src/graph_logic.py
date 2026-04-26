@@ -455,13 +455,13 @@ def _current_snapshot() -> dict:
             "dopamine":             round(gs.neuro.dopamine, 3),
             "serotonin":            round(gs.neuro.serotonin, 3),
             "norepinephrine":       round(gs.neuro.norepinephrine, 3),
-            "conflict_accumulator": round(gs.freeze.conflict_accumulator, 3),
-            "silence_pressure":     round(gs.freeze.silence_pressure, 3),
-            "imbalance_pressure":   round(gs.freeze.imbalance_pressure, 3),
+            "conflict_accumulator": round(gs.rgk.conflict.value, 3),
+            "silence_pressure":     round(gs.rgk.silence_press, 3),
+            "imbalance_pressure":   round(gs.rgk.imbalance_press.value, 3),
         }
         snap["sync_error_before"] = round(float(gs.sync_error), 3)
-        snap["sync_error_ema_fast"] = round(float(gs.freeze.sync_error_ema_fast), 4)
-        snap["sync_error_ema_slow"] = round(float(gs.freeze.sync_error_ema_slow), 4)
+        snap["sync_error_ema_fast"] = round(float(gs.rgk.sync_fast.value), 4)
+        snap["sync_error_ema_slow"] = round(float(gs.rgk.sync_slow.value), 4)
         snap["sync_regime"] = gs.sync_regime
     except Exception:
         pass

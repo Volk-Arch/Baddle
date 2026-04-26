@@ -36,7 +36,6 @@ from typing import Optional
 
 import numpy as np
 
-from .ema import TimeConsts
 from .rgk import РГК
 
 
@@ -281,159 +280,10 @@ class Neurochem:
         return n
 
 
-# ── ProtectiveFreeze ───────────────────────────────────────────────────────
-
-# Phase D Step 4c: extractors + _build_freeze_registry удалены.
-# Pressure layer EMAs живут в self._rgk (conflict, imbalance_press, sync_fast,
-# sync_slow + silence_press linear ramp + freeze_active flag).
-# Обновления через _rgk.p_conflict(d, serotonin) и _rgk.p_tick(dt, sync_err, imbalance).
-
-
-class ProtectiveFreeze:
-    """Защитный режим + накопители «усталости» Baddle.
-
-    Три независимых feeder'а — одно displayed-поле burnout в UI, плюс два
-    агрегата sync_error (fast/slow) для валидации прайм-директивы.
-
-      1. `conflict_accumulator` — хронический графовый конфликт (d > τ_stable
-         при низкой стабильности). Единственный feeder который **активирует
-         Bayes-freeze** (жёсткий режим, блокирует обновления confidence).
-
-      2. `silence_pressure` — хроническое молчание юзера. Растёт линейно
-         по времени без user-events (1.0 за SILENCE_RAMP_SECONDS), падает
-         на user-event через `add_silence_pressure(-drop)`. Раньше
-         назывался `desync_pressure`, но по факту это не рассинхрон, а
-         таймер тишины — переименован для честности.
-
-      3. `imbalance_pressure` — EMA |UserState.surprise| (predictive error
-         в Фристоновском смысле). Растёт когда юзер ведёт себя не так, как
-         ожидали. Медленный time-constant (1 день) — отражает сдвиг baseline.
-
-    `display_burnout = max` всех трёх. UI показывает одну «Усталость Baddle»,
-    `cognitive_loop._idle_multiplier()` замедляет циклы при любом из кризисов.
-
-    `sync_error_ema_fast/slow` — чистый агрегат прайм-директивы. Не входят
-    в display_burnout (это не усталость, а качество резонанса), пишутся раз
-    в час в `data/prime_directive.jsonl` через `src/prime_directive.py`.
-    Через 2 мес use сравниваем mean(slow) за первый/последний месяц →
-    падает = механики резонансного протокола работают.
-
-    **Implementation note (2026-04-24):** все EMA живут в `self.metrics`
-    (MetricRegistry). `update(d, serotonin)` → `fire_event("conflict_update")`,
-    `feed_tick(dt, sync_err, imbalance)` → `fire_event("feed_tick", ...)`.
-    `silence_pressure` остаётся как float — это линейный ramp timer, не EMA.
-    """
-
-    # Параметры threshold'ов перенесены в `src.rgk` (FREEZE_TAU_STABLE,
-    # FREEZE_THETA_ACTIVE, FREEZE_THETA_RECOVERY) — раньше определялись
-    # здесь как class const'ы, но `_rgk.p_conflict` их never читал и хардкодил
-    # те же числа. Single source теперь в РГК.
-    # Feeder time-constants — см. `src.ema.TimeConsts`.
-    SILENCE_RAMP_SECONDS = TimeConsts.SILENCE_RAMP
-
-    def __init__(self, *, rgk: "Optional[РГК]" = None):
-        # B0: optional shared РГК (production bootstrap передаёт singleton).
-        # Default rgk=None → новый РГК (backward-compat для тестов).
-        self._rgk = rgk if rgk is not None else РГК()
-
-    # ── Public read accessors (backward-compat) ────────────────────────────
-
-    @property
-    def conflict_accumulator(self) -> float:
-        return float(self._rgk.conflict.value)
-
-    @property
-    def imbalance_pressure(self) -> float:
-        return float(self._rgk.imbalance_press.value)
-
-    @property
-    def sync_error_ema_fast(self) -> float:
-        return float(self._rgk.sync_fast.value)
-
-    @property
-    def sync_error_ema_slow(self) -> float:
-        return float(self._rgk.sync_slow.value)
-
-    @property
-    def silence_pressure(self) -> float:
-        return float(self._rgk.silence_press)
-
-    @silence_pressure.setter
-    def silence_pressure(self, v: float):
-        self._rgk.silence_press = max(0.0, min(1.0, float(v)))
-
-    @property
-    def active(self) -> bool:
-        return bool(self._rgk.freeze_active)
-
-    @active.setter
-    def active(self, v: bool):
-        self._rgk.freeze_active = bool(v)
-
-    # ── Feeders ─────────────────────────────────────────────────────────────
-
-    def update(self, d: float = None, serotonin: float = 0.5):
-        """Обновить conflict accumulator и проверить вход/выход freeze.
-
-        Остальные feeders (silence/imbalance/sync_error) обновляются через
-        `feed_tick(dt, ...)` из cognitive_loop на каждом background tick'е.
-        Они **не** активируют Bayes-freeze — только display_burnout и
-        idle multiplier.
-        """
-        # Phase D: gate в _rgk.p_conflict (формула conflict EMA + freeze hysteresis).
-        # _rgk.p_conflict тоже обновляет freeze_active; self.active = property → _rgk.
-        self._rgk.p_conflict(d=d, serotonin=serotonin)
-
-    def feed_tick(self, dt: float, sync_err: float = 0.0,
-                   imbalance: float = 0.0):
-        """Единый time-based update всех feeders кроме conflict_accumulator.
-
-        Вызывается из `cognitive_loop._advance_tick` на каждой итерации.
-        `dt` — секунды с прошлого вызова (capped во внешнем коде).
-
-        Args:
-            dt: секунды с прошлого тика. <= 0 → no-op.
-            sync_err: current L2-distance user↔system (0..≈√3 в 3D).
-            imbalance: aggregated PE ∈ [0, 1] (см. cognitive_loop._advance_tick).
-        """
-        # Phase D: silence_press ramp + 3 EMA feeders в _rgk.p_tick.
-        self._rgk.p_tick(dt=dt, sync_err=sync_err, imbalance=imbalance)
-
-    @property
-    def display_burnout(self) -> float:
-        """«Baddle: Усталость» — max всех трёх feeder'ов Baddle-side.
-        sync_error EMA намеренно НЕ входит: это качество резонанса,
-        отдельная семантика от усталости.
-        """
-        return max(self.conflict_accumulator, self.silence_pressure,
-                   self.imbalance_pressure)
-
-    def combined_burnout(self, user_burnout: float = 0.0) -> float:
-        """Trivial delegate в _rgk.combined_burnout."""
-        return self._rgk.combined_burnout(user_burnout)
-
-    def add_silence_pressure(self, delta: float):
-        """Trivial delegate в _rgk.add_silence."""
-        self._rgk.add_silence(delta)
-
-    def to_dict(self) -> dict:
-        return {
-            "conflict_accumulator": round(self.conflict_accumulator, 3),
-            "silence_pressure": round(self.silence_pressure, 3),
-            "imbalance_pressure": round(self.imbalance_pressure, 3),
-            "sync_error_ema_fast": round(self.sync_error_ema_fast, 4),
-            "sync_error_ema_slow": round(self.sync_error_ema_slow, 4),
-            "display_burnout": round(self.display_burnout, 3),
-            "active": self.active,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "ProtectiveFreeze":
-        pf = cls()
-        pf._rgk.conflict.value = float(d.get("conflict_accumulator", 0.0))
-        pf.silence_pressure = float(d.get("silence_pressure", 0.0))
-        pf._rgk.imbalance_press.value = float(d.get("imbalance_pressure", 0.0))
-        pf._rgk.sync_fast.value = float(d.get("sync_error_ema_fast", 0.0))
-        pf._rgk.sync_slow.value = float(d.get("sync_error_ema_slow", 0.0))
-        pf.active = bool(d.get("active", False))
-        return pf
+# ProtectiveFreeze class удалён в B5 W3. Все state и dynamics живут в РГК:
+#   • conflict / silence_press / imbalance_press / sync_fast / sync_slow / freeze_active
+#   • _rgk.p_conflict(d, serotonin) — update accumulator + freeze flag hysteresis
+#   • _rgk.p_tick(dt, sync_err, imbalance) — time-based update остальных feeders
+#   • _rgk.add_silence(delta) — user-event silence drop
+#   • _rgk.combined_burnout(user_burnout) — max(display, user_burnout) helper
+#   • _rgk.serialize_freeze() / _rgk.load_freeze(d) — state.json roundtrip

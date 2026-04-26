@@ -42,7 +42,8 @@ DetectorReturn = Union[None, Signal, Iterable[Signal]]
 
 if TYPE_CHECKING:
     from .cognitive_loop import CognitiveLoop
-    from .neurochem import Neurochem, ProtectiveFreeze
+    from .neurochem import Neurochem
+    from .rgk import РГК
     from .user_state import UserState
 
 
@@ -63,7 +64,7 @@ class DetectorContext:
 
     Поля:
         now: unix ts текущего tick
-        user/neuro/freeze: per-class ссылки на state объекты
+        user/neuro/rgk: per-class ссылки на state объекты
         loop: CognitiveLoop для доступа к graph/_recent_bridges/etc
         dmn_eligible: gate из _loop — True если `not_frozen AND ne_quiet
             AND idle_enough`. DMN-эвристические детекторы (dmn_bridge,
@@ -75,7 +76,7 @@ class DetectorContext:
     now: float
     user: "UserState"
     neuro: "Neurochem"
-    freeze: "ProtectiveFreeze"
+    rgk: "РГК"
     loop: "CognitiveLoop"   # для доступа к graph, activity_log, plans, etc.
     dmn_eligible: bool = True
 
@@ -96,7 +97,6 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
     user = get_user_state()
     gs = get_global_state()
     neuro = gs.neuro
-    freeze = loop._get_freeze()
 
     # DMN gate
     try:
@@ -108,7 +108,7 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
         dmn_eligible = False
 
     return DetectorContext(
-        now=now, user=user, neuro=neuro, freeze=freeze, loop=loop,
+        now=now, user=user, neuro=neuro, rgk=gs.rgk, loop=loop,
         dmn_eligible=dmn_eligible,
     )
 
@@ -371,7 +371,7 @@ def detect_sync_seeking(ctx: DetectorContext) -> Optional[Signal]:
     вмешательством vs без.
     """
     try:
-        silence = float(ctx.freeze.silence_pressure)
+        silence = float(ctx.rgk.silence_press)
         if silence < 0.3:   # SYNC_SEEKING_SILENCE_MIN
             return None
 

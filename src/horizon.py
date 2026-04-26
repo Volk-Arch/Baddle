@@ -94,11 +94,11 @@ class CognitiveState:
         # Три скаляра + отдельный защитный режим. См. src/neurochem.py.
         # B0: shared singleton РГК — каскад зеркал (UserState/Neurochem/
         # ProtectiveFreeze) работает на одном объекте.
-        from .neurochem import Neurochem, ProtectiveFreeze
+        from .neurochem import Neurochem
         from .rgk import get_global_rgk
         rgk = get_global_rgk()
+        self.rgk = rgk                        # direct singleton handle (W3+)
         self.neuro = Neurochem(rgk=rgk)
-        self.freeze = ProtectiveFreeze(rgk=rgk)
         self._burnout_trip_count = 0  # kept for metrics
 
         # ── Mode flags ──────────────────────────────────────────────────
@@ -212,7 +212,7 @@ class CognitiveState:
     def sync_error(self) -> float:
         try:
             from .user_state import get_user_state, compute_sync_error
-            return compute_sync_error(get_user_state(), self.neuro, self.freeze)
+            return compute_sync_error(get_user_state(), self.neuro, None)
         except Exception:
             return 0.0
 
@@ -220,7 +220,7 @@ class CognitiveState:
     def sync_regime(self) -> str:
         try:
             from .user_state import get_user_state, compute_sync_regime
-            return compute_sync_regime(get_user_state(), self.neuro, self.freeze)
+            return compute_sync_regime(get_user_state(), self.neuro, None)
         except Exception:
             return "flow"
 
@@ -260,22 +260,22 @@ class CognitiveState:
         d        → dopamine EMA (новизна)
         w_change → serotonin EMA (стабильность весов)
         weights  → norepinephrine EMA (энтропия распределения)
-        d + текущий serotonin → ProtectiveFreeze accumulator
+        d + текущий serotonin → freeze accumulator (через _rgk.p_conflict)
         """
         self.neuro.update(d=d, w_change=w_change, weights=weights)
 
         if d is not None:
-            self.freeze.update(d=d, serotonin=self.neuro.serotonin)
-            # Синхронизация state machine с freeze.active
-            if self.freeze.active and self.state != PROTECTIVE_FREEZE:
+            self.rgk.p_conflict(d=d, serotonin=self.neuro.serotonin)
+            # Sync state machine с rgk.freeze_active
+            if self.rgk.freeze_active and self.state != PROTECTIVE_FREEZE:
                 self._prev_state = self.state
                 self.state = PROTECTIVE_FREEZE
                 self._burnout_trip_count += 1
-            elif not self.freeze.active and self.state == PROTECTIVE_FREEZE:
+            elif not self.rgk.freeze_active and self.state == PROTECTIVE_FREEZE:
                 self.state = self._prev_state or EXPLORATION
 
         # state_origin derived
-        if self.neuro.norepinephrine > 0.55 or self.freeze.conflict_accumulator > 0.1:
+        if self.neuro.norepinephrine > 0.55 or self.rgk.conflict.value > 0.1:
             self.state_origin_hint = "1_held"
         else:
             self.state_origin_hint = "1_rest"
@@ -285,7 +285,7 @@ class CognitiveState:
 
         γ derived из norepinephrine и serotonin (см. Neurochem).
         """
-        if self.freeze.active or self.state == PROTECTIVE_FREEZE:
+        if self.rgk.freeze_active or self.state == PROTECTIVE_FREEZE:
             return prior
         return self.neuro.apply_to_bayes(prior, d)
 
@@ -295,7 +295,7 @@ class CognitiveState:
 
     def horizon_budget(self) -> float:
         """Доля бюджета Horizon (vs DMN). Низкое внимание → DMN берёт бюджет."""
-        if self.freeze.active:
+        if self.rgk.freeze_active:
             return 0.3   # минимум при freeze
         # Высокое NE (напряжение/внимание) → Horizon в фокусе
         return max(0.2, min(0.95, 0.8 * self.neuro.norepinephrine + 0.2))
@@ -387,7 +387,7 @@ class CognitiveState:
         > precision-driven (EXPLORATION/EXECUTION/INTEGRATION).
         """
         # Highest priority: honor active freeze until accumulator drops below recovery threshold
-        if self.state == PROTECTIVE_FREEZE and self.freeze.active:
+        if self.state == PROTECTIVE_FREEZE and self.rgk.freeze_active:
             return PROTECTIVE_FREEZE
 
         # HRV-driven states (if HRV sensor connected)
@@ -478,19 +478,21 @@ class CognitiveState:
                 #   • conflict — графовые конфликты (единственный активирует freeze)
                 #   • silence  — хроническое молчание юзера (таймер)
                 #   • imbalance — EMA aggregate 4-х PE-каналов (Friston-loop)
-                "burnout":             round(self.freeze.display_burnout, 3),
-                "burnout_conflict":    round(self.freeze.conflict_accumulator, 3),
-                "burnout_silence":     round(self.freeze.silence_pressure, 3),
-                "burnout_imbalance":   round(self.freeze.imbalance_pressure, 3),
+                "burnout":             round(max(self.rgk.conflict.value,
+                                                  self.rgk.silence_press,
+                                                  self.rgk.imbalance_press.value), 3),
+                "burnout_conflict":    round(self.rgk.conflict.value, 3),
+                "burnout_silence":     round(self.rgk.silence_press, 3),
+                "burnout_imbalance":   round(self.rgk.imbalance_press.value, 3),
                 # Прайм-директива: EMA sync_error для валидации через 2 мес.
                 # Fast (1ч) — для UI тренда; slow (3д) — для weekly aggregate.
                 # Пишется раз в час в data/prime_directive.jsonl.
-                "sync_error_ema_fast": round(self.freeze.sync_error_ema_fast, 4),
-                "sync_error_ema_slow": round(self.freeze.sync_error_ema_slow, 4),
+                "sync_error_ema_fast": round(self.rgk.sync_fast.value, 4),
+                "sync_error_ema_slow": round(self.rgk.sync_slow.value, 4),
                 # Self-prediction: Baddle PE на её же baseline.
                 # Входит одной из 4-х компонент в burnout_imbalance.
                 "self_imbalance":      neuro_dict.get("self_imbalance", 0.0),
-                "freeze_active":       self.freeze.active,
+                "freeze_active":       self.rgk.freeze_active,
                 "state_origin":        self.state_origin_hint,
                 "recent_rpe":          neuro_dict.get("recent_rpe", 0.0),
             },
@@ -523,7 +525,7 @@ class CognitiveState:
             "tau_in": self.tau_in,
             "tau_out": self.tau_out,
             "neuro": self.neuro.to_dict(),
-            "freeze": self.freeze.to_dict(),
+            "freeze": self.rgk.serialize_freeze(),
             "_burnout_trip_count": self._burnout_trip_count,
             "maturity": self.maturity,
             "llm_disabled": self.llm_disabled,
@@ -533,7 +535,7 @@ class CognitiveState:
     @classmethod
     def from_dict(cls, d: dict) -> "CognitiveState":
         """Восстановление из dump'а. Legacy поля sync_error/hrv_* игнорируются."""
-        from .neurochem import Neurochem, ProtectiveFreeze
+        from .neurochem import Neurochem
 
         h = cls(
             precision=d.get("precision", 0.4),
@@ -552,7 +554,7 @@ class CognitiveState:
         h.tau_in = d.get("tau_in", 0.3)
         h.tau_out = d.get("tau_out", 0.7)
         h.neuro = Neurochem.from_dict(d.get("neuro", {}))
-        h.freeze = ProtectiveFreeze.from_dict(d.get("freeze", {}))
+        h.rgk.load_freeze(d.get("freeze", {}))
         h._burnout_trip_count = d.get("_burnout_trip_count", 0)
         h.maturity = float(d.get("maturity", 0.0))
         h.llm_disabled = d.get("llm_disabled", False)

@@ -209,7 +209,7 @@ def test_update_cognitive_load_empty_activity_log(tmp_path, monkeypatch):
     # Mock global state freeze.sync_error_ema_slow to be stable
     from unittest.mock import MagicMock
     fake_state = MagicMock()
-    fake_state.freeze.sync_error_ema_slow = 0.0
+    fake_state.rgk.sync_slow.value = 0.0
     monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
 
     us = UserState()
@@ -230,7 +230,7 @@ def test_update_cognitive_load_aggregates_from_activity_log(tmp_path, monkeypatc
                          lambda: mock_user)
 
     fake_state = MagicMock()
-    fake_state.freeze.sync_error_ema_slow = 0.1
+    fake_state.rgk.sync_slow.value = 0.1
     monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
 
     # Добавим 3 активности (одна — switch на следующую → context_switch)
@@ -261,7 +261,7 @@ def test_update_cognitive_load_progress_delta_from_dawn(tmp_path, monkeypatch):
 
     from unittest.mock import MagicMock
     fake_state = MagicMock()
-    fake_state.freeze.sync_error_ema_slow = 0.5    # initial
+    fake_state.rgk.sync_slow.value = 0.5    # initial
     monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
 
     us = UserState()
@@ -272,7 +272,7 @@ def test_update_cognitive_load_progress_delta_from_dawn(tmp_path, monkeypatch):
     assert us.day_summary[today_str]["progress_delta"] == pytest.approx(0.0)
 
     # Час спустя sync улучшился (упал)
-    fake_state.freeze.sync_error_ema_slow = 0.3
+    fake_state.rgk.sync_slow.value = 0.3
     us.update_cognitive_load()
     # at_dawn остался 0.5 (зафиксирован), delta = 0.3 - 0.5 = -0.2
     assert us.day_summary[today_str]["sync_error_at_dawn"] == pytest.approx(0.5)

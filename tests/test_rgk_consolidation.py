@@ -19,7 +19,7 @@ from src.rgk import (
     РГК, RPE_GAIN, RPE_WINDOW,
     FREEZE_TAU_STABLE, FREEZE_THETA_ACTIVE, FREEZE_THETA_RECOVERY,
 )
-from src.neurochem import Neurochem, ProtectiveFreeze
+from src.neurochem import Neurochem
 from src.user_state import UserState
 
 
@@ -143,10 +143,9 @@ def test_rpe_constants_single_source():
 
 
 def test_freeze_thresholds_single_source():
-    """ProtectiveFreeze.TAU_STABLE/THETA_* удалены, рgk module-level."""
-    assert not hasattr(ProtectiveFreeze, "TAU_STABLE")
-    assert not hasattr(ProtectiveFreeze, "THETA_ACTIVE")
-    assert not hasattr(ProtectiveFreeze, "THETA_RECOVERY")
+    """ProtectiveFreeze class удалён в W3 — все freeze constants только в РГК."""
+    import src.neurochem as nc
+    assert not hasattr(nc, "ProtectiveFreeze")
     assert FREEZE_TAU_STABLE == 0.6
     assert FREEZE_THETA_ACTIVE == 0.15
     assert FREEZE_THETA_RECOVERY == 0.08

@@ -706,13 +706,12 @@ class TestSingletonRGK:
     def test_user_state_with_explicit_rgk_shares(self):
         """Explicit rgk= sharing — production pattern."""
         from src.user_state import UserState
-        from src.neurochem import Neurochem, ProtectiveFreeze
+        from src.neurochem import Neurochem
         from src.rgk import РГК
         rgk = РГК()
         u = UserState(rgk=rgk)
         n = Neurochem(rgk=rgk)
-        f = ProtectiveFreeze(rgk=rgk)
-        assert u._rgk is n._rgk is f._rgk is rgk
+        assert u._rgk is n._rgk is rgk
 
     def test_production_bootstrap_shares_global(self):
         """get_user_state() + CognitiveState — каскад зеркал на одном РГК."""
@@ -730,7 +729,7 @@ class TestSingletonRGK:
         u = get_user_state()
         gs = get_global_state()
         assert u._rgk is gs.neuro._rgk
-        assert u._rgk is gs.freeze._rgk
+        assert u._rgk is gs.rgk
 
 
 # ── B4 Wave 1 — project() expansion ────────────────────────────────────────

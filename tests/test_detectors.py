@@ -73,10 +73,10 @@ def ctx(stub_loop):
     """DetectorContext с минимальными stubs."""
     user = SimpleNamespace(_last_input_ts=None, hrv_surprise=0.0)
     neuro = SimpleNamespace()
-    freeze = SimpleNamespace(silence_pressure=0.0)
+    rgk = SimpleNamespace(silence_press=0.0)
     return DetectorContext(
         now=1_000_000.0, user=user, neuro=neuro,
-        freeze=freeze, loop=stub_loop,
+        rgk=rgk, loop=stub_loop,
     )
 
 
@@ -294,7 +294,7 @@ def test_recurring_lag_none_when_empty(ctx):
 # ── detect_sync_seeking ────────────────────────────────────────────────────
 
 def test_sync_seeking_emits_when_silence_high_and_idle(ctx):
-    ctx.freeze.silence_pressure = 0.6
+    ctx.rgk.silence_press = 0.6
     ctx.user._last_input_ts = ctx.now - 3 * 3600   # 3h idle
     with patch("random.random", return_value=0.5):  # not counterfactual
         sig = detect_sync_seeking(ctx)
@@ -306,20 +306,20 @@ def test_sync_seeking_emits_when_silence_high_and_idle(ctx):
 
 
 def test_sync_seeking_none_when_silence_low(ctx):
-    ctx.freeze.silence_pressure = 0.2   # below threshold
+    ctx.rgk.silence_press = 0.2   # below threshold
     ctx.user._last_input_ts = ctx.now - 3 * 3600
     assert detect_sync_seeking(ctx) is None
 
 
 def test_sync_seeking_none_when_idle_short(ctx):
-    ctx.freeze.silence_pressure = 0.6
+    ctx.rgk.silence_press = 0.6
     ctx.user._last_input_ts = ctx.now - 600   # only 10 min idle
     assert detect_sync_seeking(ctx) is None
 
 
 def test_sync_seeking_counterfactual_skip_records_action(ctx):
     """10% случаев → None но action_memory записан."""
-    ctx.freeze.silence_pressure = 0.6
+    ctx.rgk.silence_press = 0.6
     ctx.user._last_input_ts = ctx.now - 3 * 3600
     with patch("random.random", return_value=0.05):   # < 0.1 → counterfactual
         sig = detect_sync_seeking(ctx)
@@ -333,11 +333,11 @@ def test_sync_seeking_urgency_scales_with_silence(ctx):
     """Higher silence → higher urgency."""
     ctx.user._last_input_ts = ctx.now - 3 * 3600
 
-    ctx.freeze.silence_pressure = 0.4
+    ctx.rgk.silence_press = 0.4
     with patch("random.random", return_value=0.5):
         s_low = detect_sync_seeking(ctx)
 
-    ctx.freeze.silence_pressure = 0.9
+    ctx.rgk.silence_press = 0.9
     with patch("random.random", return_value=0.5):
         s_high = detect_sync_seeking(ctx)
 

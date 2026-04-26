@@ -59,7 +59,7 @@ def update_cognitive_load(rgk) -> None:
     sync_now = sync_at_dawn or 0.0
     try:
         from .horizon import get_global_state
-        sync_now = float(get_global_state().freeze.sync_error_ema_slow)
+        sync_now = float(get_global_state().rgk.sync_slow.value)
         if sync_at_dawn is None:
             sync_at_dawn = sync_now
             today_summary["sync_error_at_dawn"] = round(sync_at_dawn, 6)
@@ -103,7 +103,7 @@ def rollover_day(rgk, hrv_recovery: Optional[float] = None) -> None:
 
     try:
         from .horizon import get_global_state
-        sync_at_dawn = float(get_global_state().freeze.sync_error_ema_slow)
+        sync_at_dawn = float(get_global_state().rgk.sync_slow.value)
     except Exception:
         sync_at_dawn = 0.0
     rgk.day_summary.setdefault(today_str, {})

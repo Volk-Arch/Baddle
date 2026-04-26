@@ -8,7 +8,7 @@ Neurochem / ProtectiveFreeze должен давать тот же snapshot. EXP
 import pytest
 
 from src.user_state import UserState
-from src.neurochem import Neurochem, ProtectiveFreeze
+from src.neurochem import Neurochem
 
 
 # ── Expected snapshot (captured 2026-04-24, pre-migration) ─────────────────
@@ -77,7 +77,7 @@ def states(monkeypatch):
 
     us = UserState()
     nc = Neurochem()
-    pf = ProtectiveFreeze()
+    r = РГК()  # отдельный rgk для pressure layer (раньше был ProtectiveFreeze)
 
     # UserState events
     for _ in range(5):
@@ -109,13 +109,13 @@ def states(monkeypatch):
     nc.record_outcome(prior=0.5, posterior=0.7)
     nc.record_outcome(prior=0.6, posterior=0.55)
 
-    # ProtectiveFreeze events
-    pf.update(d=0.7, serotonin=0.4)
-    pf.update(d=0.65, serotonin=0.45)
+    # Pressure layer events (раньше через ProtectiveFreeze, теперь через РГК)
+    r.p_conflict(d=0.7, serotonin=0.4)
+    r.p_conflict(d=0.65, serotonin=0.45)
     for _ in range(20):
-        pf.feed_tick(dt=60.0, sync_err=0.5, imbalance=0.3)
+        r.p_tick(dt=60.0, sync_err=0.5, imbalance=0.3)
 
-    return us, nc, pf
+    return us, nc, r
 
 
 # ── UserState identity ─────────────────────────────────────────────────────
@@ -189,27 +189,27 @@ def test_neurochem_predictive_and_derived(states):
         EXPECTED_NEUROCHEM["vector"], abs=TOL)
 
 
-# ── ProtectiveFreeze identity ──────────────────────────────────────────────
+# ── Freeze identity (через РГК после W3) ──────────────────────────────────
 
 def test_freeze_feeders(states):
-    _, _, pf = states
-    assert pf.conflict_accumulator == pytest.approx(
+    _, _, r = states
+    assert r.conflict.value == pytest.approx(
         EXPECTED_FREEZE["conflict_accumulator"], abs=TOL)
-    assert pf.silence_pressure == pytest.approx(
+    assert r.silence_press == pytest.approx(
         EXPECTED_FREEZE["silence_pressure"], abs=TOL)
-    assert pf.imbalance_pressure == pytest.approx(
+    assert r.imbalance_press.value == pytest.approx(
         EXPECTED_FREEZE["imbalance_pressure"], abs=TOL)
-    assert pf.sync_error_ema_fast == pytest.approx(
+    assert r.sync_fast.value == pytest.approx(
         EXPECTED_FREEZE["sync_error_ema_fast"], abs=TOL)
-    assert pf.sync_error_ema_slow == pytest.approx(
+    assert r.sync_slow.value == pytest.approx(
         EXPECTED_FREEZE["sync_error_ema_slow"], abs=TOL)
 
 
 def test_freeze_derived(states):
-    _, _, pf = states
-    assert pf.display_burnout == pytest.approx(
-        EXPECTED_FREEZE["display_burnout"], abs=TOL)
-    assert pf.active == EXPECTED_FREEZE["active"]
+    _, _, r = states
+    display = max(r.conflict.value, r.silence_press, r.imbalance_press.value)
+    assert display == pytest.approx(EXPECTED_FREEZE["display_burnout"], abs=TOL)
+    assert r.freeze_active == EXPECTED_FREEZE["active"]
 
 
 # ── Checkin-flow identity (2026-04-24 consolidation) ──────────────────────
