@@ -542,112 +542,25 @@ class UserState:
             self.focus_residue - 0.05 * (dt_seconds / 60.0))
 
     def update_from_engagement(self, signal: float = 0.65):
-        """Мягкий EMA-вклад в dopamine от факта вовлечённости юзера
-        (он написал / нажал кнопку / создал цель).
-
-        Не путать со старым `update_from_timing`: там signal зависел от
-        timing gap (быстро = 0.8, долго = 0.2), что шумно. Здесь signal
-        константный и небольшой — просто маркёр «юзер активен, не apathy».
-        EMA decay 0.95 → одно сообщение даёт +0.007 к dopamine (если был 0.5).
-        За серию из 20 сообщений dopamine поднимается к ~0.60.
-
-        Вызывается рядом с `register_input()` в /assist и других user-initiated
-        endpoint'ах. Парный feeder для `update_from_chat_sentiment` (valence).
-        """
-        sig = max(0.0, min(1.0, float(signal)))
-        self._rgk.user.gain.feed(sig)
-
-    # ── Feedback → dopamine + burnout ──────────────────────────────────────
+        """User вовлечённость → dopamine EMA. Trivial delegate."""
+        self._rgk.u_engage(signal)
 
     def update_from_feedback(self, kind: str):
-        """accept → dopamine + valence ↑; reject → burnout + valence ↓; ignore → нейтрально.
-
-        Valence — основной канал сюда: feedback юзера явно даёт знак переживания.
-        Плюс: streak of rejects накапливает negative bias (3 reject подряд →
-        ощутимый спад valence).
-
-        EMA feeds идут через registry (decay_override=0.9 для dopamine+valence).
-        Burnout additive (+0.05 на reject) и streak-bias остаются bespoke —
-        это дискретные bumps, не baseline EMA.
-        """
-        fb = self._rgk._fb  # shared counter (no duplicate)
-        if kind not in fb:
-            return
-        fb[kind] = fb[kind] + 1
-
-        ov = Decays.USER_DOPAMINE_FEEDBACK
-        if kind == "accepted":
-            self._rgk.user.gain.feed(0.9, decay_override=ov)
-            self._rgk.valence.feed(0.7, decay_override=ov)
-        elif kind == "rejected":
-            self._rgk.user.gain.feed(0.2, decay_override=ov)
-            self._rgk.valence.feed(-0.7, decay_override=ov)
-            # Bespoke additive: burnout bump (не EMA — discrete step)
-            bn = self._rgk.burnout
-            bn.value = max(0.0, min(1.0, bn.value + 0.05))
-            # Streak bias: чем больше подряд rejects, тем жёстче спад valence
-            diff = fb.get("rejected", 0) - fb.get("accepted", 0)
-            if diff >= 3:
-                val = self._rgk.valence
-                val.value = max(-1.0, min(1.0,
-                    val.value - 0.05 * min(5, diff - 2)))
-        # "ignored" — только counter, EMA не трогаем
-
-        self.tick_expectation()
-
-    # ── Chat sentiment feeder (Action Memory этап 4) ───────────────────────
+        """Accept/reject/ignore → dopamine + valence (+ burnout/streak на reject).
+        Trivial delegate. Бизнес-логика (kind filter, streak, tick) в РГК."""
+        self._rgk.u_feedback(kind)
 
     def update_from_chat_sentiment(self, sentiment: float):
-        """EMA-вклад в valence от sentiment последнего user-сообщения.
-
-        Высокочастотный сигнал (каждое сообщение) → мягкий EMA с decay 0.92
-        (baseline живёт ~12 сообщений). Это дополнение к редкому feedback
-        (accept/reject) — теперь valence отражает и «серию положительных
-        сообщений» / «раздражённый день», а не только clicks по карточкам.
-
-        Sentiment ∈ [−1, 1] — см. `src/sentiment.py` `classify_message_sentiment`.
-        """
-        self._rgk.valence.feed(max(-1.0, min(1.0, float(sentiment))))
-
-    # ── Agency (5-я ось, OQ #2) ────────────────────────────────────────────
+        """Sentiment ∈ [−1, 1] → valence EMA. Trivial delegate."""
+        self._rgk.u_chat(sentiment)
 
     def update_from_plan_completion(self, completed: int, planned: int):
-        """Обновить `agency` EMA на основе сегодняшней completion ratio.
-
-        `agency = completed / max(1, planned)` с мягким EMA (decay 0.95 —
-        baseline живёт ~20 обновлений, день-два реальной динамики).
-
-        Agency как метрика = «чувство контроля над днём». Low agency при
-        high energy = learned helplessness (нет сил идти вперёд даже когда
-        ресурс есть). Разукрупнение задач помогает больше чем «отдохни».
-
-        Не меняет dopamine/serotonin — агенство это отдельное измерение,
-        не derivative от существующих. Пока не в `vector()`, через 2 недели
-        решим включать.
-
-        Args:
-            completed: сколько запланированных задач сделано сегодня.
-            planned: сколько было запланировано (recurring + oneshot).
-                     Если 0 — метрика не обновляется (нет данных).
-        """
-        if planned is None or planned <= 0:
-            return
-        ratio = max(0.0, min(1.0, float(completed or 0) / float(planned)))
-        self._rgk.agency.feed(ratio)
-
-    # ── Energy → burnout ───────────────────────────────────────────────────
+        """Daily completion ratio → agency EMA. Trivial delegate."""
+        self._rgk.u_plan(completed or 0, planned or 0)
 
     def update_from_energy(self, decisions_today: int, max_budget: float = 100.0):
-        """Счётчик решений → burnout EMA.
-
-        Каждое решение стоит ~6 энергии (см. _compute_energy в assistant.py).
-        Burnout накапливается монотонно за день: decisions * 6 / max_budget.
-        Сбрасывается в полночь через _ensure_daily_reset.
-        """
-        sig = min(1.0, max(0.0,
-            float(decisions_today) * 6.0 / float(max_budget or 100.0)))
-        self._rgk.burnout.feed(sig)
-        self.tick_expectation()
+        """Decisions counter → burnout EMA. Trivial delegate."""
+        self._rgk.u_energy(decisions_today, max_budget=max_budget or 100.0)
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
