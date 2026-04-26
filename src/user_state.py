@@ -691,38 +691,11 @@ class UserState:
     # ── Предиктивная модель: expectation EMA + surprise ────────────────────
 
     def tick_expectation(self):
-        """Обновить все три baseline'а: global scalar, TOD-scoped scalar, 3D vector.
-
-        Вызывается автоматически после каждого `update_from_*` сигнала.
-        Три EMA параллельны, но дают разные срезы PE:
-          • `expectation` — legacy averaged baseline (UI-compat)
-          • `expectation_by_tod[cur]` — для surprise specific к времени суток
-          • `expectation_vec` — по-осевой (для `surprise_vec` и 3D imbalance)
-
-        Decay 0.97–0.98 → baseline переживает ~50 обновлений, дни а не минуты.
-        Если `_surprise_boost_remaining > 0` — используем fast-decay override
-        (0.85 / 0.80). Счётчик декрементится.
+        """Обновить три baseline'а: global scalar, TOD-scoped scalar, 3D vector.
+        Boost handling (fast-decay при _surprise_boost_remaining > 0) теперь
+        в РГК.tick_u_pred — single source.
         """
-        if self._surprise_boost_remaining > 0:
-            scalar_override = Decays.EXPECTATION_FAST
-            vec_override = Decays.EXPECTATION_VEC_FAST
-            self._surprise_boost_remaining -= 1
-        else:
-            scalar_override = None
-            vec_override = None
-
-        sl = self.state_level()
-        tod = self._rgk._current_tod()
-        v = self.vector()
-
-        if scalar_override is None:
-            self._rgk.u_exp.feed(sl)
-            self._rgk.u_exp_tod[tod].feed(sl)
-            self._rgk.u_exp_vec.feed(v)
-        else:
-            self._rgk.u_exp.feed(sl, decay_override=scalar_override)
-            self._rgk.u_exp_tod[tod].feed(sl, decay_override=scalar_override)
-            self._rgk.u_exp_vec.feed(v, decay_override=vec_override)
+        self._rgk.tick_u_pred()
 
     def apply_subjective_surprise(self,
                                     signed_surprise: float,

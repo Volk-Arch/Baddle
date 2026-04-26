@@ -240,10 +240,29 @@ class РГК:
         self.tick_u_pred()
 
     def tick_u_pred(self):
+        # Surprise boost: если _surprise_boost_remaining > 0, fast-decay
+        # override на N tick'ов (модель мира юзера изменилась). Раньше
+        # логика жила только в UserState.tick_expectation; field — в РГК.
+        if self._surprise_boost_remaining > 0:
+            scalar_override = Decays.EXPECTATION_FAST
+            vec_override = Decays.EXPECTATION_VEC_FAST
+            self._surprise_boost_remaining -= 1
+        else:
+            scalar_override = None
+            vec_override = None
+
         sl = (float(self.user.gain.value) + float(self.user.hyst.value)) / 2.0
-        self.u_exp.feed(sl)
-        self.u_exp_tod[self._current_tod()].feed(sl)
-        self.u_exp_vec.feed(self.user.vector())
+        tod = self._current_tod()
+        v = self.user.vector()
+
+        if scalar_override is None:
+            self.u_exp.feed(sl)
+            self.u_exp_tod[tod].feed(sl)
+            self.u_exp_vec.feed(v)
+        else:
+            self.u_exp.feed(sl, decay_override=scalar_override)
+            self.u_exp_tod[tod].feed(sl, decay_override=scalar_override)
+            self.u_exp_vec.feed(v, decay_override=vec_override)
 
     # ── System feeds ──────────────────────────────────────────────────────
 
