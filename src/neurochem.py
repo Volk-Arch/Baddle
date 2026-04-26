@@ -370,9 +370,10 @@ class ProtectiveFreeze:
     `silence_pressure` остаётся как float — это линейный ramp timer, не EMA.
     """
 
-    TAU_STABLE = 0.6          # порог за которым d считается конфликтом
-    THETA_ACTIVE = 0.15        # вход во freeze (учитывая EMA steady-state)
-    THETA_RECOVERY = 0.08      # выход из freeze (гистерезис)
+    # Параметры threshold'ов перенесены в `src.rgk` (FREEZE_TAU_STABLE,
+    # FREEZE_THETA_ACTIVE, FREEZE_THETA_RECOVERY) — раньше определялись
+    # здесь как class const'ы, но `_rgk.p_conflict` их never читал и хардкодил
+    # те же числа. Single source теперь в РГК.
     # Feeder time-constants — см. `src.ema.TimeConsts`.
     SILENCE_RAMP_SECONDS = TimeConsts.SILENCE_RAMP
 

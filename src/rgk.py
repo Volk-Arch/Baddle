@@ -34,6 +34,15 @@ _TOD = ("morning", "day", "evening", "night")
 RPE_GAIN = 0.15      # как сильно dopamine сдвигается на единицу RPE
 RPE_WINDOW = 20      # скользящее окно для baseline Δconfidence
 
+# Freeze thresholds — параметры p_conflict (хроническое накопление conflict
+# → активация защитного freeze flag). Раньше определены в ProtectiveFreeze
+# class (TAU_STABLE/THETA_ACTIVE/THETA_RECOVERY), но never read — p_conflict
+# хардкодил те же числа. Single source — здесь.
+# Семантически отдельно от Resonator.THETA_ACT/REC (R/C mode bit).
+FREEZE_TAU_STABLE = 0.6        # порог за которым d считается конфликтом
+FREEZE_THETA_ACTIVE = 0.15     # вход во freeze (на conflict EMA steady-state)
+FREEZE_THETA_RECOVERY = 0.08   # выход из freeze (гистерезис)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # 1. Resonator — один зеркальный контур
@@ -276,11 +285,11 @@ class РГК:
         if d is None:
             return
         s = float(self.system.hyst.value) if serotonin is None else float(serotonin)
-        sig = max(0.0, float(d) - 0.6) * max(0.0, 1.0 - s)
+        sig = max(0.0, float(d) - FREEZE_TAU_STABLE) * max(0.0, 1.0 - s)
         self.conflict.feed(sig)
-        if self.freeze_active and self.conflict.value < 0.08:
+        if self.freeze_active and self.conflict.value < FREEZE_THETA_RECOVERY:
             self.freeze_active = False
-        elif (not self.freeze_active) and self.conflict.value > 0.15:
+        elif (not self.freeze_active) and self.conflict.value > FREEZE_THETA_ACTIVE:
             self.freeze_active = True
 
     def p_tick(self, dt: float, sync_err: float = 0.0, imbalance: float = 0.0):
