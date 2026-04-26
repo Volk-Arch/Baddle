@@ -220,16 +220,35 @@
       </div>
     </div>
 
-    <!-- Sparklines / sync-dashboard / timeline — toggle через toolbar -->
-    <div id="neuro-sparklines" class="neuro-sparklines" style="display:none">
-      <div class="neuro-sparkline-title">История нейрохимии · последние 30 тиков</div>
-      <svg id="neuro-sparkline-svg" viewBox="0 0 240 40" preserveAspectRatio="none"></svg>
-    </div>
-    <div id="sync-dashboard" class="sync-dashboard" style="display:none">
-      <div class="dash-header">Sync dashboard <span id="sync-dash-count" class="dash-count"></span></div>
-      <svg id="sync-dash-svg" viewBox="0 0 360 80" preserveAspectRatio="none"></svg>
-      <div class="dash-subhead">Топ режимов с rejects</div>
-      <div id="sync-dash-top" class="dash-top"></div>
+    <!-- Outcome dashboard / timeline — toggle через toolbar.
+         Outcome заменил Sparkline (heartbeat не пишет chem snapshots — был
+         пуст) + Sync-график (тот же sync_error trend, но из живых данных
+         data/prime_directive.jsonl с EMA fast/slow). -->
+    <div id="outcome-dashboard" class="outcome-dashboard" style="display:none">
+      <div class="dash-header">
+        Outcome <span id="outcome-meta" class="dash-count"></span>
+        <span id="outcome-verdict" class="outcome-verdict"></span>
+      </div>
+      <!-- Sync_error trend (главное — прайм-директива) -->
+      <div class="outcome-section-title">sync_error EMA · daily</div>
+      <svg id="outcome-sync-svg" viewBox="0 0 360 90" preserveAspectRatio="none"></svg>
+      <!-- Distributions: capacity zones + frequency regime + R/C bit -->
+      <div class="outcome-dist-grid">
+        <div class="outcome-dist-cell" title="Phase C: время в каждой capacity zone (физо/эмо/когн composite)">
+          <div class="outcome-dist-label">Capacity zone</div>
+          <div class="outcome-dist-bar" id="outcome-capacity-bar"></div>
+        </div>
+        <div class="outcome-dist-cell" title="HRV-derived: short_wave (тахикардия / симпатика) / flat / long_wave (когерентность / парасимпатика)">
+          <div class="outcome-dist-label">Frequency regime</div>
+          <div class="outcome-dist-bar" id="outcome-regime-bar"></div>
+        </div>
+        <div class="outcome-dist-cell" title="Counter-wave bit (Правило 7): R = passive resonance, C = active counter-wave при desync >0.15">
+          <div class="outcome-dist-label">Mode (R/C)</div>
+          <div class="outcome-dist-bar" id="outcome-mode-bar"></div>
+        </div>
+      </div>
+      <!-- Mean balance + sync EMA числа -->
+      <div class="outcome-stats" id="outcome-stats"></div>
     </div>
     <div id="neuro-timeline" class="neuro-timeline" style="display:none">
       <div class="neuro-timeline-header">
@@ -243,11 +262,8 @@
       <button onclick="openCheckin()" id="checkin-btn" class="dash-action" title="Daily check-in — ручной ввод energy/focus/stress + expected/reality">
         <span class="dash-action-icon">📝</span><span class="dash-action-label">Check-in</span>
       </button>
-      <button onclick="assistToggleSparkline()" id="neuro-spark-btn" class="dash-action" title="История нейрохимии — 30 последних тиков">
-        <span class="dash-action-icon">📈</span><span class="dash-action-label">Sparkline</span>
-      </button>
-      <button onclick="assistToggleSyncDash()" id="neuro-sync-btn" class="dash-action" title="Sync-dashboard — график sync_error + топ ошибки">
-        <span class="dash-action-icon">📊</span><span class="dash-action-label">Sync-график</span>
+      <button onclick="assistToggleOutcome()" id="neuro-outcome-btn" class="dash-action" title="Outcome — sync_error EMA trend + capacity/regime/mode distributions из data/prime_directive.jsonl. Главный валидатор прайм-директивы.">
+        <span class="dash-action-icon">📊</span><span class="dash-action-label">Outcome</span>
       </button>
       <button onclick="assistToggleTimeline()" id="neuro-timeline-btn" class="dash-action" title="Хронология — последние 20 action'ов системы">
         <span class="dash-action-icon">⏱</span><span class="dash-action-label">Timeline</span>

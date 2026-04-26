@@ -1446,23 +1446,9 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
-/* Neurochem sparkline */
-.neuro-sparklines {
-  background: #0c0a12;
-  border: 1px solid #27272a;
-  border-radius: 6px;
-  padding: 4px;
-  margin-top: 4px;
-}
-.neuro-sparklines svg {
-  width: 100%;
-  height: 40px;
-  display: block;
-}
-.neuro-sparklines .spark-label {
-  font-size: 8px;
-  font-variant-numeric: tabular-nums;
-}
+/* Neurochem sparkline + sync-dashboard removed 2026-04-26: оба читали
+   state_graph.jsonl (heartbeat без chem snapshot — рисовали пустоту).
+   Заменены Outcome dashboard'ом поверх data/prime_directive.jsonl. */
 
 /* Named-state badge (Voronoi) */
 .neuro-named-badge {
@@ -1492,13 +1478,16 @@ select {
 .neuro-zone-badge.zone-stress_rest  { background: #78350f; color: #fed7aa; border-color: #b45309; }
 .neuro-zone-badge.zone-overload     { background: #7f1d1d; color: #fecaca; border-color: #b91c1c; }
 
-/* Sync-dashboard */
-.sync-dashboard {
+/* Outcome dashboard — sync_error trend + capacity/regime/mode distributions.
+   Источник: data/prime_directive.jsonl (snapshots раз в час, Wave 3 fields).
+   Главный валидатор прайм-директивы. */
+.outcome-dashboard {
   background: #0c0a12;
   border: 1px solid #27272a;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   margin-top: 6px;
+  margin-bottom: 12px;
 }
 .dash-header {
   font-size: 10px;
@@ -1506,37 +1495,87 @@ select {
   letter-spacing: 0.5px;
   color: #a5b4fc;
   text-transform: uppercase;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.dash-count { color: #64748b; font-weight: 400; margin-left: 6px; }
-.sync-dashboard svg {
+.dash-count { color: #64748b; font-weight: 400; }
+.outcome-verdict {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.2px;
+}
+.outcome-section-title {
+  font-size: 9px;
+  color: #52525b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 6px 0 4px;
+  font-weight: 600;
+}
+.outcome-dashboard svg {
   width: 100%;
-  height: 80px;
+  height: 90px;
   display: block;
   background: #18181b;
   border-radius: 4px;
 }
-.dash-subhead {
-  font-size: 10px;
+.outcome-dist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.outcome-dist-cell {
+  background: #18181b;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.outcome-dist-label {
+  font-size: 9px;
   color: #71717a;
-  margin-top: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
   margin-bottom: 4px;
 }
-.dash-top {
+.outcome-dist-bar {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 10px;
-}
-.dash-top-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 2px 6px;
-  background: #18181b;
+  height: 18px;
   border-radius: 3px;
+  overflow: hidden;
+  background: #27272a;
 }
-.dash-top-mode { color: #e4e4e7; }
-.dash-top-count { color: #f87171; font-variant-numeric: tabular-nums; }
+.outcome-dist-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #18181b;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.outcome-dist-empty {
+  font-size: 9px;
+  color: #52525b;
+  padding: 3px 6px;
+  font-style: italic;
+}
+.outcome-stats {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #a1a1aa;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.outcome-stats b { color: #e4e4e7; font-weight: 600; }
+.outcome-stats-sep { color: #3f3f46; }
 
 /* Weekly review modal */
 .weekly-modal {

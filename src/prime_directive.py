@@ -44,16 +44,29 @@ def record_tick(sync_error: float,
                 user_imbalance: float = 0.0,
                 self_imbalance: float = 0.0,
                 agency_gap: float = 0.0,
-                hrv_surprise: float = 0.0) -> bool:
+                hrv_surprise: float = 0.0,
+                # Outcome dashboard fields (added 2026-04-26):
+                balance_user: float | None = None,
+                balance_system: float | None = None,
+                capacity_zone: str | None = None,
+                frequency_regime: str | None = None,
+                mode_user: str | None = None,
+                mode_system: str | None = None) -> bool:
     """Append one snapshot. Возвращает True если записалось.
 
-    Все аргументы — float scalars. Failed write (read-only fs, permissions)
-    → False silent. Лог не критичен для работы — только для валидации.
+    Все аргументы — float scalars (или string для categorical). Failed write
+    (read-only fs, permissions) → False silent. Лог не критичен для работы.
 
     Дополнительные PE-компоненты (`user_imbalance`, `self_imbalance`,
     `agency_gap`, `hrv_surprise`) — decomposition агрегированного
-    `imbalance_pressure` на источники. Полезно для анализа через 2 мес:
-    какой канал PE реально двигал burnout, а какой всегда был 0.
+    `imbalance_pressure` на источники.
+
+    Outcome dashboard fields (Phase D + Counter-wave):
+    - `balance_user`/`balance_system` — резонансный скаляр (DA·NE·ACh)/(5HT·GABA)
+    - `capacity_zone` — green/yellow/red (Phase C)
+    - `frequency_regime` — short_wave/flat/long_wave (HRV-derived)
+    - `mode_user`/`mode_system` — R/C bit (Counter-wave, Правило 7)
+    Все optional с None default — старые logs совместимы.
     """
     _ensure_dir()
     entry = {
@@ -69,6 +82,12 @@ def record_tick(sync_error: float,
         "agency_gap":           round(float(agency_gap), 4),
         "hrv_surprise":         round(float(hrv_surprise), 4),
     }
+    if balance_user     is not None: entry["balance_user"]     = round(float(balance_user), 4)
+    if balance_system   is not None: entry["balance_system"]   = round(float(balance_system), 4)
+    if capacity_zone    is not None: entry["capacity_zone"]    = str(capacity_zone)
+    if frequency_regime is not None: entry["frequency_regime"] = str(frequency_regime)
+    if mode_user        is not None: entry["mode_user"]        = str(mode_user)
+    if mode_system      is not None: entry["mode_system"]      = str(mode_system)
     try:
         with open(_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -125,6 +144,21 @@ def aggregate(window_days: Optional[float] = None) -> dict:
         vals = [float(e.get(field, 0.0)) for e in entries]
         return round(sum(vals) / len(vals), 4) if vals else 0.0
 
+    def _mean_optional(field: str) -> Optional[float]:
+        """Усреднить только entries где field явно заполнен (не None)."""
+        vals = [float(e[field]) for e in entries if e.get(field) is not None]
+        return round(sum(vals) / len(vals), 4) if vals else None
+
+    def _categorical_counts(field: str) -> dict:
+        """Распределение string-значения по entries (capacity_zone, regime, mode)."""
+        out: dict = {}
+        for e in entries:
+            v = e.get(field)
+            if v is None:
+                continue
+            out[str(v)] = out.get(str(v), 0) + 1
+        return out
+
     span_s = float(entries[-1].get("ts", 0)) - float(entries[0].get("ts", 0))
     out = {
         "count":            len(entries),
@@ -142,6 +176,15 @@ def aggregate(window_days: Optional[float] = None) -> dict:
         "mean_pe_self":     _mean("self_imbalance"),
         "mean_pe_agency":   _mean("agency_gap"),
         "mean_pe_hrv":      _mean("hrv_surprise"),
+        # Outcome dashboard distributions (added 2026-04-26).
+        # Optional fields: None если в окне нет ни одного snapshot с этим полем
+        # (старые logs до Wave 3 расширения).
+        "mean_balance_user":   _mean_optional("balance_user"),
+        "mean_balance_system": _mean_optional("balance_system"),
+        "capacity_zone_counts":    _categorical_counts("capacity_zone"),
+        "frequency_regime_counts": _categorical_counts("frequency_regime"),
+        "mode_user_counts":        _categorical_counts("mode_user"),
+        "mode_system_counts":      _categorical_counts("mode_system"),
     }
 
     # Trend detection: первая треть vs последняя треть — по slow EMA.

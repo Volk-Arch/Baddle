@@ -1846,120 +1846,124 @@ function _updateNeurochemPanel(metrics) {
   if (camBtn) camBtn.classList.toggle('active', camOn);
   _lastCameraState = camOn;
 
-  // Refresh sparkline + sync-dashboard if open
-  if (_sparklineOpen) _refreshSparkline();
-  if (_syncDashOpen) _refreshSyncDash();
+  // Refresh outcome dashboard if open
+  if (_outcomeOpen) _refreshOutcome();
 }
 
-// ── Neurochem sparkline (30-tick history) ────────────────────────────
+// ── Outcome dashboard ───────────────────────────────────────────────
+//
+// Заменил Sparkline + Sync-график (оба читали state_graph, который
+// 90% — heartbeat без chem snapshot, графики были пустые). Outcome
+// читает data/prime_directive.jsonl — снапшоты sync_error EMA fast/slow
+// раз в час + balance/capacity_zone/frequency_regime/mode (Wave 3 fields).
+// Главный валидатор прайм-директивы: trend_verdict через 2 мес use.
 
-let _sparklineOpen = false;
+let _outcomeOpen = false;
 
-function assistToggleSparkline() {
-  const panel = document.getElementById('neuro-sparklines');
-  const btn = document.getElementById('neuro-spark-btn');
+async function assistToggleOutcome() {
+  const panel = document.getElementById('outcome-dashboard');
+  const btn = document.getElementById('neuro-outcome-btn');
   if (!panel) return;
-  _sparklineOpen = panel.style.display === 'none';
-  panel.style.display = _sparklineOpen ? 'block' : 'none';
-  if (btn) btn.classList.toggle('active', _sparklineOpen);
-  if (_sparklineOpen) _refreshSparkline();
+  _outcomeOpen = panel.style.display === 'none';
+  panel.style.display = _outcomeOpen ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', _outcomeOpen);
+  if (_outcomeOpen) await _refreshOutcome();
 }
 
-async function _refreshSparkline() {
+const _ZONE_COLORS  = { green: '#10b981', yellow: '#f59e0b', red: '#ef4444' };
+const _REGIME_COLORS = { short_wave: '#ef4444', flat: '#a1a1aa', long_wave: '#10b981' };
+const _MODE_COLORS  = { R: '#71717a', C: '#fb923c' };
+const _VERDICT_LABELS = {
+  improving:         { text: 'тренд: улучшение ↘', color: '#10b981' },
+  stable:            { text: 'тренд: стабильно',   color: '#a1a1aa' },
+  worsening:         { text: 'тренд: ухудшение ↗', color: '#ef4444' },
+  insufficient_data: { text: 'мало данных',         color: '#52525b' },
+};
+
+function _renderDistBar(elId, counts, colors) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const total = Object.values(counts || {}).reduce((s, n) => s + n, 0);
+  if (!total) {
+    el.innerHTML = '<span class="outcome-dist-empty">нет данных</span>';
+    return;
+  }
+  const segs = Object.entries(counts).map(([k, n]) => {
+    const pct = (n / total) * 100;
+    const color = colors[k] || '#52525b';
+    return `<span class="outcome-dist-seg" style="width:${pct.toFixed(1)}%;background:${color}" title="${_esc(k)} · ${n} (${pct.toFixed(0)}%)">${_esc(k)} ${pct.toFixed(0)}%</span>`;
+  }).join('');
+  el.innerHTML = segs;
+}
+
+async function _refreshOutcome() {
   try {
-    const r = await fetch('/assist/history?limit=30');
+    const r = await fetch('/assist/prime-directive?window_days=30&daily=1');
     const d = await r.json();
-    const svg = document.getElementById('neuro-sparkline-svg');
-    if (!svg || !d.entries || !d.entries.length) {
-      if (svg) svg.innerHTML = '<text x="120" y="22" text-anchor="middle" fill="#52525b" font-size="9">no history yet</text>';
-      return;
+
+    // Header meta + verdict chip
+    const meta = document.getElementById('outcome-meta');
+    if (meta) {
+      const span = (d.days_span || 0).toFixed(1);
+      meta.textContent = `· ${d.count || 0} snapshots · ${span}d`;
     }
-    const series = [
-      {key: 'dopamine',        color: '#10b981', y: 0 },   // 4 strips x 10px each
-      {key: 'serotonin',       color: '#a78bfa', y: 10 },
-      {key: 'norepinephrine',  color: '#f59e0b', y: 20 },
-      {key: 'burnout',         color: '#ef4444', y: 30 },
-    ];
-    const n = d.entries.length;
-    const W = 240, H = 40;
-    const stepX = n > 1 ? W / (n - 1) : W;
-    let paths = '';
-    for (const s of series) {
-      const pts = d.entries.map((e, i) => {
-        const v = typeof e[s.key] === 'number' ? e[s.key] : 0.5;
-        const x = i * stepX;
-        const y = s.y + (1 - Math.max(0, Math.min(1, v))) * 8 + 1;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      }).join(' ');
-      paths += `<polyline fill="none" stroke="${s.color}" stroke-width="1.4" points="${pts}"/>`;
-      paths += `<line x1="0" x2="${W}" y1="${s.y + 9.5}" y2="${s.y + 9.5}" stroke="#27272a" stroke-width="0.4"/>`;
+    const v = document.getElementById('outcome-verdict');
+    if (v) {
+      const info = _VERDICT_LABELS[d.trend_verdict] || _VERDICT_LABELS.insufficient_data;
+      v.textContent = info.text;
+      v.style.color = info.color;
     }
-    svg.innerHTML = paths;
-  } catch(e) { /* silent */ }
-}
 
-// ── Sync-dashboard ──────────────────────────────────────────────────
-
-let _syncDashOpen = false;
-
-function assistToggleSyncDash() {
-  const panel = document.getElementById('sync-dashboard');
-  const btn = document.getElementById('neuro-sync-btn');
-  if (!panel) return;
-  _syncDashOpen = panel.style.display === 'none';
-  panel.style.display = _syncDashOpen ? 'block' : 'none';
-  if (btn) btn.classList.toggle('active', _syncDashOpen);
-  if (_syncDashOpen) _refreshSyncDash();
-}
-
-async function _refreshSyncDash() {
-  try {
-    const r = await fetch('/assist/history?limit=80');
-    const d = await r.json();
-    const svg = document.getElementById('sync-dash-svg');
-    const top = document.getElementById('sync-dash-top');
-    const count = document.getElementById('sync-dash-count');
-    if (count) count.textContent = `· ${d.count || 0} ticks`;
-    if (!svg) return;
-    if (!d.entries || !d.entries.length) {
-      svg.innerHTML = '<text x="180" y="42" text-anchor="middle" fill="#52525b" font-size="10">нет данных</text>';
-      if (top) top.innerHTML = '';
-      return;
-    }
-    const W = 360, H = 80, pad = 4;
-    const n = d.entries.length;
-    const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
-    // sync_error L2-norm может быть 0..2, рисуем 0..1.5 вертикально
-    const maxSync = 1.5;
-    const pts = d.entries.map((e, i) => {
-      const v = typeof e.sync_error === 'number' ? e.sync_error : 0;
-      const x = pad + i * stepX;
-      const y = pad + (1 - Math.max(0, Math.min(maxSync, v)) / maxSync) * (H - 2*pad);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
-    // 0.3 threshold line (sync-high boundary)
-    const threshY = pad + (1 - 0.3/maxSync) * (H - 2*pad);
-    svg.innerHTML = `
-      <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
-            stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.6"/>
-      <text x="${W-pad-4}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
-            font-size="8" opacity="0.8">0.3 sync</text>
-      <polyline fill="none" stroke="#eab308" stroke-width="1.2" points="${pts}"/>
-      <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">older ——→ newer</text>
-    `;
-    // Top rejected modes
-    if (top) {
-      const list = d.top_rejected_modes || [];
-      if (!list.length) {
-        top.innerHTML = '<div style="color:#52525b;font-size:10px">отказов нет</div>';
+    // Sync_error EMA chart: daily bins, fast (yellow) и slow (purple)
+    const svg = document.getElementById('outcome-sync-svg');
+    if (svg) {
+      const days = d.daily || [];
+      if (!days.length) {
+        svg.innerHTML = '<text x="180" y="48" text-anchor="middle" fill="#52525b" font-size="10">нет snapshot\'ов в окне</text>';
       } else {
-        top.innerHTML = list.map(r =>
-          `<div class="dash-top-row"><span class="dash-top-mode">${_esc(r.mode)}</span>` +
-          `<span class="dash-top-count">${r.count}×</span></div>`
-        ).join('');
+        const W = 360, H = 90, pad = 6;
+        const n = days.length;
+        const stepX = n > 1 ? (W - 2*pad) / (n - 1) : 0;
+        const maxY = Math.max(0.3, ...days.map(b => Math.max(b.mean_fast, b.mean_slow))) * 1.2;
+        const yOf = (val) => pad + (1 - Math.max(0, Math.min(maxY, val)) / maxY) * (H - 2*pad - 12);
+        const pts = (key) => days.map((b, i) => {
+          const x = pad + i * stepX;
+          return `${x.toFixed(1)},${yOf(b[key]).toFixed(1)}`;
+        }).join(' ');
+        // 0.3 sync-high threshold dashed
+        const threshY = yOf(0.3);
+        svg.innerHTML = `
+          <line x1="${pad}" x2="${W-pad}" y1="${threshY}" y2="${threshY}"
+                stroke="#6366f1" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.5"/>
+          <text x="${W-pad-2}" y="${threshY-2}" text-anchor="end" fill="#6366f1"
+                font-size="8" opacity="0.7">0.3</text>
+          <polyline fill="none" stroke="#a78bfa" stroke-width="1.6" points="${pts('mean_slow')}" opacity="0.95"/>
+          <polyline fill="none" stroke="#eab308" stroke-width="1.0" points="${pts('mean_fast')}" opacity="0.7"/>
+          <text x="${pad+2}" y="${H-3}" fill="#52525b" font-size="8">${_esc(days[0].date)} ——→ ${_esc(days[n-1].date)}</text>
+          <text x="${W-pad-2}" y="${pad+8}" text-anchor="end" fill="#a78bfa" font-size="8">slow EMA</text>
+          <text x="${W-pad-2}" y="${pad+18}" text-anchor="end" fill="#eab308" font-size="8" opacity="0.8">fast EMA</text>
+        `;
       }
     }
-  } catch(e) { /* silent */ }
+
+    // 3 distribution bars
+    _renderDistBar('outcome-capacity-bar', d.capacity_zone_counts || {},    _ZONE_COLORS);
+    _renderDistBar('outcome-regime-bar',   d.frequency_regime_counts || {}, _REGIME_COLORS);
+    _renderDistBar('outcome-mode-bar',     d.mode_user_counts || {},        _MODE_COLORS);
+
+    // Stats line: mean balance + sync EMA
+    const stats = document.getElementById('outcome-stats');
+    if (stats) {
+      const fmt = (v, prec = 3) => (v == null ? '—' : Number(v).toFixed(prec));
+      stats.innerHTML = `
+        <span><b>sync_error</b> mean ${fmt(d.mean_sync_error)} · slow EMA ${fmt(d.mean_ema_slow, 4)}</span>
+        <span class="outcome-stats-sep">·</span>
+        <span><b>balance</b> user ${fmt(d.mean_balance_user, 2)} · sys ${fmt(d.mean_balance_system, 2)}</span>
+      `;
+    }
+  } catch(e) {
+    console.warn('outcome refresh failed', e);
+  }
 }
 
 // ── Weekly review modal ─────────────────────────────────────────────

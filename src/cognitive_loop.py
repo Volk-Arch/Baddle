@@ -754,6 +754,13 @@ class CognitiveLoop:
                 self_imbalance=float(gs.neuro.self_imbalance),
                 agency_gap=float(u.agency_gap),
                 hrv_surprise=float(u.hrv_surprise),
+                # Outcome dashboard snapshots (Phase D + Counter-wave)
+                balance_user=float(u.balance()),
+                balance_system=float(gs.neuro.balance()),
+                capacity_zone=u.capacity_zone,
+                frequency_regime=u.frequency_regime,
+                mode_user=u.mode,
+                mode_system=gs.neuro.mode,
             )
         except Exception as e:
             log.debug(f"[cognitive_loop] prime_directive record failed: {e}")

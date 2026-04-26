@@ -37,7 +37,7 @@
 
 ## ⚡ Cheap (validation / self-research)
 
-- [ ] **Outcome tracking dashboard** — UI viewer для validation работает ли система. Sync_error trends + balance() distribution + capacity zone time per zone + frequency_regime histogram. Данные уже пишутся в `data/prime_directive.jsonl` + state snapshots, нужен только chart endpoint + UI tab в /lab. Покажет работает ли система **на тебе** через месяц. **~3-4ч.**
+- [x] ~~**Outcome tracking dashboard**~~ ✅ done 2026-04-26. `📊 Outcome` кнопка в Состоянии открывает panel с sync_error EMA daily chart (slow + fast) + 3 distribution bars (capacity_zone / frequency_regime / mode R/C) + trend verdict (improving/stable/worsening). Источник — `data/prime_directive.jsonl` (расширен полями balance_user/balance_system/capacity_zone/frequency_regime/mode). Заменил Sparkline + Sync-график (оба читали state_graph, который heartbeat без chem snapshot — графики были пустые).
 - [ ] **Insight bookmark** — Action Memory ловит actions/outcomes, episodic memory ловит nodes, но subjective marker «эта мысль повлияла» отсутствует. Простая ⭐ кнопка → нода `insight_bookmark` (type=insight, refs=[active_session_indices]) с context. Light feature, бесплатна для long-term self-research через год. **~1-2ч.**
 
 ---
