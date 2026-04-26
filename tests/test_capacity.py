@@ -3,7 +3,6 @@
 Spec: docs/capacity-design.md (3-zone модель). Phase C завершена 2026-04-25.
 """
 import datetime as _dt
-from unittest.mock import patch
 
 import pytest
 
@@ -11,11 +10,6 @@ from src.user_state import (
     UserState,
     compute_cognitive_load,
     compute_capacity_indicators,
-    CAPACITY_PHYS_COHERENCE_MIN,
-    CAPACITY_PHYS_BURNOUT_MAX,
-    CAPACITY_AFFECT_SEROTONIN_MIN,
-    CAPACITY_AFFECT_DOPAMINE_MIN,
-    CAPACITY_COGLOAD_MAX,
 )
 
 
