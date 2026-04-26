@@ -472,6 +472,9 @@ class CognitiveState:
                 "acetylcholine":  neuro_dict.get("acetylcholine", 0.5),
                 "gaba":           neuro_dict.get("gaba", 0.5),
                 "balance":        neuro_dict.get("balance", 1.0),
+                # R/C bit (Правило 7): R = passive resonance, C = active
+                # counter-wave (system-side imbalance >0.15). UI рисует значок.
+                "mode":           neuro_dict.get("mode", "R"),
                 # burnout = display_burnout: max(conflict_accumulator,
                 # silence_pressure, imbalance_pressure). Три feeder'а:
                 #   • conflict — графовые конфликты (единственный активирует freeze)

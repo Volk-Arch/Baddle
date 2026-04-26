@@ -50,10 +50,6 @@
 - [ ] **Резонансный промпт-preset** — Chat UI dropdown 🔵/🔴/⚪ + шаблон `[Контекст волны] [Состояние] [Запрос] [Параметры]`. Опционально auto-detect через `frequency_regime`. Spec — [resonance-prompt-preset.md](resonance-prompt-preset.md). **~1-2ч**.
 - [ ] **Snapshot-якорь узора при перерыве** — когда юзер прерывает работу (close session, switch context, idle >10мин), фиксировать текущую геометрию конуса + frequency_regime + active session_indices в `data/anchor_snapshots.jsonl`. При возврате — restore-предложение «продолжить узор» с этими параметрами. Идея: вход в поток после перерыва стоит 15-40 мин восстановления — anchor может сократить. A/B измеримо. **~3ч** (backend + UI prompt). Из chat-export 2026-04-22..24.
 - [ ] **Cone-viz controls (рычаги конуса как инструмент)** — текущий `baddle-cone-svg` показывает форму как индикатор. Сделать его **управляемым**: ширина (aperture slider), длина (horizon slider), направление (mode dropdown). Юзер видит и управляет геометрией внимания напрямую. Зависит от aperture фичи (cheap). **~2ч** UI после aperture. Из chat-export.
-- [ ] **Counter-wave Tier 2 — explicit mode-aware tactics** — Counter-wave (Правило 7) активирован 2026-04-25: `Resonator.update_mode()` вызывается в `_advance_tick`, Dispatcher понижает urgency push-style сигналов при `mode='C'`. Нужно расширить:
-  - **Sync_seeking explicit mode-aware tone** — `_generate_sync_seeking_message` при `user.mode='C'` выбирает curious/reference (без давления) вместо caring/simple. **~1ч**.
-  - **UI индикатор R/C** в balance widget — JS читает `state.user_state.mode`/`state.neurochem.mode` и рисует 🌊R / 🌊C значок рядом с balance числом. **~30 мин**.
-  - **Property test** на mode trajectory через реальный `_advance_tick` (sync_err > 0.15 → mode='C' через N тиков, потом restore при низком). **~30 мин**.
 
 ### Memory / RAG
 

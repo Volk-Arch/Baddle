@@ -129,14 +129,14 @@
 
 ---
 
-## Counter-wave (Правило 7) — активирован 2026-04-25
+## Counter-wave (Правило 7) — done 2026-04-26
 
-`Resonator.update_mode(perturbation)` теперь вызывается в `cognitive_loop._advance_tick`. Dispatcher понижает urgency push-style сигналов при `user.mode='C'` (см. [signals.py](../src/signals.py) `COUNTER_WAVE_PUSH_TYPES`).
+Активирован 2026-04-25 (`Resonator.update_mode(perturbation)` вызывается в `cognitive_loop._advance_tick`; Dispatcher понижает urgency push-style сигналов при `user.mode='C'`, см. [signals.py](../src/signals.py) `COUNTER_WAVE_PUSH_TYPES`).
 
-**Tier 2 расширения** (см. [TODO.md § Tier 2 Резонансные](TODO.md)):
-- Sync_seeking explicit mode-aware tone (~1ч)
-- UI R/C индикатор в balance widget (~30 мин)
-- Property test на mode trajectory через `_advance_tick` (~30 мин)
+Tier 2 расширения закрыты 2026-04-26:
+- **Sync_seeking mode-aware tone** — `_generate_sync_seeking_message` при `user.mode='C'` сдвигает caring/simple → reference/curious (`src/cognitive_loop.py:2401-2410`).
+- **UI R/C индикатор** — `balance-mode` span в каждом cell, gray R при passive resonance, orange C с pulse при counter-wave. `Neurochem.mode` пробросан через `CognitiveState.get_metrics()`.
+- **Property test mode trajectory** — `tests/test_loop_integration.py::TestModeTrajectoryAdvanceTick` (4 теста: drive C, restore R, гистерезис band, user/neuro independence).
 
 ---
 

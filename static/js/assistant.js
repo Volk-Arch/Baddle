@@ -1754,20 +1754,24 @@ function _updateNeurochemPanel(metrics) {
   _setBalanceCell('balance-system-val', 'balance-system',
                    typeof neuro.balance === 'number' ? neuro.balance : null);
 
-  // Sync indicator (prime-directive в одном бейдже)
-  const regime = metrics.sync_regime || 'flow';
-  const syncErr = typeof metrics.sync_error === 'number' ? metrics.sync_error : 0;
-  const regimeEl = document.getElementById('sync-regime');
-  if (regimeEl) {
-    regimeEl.textContent = regime.toUpperCase();
-    regimeEl.className = 'sync-regime ' + regime;
-  }
-  const errEl = document.getElementById('sync-error');
-  if (errEl) {
-    // Max L2 на 4D в [0,1] ≈ 2.0 → пересчёт в percent «синхронизации»
-    const pct = Math.max(0, Math.min(100, Math.round((1 - syncErr / 2) * 100)));
-    errEl.textContent = 'sync ' + pct + '%';
-  }
+  // Counter-wave bit (Правило 7): R = passive resonance, C = active
+  // counter-wave generation (резонатор компенсирует desync >0.15).
+  const _setBalanceMode = (id, m) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('r', 'c');
+    if (m === 'R' || m === 'C') {
+      el.textContent = m;
+      el.classList.add(m.toLowerCase());
+    } else {
+      el.textContent = '';
+    }
+  };
+  _setBalanceMode('balance-user-mode', user.mode);
+  _setBalanceMode('balance-system-mode', neuro.mode);
+
+  // Sync indicator: единственная установка — в #dash-sync-regime/#dash-sync-error
+  // (ниже, в "Dashboard status strip" блоке). Старый sync-divider удалён.
 
   // Dopamine phasic arrow (legacy — new dopamine is single scalar, so always hidden)
   const phasicEl = document.getElementById('neuro-da-phasic');
@@ -1804,7 +1808,9 @@ function _updateNeurochemPanel(metrics) {
     namedEl.dataset.stateKey = ns.key || 'flow';
   }
 
-  // Dashboard status strip — 4 живых индикатора
+  // Sync block в Сihн-card (regime + sync%). Раньше был дубль также в neuro-divider
+  // и в status-strip; теперь — единственное место. named_state/horizon показаны
+  // в чипах ТЫ-card / BADDLE-card (live-обновляются ниже).
   try {
     const regime = metrics.sync_regime || '—';
     const syncErr = metrics.sync_error;
@@ -1814,18 +1820,6 @@ function _updateNeurochemPanel(metrics) {
     if (dashSE) dashSE.textContent = (syncErr !== undefined && syncErr !== null)
       ? `sync ${Math.round((1 - Math.min(1, syncErr)) * 100)}% · err ${syncErr.toFixed(2)}`
       : 'sync —';
-
-    const ns = (metrics.user_state || {}).named_state || {};
-    const dashN = document.getElementById('dash-named');
-    const dashNA = document.getElementById('dash-named-advice');
-    if (dashN) dashN.textContent = (ns.label || '—');
-    if (dashNA) dashNA.textContent = ns.advice || '—';
-
-    const dashH = document.getElementById('dash-horizon');
-    const dashO = document.getElementById('dash-origin');
-    const stateKey = metrics.state || 'exploration';
-    if (dashH) dashH.textContent = (_MODE_LABELS[stateKey] || stateKey);
-    if (dashO) dashO.textContent = (_ORIGIN_LABELS[neuro.state_origin] || neuro.state_origin || '◌ покой');
   } catch(e) {}
 
   // Activity zone badge (HRV × activity — 4 зоны)

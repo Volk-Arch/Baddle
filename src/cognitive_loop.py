@@ -2398,6 +2398,21 @@ class CognitiveLoop:
         elif time_of_day == "ночь":   heuristic_tone = "ambient"
         else:                          heuristic_tone = "simple"
 
+        # Counter-wave (Правило 7): при user.mode='C' резонатор уже активно
+        # компенсирует рассинхрон. Push-style тоны (caring/simple) добавляют
+        # шум: эмо-жалость или обыденный «как ты?» при desync воспринимаются
+        # как давление. Сдвиг в reference (опираемся на факт из графа если
+        # есть topics) или curious (мягкое любопытство без оценки).
+        # Симметрия с signals.COUNTER_WAVE_PUSH_TYPES — там тот же тип
+        # сигнала понижается по urgency, здесь — по тону.
+        try:
+            if get_user_state().mode == "C" and heuristic_tone in ("caring", "simple"):
+                _old = heuristic_tone
+                heuristic_tone = "reference" if recent_topics else "curious"
+                log.debug(f"[counter-wave] sync_seeking tone {_old}→{heuristic_tone}")
+        except Exception:
+            pass
+
         # Action Memory (этап 5): если у нас есть история past sync_seeking
         # outcomes, override heuristic_tone если есть явный winner.
         # Cold start (<3 closed actions) → scoring=all 0 → heuristic wins.
