@@ -165,6 +165,28 @@ Cleanup продолжается пока явное не исчерпано —
 
 ---
 
+## W16 — Resonance transfer onboarding (6-10ч, после W14+W15)
+
+**Главный архитектурный вопрос проекта получает реализацию.** Концепт — [../docs/synchronization.md](../docs/synchronization.md). Мотивация — [../docs/foundation.md § Origin question](../docs/foundation.md#origin-question--главный-вопрос-проекта).
+
+Превращает onboarding нового юзера из 1.5 мес passive accumulation в 1-2 недели active probing через analogies. **Каждая задача = стоячая волна = сумма component waves**, активация тех же components у нового юзера → узор воспроизводится.
+
+5-axis chem РГК уже = 5 component frequencies — substrate готов. Нужен только transfer protocol поверх.
+
+**Sub-waves:**
+- **W16.1** `sync_error_wave` per axis (вместо scalar L2) в `_rgk.project("freeze")`. Диагностика «на каких частотах расхождение» (1-2ч)
+- **W16.2** Onboarding analogies endpoint: `GET /onboarding/analogies` + `POST /onboarding/answer`. 5-7 questions с target named_state'ами из 8-region map. Embedding similarity → activation (2-3ч)
+- **W16.3** Few-shot bias calibration: при первом task в category — UI с 3-5 examples, linear fit → initial bias_coefficient (1-2ч)
+- **W16.4** Adiabatic adjustment: при больших sync_error_wave[axis] система генерирует analogies для axis в morning briefing — active learning loop (2-3ч)
+
+**Зависит:** W14 (workspace для onboarding flow) + W15.4 (calibration loop infrastructure). Без них transfer protocol работает на substrate готовом не до конца.
+
+**Validation (Testable claim 8 в rgk-spec):** A/B test 2+ users — Group A passive, Group B onboarding analogies. Если Group B sync convergence за ≤2 недели и Group A за 1-2 мес — differential ≥3x подтверждает. Если differential <1.5x — analogies маргинальны, learning происходит через events.
+
+**Risk:** **первое реальное трение проекта**. До W16 все insights накладывались без трения. Resonance transfer — точка где модель проверяется на extensibility за пределы single-user. Если works — модель действительно universal. Если нет — переосмысление (что universal vs personal в РГК?).
+
+---
+
 ## W15 — Power: единая метрика сложности/нагрузки (16-22ч, design + impl)
 
 Концепт: [../docs/power.md](../docs/power.md). Implementation: [power-implementation.md](power-implementation.md).

@@ -49,6 +49,7 @@
 
 ### Резонансные
 
+- [ ] **Resonance transfer onboarding (W16)** — direction для главного вопроса проекта (как нейросеть быстро попадает в узор нового юзера). Активация component waves через 5-7 «вспомни случай когда…» с target named_state'ами. Few-shot bias calibration по 3-5 examples per category. `sync_error_wave` per axis вместо scalar L2. Adiabatic adjustment когда axis-drift замечен. Spec — [docs/synchronization.md](../docs/synchronization.md). **~6-10ч**. **Зависит:** W14 (workspace) + W15 (Power) — substrate расширение. **Validation:** Testable claim 8 в rgk-spec — A/B test resonance transfer vs passive accumulation, differential ≥3x подтверждает.
 - [ ] **Дыхательный режим** — Baddle предлагает 5→5 / 4-4-4-4 / 4-7-8 при рассогласовании frequency_regime. Action Memory cycle закрывает обучение по outcome. Bonus: User GABA boost feeder через breathing detection. Spec — [breathing-mode.md](breathing-mode.md). **~5ч**.
 - [ ] **Резонансный промпт-preset** — Chat UI dropdown 🔵/🔴/⚪ + шаблон `[Контекст волны] [Состояние] [Запрос] [Параметры]`. Опционально auto-detect через `frequency_regime`. Spec — [resonance-prompt-preset.md](resonance-prompt-preset.md). **~1-2ч**.
 - [ ] **Snapshot-якорь узора при перерыве** — когда юзер прерывает работу (close session, switch context, idle >10мин), фиксировать текущую геометрию конуса + frequency_regime + active session_indices в `data/anchor_snapshots.jsonl`. При возврате — restore-предложение «продолжить узор» с этими параметрами. Идея: вход в поток после перерыва стоит 15-40 мин восстановления — anchor может сократить. A/B измеримо. **~3ч** (backend + UI prompt). Из chat-export 2026-04-22..24.
@@ -132,6 +133,11 @@
 ### #4 Lab-scratch — изолированный граф для экспериментов
 **Три варианта:** A. Active pointer; B. Cognitive pause; C. Dual runtime (`_graph` для main, `_lab_graph` для scratch).
 **Блок:** понять после 1-2 мес daily-use есть ли реальная потребность.
+
+### #5 Multi-user replication через resonance transfer
+**Контекст:** [docs/foundation.md § Origin question](../docs/foundation.md#origin-question--главный-вопрос-проекта). Single-user proof работает (автор, 1.5 мес). Replication для нового юзера — direction найдено через resonance transfer ([docs/synchronization.md](../docs/synchronization.md)).
+**Дилемма:** реализация (W16 в Tier 2) проверит экспериментально. Если works (sync convergence у второго юзера за 1-2 нед через analogies) — модель universal. Если нет — переосмысление (что есть universal vs personal в РГК-axes? Возможно нужны pre-trained baseline'ы из corpus).
+**Блок:** W14 (workspace) + W15 (Power) реализованы → второй юзер готов попробовать. Это **первое реальное трение проекта** — точка проверки extensibility модели.
 
 ---
 
