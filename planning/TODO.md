@@ -7,6 +7,7 @@
 > - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
 > - [cleanup-plan.md](cleanup-plan.md) — следующий раунд polish (routes audit, docs sync, rgk-spec gaps, file consolidation).
 > - [../docs/workspace.md](../docs/workspace.md) + [workspace-design.md](workspace-design.md) — **W14**: рабочая память (STM) между divergent generation и graph (LTM). Scope над графом + cross-кандидатная обработка. Закрывает Backlog #11.
+> - [../docs/power.md](../docs/power.md) + [power-implementation.md](power-implementation.md) — **W15**: единая метрика сложности/нагрузки. Унифицирует estimated_complexity, cognitive_load, urgency, dispatcher.budget через `Power = U × V × P × interest × chem_modulator` (Фристон / Мощность из физики).
 > - [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---

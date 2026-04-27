@@ -165,6 +165,28 @@ Cleanup продолжается пока явное не исчерпано —
 
 ---
 
+## W15 — Power: единая метрика сложности/нагрузки (16-22ч, design + impl)
+
+Концепт: [../docs/power.md](../docs/power.md). Implementation: [power-implementation.md](power-implementation.md).
+
+Эволюция мысли (Игорь, 2026-04-27): «формула сложности задачи... по идее это разница между ожиданием и реальностью по Фристону. А вообще это чистая формула сколько энергии требуется за какой период».
+
+**`Power = U × V × P × interest × chem_modulator`** где `P = max(1, (T_norm/T_actual)^γ)`. Векторно по 3 контурам (phys/affect/cogload).
+
+Унифицирует:
+- `estimated_complexity` arbitrary → derived
+- `cognitive_load_today` 6-observable → sum P_cogload
+- `urgency` arbitrary → power-derived
+- `dispatcher.budget = 5/hour` константа → `available_capacity_now`
+
+**7 sub-waves:** primitive → tasks storage (W12 объединён) → live tracking → interest → calibration loop → dispatcher closure → vector capacity check.
+
+**Не блокирует** B5 / W6-11 / W14. Параллельно или после.
+
+W12 (tasks redesign) **поглощается** в W15.2 — реализуем сразу с Power-полями.
+
+---
+
 ## W11 — File consolidation (2-4ч suммарно, рискованно по 1 шагу)
 
 51 .py файл / 24.5k LOC сейчас. Несколько арбитрарных разделений по historical reasons. **Каждый шаг — отдельный commit** (одна группа за раз, не bulk).
