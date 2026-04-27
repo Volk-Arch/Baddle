@@ -6,7 +6,7 @@
 > - [docs/architecture-rules.md](../docs/architecture-rules.md) — 7 правил архитектуры + фильтр для новых фич.
 > - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
 > - [cleanup-plan.md](cleanup-plan.md) — следующий раунд polish (routes audit, docs sync, rgk-spec gaps, file consolidation).
-> - [chat-store-design.md](chat-store-design.md) — **W14**: convergence buffer для assistant.py + cognitive_loop.py decompose.
+> - [../docs/workspace.md](../docs/workspace.md) + [workspace-design.md](workspace-design.md) — **W14**: рабочая память (STM) между divergent generation и graph (LTM). Scope над графом + cross-кандидатная обработка. Закрывает Backlog #11.
 > - [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---
@@ -159,8 +159,8 @@
 
 ### Пакет «Память и pruning»
 
-- **#11 Оперативная vs долговременная память** (P4/R3). *Мнение:* **не проактивно** — текущий consolidation решает 80%.
-- **#12 Pruning: коллапсировать похожие** (P3/R4). Откладывать.
+- **#11 Оперативная vs долговременная память** (P4/R3). → **закрывается через [workspace](../docs/workspace.md) (W14)**: scope="workspace" с `expires_at` = STM, scope="graph" = LTM, ночной cycle promote workspace-нод по hebbian-принципам в LTM. Не отдельная подсистема, расширение Правила 3.
+- **#12 Pruning: коллапсировать похожие** (P3/R4). → **частично через [workspace](../docs/workspace.md) cross-processing (W14.5)**: similar workspace-кандидаты consolidate в один summary через REM-style collapse. Для LTM — отдельно, по необходимости.
 
 ### Пакет «Эмоциональная модель»
 

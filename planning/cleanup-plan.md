@@ -90,30 +90,29 @@ balance ∈ [0.3, 1.5] — diagnostic scalar, **не используется** 
 
 ---
 
-## W14 — ChatStore + декомпозиция (8-12ч, design wave + impl)
+## W14 — Workspace + декомпозиция (16-22ч suммарно, design wave + impl)
 
-**Главный архитектурный шаг после B5.** Spec — [chat-store-design.md](chat-store-design.md).
+**Главный архитектурный шаг после B5.** Концепция — [docs/workspace.md](../docs/workspace.md). Implementation план — [workspace-design.md](workspace-design.md).
 
-Идея автора (2026-04-27): «не ограничиваем систему в действиях, но выбираем из того что она сделала». Это **convergence-точка** между divergent generation (scout / brief / observation / dmn-bridge / alerts / assist reply) и chat history.
+Идея автора (2026-04-27): **«не ограничиваем систему в действиях, но выбираем из того что она сделала»**. Это активное пред-сознательное пространство между divergent generation (детекторы / scout / brief / dmn-bridge / assist reply) и committed graph. Не store: накопленные кандидаты могут быть **обработаны между собой** через scout/SmartDC/consolidation до broadcast'а.
 
-`assistant.py` 3105 LOC + `cognitive_loop.py` 2628 LOC = 23% проекта. Большая часть — manual aggregation для отображения кандидатов в чат-ленте, размазанная по 5+ файлам.
+Параллель в когнитивной науке — Global Workspace Theory (Bernard Baars, 1988). Закрывает [TODO Backlog #11 «Оперативная vs долговременная память»](TODO.md): workspace = STM, граф = LTM, перенос через consolidation.
 
-**ChatStore** = единая convergence-точка:
-- Все источники → `chat_store.add(ChatCandidate)`.
-- Selection rule: drop expired → immediate preempt → counter-wave penalty → budget per window → urgency-sort.
-- `commit()` → ноды графа (как сейчас).
+**Реализация:** workspace = **scope над графом**, не отдельный store. Поля `scope: "workspace" | "graph"` + `expires_at` на нодах. Все существующие graph operations работают.
 
-**Подшаги (sub-waves):**
-- **W14.1** chat_store.py primitive + tests (3-4ч)
-- **W14.2** /assist reply migration (1-2ч)
-- **W14.3** alerts migration через ChatStore (2-3ч)
-- **W14.4** briefings + scout migration (2-3ч)
-- **W14.5** assistant.py split в src/routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}.py (3-5ч)
-- **W14.6** cognitive_loop.py split: bookkeeping.py + briefings.py + advance_tick остаётся (2-3ч)
+**Sub-waves (8 шагов, ~16-22ч):**
+- **W14.1** `src/workspace.py` primitive + scope/expires_at fields (3-4ч)
+- **W14.2** `/assist` + user message через workspace (1-2ч)
+- **W14.3** alerts → workspace (2-3ч)
+- **W14.4** briefings + scout → workspace (2-3ч)
+- **W14.5** Cross-кандидатная обработка (scout/SmartDC между similar candidates) (2-3ч)
+- **W14.6** assistant.py split → `src/routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}.py` (3-5ч)
+- **W14.7** cognitive_loop.py split → `bookkeeping.py + briefings.py + advance_tick` (2-3ч)
+- **W14.8** STM→LTM consolidation в ночном cycle (2-3ч) — закрывает Backlog #11
 
-**Ожидаемая дельта:** assistant.py 3105 → ~150, cognitive_loop.py 2628 → ~1200, +chat_store.py 200 + новые routes/*.py 8 файлов по ~150-700.
+**Ожидаемая дельта:** assistant.py 3105 → ~150, cognitive_loop.py 2628 → ~1200, +workspace.py 150 + 8 routes/*.py.
 
-**Risk:** behaviour drift (immediate → buffered может задержать alerts на ~5s); hot path performance.
+**Risk:** behaviour drift (alert delay ~5s); hot path; infinite loop в cross-processing (защита через `_synthesized_from` flag).
 
 ---
 
