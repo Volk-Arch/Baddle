@@ -5,6 +5,8 @@
 > - [docs/](../docs/) — как код работает (по подсистемам).
 > - [docs/architecture-rules.md](../docs/architecture-rules.md) — 7 правил архитектуры + фильтр для новых фич.
 > - [docs/resonance-model.md](../docs/resonance-model.md) — резонансная оптика, 5 аксиом.
+> - [cleanup-plan.md](cleanup-plan.md) — следующий раунд polish (routes audit, docs sync, rgk-spec gaps, file consolidation).
+> - [chat-store-design.md](chat-store-design.md) — **W14**: convergence buffer для assistant.py + cognitive_loop.py decompose.
 > - [breathing-mode.md](breathing-mode.md), [resonance-prompt-preset.md](resonance-prompt-preset.md) — Tier 2 design specs.
 
 ---

@@ -90,7 +90,36 @@ balance ∈ [0.3, 1.5] — diagnostic scalar, **не используется** 
 
 ---
 
+## W14 — ChatStore + декомпозиция (8-12ч, design wave + impl)
+
+**Главный архитектурный шаг после B5.** Spec — [chat-store-design.md](chat-store-design.md).
+
+Идея автора (2026-04-27): «не ограничиваем систему в действиях, но выбираем из того что она сделала». Это **convergence-точка** между divergent generation (scout / brief / observation / dmn-bridge / alerts / assist reply) и chat history.
+
+`assistant.py` 3105 LOC + `cognitive_loop.py` 2628 LOC = 23% проекта. Большая часть — manual aggregation для отображения кандидатов в чат-ленте, размазанная по 5+ файлам.
+
+**ChatStore** = единая convergence-точка:
+- Все источники → `chat_store.add(ChatCandidate)`.
+- Selection rule: drop expired → immediate preempt → counter-wave penalty → budget per window → urgency-sort.
+- `commit()` → ноды графа (как сейчас).
+
+**Подшаги (sub-waves):**
+- **W14.1** chat_store.py primitive + tests (3-4ч)
+- **W14.2** /assist reply migration (1-2ч)
+- **W14.3** alerts migration через ChatStore (2-3ч)
+- **W14.4** briefings + scout migration (2-3ч)
+- **W14.5** assistant.py split в src/routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}.py (3-5ч)
+- **W14.6** cognitive_loop.py split: bookkeeping.py + briefings.py + advance_tick остаётся (2-3ч)
+
+**Ожидаемая дельта:** assistant.py 3105 → ~150, cognitive_loop.py 2628 → ~1200, +chat_store.py 200 + новые routes/*.py 8 файлов по ~150-700.
+
+**Risk:** behaviour drift (immediate → buffered может задержать alerts на ~5s); hot path performance.
+
+---
+
 ## W13 — Пересмотр assistant.py + cognitive_loop.py (4-8ч, high value)
+
+**Заменён W14** — оригинальный W13 был «искать magic numbers в больших файлах». W14 это включает + предлагает **архитектурное решение** для split. Если W14 невозможен/не подходит — fallback к audit-only W13:
 
 Эти два файла = **5733 LOC = 23% всего проекта**. Самые большие, активные, самые «бизнес-логические». Hypothesis: там же скрыты следующие 12 расхождений с РГК (по аналогии с W0 для facade). Business orchestration — место где правила architecture-rules ещё **не доползли** до полного применения.
 
