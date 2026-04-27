@@ -163,6 +163,7 @@ imbalance_pressure без контекста.
 | [workspace.md](workspace.md) | Рабочая память (STM) между divergent generation и graph (LTM). Scope над графом, дневной/ночной циклы, NREM/REM/homeostasis параллели |
 | [power.md](power.md) | Единая метрика сложности/нагрузки. `Power = U × V × P × interest × chem_modulator` через 3 контура capacity. Унифицирует estimated_complexity / cognitive_load / urgency / dispatcher.budget |
 | [synchronization.md](synchronization.md) | Resonance transfer — как новый юзер быстро попадает в узор через analogies (coarse → fine). Direction для ответа на Origin question (foundation § Origin) |
+| [positioning.md](positioning.md) | AHI как когнитивный шлюз (manifesto). Почему прослойка между человеком и AGI обязательна — даже при зрелом AGI. 4 структурные причины (исполнение vs вероятность, bandwidth ~50 бит/с, регуляторика, эпистемологический зазор). Корни Habr-статьи |
 | [alerts-and-cycles.md](alerts-and-cycles.md) | Полная карта фоновых check'ов + alert types + throttling math |
 | [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа |
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
