@@ -63,6 +63,83 @@ Workspace вводит **STM-слой**:
 
 ---
 
+## Дневной и ночной циклы
+
+Два режима работы вытекают естественно из STM/LTM разделения. Параллель с биологическим sleep architecture: NREM делает consolidation (гиппокамп → cortex), REM ищет novel associations и insights — именно ночная фаза где случаются озарения.
+
+### Дневной режим
+
+Основная работа происходит в workspace. LTM присутствует **в фоне**: подтягивается когда нужно через **activation**.
+
+```
+user input → workspace.add(immediate)
+           → embedding-similarity к LTM
+           → top-K «толстых» нод (confidence > 0.6, evidence > N)
+           → activation: workspace.add(source="ltm_recall", scope="workspace")
+           → SmartDC между user_msg и активированными → insight кандидат
+           → cross-обработка между similar workspace-кандидатами
+           → select() → broadcast в чат + commit в граф
+```
+
+«Толстые идеи» — high-confidence, frequently-accessed, evidence-rich LTM-ноды (главные цели, принципы, key insights). Они доминируют в priming, аналогично tip-of-the-tongue activation в человеческой памяти: думая про X, активируется related context Y, Z. Реализационно — подмножество существующего RAG в `execute_deep`, перенесённое в общий workspace path.
+
+**Activation ≠ копирование.** LTM-нода не клонируется в workspace; создаётся reference-нода `source="ltm_recall"` с указанием на оригинал. После expiry она исчезает, оригинал в LTM не страдает.
+
+### Ночной режим
+
+Юзер спит. Workspace становится местом для двух фаз:
+
+**Фаза 1 — consolidation (STM → LTM transfer).** `consolidation.py` ночной cycle проходит по `scope="workspace"`-нодам:
+- **Promote** в LTM (`scope="graph"`, `expires_at=None`): used in synthesis (referenced by committed node), accumulated Beta-prior evidence > threshold, survived multiple selection cycles.
+- **Archive**: low evidence, no references, expired без commit. Мягкий delete или archive для post-hoc analysis.
+- **Decay confidence**: hebbian-style, в соответствии с world-model механикой 3.
+
+**Фаза 2 — REM scout (deep bridges в LTM).** Здесь основные инсайты:
+- `pump_logic` запускается над **полным** графом, не только над workspace.
+- Берёт **давно-неактивированные** кластеры (low touched_at), ищет мосты к **толстым** активным core'ам.
+- Найденные bridges с quality > 0.5 → workspace candidates на **следующее утро** (`expires_at = next_morning + 24h`, urgency middling).
+- Морнинг briefing включает их как «Ночные находки» — это закрывает [TODO Tier 2 «META-вопросы — ночная генерация»](../planning/TODO.md).
+
+Это resonance с biological sleep:
+- **NREM** (early night) — consolidation focus, фаза 1
+- **REM** (later night) — novel associations, фаза 2 (Walker, Stickgold)
+
+### Циклический поток
+
+```
+DAY:
+  user input → workspace ← LTM activation (relevant толстые ноды)
+                         → cross-обработка (scout/SmartDC между similar)
+                         → selection
+                         → broadcast (chat) + commit (graph)
+
+NIGHT:
+  workspace pruning (expired без commit)
+  STM → LTM promotion (winners → scope="graph")
+  REM scout: deep bridges в полном LTM
+  bridges с quality > threshold → next-morning workspace candidates
+
+NEXT MORNING:
+  workspace warm с overnight insights
+  briefing включает «ночные находки» если quality высокая
+  цикл начинается заново
+```
+
+**Прогностическая сила.** Эта схема **предсказывает** что должны быть наблюдаемые feedback loops:
+- Хороший сон (по HRV) → больше REM bridges → утро с более глубоким briefing.
+- Плохой сон → меньше night-cycle activity → утро без overnight insights.
+- Хроническое перегрузка workspace днём (много кандидатов, мало select) → ночная consolidation overflow → archive вместо promotion → потеря возможных insights.
+
+Эти связи можно валидировать через `data/prime_directive.jsonl` aggregate.
+
+### Что это **не**
+
+- Не имитация мозга. Параллель — описательная (helps говорить про систему), не цель.
+- Не симуляция сна. Ночной cycle — реальная background work, не dream-generation.
+- Не предположение что юзер спит. Ночной cycle активируется по `_idle_multiplier > threshold` — независимо от того ночь или день. Если юзер работает в 3 утра — workspace продолжает дневной режим.
+
+---
+
 ## Селекция и broadcast
 
 Cycle workspace → chat:

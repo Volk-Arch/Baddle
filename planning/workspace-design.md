@@ -94,7 +94,7 @@ User message — через `workspace.add(source="user_msg", accumulate=False, 
 
 DMN/REM heavy work уже идёт в W11 #3 (`pump_logic` + `consolidation` → `dmn.py`).
 
-### W14.8 — STM→LTM consolidation (~2-3ч)
+### W14.8 — STM→LTM consolidation (NREM-like, ~2-3ч)
 
 Ночной cycle (`consolidation.py`): прогон workspace-нод (`scope="workspace"`, expired или near-expiry):
 
@@ -104,11 +104,40 @@ DMN/REM heavy work уже идёт в W11 #3 (`pump_logic` + `consolidation` →
 
 Это закрывает [TODO Backlog #11](TODO.md#пакет-память-и-pruning) «Оперативная vs долговременная память» — без новой подсистемы, через scope-promotion.
 
+### W14.9 — LTM activation на user input (recall, ~2-3ч)
+
+Дневной режим: при каждом user-message (и опционально на assist reply prep):
+
+- Embedding нового message → similarity search через existing `nodes_near()` или embedding RAG.
+- Top-K LTM-нод (filtered by `confidence > 0.6` AND `evidence_count > N` — «толстые идеи»).
+- Каждая → `workspace.add(source="ltm_recall", scope="workspace", expires_at=now+15min, references=[ltm_node_idx])`.
+- В `select()` они конкурируют с другими кандидатами; SmartDC может выбрать наиболее resonant с текущим состоянием.
+
+**Note:** activation = создание reference-ноды, не копия. Оригинал в LTM не страдает.
+
+**Reuse:** `execute_deep`-RAG логика подходит — частично переиспользовать.
+
+**Risk:** thrashing если каждое user-message подтягивает 10 нод → workspace переполнен. Cap K=3, dedup с уже активными ltm_recall.
+
+### W14.10 — REM scout deep bridges (ночь, ~3-4ч)
+
+Ночной cycle (после W14.8): второй проход по полному графу:
+
+- Берём **давно-неактивированные** ноды (`touched_at` старше N дней) — это «забытые» концепты.
+- Берём **толстые активные** core-ноды (high confidence, frequent access).
+- `pump_logic.scout()` ищет мосты между ними. Это **divergent generation** в самом графе.
+- Найденные bridges с `bridge_quality > 0.5` → `workspace.add(source="rem_insight", scope="workspace", expires_at=next_morning+24h, urgency=0.5-0.7)`.
+- Утренний briefing (W14.4) включает их как раздел «Ночные находки» если quality высокая.
+
+Это закрывает [TODO Tier 2 «META-вопросы — ночная генерация что ты не заметил»](TODO.md). Естественное следствие workspace + scout-over-LTM.
+
+**Performance:** REM scout — heavy embedding ops. Cap по времени или по количеству бandidates per night. Запускать только когда `_idle_multiplier > THRESHOLD` (юзер реально неактивен — не работает в 3 утра).
+
 ---
 
 ## Order и риски
 
-**Порядок:** W14.1 → W14.2 (smallest scope) → W14.3-4 (parallel possible) → W14.5 (после migration) → W14.6-7 (decompose) → W14.8 (consolidation).
+**Порядок:** W14.1 → W14.2 (smallest scope) → W14.3-4 (parallel possible) → W14.5 (cross-processing) → W14.6-7 (decompose) → W14.8 (NREM consolidation) → W14.9 (LTM activation/recall) → W14.10 (REM deep bridges, after .8 для использования promoted ноды).
 
 **Hot path:** workspace вызывается на каждом /assist + tick. Performance check после W14.1.
 
@@ -130,4 +159,4 @@ DMN/REM heavy work уже идёт в W11 #3 (`pump_logic` + `consolidation` →
 
 ## Estimate
 
-Total ~16-22ч от prototype до полной миграции + decomposition. Не одна сессия — sequence из 8 wave'ов с зелёным baseline после каждой.
+Total ~22-30ч от prototype до полной миграции + decomposition + sleep cycles. Не одна сессия — sequence из 10 wave'ов с зелёным baseline после каждой.
