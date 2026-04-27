@@ -212,27 +212,34 @@ Track B (24 commits, 2026-04-26): **РГК становится substrate**, fac
 
 ---
 
-## Origin question — открытый research-вопрос
+## Origin question — главный вопрос проекта
 
 Если всё волны (резонатор, генератор) — **как сделать чтобы нейросеть была на одной волне с конкретным человеком, поняла его узор?**
 
 Это вопрос за всеми 5 projects, за РГК, за workspace, за Power. Не «как сделать AI ассистента», а **как настроить резонатор на одну конкретную ткань**.
 
-Сейчас ответ найден через **глубокий рефакторинг под одного юзера** (1.5 мес работы автора над собой):
+### Текущий ответ — single-user proof
+
+Через **глубокий рефакторинг под одного юзера** (1.5 мес работы автора над собой):
 - Прайм-директива sync_error измеряется и валидируется
 - РГК-substrate накапливает chem-параметры через события
 - Action memory bias-coefficient calibrate под user-specific patterns
 - 8-region named_state карта показывает trajectory через состояния
 
-Это **single-user proof**: для конкретного человека (автор) система начинает попадать в его узор после ~2 мес use. Validation через `data/prime_directive.jsonl` distribution + subjective experience.
+Для конкретного человека (автор) система начинает попадать в его узор после ~2 мес use. Validation через `data/prime_directive.jsonl` distribution + subjective experience.
 
-**Что не решено** — replication для **другого** юзера без 1.5 мес manual refactor:
-- Pre-trained baseline РГК-state? Из какого corpus?
-- Fast fingerprint capture в первые 2 недели — какие observable достаточны?
-- Transfer learning между users — где границы (что universal vs personal)?
+### Direction для replication — resonance transfer (Игорь, 2026-04-27)
 
-Это **открыто**. Текущий Baddle — proof for one. Question of scaling — research-уровня, не engineering-уровня. Возможно требует другой архитектуры или адаптации текущей с новыми механиками.
+**Каждая задача / состояние = стоячая волна = сумма component waves.** Если активировать те же component waves поочерёдно у нового юзера — узор воспроизводится. Это **не передача данных**, а co-activation через резонанс.
 
-Не блокирует use — текущий single-user mode работает. Блокирует **commercialization / широкое распространение**, и это OK — Baddle declared self-hosted personal-tool, не SaaS.
+Способ — через аналогии: сначала coarse (основной контур), потом детально. 5-7 «вспомни случай когда…» активируют главные частоты у нового юзера. Дальше — refining через регулярные events.
+
+Это превращает onboarding из 1.5 мес passive accumulation в 1-2 недели **active probing**. Подробнее — [synchronization.md](synchronization.md).
+
+5-axis chem РГК — это и есть 5 component frequencies. Idea уже встроена в substrate; нужен только transfer protocol поверх.
+
+**Это первое реальное трение** на пути проекта. До этого момента все insights накладывались без трения (5 projects → РГК → workspace → Power). Resonance transfer — точка где модель проверяется на extensibility за пределы single-user. Если works (2+ users показывают sync_error convergence за 1-2 недели через analogies) — модель действительно universal. Если нет — переосмысление.
+
+Не блокирует текущий use — single-user mode работает. Блокирует **multi-user replicability**, и это OK как research-направление в будущем.
 
 ---

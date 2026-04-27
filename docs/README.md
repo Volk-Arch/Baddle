@@ -65,6 +65,7 @@ hypotheses с validation paths через `data/prime_directive.jsonl` и accumu
 | «Какие принципы дизайна?» | [architecture-rules](architecture-rules.md) — 7 правил + фильтр для новых фич |
 | «STM/LTM, рабочая память?» | [workspace](workspace.md) — scope над графом + дневной/ночной циклы |
 | «Сложность, нагрузка, capacity budget?» | [power](power.md) — единая метрика через `Power = U×V×P×interest×chem_modulator` |
+| «Как другой юзер быстро попадёт в узор?» | [synchronization](synchronization.md) — resonance transfer через аналогии (coarse → fine) |
 | «Что не решено?» | [planning/TODO § Открытые вопросы](../planning/TODO.md) |
 
 ---
@@ -161,6 +162,7 @@ imbalance_pressure без контекста.
 | [universe-as-git.md](universe-as-git.md) | Универсальный паттерн divergence ↔ convergence (Глава 8 — память, творчество). Корни workspace/Power концепций |
 | [workspace.md](workspace.md) | Рабочая память (STM) между divergent generation и graph (LTM). Scope над графом, дневной/ночной циклы, NREM/REM/homeostasis параллели |
 | [power.md](power.md) | Единая метрика сложности/нагрузки. `Power = U × V × P × interest × chem_modulator` через 3 контура capacity. Унифицирует estimated_complexity / cognitive_load / urgency / dispatcher.budget |
+| [synchronization.md](synchronization.md) | Resonance transfer — как новый юзер быстро попадает в узор через analogies (coarse → fine). Direction для ответа на Origin question (foundation § Origin) |
 | [alerts-and-cycles.md](alerts-and-cycles.md) | Полная карта фоновых check'ов + alert types + throttling math |
 | [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа |
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
