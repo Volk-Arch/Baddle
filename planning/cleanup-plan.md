@@ -100,9 +100,9 @@ balance ∈ [0.3, 1.5] — diagnostic scalar, **не используется** 
 
 **Реализация:** workspace = **scope над графом**, не отдельный store. Поля `scope: "workspace" | "graph"` + `expires_at` на нодах. Все существующие graph operations работают.
 
-**Asymmetric cost insight (2026-04-27):** дневной режим — cheap (workspace in-memory + bayesian/chem); ночной режим — thoughtful (sequential integration). LTM recall днём = expensive overhead, поэтому **opt-in lazy queue** вместо broad activation.
+**Asymmetric cost insight (2026-04-27):** дневной режим — cheap (workspace in-memory + bayesian/chem); ночной режим — thoughtful (3 фазы integration). LTM recall днём = expensive overhead, поэтому **opt-in lazy queue** вместо broad activation. Ночь — три фазы соответствуют биологическому sleep: NREM replay → REM remote associations → Synaptic homeostasis.
 
-**Sub-waves (9 шагов, ~18-25ч):**
+**Sub-waves (11 шагов, ~22-30ч):**
 
 День — cheap workspace operations:
 - **W14.1** `src/workspace.py` primitive + scope/expires_at fields (3-4ч)
@@ -116,12 +116,14 @@ balance ∈ [0.3, 1.5] — diagnostic scalar, **не используется** 
 - **W14.6** assistant.py split → `src/routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}.py` (3-5ч)
 - **W14.7** cognitive_loop.py split → `bookkeeping.py + briefings.py + advance_tick` (2-3ч)
 
-Ночь — sequential integration (закрывает Backlog #11+#12+Tier 2 «META»):
-- **W14.8** Sequential integration: per-node embedding search → merge / mid-distance edge / promote. Insight'ы emerge из mid-distance находок, не отдельный REM scout (3-4ч).
+Ночь — 3-фазный sleep cycle (закрывает Backlog #11+#12+Tier 2 «META»):
+- **W14.8** Phase 1 — Sequential integration (NREM-like): per-node merge/mid-distance/promote (3-4ч)
+- **W14.10** Phase 2 — Cross-batch REM scout: pairs внутри сегодняшнего batch + remote associations с давним LTM (2-3ч)
+- **W14.11** Phase 3 — Synaptic homeostasis: global confidence decay × restoration touched-today (1-2ч)
 
 **Ожидаемая дельта:** assistant.py 3105 → ~150, cognitive_loop.py 2628 → ~1200, +workspace.py 150 + 8 routes/*.py.
 
-**Risk:** behaviour drift (alert delay ~5s); hot path performance; ночной cycle time budget (cap 5 мин на pass — overflow → archive с пометкой «недо-integrated»); delayed response при lazy recall (mitigation: explicit `/assist/recall` остаётся sync).
+**Risk:** behaviour drift (alert delay ~5s); hot path performance; ночной cycle time budget per phase; over-aggressive decay в W14.11 (mitigation: confidence_at_promote сохранять).
 
 ---
 

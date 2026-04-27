@@ -145,6 +145,65 @@ for node N in workspace_nodes_by_quality_desc():
 
 **Cap:** time budget на ночной pass (например max 5 мин). Если workspace переполнен — приоритет high-quality нод, остальные archive с меткой "недо-integrated".
 
+### W14.10 — Cross-batch REM scout (~2-3ч)
+
+После W14.8 phase 1 (integration), Phase 2: scout между сегодняшними promoted-нодами + random sample давнего LTM.
+
+```python
+today_batch = nodes_promoted_this_night  # из W14.8
+
+# pairs внутри batch — cross-batch insight'ы
+for pair in random.sample(combinations(today_batch, 2), k=N):
+    bridge = pump_logic.scout(pair[0], pair[1])
+    if bridge and bridge.quality > 0.5:
+        workspace.add(source="cross_batch_insight",
+                      expires_at=next_morning + 24h,
+                      references=list(pair))
+
+# pairs (today_batch × random_old_LTM) — remote associations (REM-style)
+random_old = sample(old_ltm_nodes, k=N, where=touched_at_old)
+for new in today_batch:
+    for old in random_old[:3]:
+        bridge = pump_logic.scout(new, old)
+        if bridge and bridge.quality > 0.6:
+            workspace.add(source="remote_association",
+                          expires_at=next_morning + 24h,
+                          references=[new, old])
+```
+
+**Почему** Phase 1 этого не делает: в W14.8 каждая новая нода смотрит в LTM (close + mid-distance), но **между сегодняшними** новыми связи не ищутся. И связи к **давно неактивированным** old LTM (low touched_at) тоже пропускаются — sequential search идёт через `nodes_near` который typically returns recent.
+
+**Cap:** total time budget на Phase 2 (например 2 мин), max N pairs.
+
+**Performance:** небольшой today_batch (типично 10-30 нод за день) × small old_sample → manageable. Heavy ops только на found bridges.
+
+### W14.11 — Synaptic homeostasis (~1-2ч)
+
+После W14.10 Phase 3: global rebalancing confidence на LTM.
+
+```python
+DECAY_FACTOR = 0.95          # ночное ослабление
+RESTORE_TOUCHED = 1 / 0.95   # для touched_today nodes — net stable
+ARCHIVE_THRESHOLD = 0.05      # ниже этой confidence → archive
+
+for node in graph.nodes:
+    if node.scope != "graph":
+        continue
+    node.confidence *= DECAY_FACTOR
+    if node.touched_today or node.committed_today:
+        node.confidence *= RESTORE_TOUCHED
+    if node.confidence < ARCHIVE_THRESHOLD:
+        archive(node)  # soft delete или move в data/archive/
+```
+
+**Эффект:** rarely-touched ноды медленно decay → archive когда падают ниже threshold. Frequently-touched стабильны (decay × restore ≈ 1.0). Это **предотвращает раздувание графа** при долгой работе.
+
+**Связь с existing hebbian decay** в `consolidation.py` — там per-node, on read access. Synaptic homeostasis — **batch global** на ВСЕХ LTM, один раз за ночь. Дополняет, не замещает.
+
+**Calibration:** DECAY_FACTOR подобрать под use rate. 0.95/night = ~half-life 14 дней для untouched нод. Если archive слишком агрессивный — поднять до 0.97. Adjusting через 1-2 мес use наблюдений.
+
+**Risk:** confidence потеряет ground truth если decay incorrectly tuned. Mitigation: сохранять `confidence_at_promote` отдельным полем, чтобы можно было восстановить если decay over-aggressive.
+
 ### W14.9 — Lazy LTM recall queue (~1-2ч)
 
 Дневной режим: workspace **не делает** broad recall на каждое user-message. Hot path остаётся cheap (in-memory operations only).
@@ -167,9 +226,14 @@ for node N in workspace_nodes_by_quality_desc():
 
 ## Order и риски
 
-**Порядок:** W14.1 → W14.2 (smallest scope) → W14.3-4 (parallel possible) → W14.5 (cross-processing in workspace) → W14.6-7 (decompose) → W14.9 (lazy queue infra) → W14.8 (sequential integration, эта volume — самая большая, но даёт STM→LTM + insights одним проходом).
+**Порядок:** W14.1 → W14.2 (smallest scope) → W14.3-4 (parallel possible) → W14.5 (cross-processing in workspace) → W14.6-7 (decompose) → W14.9 (lazy queue infra) → W14.8 (sequential integration phase 1) → W14.10 (cross-batch + remote associations phase 2) → W14.11 (synaptic homeostasis phase 3).
 
-**W14.10 удалён** — REM scout как отдельный second pass не нужен. Insight'ы emerge из integration в W14.8.
+**Биологические параллели:**
+- W14.8 ≈ NREM consolidation + memory replay (Wilson & McNaughton 1994)
+- W14.10 ≈ REM remote associations (Walker, Stickgold)
+- W14.11 ≈ Synaptic homeostasis (Tononi & Cirelli 2014)
+
+Эти параллели описательные — не цель имитировать мозг. Просто оказывается что resource allocation для LLM-based system с asymmetric workloads совпадает с тем что природа нашла за миллионы лет.
 
 **Hot path:** workspace вызывается на каждом /assist + tick. Performance check после W14.1.
 
@@ -191,4 +255,4 @@ for node N in workspace_nodes_by_quality_desc():
 
 ## Estimate
 
-Total ~18-25ч от prototype до полной миграции + decomposition + sleep cycles. Не одна сессия — sequence из 9 wave'ов с зелёным baseline после каждой. (Уменьшено с 22-30ч после устранения отдельного REM scout — integration делает это естественно.)
+Total ~22-30ч от prototype до полной миграции + decomposition + 3-фазный sleep cycle. Не одна сессия — sequence из 11 wave'ов с зелёным baseline после каждой.

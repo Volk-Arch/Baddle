@@ -139,16 +139,32 @@ DAY:
             → опционально: note "need context X"
 
 NIGHT (когда _idle_multiplier > threshold):
-  для каждой workspace-ноды:
-    embedding search в LTM (один раз, cheap для одной ноды)
-    integration: merge / mid-distance edge / promote
-    insight'ы emerge естественно из mid-distance находок
-    process noted queries
+  Phase 1 — Sequential integration (memory replay):
+    для каждой workspace-ноды:
+      embedding search в LTM (cheap для одной ноды)
+      merge / mid-distance edge / promote
+      insight'ы emerge из mid-distance находок
+      process noted queries
+
+  Phase 2 — Cross-batch scout (REM-style remote associations):
+    today's batch = свежие promoted-ноды
+    pump_logic.scout(today's batch ↔ today's batch + random LTM sample)
+    found bridges с quality > threshold → next-morning insight cards
+
+  Phase 3 — Synaptic homeostasis (overall calibration):
+    global confidence decay × 0.95 на ВСЕХ LTM-нодах
+    touched_today nodes: restore × (1/0.95) — net stable
+    rarely-touched: net decay → archive когда упадёт ниже threshold
+    эффект: bandwidth освобождается для нового, важное удерживается
 
 NEXT MORNING:
-  workspace warm с promoted LTM + insight-кандидаты + answers
+  workspace warm с promoted LTM + insight-кандидаты + answers + cross-batch
   briefing включает «Ночные находки»
 ```
+
+**Phase 2 — почему важна.** В Phase 1 каждая новая нода смотрит в **существующий** LTM. Но если за день поступили 10 нод на смежные темы — связи между ними самими пропускаются. REM-style scout (Walker, Stickgold) ищет именно «remote associations» — то что днём казалось разным, а ночью оказывается связано.
+
+**Phase 3 — почему важна.** Synaptic homeostasis (Tononi & Cirelli, 2014): sleep balances synaptic strengths which were upregulated during waking, чтобы предотвратить saturation и освободить bandwidth для нового материала. Hebbian decay per-node у нас есть; здесь — **systemic rebalancing**. Net effect: рутинные/часто-используемые ноды стабильны, забытые медленно decay → archive. Это **предотвращает раздувание графа** при долгой работе.
 
 ### Прогностическая сила
 
