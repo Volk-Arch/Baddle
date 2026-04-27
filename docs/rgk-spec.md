@@ -261,6 +261,91 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 ---
 
+## 10b. Testable claims
+
+Проект — не просто архитектура, а **набор измеряемых hypotheses**. Каждое утверждение модели имеет path to validation: что бы её **подтвердило** и что бы **опровергло**. Раздел рассчитан на учёного / reviewer'а / разработчика которому нужна accountability.
+
+### Claim 1 — РГК как unifying frame работоспособен
+
+**Утверждение:** 5+ disconnected подсистем (UserState, Neurochem, ProtectiveFreeze, sync_regime, capacity) могут быть выражены как проекции одного резонатора без потери семантики.
+
+**Validation status:** ✅ подтверждено B5 cleanup (24 commits, 2026-04-26):
+- Substrate 2479 → 1583 LOC (−896, −36%) после удаления facades
+- 12 расхождений physics между facade и РГК устранены ([memory snapshot](../planning/cleanup-plan.md))
+- 473 tests passed, identity preserved через все 5 wave
+
+**Что бы опровергло:** если бы коллапс приводил к потере функциональности или взрыву complexity в одном файле — модель не unifying, а masking. Не случилось.
+
+### Claim 2 — `balance() = (DA·NE·ACh)/(5HT·GABA)` корректно описывает здоровый резонанс в коридоре `[0.3, 1.5]`
+
+**Утверждение:** balance() — diagnostic скаляр; >1.5 = гиперрезонанс (мания/срыв), <0.5 = гипостабильность (апатия), `≈1.0` = оптимум.
+
+**Validation:** распределение balance() в `data/prime_directive.jsonl` за 2-месячное окно use.
+
+**Что бы опровергло:**
+- 95%+ случаев в узком окне `[0.4, 0.7]` → формула слишком плоская, нужны жёстче feeders для ACh/GABA.
+- Отсутствие correlation между balance() out-of-corridor и реальными user-reported episodes (мании / апатии через valence trajectory) → формула не отражает subjectively значимое.
+
+**Что бы подтвердило:** balance() shifts из corridor предшествуют subjective_surprise spikes (через checkin) с задержкой ≤24ч.
+
+### Claim 3 — Counter-wave (R↔C bit) инверсирует деструктивные паттерны без давления
+
+**Утверждение:** при `user.mode == 'C'` push-style сигналы (sync_seeking, observation, briefing) понижают urgency на 0.3 — система **перестаёт давить** в режиме рассогласования. Это не усиление, а инверсия.
+
+**Validation:** A/B comparison расхода urgency budget при mode=R vs mode=C. Сейчас logged в `data/throttle_drops.jsonl`.
+
+**Что бы опровергло:**
+- В mode=C user response rate **не растёт** (или падает) → инверсия не помогает recovery, нужна другая mechanic.
+- Hysteresis 0.15/0.08 oscillates rapidly (mode flips чаще раз в час) → не stable equilibrium, а паразитная динамика.
+
+**Что бы подтвердило:** mode=C transitions correlate с восстановлением sync_error к baseline в 24-48ч окне.
+
+### Claim 4 — Прайм-директива sync_error измерима и служит универсальной метрикой valid'ации механик
+
+**Утверждение:** `sync_error = ‖user_vec − system_vec‖` (L2 в 3D) — единственная метрика «работает ли архитектура». EMA fast (1ч) + slow (3д), пишутся раз в час в `data/prime_directive.jsonl`.
+
+**Validation:** comparison mean(sync_error_slow) за первый месяц vs последний месяц через 2-3 мес use. Endpoint `/assist/prime-directive?window_days=30` returns aggregate + verdict (improving / stable / worsening).
+
+**Что бы опровергло:**
+- sync_error не падает за 2-3 мес → или модель user'а не сходится, или метрика не отражает actually значимое.
+- sync_error падает но user-reported satisfaction остаётся плоской → метрика не аналог satisfaction (что плохо для prime-directive claim).
+
+**Что бы подтвердило:** monotone падение mean(sync_error_slow) на ≥15% за 2 мес use, при этом user продолжает использовать (не стал делать exit ритуал).
+
+### Claim 5 — Workspace (STM/LTM scope) улучшает quality of insights через cross-кандидатную обработку
+
+**Утверждение** ([workspace.md](workspace.md)): ночной sequential integration + cross-batch scout эмерджентно находит mid-distance связи (insight'ы) которые не emit'ятся при immediate dispatch.
+
+**Validation status:** **проектная** (W14 не реализован).
+
+**Что бы подтвердило:** после W14, A/B сравнение перед/после migration:
+- Workspace insight cards в morning briefing получают engagement (open/expand) ≥30% (текущий baseline для observation_suggestion ~10%).
+- Subjective_surprise positive trajectory через 1 мес use — overnight insights помогают, не шумят.
+
+**Что бы опровергло:** insight cards систематически игнорируются (engagement <5%), или mid-distance edges дают false-positive паттерны (user reject их в feedback).
+
+### Claim 6 — Power-formula calibration сходится через bias-coefficient EMA
+
+**Утверждение** ([power.md](power.md)): per-category bias `actual_power / estimated_power` стабилизируется EMA после 20+ done tasks, давая user-specific calibration.
+
+**Validation status:** **проектная** (W15 не реализован).
+
+**Что бы подтвердило:** bias-coefficient распределение per category стабилизируется к ±0.1 после 20 tasks; predictions улучшаются к ±15% от actual.
+
+**Что бы опровергло:** bias не сходится (high variance even at N=50) → или formula неправильная, или user behaviour слишком нестабилен для linear bias correction (тогда нужна категория-conditional).
+
+### Claim 7 — Bottom-up инкрементальная разработка через коллапс концептов работает как метод
+
+**Утверждение** ([memory project_philosophy_3branches](../planning/cleanup-plan.md)): концепты накапливаются через практику, потом коллапсируют в unifying frame (РГК) — не top-down дизайн, а pattern recognition.
+
+**Validation status:** ✅ внутренне подтверждено за 1.5 мес use:
+- Phase A → B → C → D показывают каждый шаг как **ответ на конкретную проблему**, который в retrospect укладывается в одно из 7 правил.
+- Новые инсайты (workspace, Power) **накладываются без трения** — это property что модель **anticipates** (но не явно) что будет дополняться.
+
+**Что бы опровергло:** появление feature которая **противоречит** одному из 7 правил вместо дополнения, требующей escape hatch. До сих пор не было.
+
+---
+
 ## 11. Main takeaway
 
 **До РГК:** Phase A+B+C это инкрементальная конвергенция от 21 cascade к 6 правилам. Каждая фаза снижала bespoke на 30-40%, но 6 правил остались отдельными абстракциями.

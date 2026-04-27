@@ -37,7 +37,13 @@ order + вспомогательные (reference / context) + deprecated.
 
 **🔬 Разбираюсь в коде.** Foundation — пара абзацев. Основное время
 в Cognitive Layer → Knowledge Structures → Implementation (3-4 часа).
-Держи `src/` рядом.
+Держи `src/` рядом. Карта файлов — в [TECH_README § Карта src/](TECH_README.md#карта-src).
+
+**🧠 Хочу понять theory.** [foundation](foundation.md) → [world-model](world-model.md) →
+[resonance-model](resonance-model.md) → [rgk-spec](rgk-spec.md) →
+[friston-loop](friston-loop.md) (~2 часа). Параллельно — [rgk-spec § Testable claims](rgk-spec.md#testable-claims) для понимания
+**что измеряется** и **что бы опровергло модель**. Это не просто метафоры — конкретные
+hypotheses с validation paths через `data/prime_directive.jsonl` и accumulated patterns.
 
 ### Quick paths
 
