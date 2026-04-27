@@ -63,80 +63,107 @@ Workspace вводит **STM-слой**:
 
 ---
 
-## Дневной и ночной циклы
+## Дневной и ночной циклы — асимметрия по стоимости
 
-Два режима работы вытекают естественно из STM/LTM разделения. Параллель с биологическим sleep architecture: NREM делает consolidation (гиппокамп → cortex), REM ищет novel associations и insights — именно ночная фаза где случаются озарения.
+**Дневной режим — дешёвый и быстрый.** Много внешних входов (user msg, HRV, sensors, alerts), всё нужно обрабатывать предиктивно по Bayes. Работа с LTM здесь **дорогая**: embedding RAG на каждое user-msg добавляет latency и грузит hot path. Большинство ответов и так не требуют deep context — bayesian update + chem feeders справляются.
 
-### Дневной режим
+**Ночной режим — медленный и thoughtful.** Юзер не ждёт ответа, hot path пустой. Можно позволить per-node integration: сейчас одна workspace-нода, посмотрим где её место в LTM, найдём похожие, сольём или сошлёмся, в процессе **естественно** обнаружим mid-distance связи — это и есть insight'ы.
 
-Основная работа происходит в workspace. LTM присутствует **в фоне**: подтягивается когда нужно через **activation**.
+Параллель — memory replay в hippocampus during sleep (Wilson & McNaughton, 1994): hippocampal neurons reactivate experiences пошагово, transfer in cortex; в процессе reactivation обнаруживаются cross-experience patterns. У Baddle тот же паттерн без необходимости имитировать мозг — просто оказывается, что cheap-day / thoughtful-night = best resource allocation для LLM-based system с asymmetric workloads.
+
+### Дневной режим — минимум LTM
 
 ```
 user input → workspace.add(immediate)
-           → embedding-similarity к LTM
-           → top-K «толстых» нод (confidence > 0.6, evidence > N)
-           → activation: workspace.add(source="ltm_recall", scope="workspace")
-           → SmartDC между user_msg и активированными → insight кандидат
            → cross-обработка между similar workspace-кандидатами
-           → select() → broadcast в чат + commit в граф
+             (всё in-memory, без LTM hops)
+           → select() → broadcast в чат + commit в граф (просто scope mutate,
+             без integration с LTM)
+           → workspace-нода может оставить «note для ночи»: «I need context
+             about X» — query queue
 ```
 
-«Толстые идеи» — high-confidence, frequently-accessed, evidence-rich LTM-ноды (главные цели, принципы, key insights). Они доминируют в priming, аналогично tip-of-the-tongue activation в человеческой памяти: думая про X, активируется related context Y, Z. Реализационно — подмножество существующего RAG в `execute_deep`, перенесённое в общий workspace path.
+LTM **не активируется** на каждое сообщение. Workspace работает с тем что уже в нём (включая ранее активированные ноды) + chem-state RGK. Если ответ требует deep context — это **explicit path**: либо `execute_deep` (юзер запросил deep mode), либо высокий `_check_user_surprise` сигнал — тогда RAG включается explicitly.
 
-**Activation ≠ копирование.** LTM-нода не клонируется в workspace; создаётся reference-нода `source="ltm_recall"` с указанием на оригинал. После expiry она исчезает, оригинал в LTM не страдает.
+«Lazy queue» pattern: workspace может зафиксировать `note: "need context: X"` на committed-ноде. Эти notes — **input для ночного processing**, не immediate side-effect.
 
-### Ночной режим
+### Ночной режим — sequential integration
 
-Юзер спит. Workspace становится местом для двух фаз:
+Юзер спит (или `_idle_multiplier > threshold`). Один проход по workspace-нодам, **по одной**:
 
-**Фаза 1 — consolidation (STM → LTM transfer).** `consolidation.py` ночной cycle проходит по `scope="workspace"`-нодам:
-- **Promote** в LTM (`scope="graph"`, `expires_at=None`): used in synthesis (referenced by committed node), accumulated Beta-prior evidence > threshold, survived multiple selection cycles.
-- **Archive**: low evidence, no references, expired без commit. Мягкий delete или archive для post-hoc analysis.
-- **Decay confidence**: hebbian-style, в соответствии с world-model механикой 3.
+```
+для каждой ноды N в scope="workspace" с quality (evidence/references/recency):
+    если quality < threshold:
+        archive (или soft-delete)
+        continue
 
-**Фаза 2 — REM scout (deep bridges в LTM).** Здесь основные инсайты:
-- `pump_logic` запускается над **полным** графом, не только над workspace.
-- Берёт **давно-неактивированные** кластеры (low touched_at), ищет мосты к **толстым** активным core'ам.
-- Найденные bridges с quality > 0.5 → workspace candidates на **следующее утро** (`expires_at = next_morning + 24h`, urgency middling).
-- Морнинг briefing включает их как «Ночные находки» — это закрывает [TODO Tier 2 «META-вопросы — ночная генерация»](../planning/TODO.md).
+    # Cheap embedding search в LTM один раз
+    similar = nodes_near(N.embedding, k=20)
 
-Это resonance с biological sleep:
-- **NREM** (early night) — consolidation focus, фаза 1
-- **REM** (later night) — novel associations, фаза 2 (Walker, Stickgold)
+    if есть очень близкая (distance < merge_threshold):
+        merge: link N → similar[0], increment evidence
+        N сама не promotes, но усиливает existing
+    elif есть mid-distance patterns (distance в [merge_th, related_th]):
+        # ← здесь рождаются insight'ы естественно
+        record edge "related_to" между N и mid-distance neighbors
+        если mid-distance пара особо resonant → отдельный insight-кандидат
+    else:
+        # уникальная мысль
+        promote N: scope="graph", expires_at=None
+
+    обработать noted queries (если N имела «need context: X»):
+        запросить LTM, повесить answer в next-morning workspace
+```
+
+Это **NREM consolidation + REM insight emergence в одном проходе**. Не два отдельных cycle'а — insight'ы **emerge** в integration, не ищутся отдельно. Дешевле и elegantнее.
+
+**Почему mid-distance ноды = insight'ы.** Близкие — уже известно (просто merge). Далёкие — unrelated (просто ignore). Mid-distance — semantically resonant но **не уже соединены** — это значит между ними существует связь, которую система ещё не записала. Запись = **новый edge в графе** + потенциальная карточка «вот здесь есть параллель» в утренний briefing.
+
+### Утренний briefing
+
+После ночного pass workspace warm:
+- Promoted-LTM ноды (новые в графе)
+- Insight-кандидаты с edges «related_to» (mid-distance discoveries)
+- Answer'ы на noted queries из вчера
+- Existing morning_briefing logic + раздел «Ночные находки»
+
+Если quality insights высокая — briefing глубже. Если низкая (ничего интересного нашлось) — briefing обычный.
 
 ### Циклический поток
 
 ```
 DAY:
-  user input → workspace ← LTM activation (relevant толстые ноды)
-                         → cross-обработка (scout/SmartDC между similar)
-                         → selection
-                         → broadcast (chat) + commit (graph)
+  user input → workspace (in-memory, cheap)
+            → cross-обработка similar
+            → select → broadcast + commit (scope mutation)
+            → опционально: note "need context X"
 
-NIGHT:
-  workspace pruning (expired без commit)
-  STM → LTM promotion (winners → scope="graph")
-  REM scout: deep bridges в полном LTM
-  bridges с quality > threshold → next-morning workspace candidates
+NIGHT (когда _idle_multiplier > threshold):
+  для каждой workspace-ноды:
+    embedding search в LTM (один раз, cheap для одной ноды)
+    integration: merge / mid-distance edge / promote
+    insight'ы emerge естественно из mid-distance находок
+    process noted queries
 
 NEXT MORNING:
-  workspace warm с overnight insights
-  briefing включает «ночные находки» если quality высокая
-  цикл начинается заново
+  workspace warm с promoted LTM + insight-кандидаты + answers
+  briefing включает «Ночные находки»
 ```
 
-**Прогностическая сила.** Эта схема **предсказывает** что должны быть наблюдаемые feedback loops:
-- Хороший сон (по HRV) → больше REM bridges → утро с более глубоким briefing.
-- Плохой сон → меньше night-cycle activity → утро без overnight insights.
-- Хроническое перегрузка workspace днём (много кандидатов, мало select) → ночная consolidation overflow → archive вместо promotion → потеря возможных insights.
+### Прогностическая сила
 
-Эти связи можно валидировать через `data/prime_directive.jsonl` aggregate.
+Схема **предсказывает** наблюдаемые feedback loops:
+- Хороший сон (по HRV) → длиннее ночной cycle → больше workspace-нод integrate → утро с глубоким briefing.
+- Плохой сон → ночной cycle прерывается → workspace overflow → промахи insights.
+- Хроническое overflow workspace днём → archive вместо promotion → потеря потенциальных insights.
+
+Эти связи валидируются через `data/prime_directive.jsonl` aggregate (HRV recovery × overnight insight count × next-day sync_error).
 
 ### Что это **не**
 
-- Не имитация мозга. Параллель — описательная (helps говорить про систему), не цель.
+- Не имитация мозга. Параллель memory replay — описательная (helps говорить про систему), не цель.
 - Не симуляция сна. Ночной cycle — реальная background work, не dream-generation.
-- Не предположение что юзер спит. Ночной cycle активируется по `_idle_multiplier > threshold` — независимо от того ночь или день. Если юзер работает в 3 утра — workspace продолжает дневной режим.
+- Не предположение что юзер спит. Активируется по `_idle_multiplier > threshold` — независимо от ночь/день. Если юзер работает в 3 утра — продолжается дневной режим.
 
 ---
 

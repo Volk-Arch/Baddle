@@ -94,50 +94,82 @@ User message — через `workspace.add(source="user_msg", accumulate=False, 
 
 DMN/REM heavy work уже идёт в W11 #3 (`pump_logic` + `consolidation` → `dmn.py`).
 
-### W14.8 — STM→LTM consolidation (NREM-like, ~2-3ч)
+### W14.8 — Sequential integration (NREM + emergent REM в одном проходе, ~3-4ч)
 
-Ночной cycle (`consolidation.py`): прогон workspace-нод (`scope="workspace"`, expired или near-expiry):
+**Ключевая переработка:** не два отдельных cycle'а (NREM consolidation + REM scout), а **один пошаговый pass** по workspace-нодам где insight'ы **emerge** из integration. Дешевле и точнее resonance с memory replay в hippocampus.
 
-- Если used in synthesis (referenced by another committed node) → promote: `scope="graph"`, `expires_at=None`. STM → LTM.
-- Если accumulated supporting evidence (Beta-prior alpha+beta > threshold) → promote.
-- Иначе expire/archive по hebbian-принципам как сейчас.
+`consolidation.py` ночной cycle (когда `_idle_multiplier > threshold`):
 
-Это закрывает [TODO Backlog #11](TODO.md#пакет-память-и-pruning) «Оперативная vs долговременная память» — без новой подсистемы, через scope-promotion.
+```python
+for node N in workspace_nodes_by_quality_desc():
+    if quality(N) < threshold:
+        archive(N); continue
 
-### W14.9 — LTM activation на user input (recall, ~2-3ч)
+    similar = nodes_near(N.embedding, k=20)  # один cheap call
 
-Дневной режим: при каждом user-message (и опционально на assist reply prep):
+    if similar[0].distance < MERGE_TH:
+        # Близкое — merge: link N → similar[0], increment evidence
+        link(N, similar[0]); evidence_bump(similar[0])
+        # N не promotes сама — она УСИЛИВАЕТ existing
+    else:
+        mid = [s for s in similar if MERGE_TH <= s.distance < RELATED_TH]
+        if mid:
+            # ← Insight emergence: mid-distance связи которых ещё нет
+            for m in mid:
+                if not edge_exists(N, m):
+                    add_edge(N, m, type="related_to")
+            if very_resonant(N, mid):
+                # отдельный insight-кандидат для morning briefing
+                workspace.add(source="overnight_insight",
+                              expires_at=next_morning+24h,
+                              references=[N.idx, *[m.idx for m in mid]])
 
-- Embedding нового message → similarity search через existing `nodes_near()` или embedding RAG.
-- Top-K LTM-нод (filtered by `confidence > 0.6` AND `evidence_count > N` — «толстые идеи»).
-- Каждая → `workspace.add(source="ltm_recall", scope="workspace", expires_at=now+15min, references=[ltm_node_idx])`.
-- В `select()` они конкурируют с другими кандидатами; SmartDC может выбрать наиболее resonant с текущим состоянием.
+        promote(N)  # scope="graph", expires_at=None
 
-**Note:** activation = создание reference-ноды, не копия. Оригинал в LTM не страдает.
+    # Process noted queries (если N имела "need context: X")
+    for query in N.notes.get("queries", []):
+        answer = nodes_near(query.embedding, k=3)
+        workspace.add(source="ltm_recall_overnight",
+                      expires_at=next_morning+12h,
+                      content=answer)
+```
 
-**Reuse:** `execute_deep`-RAG логика подходит — частично переиспользовать.
+Это закрывает:
+- [TODO Backlog #11](TODO.md#пакет-память-и-pruning) — STM/LTM transfer через scope mutation
+- [TODO Backlog #12](TODO.md#пакет-память-и-pruning) — pruning через merge-on-close
+- [TODO Tier 2 «META-вопросы — ночная генерация»](TODO.md) — emergent insight'ы из mid-distance edges
 
-**Risk:** thrashing если каждое user-message подтягивает 10 нод → workspace переполнен. Cap K=3, dedup с уже активными ltm_recall.
+Без отдельного REM scout — он **не нужен** как separate pass. Insight'ы emerge естественно при integration.
 
-### W14.10 — REM scout deep bridges (ночь, ~3-4ч)
+**Performance:** один embedding search per workspace-нода. Если 50 нод за день → 50 cheap searches за ночь. В отличие от broad scout по всему графу — это **много дешевле**.
 
-Ночной cycle (после W14.8): второй проход по полному графу:
+**Cap:** time budget на ночной pass (например max 5 мин). Если workspace переполнен — приоритет high-quality нод, остальные archive с меткой "недо-integrated".
 
-- Берём **давно-неактивированные** ноды (`touched_at` старше N дней) — это «забытые» концепты.
-- Берём **толстые активные** core-ноды (high confidence, frequent access).
-- `pump_logic.scout()` ищет мосты между ними. Это **divergent generation** в самом графе.
-- Найденные bridges с `bridge_quality > 0.5` → `workspace.add(source="rem_insight", scope="workspace", expires_at=next_morning+24h, urgency=0.5-0.7)`.
-- Утренний briefing (W14.4) включает их как раздел «Ночные находки» если quality высокая.
+### W14.9 — Lazy LTM recall queue (~1-2ч)
 
-Это закрывает [TODO Tier 2 «META-вопросы — ночная генерация что ты не заметил»](TODO.md). Естественное следствие workspace + scout-over-LTM.
+Дневной режим: workspace **не делает** broad recall на каждое user-message. Hot path остаётся cheap (in-memory operations only).
 
-**Performance:** REM scout — heavy embedding ops. Cap по времени или по количеству бandidates per night. Запускать только когда `_idle_multiplier > THRESHOLD` (юзер реально неактивен — не работает в 3 утра).
+Вместо — **opt-in note pattern**:
+- При commit committed-нода может содержать `notes.queries: ["need context about X"]` если LLM-response generation определила что нужен deep context, но не получила (saved tokens).
+- Эти queries — input для ночного W14.8 processing.
+- Утром answers ждут в workspace (`source="ltm_recall_overnight"`).
+
+**Где вешаются queries:**
+- `execute_deep` если max_tokens cap'нул retrieval — note query.
+- assist response с low-confidence (LLM «не уверен» по surprise indicator) — note.
+- explicit user request «уточни X в моих заметках» — синхронный recall (только этот case делает immediate LTM hit).
+
+Это превращает дневной режим в **request pattern**: «нужно бы это» → ночью отвечается. Хот-path остаётся для bayesian + chem updates без RAG overhead.
+
+**Risk:** delayed response — если юзер ждёт context immediate, а получит утром. Mitigation: explicit queries (`/assist/recall?q=...`) делаются immediate.
 
 ---
 
 ## Order и риски
 
-**Порядок:** W14.1 → W14.2 (smallest scope) → W14.3-4 (parallel possible) → W14.5 (cross-processing) → W14.6-7 (decompose) → W14.8 (NREM consolidation) → W14.9 (LTM activation/recall) → W14.10 (REM deep bridges, after .8 для использования promoted ноды).
+**Порядок:** W14.1 → W14.2 (smallest scope) → W14.3-4 (parallel possible) → W14.5 (cross-processing in workspace) → W14.6-7 (decompose) → W14.9 (lazy queue infra) → W14.8 (sequential integration, эта volume — самая большая, но даёт STM→LTM + insights одним проходом).
+
+**W14.10 удалён** — REM scout как отдельный second pass не нужен. Insight'ы emerge из integration в W14.8.
 
 **Hot path:** workspace вызывается на каждом /assist + tick. Performance check после W14.1.
 
@@ -159,4 +191,4 @@ DMN/REM heavy work уже идёт в W11 #3 (`pump_logic` + `consolidation` →
 
 ## Estimate
 
-Total ~22-30ч от prototype до полной миграции + decomposition + sleep cycles. Не одна сессия — sequence из 10 wave'ов с зелёным baseline после каждой.
+Total ~18-25ч от prototype до полной миграции + decomposition + sleep cycles. Не одна сессия — sequence из 9 wave'ов с зелёным baseline после каждой. (Уменьшено с 22-30ч после устранения отдельного REM scout — integration делает это естественно.)
