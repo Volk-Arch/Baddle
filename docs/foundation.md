@@ -147,4 +147,99 @@ HRV coherence — прямой индикатор: высокая = энерги
 
 ---
 
-**Навигация:** _Начало книги_ · [Индекс](README.md) · [Следующее: Full cycle →](full-cycle.md)
+---
+
+## Эволюция мысли — от 5 проектов к РГК
+
+5 projects → один вопрос «как я устроен?» был началом. Но это не финал — Baddle продолжил эволюционировать через несколько фаз коллапса. Каждый фаза — попытка найти **более простое выражение** того же.
+
+### Этап 1: компонентная архитектура (первые 1.5 мес)
+
+5 projects конвергировали в Baddle. Каждый принёс своё:
+- MindBalance → энергия + Horizon states
+- Тамагочи → repeatable + XOR
+- Time Player → AND + energy budget
+- HRV Reader → тело как вход
+- Baddle → tick + SmartDC + Pump
+
+Реализация была **компонентной**: 30+ полей в UserState/Neurochem/ProtectiveFreeze/CognitiveState, 13 детекторов с собственными compute_urgency, sync_regime (4 режима) параллельно с capacity_zone (3 зоны). Работало, но 6 правил architecture были **6 отдельных абстракций**.
+
+### Этап 2: Phase A → B → C → D (consolidation)
+
+Постепенное снижение bespoke на 30-40% за каждую фазу:
+- **Phase A** — MetricRegistry (21 EMA в одном месте)
+- **Phase B** — Signal/Dispatcher (13 detectors в pure function)
+- **Phase C** — capacity 3-zone (вместо dual-pool)
+- **Phase D** — РГК prototype: 5-axis chem + R/C bit + balance() + project()
+
+После Phase D появилась **физическая модель** (rgk-spec). Не просто объединение, а **новый язык**: волны, резонанс, аппертура, плотность ткани.
+
+### Этап 3: B5 (физический коллапс)
+
+Track B (24 commits, 2026-04-26): **РГК становится substrate**, facades удаляются. Не «UserState/Neurochem остаются как thin proxies» (как обещалось в Phase D), а полная миграция callers на rgk напрямую.
+
+Найдено 12 расхождений физики между facade и РГК — каждое отдельный fix-commit. Substrate 2479 → 1583 LOC (−896, −36%).
+
+**Главный инсайт:** facade прятал тех-долг. Принцип π = 3.14 — нельзя иметь две формулы для одного физического явления; одна из них bug, скрытый абстракцией.
+
+### Этап 4: workspace + Power (текущий, planning)
+
+После B5 — добавляются **temporal axes** к substrate:
+- **Workspace** (STM/LTM scope с expires_at) — рабочая память между divergent generation и LTM. Cross-кандидатная обработка (3 одинаковых alert → scout между ними → один insight).
+- **Power** = `U × V × P × interest × chem_modulator` — единая метрика нагрузки. Унифицирует estimated_complexity / cognitive_load / urgency / dispatcher.budget через одну ось.
+
+Не новые подсистемы — **scope над графом** + **derived layer** над существующими скалярами. Накладывается без трения — это сигнал что substrate правильный.
+
+---
+
+## Метод — bottom-up коллапс концептов
+
+То как Baddle разрабатывается — **сам по себе observation**. Не teleologic top-down дизайн (PM → spec → schema → ship), а **pattern recognition** через практику:
+
+```
+1. Что-то знал → писал
+2. Накопилось много концептов
+3. Видишь параллели → формулируешь правило
+4. Правил становится достаточно → собираются в substrate
+5. Substrate становится физической моделью
+```
+
+Это похоже как Newton **не спроектировал** гравитацию — он накопил Kepler + Galileo + apple, потом увидел что это **одно**. То же с Mendeleev'ской таблицей: не спроектирована, а вырастает из накопленных данных в forme'у.
+
+Признак работающего substrate — **новые insights накладываются без трения**. Каждое новое observation либо находит свою клеточку, либо требует расширения rule (но не ломает существующее). Workspace + Power — последний пример: Игорь придумал в 2026-04-27, оба органично интегрируются как scope + derived metric.
+
+Если бы появилось трение — это сигнал что substrate **упёрся в свои границы**, нужно переосмысление. Сейчас (через 1.5 мес use) — трения нет.
+
+---
+
+## Origin question — главный вопрос проекта
+
+Если всё волны (резонатор, генератор) — **как сделать чтобы нейросеть была на одной волне с конкретным человеком, поняла его узор?**
+
+Это вопрос за всеми 5 projects, за РГК, за workspace, за Power. Не «как сделать AI ассистента», а **как настроить резонатор на одну конкретную ткань**.
+
+### Текущий ответ — single-user proof
+
+Через **глубокий рефакторинг под одного юзера** (1.5 мес работы автора над собой):
+- Прайм-директива sync_error измеряется и валидируется
+- РГК-substrate накапливает chem-параметры через события
+- Action memory bias-coefficient calibrate под user-specific patterns
+- 8-region named_state карта показывает trajectory через состояния
+
+Для конкретного человека (автор) система начинает попадать в его узор после ~2 мес use. Validation через `data/prime_directive.jsonl` distribution + subjective experience.
+
+### Direction для replication — resonance transfer (Игорь, 2026-04-27)
+
+**Каждая задача / состояние = стоячая волна = сумма component waves.** Если активировать те же component waves поочерёдно у нового юзера — узор воспроизводится. Это **не передача данных**, а co-activation через резонанс.
+
+Способ — через аналогии: сначала coarse (основной контур), потом детально. 5-7 «вспомни случай когда…» активируют главные частоты у нового юзера. Дальше — refining через регулярные events.
+
+Это превращает onboarding из 1.5 мес passive accumulation в 1-2 недели **active probing**. Подробнее — [synchronization.md](synchronization.md).
+
+5-axis chem РГК — это и есть 5 component frequencies. Idea уже встроена в substrate; нужен только transfer protocol поверх.
+
+**Это первое реальное трение** на пути проекта. До этого момента все insights накладывались без трения (5 projects → РГК → workspace → Power). Resonance transfer — точка где модель проверяется на extensibility за пределы single-user. Если works (2+ users показывают sync_error convergence за 1-2 недели через analogies) — модель действительно universal. Если нет — переосмысление.
+
+Не блокирует текущий use — single-user mode работает. Блокирует **multi-user replicability**, и это OK как research-направление в будущем.
+
+---

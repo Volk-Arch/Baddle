@@ -164,9 +164,203 @@ check в [alerts-and-cycles.md](alerts-and-cycles.md).
 
 ---
 
+## Каскад зеркал — современный view (post-B5)
+
+```
+                    ┌─────────────────────────┐
+                    │         РЕАЛЬНОСТЬ      │
+                    │     (мир, события)      │
+                    └────────────┬────────────┘
+                                 │ (наблюдается)
+                                 ▼
+                    ┌─────────────────────────┐
+                    │         ЧЕЛОВЕК         │  ← первое зеркало
+                    │  (тело · мышление ·     │
+                    │   валентность)          │
+                    └─┬───────┬───────┬───────┘
+                      │ HRV   │ chat  │ feedback
+                      ▼       ▼       ▼
+   ┌──────────────────────────────────────────────────┐
+   │                    BADDLE                        │  ← второе зеркало
+   │  ┌────────────────────────────────────────────┐  │
+   │  │              РГК (substrate)               │  │
+   │  │   user mirror   ←── coupling ──→  system   │  │
+   │  │      ↑                              ↑      │  │
+   │  │   5-axis chem (DA/5HT/NE/ACh/GABA)         │  │
+   │  │   R/C bit · balance() · project()          │  │
+   │  └────────────────────────────────────────────┘  │
+   │                       ↕                          │
+   │  ┌────────────────────────────────────────────┐  │
+   │  │           WORKSPACE (STM, scope)           │  │
+   │  │   day: cheap in-memory + cross-обработка   │  │
+   │  │   night: sequential integration → LTM      │  │
+   │  └────────────────┬───────────────────────────┘  │
+   │                   │ commit (scope mutation)      │
+   │                   ▼                              │
+   │  ┌────────────────────────────────────────────┐  │
+   │  │            ГРАФ (LTM)                      │  │
+   │  │   ноды + рёбра + Beta-prior + history      │  │
+   │  └────────────────────────────────────────────┘  │
+   │                                                  │
+   │  Power = U×V×P×interest×chem_modulator           │
+   │  (unifies estimated_complexity, cognitive_load,  │
+   │   urgency, dispatcher.budget)                    │
+   └──────────────────────────┬───────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────────────┐
+                    │      USER (chat)        │
+                    │   broadcast / response  │
+                    └─────────────────────────┘
+                              │
+                              │ sync_error = ‖user_vec − system_vec‖
+                              ▼
+                    ┌─────────────────────────┐
+                    │   ПРАЙМ-ДИРЕКТИВА       │
+                    │   (data/prime_*.jsonl)  │
+                    │   metric качества       │
+                    │   зеркала               │
+                    └─────────────────────────┘
+```
+
+**Циклический поток:**
+
+- **День** (cheap, hot path): `user input → workspace.add → cross-обработка → select → broadcast + commit (scope mutation в LTM)`. РГК-state эволюционирует через chem feeders (HRV → 5HT/NE; engagement → DA; valence → sentiment EMA; balance() рассчитывается).
+- **Ночь** (thoughtful, sequential): три фазы — NREM-like consolidation (workspace integration в LTM с merge/mid-distance), REM-like cross-batch scout (между свежими LTM-нодами + remote associations), Synaptic homeostasis (global confidence rebalancing).
+- **Прайм-директива** пишется раз в час из РГК, агрегируется, показывает trend качества зеркала за 30 дней (`/assist/prime-directive`).
+
+7 правил architecture — **проекции** этой картины:
+1. Signal/Dispatcher — events в workspace
+2. EMA — каждый chem axis + sync_error
+3. Граф — LTM + workspace одного substrate с разным scope
+4. distinct() — единственный примитив рассуждения
+5. PE — driver автономного поведения (idle multiplier, scout triggers)
+6. Резонатор — substrate (РГК)
+7. Counter-wave — R/C bit для инверсии деструктивных аттракторов
+
+---
+
+## Карта src/
+
+51 файл, ≈24.5k LOC (post-B5, 2026-04-26). Группировка по responsibility — не по тому где сейчас живёт код, а **что код делает**. После W11 file consolidation некоторые файлы сольются.
+
+### Substrate — state + dynamics (≈1956 LOC)
+
+Substrate всех state и формул. После B5 Track B closed — РГК authoritative; UserState/Neurochem stub'ы для backward-compat.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `rgk.py` | 1038 | **Substrate.** Resonator (5 chem-axes + R/C bit + balance), РГК (пара mirrors + auxiliaries + projectors). Все формулы и state. Single source of truth |
+| `horizon.py` | 587 | `CognitiveState` — adaptive controller (precision, policy, T, KL, maturity drift, state machine). Делегирует chem/freeze в `self.rgk` |
+| `ema.py` | 329 | `EMA` / `VectorEMA` primitives + `Decays` / `TimeConsts` namespaces. Правило 2 каркас |
+| `user_state.py` | 393 | Backward-compat shim над `_rgk.user`. После B5 W5 final — все методы 1-line delegates. Удалится в W10 |
+| `user_dynamics.py` | 118 | Filesystem-touching helpers (`update_cognitive_load`, `rollover_day`) — выделены из user_state в B5 W2 |
+| `neurochem.py` | 34 | Stub после удаления `Neurochem` + `ProtectiveFreeze` в B5 W3+W4. Migration mapping в комментариях |
+
+### Loop — background cognitive processing (≈4019 LOC)
+
+Continuous cycle над substrate. После W14 — workspace станет central convergence-точкой.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `cognitive_loop.py` | 2628 | Main background loop, `_advance_tick`, `_check_*` детекторы, throttle, briefings. **W14.7 split candidate**: bookkeeping + briefings + advance_tick |
+| `detectors.py` | 890 | 13 pure-function детекторов (Правило 1). `Signal`-producers, dispatch'ятся через signals.Dispatcher |
+| `surprise_detector.py` | 401 | 14-й детектор по факту, отдельно по historical reasons. **W11 #1**: move в detectors.py |
+| `signals.py` | 301 | `Signal` + `Dispatcher` (budget, dedup, expires, counter-wave penalty). Правило 1 каркас |
+
+### Graph — knowledge structures (≈3527 LOC)
+
+Граф мыслей + операции. Правило 3 (нода) + Правило 4 (distinct) каркас.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `graph_logic.py` | 1682 | Operations: nodes/edges, `record_action`, `_bayesian_update_distinct`, snapshot, capacity-aware Bayes-freeze. Правило 3+4 |
+| `tick_nand.py` | 499 | NAND tick: distinct → Bayes → emit. Inner loop |
+| `consolidation.py` | 442 | Hebbian decay, REM-style сборка, archive. **W11 #3 + W14.8 candidate**: merge с pump_logic в `dmn.py`; расширить sequential integration |
+| `pump_logic.py` | 374 | Scout — поиск мостов между далёкими нодами. **W11 #3**: merge с consolidation |
+| `state_graph.py` | 368 | History тиков (otdellsy от main graph). Pulse heartbeat, state replay |
+| `thinking.py` | 186 | NAND helpers: classify_nodes, _filter_lineage, _pick_target, _tick_force_collapse. **W11 #2**: rename + merge в `nand.py` с tick_nand + meta_tick |
+| `meta_tick.py` | 172 | Policy adaptation на основе state_graph tail (последние 20 тиков). **W11 #2**: merge в `nand.py` |
+| `graph_store.py` | 122 | Persistence для graph (jsonl + atomic write) |
+
+### IO / HTTP routes (≈5519 LOC)
+
+Inherent IO. После W14.5 split: `assistant.py` 3105 → ~150 + `src/routes/*.py`.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `assistant.py` | 3105 | **Главный** Flask blueprint. 60+ endpoints: /assist + chat + alerts + goals + activity + plans + checkins + profile + briefings + sensors. **W14.5 candidate**: split в `src/routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}.py` |
+| `graph_routes.py` | 1912 | Graph-related Flask endpoints: /graph/*, smartdc, pump triggers, lab UI. **W6 candidate**: 9 dead routes review |
+| `api_backend.py` | 437 | LLM client wrapper (OpenAI-compat), embedding cache, depth/aperture defaults |
+| `chat.py` | 65 | Tiny Flask blueprint для chat endpoints. **W11 #5 candidate**: merge с chat_history + chat_commands в `src/chat/` |
+| `main.py` | 65 | Entry point — gunicorn / Flask app initialization |
+
+### Domain logic — features (≈3722 LOC)
+
+Specific business logic слой. Не substrate, не loop — конкретные вещи которые Baddle делает.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `assistant_exec.py` | 1469 | Heavy execution для chat: 14 modes router (`execute_deep` + variants), prompt building, RAG, depth engine |
+| `suggestions.py` | 703 | Observation → suggestion pattern (от detect к UI card) |
+| `chat_commands.py` | 425 | Slash-commands (`/как я?`, `/план`, `/запусти`, `/help`, etc.). **W11 #5**: merge в `chat/` |
+| `intent_router.py` | 370 | LLM-классификация intent (какой mode подходит для message) |
+| `modes.py` | 288 | 14 chat modes definitions (name, intro, prompts) |
+| `chat_history.py` | 189 | Chat persistence + replay. **W11 #5**: merge в `chat/` |
+| `prompts.py` | 167 | LLM prompts templates |
+| `dialectic.py` | 106 | Thesis/antithesis/synthesis для SmartDC + chat |
+| `demo.py` | 309 | Initial seeder — demo workspaces (work-demo + personal-demo) при первом запуске |
+| `defaults.py` | 60 | Ship-with-code defaults (roles, templates) — JSON если data/ пуста. **W11 #6**: merge с demo в `seed.py` |
+
+### Tasks / goals / plans (≈1112 LOC)
+
+Three storage layers с overlapping API patterns. **W12 candidate** (поглощается в W15.2): shared `jsonl_store.py` primitive + добавление `tasks.py`.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `plans.py` | 368 | Daily plans (events на конкретное время). schedule_for_day, recurring matching |
+| `recurring.py` | 373 | Циклические привычки (N раз в день/неделю). Streak counter, lag detection |
+| `goals_store.py` | 371 | Долгосрочные цели + violations + solved archive. Rotation cycle |
+
+### User model — persona / activity / sentiment (≈1374 LOC)
+
+Не substrate (то живёт в РГК), а dimensions data о юзере.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `activity_log.py` | 577 | TaskPlayer event log (`activity.jsonl`), surprise tracking, replay |
+| `patterns.py` | 400 | Pattern detection (паттерны поведения для предложений привычек) |
+| `user_profile.py` | 308 | Профиль (preferences, constraints), 5 категорий, profile.json |
+| `checkins.py` | 188 | Manual check-in (energy/focus/stress/reality), `_apply_to_user_state` |
+| `sentiment.py` | 100 | LLM-classify message sentiment (light feeder в `valence`) |
+| `user_state_map.py` | 85 | 8-region named_state карта (Voronoi-style по chem-профилю) |
+
+### Sensors / HRV (≈862 LOC)
+
+**W11 #4 candidate**: `src/sensors/` package.
+
+| Файл | LOC | Что |
+|---|---|---|
+| `sensor_stream.py` | 290 | Generic sensor reading stream + adapter abstraction |
+| `hrv_metrics.py` | 272 | RMSSD, coherence, stress derivation из RR-интервалов |
+| `hrv_manager.py` | 205 | HRV state manager (running / paused), simulator + real adapter dispatch |
+| `sensor_adapters.py` | 95 | Polar H10 (in development), simulator |
+
+### Utility / specialized helpers
+
+| Файл | LOC | Что |
+|---|---|---|
+| `prime_directive.py` | 299 | Hourly write of sync_error EMA в `data/prime_directive.jsonl`; `/assist/prime-directive` aggregate endpoint |
+| `solved_archive.py` | 233 | RAG over solved goals (для retrieval похожих past решений) |
+| `paths.py` | 70 | Все file paths в одном месте (DATA_DIR, GRAPHS_DIR, etc.) |
+| `http_utils.py` | 61 | Atomic write + thread-safe Flask helpers |
+| `__init__.py` | 0 | пакет marker |
+
+---
+
 ## Архитектура
 
-Концептуальная вертикаль. Карта файлов — в [docs/README.md](README.md).
+Концептуальная вертикаль. Карта файлов — выше, путеводитель — в [docs/README.md](README.md).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

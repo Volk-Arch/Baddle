@@ -7,6 +7,26 @@ order + вспомогательные (reference / context) + deprecated.
 
 ---
 
+## В 5 минут — mental model
+
+Если у вас нет 4 часов, прочтите этот раздел и [glossary](#словарь) внизу.
+
+**Что Baddle делает.** Локальный второй мозг для одного человека. Замечает закономерности, ищет связи, замедляется когда юзер устал. Без облака, без gamification, без «вернись».
+
+**Mental model — три концепции:**
+
+1. **Каскад зеркал.** Реальность → человек → Baddle. Человек настроен на мир, Baddle — на конкретного человека. Метрика качества зеркала — `sync_error = ‖предсказание − реальное действие‖`. Это **прайм-директива**, измеряется и логируется ([world-model.md](world-model.md)).
+
+2. **РГК — резонатор как substrate.** Не «контейнер state», а **физическая модель**: 5 chem-параметров (DA/5-HT/NE/ACh/GABA) + R/C bit + balance() формула. Всё остальное (capacity-зоны, sync_regime, named_state) — **проекции** одного резонатора через `project(domain)`. Каскад зеркал = **пара** связанных резонаторов (user mirror + system mirror) ([rgk-spec.md](rgk-spec.md), [neurochem-design.md](neurochem-design.md)).
+
+3. **7 правил как проекции одной модели.** Любая фича — выражение одного из них. Сигнал → Signal/Dispatcher. Метрика → EMA. Знание → нода графа. Рассуждение → distinct(). Автономное поведение → PE. State → резонатор. Не давить → R/C инверсия ([architecture-rules.md](architecture-rules.md)).
+
+**Bottom-up инкрементальная разработка.** Проект не спроектирован сверху — concepts накопились (нейрохимия + Bayes + конус + HRV + Friston), потом коллапсировали в РГК как unifying frame. То же продолжается: `workspace` (STM/LTM scope), `Power` (единая метрика нагрузки) — добавляются через scope над графом и derived метрики, без новых подсистем.
+
+**Главное соглашение.** Если новая фича не укладывается в одно из 7 правил — это сигнал что либо фича другой природы (стоп, переосмыслить), либо правил не хватает. Полу-абстракция хуже consistent bespoke.
+
+---
+
 ## Как читать
 
 **🆕 Первый раз.** Главы 1 + 2 (2 часа). После — можешь объяснить проект
@@ -17,7 +37,13 @@ order + вспомогательные (reference / context) + deprecated.
 
 **🔬 Разбираюсь в коде.** Foundation — пара абзацев. Основное время
 в Cognitive Layer → Knowledge Structures → Implementation (3-4 часа).
-Держи `src/` рядом.
+Держи `src/` рядом. Карта файлов — в [TECH_README § Карта src/](TECH_README.md#карта-src).
+
+**🧠 Хочу понять theory.** [foundation](foundation.md) → [world-model](world-model.md) →
+[resonance-model](resonance-model.md) → [rgk-spec](rgk-spec.md) →
+[friston-loop](friston-loop.md) (~2 часа). Параллельно — [rgk-spec § Testable claims](rgk-spec.md#testable-claims) для понимания
+**что измеряется** и **что бы опровергло модель**. Это не просто метафоры — конкретные
+hypotheses с validation paths через `data/prime_directive.jsonl` и accumulated patterns.
 
 ### Quick paths
 
@@ -34,7 +60,12 @@ order + вспомогательные (reference / context) + deprecated.
 | «Как измерить что работает?» | [friston-loop § Прайм-директива](friston-loop.md#связь-с-прайм-директивой) → `/assist/prime-directive` |
 | «Место Baddle относительно меня?» | [world-model](world-model.md) — каскад зеркал |
 | «Резонансная оптика / единый словарь?» | [resonance-model](resonance-model.md) — mapping «концепт ↔ Baddle ↔ код» |
+| «Что такое РГК?» | [rgk-spec](rgk-spec.md) — спецификация физической модели + mapping к коду |
+| «Divergence / convergence как универсальный паттерн?» | [universe-as-git](universe-as-git.md) Глава 8 — память, обучение, творчество |
 | «Какие принципы дизайна?» | [architecture-rules](architecture-rules.md) — 7 правил + фильтр для новых фич |
+| «STM/LTM, рабочая память?» | [workspace](workspace.md) — scope над графом + дневной/ночной циклы |
+| «Сложность, нагрузка, capacity budget?» | [power](power.md) — единая метрика через `Power = U×V×P×interest×chem_modulator` |
+| «Как другой юзер быстро попадёт в узор?» | [synchronization](synchronization.md) — resonance transfer через аналогии (coarse → fine) |
 | «Что не решено?» | [planning/TODO § Открытые вопросы](../planning/TODO.md) |
 
 ---
@@ -127,6 +158,11 @@ imbalance_pressure без контекста.
 |---|---|
 | [world-model.md](world-model.md) | Оптика проекта: каскад зеркал + resonance protocol + 5 механик. Содержит **canonical mapping** «внешние словари ↔ Baddle ↔ код» |
 | [resonance-model.md](resonance-model.md) | Резонансная рамка: 5 аксиом + волна/частота/чистота как единый словарь для существующих механик. Интерпретирующий слой над world-model |
+| [rgk-spec.md](rgk-spec.md) | **Спецификация физической модели РГК.** Аксиомы + математическое выражение + маппинг к коду. Стратегический документ — корни большинства последующих правил |
+| [universe-as-git.md](universe-as-git.md) | Универсальный паттерн divergence ↔ convergence (Глава 8 — память, творчество). Корни workspace/Power концепций |
+| [workspace.md](workspace.md) | Рабочая память (STM) между divergent generation и graph (LTM). Scope над графом, дневной/ночной циклы, NREM/REM/homeostasis параллели |
+| [power.md](power.md) | Единая метрика сложности/нагрузки. `Power = U × V × P × interest × chem_modulator` через 3 контура capacity. Унифицирует estimated_complexity / cognitive_load / urgency / dispatcher.budget |
+| [synchronization.md](synchronization.md) | Resonance transfer — как новый юзер быстро попадает в узор через analogies (coarse → fine). Direction для ответа на Origin question (foundation § Origin) |
 | [alerts-and-cycles.md](alerts-and-cycles.md) | Полная карта фоновых check'ов + alert types + throttling math |
 | [action-memory-design.md](action-memory-design.md) | Действия / outcomes как ноды графа |
 | [TECH_README.md](TECH_README.md) | Технический обзор (параллельно с этим index'ом) |
@@ -159,3 +195,45 @@ imbalance_pressure без контекста.
 4. Обнови [../planning/TODO.md](../planning/TODO.md) если не всё закрыто.
 
 Docs-дерево растёт как книга, а не как свалка.
+
+---
+
+## Словарь
+
+Ключевые термины проекта в одну строку. При первой встрече в коде или docs — смотри сюда.
+
+**РГК** — Резонансно-Генерирующий Контур. Substrate state+dynamics. Пара связанных резонаторов (user mirror + system mirror) + 5-axis chem (DA/5HT/NE/ACh/GABA) + R/C bit + balance(). [src/rgk.py](../src/rgk.py).
+
+**Каскад зеркал** — реальность → человек → Baddle. Метафора оптики проекта: Baddle настроен на одного юзера через двойной резонатор. См. [world-model.md](world-model.md).
+
+**balance()** — `(DA × NE × ACh) / (5HT × GABA)`. Корридор `[0.3, 1.5]` = здоровый резонанс. >1.5 гиперрезонанс/мания, <0.5 гипостабильность/апатия.
+
+**R/C mode** — bit на резонаторе. R (resonance) — пассивный приёмник. C (counter-wave) — активный генератор инверсной волны для разрыва деструктивного аттрактора. Hysteresis 0.15/0.08. См. [resonance-model.md § Две роли](resonance-model.md).
+
+**Прайм-директива** — `sync_error = ‖user_vec − system_vec‖`. Единственная метрика «работает ли». EMA fast/slow в [data/prime_directive.jsonl](../data/), endpoint `/assist/prime-directive`. См. [friston-loop § Прайм-директива](friston-loop.md).
+
+**Counter-wave** — Правило 7. Инверсия паттерна вместо давления. Three modes of inversion: смена частоты / задержка / смена несущей.
+
+**distinct(a, b)** — единственный примитив рассуждения ∈ [0, 1]. Все операции над знанием (SmartDC, Pump, Novelty) надстройки. Зоны `τ_in=0.3`, `τ_out=0.7`. Правило 4.
+
+**SmartDC** — диалектика гипотезы: thesis vs antithesis vs neutral → synthesis с числовой confidence. Использует distinct() во всех путях. [thinking-operations.md](thinking-operations.md).
+
+**Pump** — поиск скрытых мостов. `scout(A, B)` находит общую ось между двумя далёкими нодами графа. Background-цикл DMN.
+
+**DMN** — Default Mode Network. Continuous фоновый pump между idle тиками. Эмерджентные insight'ы на 4 уровнях глубины.
+
+**γ (gamma)** — `2.0 + 3.0 · NE · (1 − 5HT)`. Чувствительность Bayes-обновления. Спокойный режим → ~2.0, ищущий → ~5.0.
+
+**Capacity** — резерв энергии в 3 контурах: phys / affect / cogload. Зоны green / yellow / red. Decision gate в `_assist`. [capacity-design.md](capacity-design.md).
+
+**Workspace** — рабочая память (STM). Scope над графом с `expires_at`. Дневной режим — cheap in-memory; ночной — sequential integration с LTM. См. [workspace.md](workspace.md).
+
+**Power** — единая метрика сложности/нагрузки. `U × V × P × interest × chem_modulator`. Унифицирует estimated_complexity / cognitive_load / urgency / budget. Vector по 3 контурам capacity. См. [power.md](power.md).
+
+**ProtectiveFreeze** *(deprecated)* — был отдельный класс, удалён в B5 W3. Pressure-layer (conflict_accumulator + silence_pressure + imbalance_pressure + sync_error EMA + freeze_active flag) живёт в `_rgk` напрямую.
+
+**Neurochem** *(deprecated)* — был отдельный класс, удалён в B5 W4. System chem (gain/hyst/aperture/plasticity/damping) живёт в `_rgk.system` напрямую.
+
+**UserState** — backward-compat shim над `_rgk.user`. Production использует `_rgk.user.X.value` или `_rgk.project("user_state")`.
+
+**Workspace = STM, Граф = LTM.** Перенос через scope mutation в ночном `consolidation` cycle.
