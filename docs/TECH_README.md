@@ -164,6 +164,82 @@ check в [alerts-and-cycles.md](alerts-and-cycles.md).
 
 ---
 
+## Каскад зеркал — современный view (post-B5)
+
+```
+                    ┌─────────────────────────┐
+                    │         РЕАЛЬНОСТЬ      │
+                    │     (мир, события)      │
+                    └────────────┬────────────┘
+                                 │ (наблюдается)
+                                 ▼
+                    ┌─────────────────────────┐
+                    │         ЧЕЛОВЕК         │  ← первое зеркало
+                    │  (тело · мышление ·     │
+                    │   валентность)          │
+                    └─┬───────┬───────┬───────┘
+                      │ HRV   │ chat  │ feedback
+                      ▼       ▼       ▼
+   ┌──────────────────────────────────────────────────┐
+   │                    BADDLE                        │  ← второе зеркало
+   │  ┌────────────────────────────────────────────┐  │
+   │  │              РГК (substrate)               │  │
+   │  │   user mirror   ←── coupling ──→  system   │  │
+   │  │      ↑                              ↑      │  │
+   │  │   5-axis chem (DA/5HT/NE/ACh/GABA)         │  │
+   │  │   R/C bit · balance() · project()          │  │
+   │  └────────────────────────────────────────────┘  │
+   │                       ↕                          │
+   │  ┌────────────────────────────────────────────┐  │
+   │  │           WORKSPACE (STM, scope)           │  │
+   │  │   day: cheap in-memory + cross-обработка   │  │
+   │  │   night: sequential integration → LTM      │  │
+   │  └────────────────┬───────────────────────────┘  │
+   │                   │ commit (scope mutation)      │
+   │                   ▼                              │
+   │  ┌────────────────────────────────────────────┐  │
+   │  │            ГРАФ (LTM)                      │  │
+   │  │   ноды + рёбра + Beta-prior + history      │  │
+   │  └────────────────────────────────────────────┘  │
+   │                                                  │
+   │  Power = U×V×P×interest×chem_modulator           │
+   │  (unifies estimated_complexity, cognitive_load,  │
+   │   urgency, dispatcher.budget)                    │
+   └──────────────────────────┬───────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────────────┐
+                    │      USER (chat)        │
+                    │   broadcast / response  │
+                    └─────────────────────────┘
+                              │
+                              │ sync_error = ‖user_vec − system_vec‖
+                              ▼
+                    ┌─────────────────────────┐
+                    │   ПРАЙМ-ДИРЕКТИВА       │
+                    │   (data/prime_*.jsonl)  │
+                    │   metric качества       │
+                    │   зеркала               │
+                    └─────────────────────────┘
+```
+
+**Циклический поток:**
+
+- **День** (cheap, hot path): `user input → workspace.add → cross-обработка → select → broadcast + commit (scope mutation в LTM)`. РГК-state эволюционирует через chem feeders (HRV → 5HT/NE; engagement → DA; valence → sentiment EMA; balance() рассчитывается).
+- **Ночь** (thoughtful, sequential): три фазы — NREM-like consolidation (workspace integration в LTM с merge/mid-distance), REM-like cross-batch scout (между свежими LTM-нодами + remote associations), Synaptic homeostasis (global confidence rebalancing).
+- **Прайм-директива** пишется раз в час из РГК, агрегируется, показывает trend качества зеркала за 30 дней (`/assist/prime-directive`).
+
+7 правил architecture — **проекции** этой картины:
+1. Signal/Dispatcher — events в workspace
+2. EMA — каждый chem axis + sync_error
+3. Граф — LTM + workspace одного substrate с разным scope
+4. distinct() — единственный примитив рассуждения
+5. PE — driver автономного поведения (idle multiplier, scout triggers)
+6. Резонатор — substrate (РГК)
+7. Counter-wave — R/C bit для инверсии деструктивных аттракторов
+
+---
+
 ## Карта src/
 
 51 файл, ≈24.5k LOC (post-B5, 2026-04-26). Группировка по responsibility — не по тому где сейчас живёт код, а **что код делает**. После W11 file consolidation некоторые файлы сольются.
