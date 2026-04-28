@@ -155,8 +155,20 @@
           <div class="sync-block-label">Симбиоз <span class="sync-block-tech">‖user − system‖</span></div>
           <div class="sync-block-value" id="dash-sync-regime">—</div>
           <div class="sync-block-sub" id="dash-sync-error">sync —</div>
-          <div class="sync-block-sub sync-max-axis" id="dash-max-axis" style="display:none"
-               title="Ось наибольшего расхождения user/system прямо сейчас (live). Полная история — Outcome 🪞 Spread."></div>
+          <!-- Per-axis расхождение (5D chem). Большая площадь = больше desync.
+               Live snapshot. Daily тренд по осям — Outcome → Spread tab. -->
+          <svg id="dash-axis-radar" class="dash-axis-radar" viewBox="0 0 120 120"
+               title="Per-axis расхождение user − system по 5 chem-осям (live).
+DA/5HT/NE — top three; ACh/GABA — bottom two.
+Полная картина = резонанс, расхождения — рассинхрон.
+Daily история — Outcome 🪞 Spread.">
+            <!-- Static background: pentagon at radius 1.0 + guideline circles -->
+            <g class="radar-bg"></g>
+            <!-- Dynamic data polygon -->
+            <polygon class="radar-data" points=""></polygon>
+            <!-- Axis labels (static) -->
+            <g class="radar-labels"></g>
+          </svg>
         </div>
         <!-- Резонанс + R/C bit (был balance widget в top-header) -->
         <div class="sync-block" id="assist-balance" title="🌊 Резонанс (Phase D): User × System balance. Формула (DA·NE·ACh)/(5HT·GABA). Зелёный [0.5–1.5] = резонанс, жёлтый [0.3–0.5]/[1.5–2.0] = пограничный, красный = срыв или застой. R/C — Counter-wave bit: R = passive resonance, C = active compensation.">

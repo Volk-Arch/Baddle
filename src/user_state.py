@@ -72,25 +72,22 @@ def compute_capacity_indicators(user) -> dict:
     return user._rgk.project("capacity")
 
 
-def system_vector(rgk_or_neuro, freeze=None) -> np.ndarray:
-    """5D system vector (DA/5HT/NE/ACh/GABA). Принимает РГК (production) или
-    legacy Neurochem (deprecated, 3D — pad'ится 0.5 для ACh/GABA)."""
-    sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
+def system_vector(rgk) -> np.ndarray:
+    """5D system vector (DA/5HT/NE/ACh/GABA) из РГК."""
+    sys = rgk.system
     return np.array([
-        float(sys.gain.value)       if hasattr(sys, "gain")       else float(sys.dopamine),
-        float(sys.hyst.value)       if hasattr(sys, "hyst")       else float(sys.serotonin),
-        float(sys.aperture.value)   if hasattr(sys, "aperture")   else float(sys.norepinephrine),
-        float(sys.plasticity.value) if hasattr(sys, "plasticity") else 0.5,
-        float(sys.damping.value)    if hasattr(sys, "damping")    else 0.5,
+        float(sys.gain.value),
+        float(sys.hyst.value),
+        float(sys.aperture.value),
+        float(sys.plasticity.value),
+        float(sys.damping.value),
     ], dtype=np.float32)
 
 
-def system_state_level(rgk_or_neuro) -> float:
-    """mean(DA, 5HT). Полиморфно — РГК или Neurochem."""
-    sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
-    da = float(sys.gain.value) if hasattr(sys, "gain") else float(sys.dopamine)
-    s  = float(sys.hyst.value) if hasattr(sys, "hyst") else float(sys.serotonin)
-    return (da + s) / 2.0
+def system_state_level(rgk) -> float:
+    """mean(DA, 5HT) из РГК.system."""
+    sys = rgk.system
+    return (float(sys.gain.value) + float(sys.hyst.value)) / 2.0
 
 
 def compute_sync_error(rgk) -> float:
@@ -135,9 +132,10 @@ def compute_sync_error_wave(rgk) -> dict:
             "scalar_5d": float, # L2 over 5 axes (max ≈ √5 ≈ 2.236)
         }
 
-    Не replaces скаляр `compute_sync_error` (тот 3D legacy). Эта функция —
-    добавочный слой spectral diagnosis. Использование:
-      - `/assist/chemistry` coupling-секция expose'ит per-axis
+    Дополнительный слой spectral diagnosis поверх scalar `compute_sync_error`
+    (тот тоже 5D после 2026-04-28 clean break — wave добавляет per-axis
+    breakdown + max_axis identifier). Использование:
+      - `/assist/state` `sync_error_wave` поле expose'ит per-axis для UI
       - В будущем W16.4: при больших sync_error_wave[axis] система генерит
         analogies для этой axis в morning briefing (adiabatic adjustment)
     """

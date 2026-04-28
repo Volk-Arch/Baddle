@@ -1202,6 +1202,43 @@ select {
   color: #71717a;
   margin-top: 3px;
 }
+/* Per-axis sync radar (W16.1): 5D pentagon, площадь ∝ desync. */
+.dash-axis-radar {
+  display: block;
+  width: 100%;
+  max-width: 110px;
+  margin: 6px auto 0;
+  overflow: visible;
+}
+.dash-axis-radar .radar-bg-shape {
+  fill: rgba(255, 255, 255, 0.025);
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-width: 0.5;
+}
+.dash-axis-radar .radar-bg-guide {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-width: 0.4;
+  stroke-dasharray: 1.5,1.5;
+}
+.dash-axis-radar .radar-axis-line {
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 0.4;
+}
+.dash-axis-radar .radar-data {
+  fill: rgba(244, 114, 182, 0.25);  /* pink-rose */
+  stroke: rgba(244, 114, 182, 0.85);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  transition: points 0.4s ease, fill-opacity 0.4s ease;
+}
+.dash-axis-radar .radar-label {
+  font-size: 7px;
+  fill: #a1a1aa;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
 .sync-balance-pair {
   display: flex;
   align-items: center;

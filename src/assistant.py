@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify
 
 log = logging.getLogger(__name__)
 
@@ -1102,54 +1102,6 @@ def assist_health():
     """Quick LLM-connection health for UI badge. `status` ∈ {ok, degraded, offline, unknown}."""
     from .api_backend import get_api_health
     return jsonify(get_api_health())
-
-
-@assistant_bp.route("/assist/chemistry", methods=["GET"])
-def assist_chemistry():
-    """5-axis химический профиль обоих резонаторов в YAML формате.
-
-    Параметрический snapshot из РГК v1.0 spec §«Параметрический профиль сессии».
-    Удобно для Lab — копировать в внешние tools, документацию, debug.
-    Query: ?format=json для JSON-эквивалента.
-    """
-    import yaml
-    from .horizon import get_global_state
-
-    rgk = get_global_state().rgk
-    sys = rgk.system
-    usr = rgk.user
-    snap = {
-        "session_chemistry": {
-            "user": {
-                "dopamine_gain":           round(float(usr.gain.value), 3),
-                "serotonin_hysteresis":    round(float(usr.hyst.value), 3),
-                "norepinephrine_aperture": round(float(usr.aperture.value), 3),
-                "acetylcholine_plasticity": round(float(usr.plasticity.value), 3),
-                "gaba_damping":            round(float(usr.damping.value), 3),
-                "balance":                 round(usr.balance(), 3),
-                "named_state":             rgk.project("named_state").get("key"),
-            },
-            "system": {
-                "dopamine_gain":           round(float(sys.gain.value), 3),
-                "serotonin_hysteresis":    round(float(sys.hyst.value), 3),
-                "norepinephrine_aperture": round(float(sys.aperture.value), 3),
-                "acetylcholine_plasticity": round(float(sys.plasticity.value), 3),
-                "gaba_damping":            round(float(sys.damping.value), 3),
-                "balance":                 round(sys.balance(), 3),
-                "gamma":                   round(rgk.gamma(), 3),
-            },
-            "coupling": {
-                "sync_error": round(float(get_global_state().sync_error), 3),
-                "sync_error_wave": rgk.sync_error_wave(),
-                "sync_regime": get_global_state().sync_regime,
-            },
-        }
-    }
-    if request.args.get("format") == "json":
-        return jsonify(snap)
-    yaml_text = yaml.dump(snap, allow_unicode=True, sort_keys=False,
-                            default_flow_style=False)
-    return Response(yaml_text, mimetype="text/yaml; charset=utf-8")
 
 
 @assistant_bp.route("/patterns", methods=["GET"])

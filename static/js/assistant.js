@@ -17,6 +17,90 @@ const _CAPACITY_REASON_RU = {
   cogload_high:      'когнитивная нагрузка высокая',
 };
 
+// ── Per-axis sync radar (W16.1) ──────────────────────────────────────────
+// Pentagon с 5 chem-осями (DA top, 5HT upper-right, NE lower-right,
+// ACh lower-left, GABA upper-left). Каждая axis = отрезок от центра,
+// длина пропорциональна |user[axis] - system[axis]|. Большая площадь = больше
+// рассинхрон. Static background рисуется один раз при инициализации.
+const _RADAR_AXES = [
+  { key: 'dopamine',       label: 'DA' },
+  { key: 'norepinephrine', label: 'NE' },
+  { key: 'gaba',           label: 'GABA' },
+  { key: 'acetylcholine',  label: 'ACh' },
+  { key: 'serotonin',      label: '5HT' },
+];
+const _RADAR_CX = 60, _RADAR_CY = 60, _RADAR_R = 38;
+
+function _radarPoint(axisIdx, frac) {
+  // axisIdx 0..4 → angle (top is 0, clockwise). frac ∈ [0,1] = доля радиуса.
+  const angle = -Math.PI / 2 + (axisIdx * 2 * Math.PI / _RADAR_AXES.length);
+  return [
+    _RADAR_CX + _RADAR_R * frac * Math.cos(angle),
+    _RADAR_CY + _RADAR_R * frac * Math.sin(angle),
+  ];
+}
+
+function _radarPolyPoints(fracs) {
+  return fracs.map((f, i) => {
+    const [x, y] = _radarPoint(i, f);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(' ');
+}
+
+let _radarBgInited = false;
+function _initRadarBg() {
+  if (_radarBgInited) return;
+  const svg = document.getElementById('dash-axis-radar');
+  if (!svg) return;
+  const bgGroup = svg.querySelector('.radar-bg');
+  const lblGroup = svg.querySelector('.radar-labels');
+  if (!bgGroup || !lblGroup) return;
+  // Pentagon at full radius
+  const ring1 = _radarPolyPoints([1, 1, 1, 1, 1]);
+  const ring050 = _radarPolyPoints([0.5, 0.5, 0.5, 0.5, 0.5]);
+  const ring025 = _radarPolyPoints([0.25, 0.25, 0.25, 0.25, 0.25]);
+  bgGroup.innerHTML = `
+    <polygon class="radar-bg-shape" points="${ring1}"></polygon>
+    <polygon class="radar-bg-guide" points="${ring050}"></polygon>
+    <polygon class="radar-bg-guide" points="${ring025}"></polygon>
+    ${_RADAR_AXES.map((_, i) => {
+      const [x, y] = _radarPoint(i, 1);
+      return `<line class="radar-axis-line" x1="${_RADAR_CX}" y1="${_RADAR_CY}" x2="${x.toFixed(2)}" y2="${y.toFixed(2)}"></line>`;
+    }).join('')}
+  `;
+  // Labels (чуть дальше vertex'а)
+  lblGroup.innerHTML = _RADAR_AXES.map((axis, i) => {
+    const [x, y] = _radarPoint(i, 1.22);
+    return `<text class="radar-label" x="${x.toFixed(2)}" y="${y.toFixed(2)}">${axis.label}</text>`;
+  }).join('');
+  _radarBgInited = true;
+}
+
+function _renderAxisRadar(wave) {
+  _initRadarBg();
+  const svg = document.getElementById('dash-axis-radar');
+  if (!svg) return;
+  const dataPoly = svg.querySelector('.radar-data');
+  if (!dataPoly) return;
+  if (!wave || !wave.axes) {
+    dataPoly.setAttribute('points', _radarPolyPoints([0, 0, 0, 0, 0]));
+    return;
+  }
+  const fracs = _RADAR_AXES.map(axis => {
+    const v = wave.axes[axis.key];
+    return Math.max(0, Math.min(1, typeof v === 'number' ? v : 0));
+  });
+  dataPoly.setAttribute('points', _radarPolyPoints(fracs));
+  // Tooltip — обновляем values в title (sub-axes показывает каждую)
+  const sums = fracs.reduce((a, b) => a + b, 0);
+  if (sums > 0.01) {
+    const labels = _RADAR_AXES.map((a, i) =>
+      `${a.label} ${(fracs[i]).toFixed(2)}`
+    ).join(' · ');
+    svg.setAttribute('title', `Per-axis расхождение: ${labels}\nDaily история — Outcome 🪞 Spread.`);
+  }
+}
+
 function _capacityIndicatorTooltip(indKey) {
   // Базовый текст из data-attr (HTML title) + reason если этот контур fail
   const base = {
@@ -1820,23 +1904,8 @@ function _updateNeurochemPanel(metrics) {
     if (dashSE) dashSE.textContent = (syncErr !== undefined && syncErr !== null)
       ? `sync ${Math.round((1 - Math.min(1, syncErr)) * 100)}% · err ${syncErr.toFixed(2)}`
       : 'sync —';
-    // Live max-axis indicator (W16.1a) — показываем только при значительном расхождении.
-    // Полная картина по 5 осям — Outcome 🪞 Spread.
-    const dashMA = document.getElementById('dash-max-axis');
-    if (dashMA) {
-      const wave = metrics.sync_error_wave;
-      const AXIS_SHORT = {
-        dopamine: 'DA', serotonin: '5HT', norepinephrine: 'NE',
-        acetylcholine: 'ACh', gaba: 'GABA',
-      };
-      if (wave && wave.max_axis && wave.max_value > 0.15) {
-        const label = AXIS_SHORT[wave.max_axis] || wave.max_axis;
-        dashMA.textContent = `Δ ${label} ${wave.max_value.toFixed(2)}`;
-        dashMA.style.display = '';
-      } else {
-        dashMA.style.display = 'none';
-      }
-    }
+    // Per-axis sync radar (W16.1) — pentagon с 5 chem-осями, площадь ∝ desync.
+    _renderAxisRadar(metrics.sync_error_wave);
   } catch(e) {}
 
   // Activity zone badge (HRV × activity — 4 зоны)

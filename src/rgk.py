@@ -508,12 +508,9 @@ class РГК:
         self.recent_rpe = float(d.get("recent_rpe", 0.0))
         self._rpe_hist = list(d.get("_delta_history", []))
         vec = d.get("expectation_vec")
-        if isinstance(vec, (list, tuple)) and 1 <= len(vec) <= 5:
+        if isinstance(vec, (list, tuple)) and len(vec) == 5:
             try:
-                # Graceful pad: legacy 3-element saves расширяются до 5 (default 0.5).
-                # 5D переход 2026-04-28 (clean break).
-                vals = [float(x) for x in vec] + [0.5] * (5 - len(vec))
-                arr = np.array(vals, dtype=np.float32)
+                arr = np.array([float(x) for x in vec], dtype=np.float32)
                 self.s_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
             except Exception:
                 pass
@@ -594,12 +591,9 @@ class РГК:
                     except Exception:
                         pass
         vec = d.get("expectation_vec")
-        if isinstance(vec, (list, tuple)) and 1 <= len(vec) <= 5:
+        if isinstance(vec, (list, tuple)) and len(vec) == 5:
             try:
-                # Graceful pad: legacy 3-element saves расширяются до 5 (default 0.5).
-                # 5D переход 2026-04-28 (clean break).
-                vals = [float(x) for x in vec] + [0.5] * (5 - len(vec))
-                arr = np.array(vals, dtype=np.float32)
+                arr = np.array([float(x) for x in vec], dtype=np.float32)
                 self.u_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
             except Exception:
                 pass
@@ -968,17 +962,17 @@ EXPECTED_USER = {
     "expectation": 0.517369,
     "expectation_by_tod": {"morning": 0.5, "day": 0.517369,
                             "evening": 0.5, "night": 0.5},
-    "expectation_vec": [0.529848, 0.518119, 0.463763],
+    "expectation_vec": [0.529848, 0.518119, 0.463763, 0.5, 0.5],
     "hrv_baseline_by_tod": {"morning": None, "day": 0.6,
                               "evening": None, "night": None},
-    "vector": [0.566345, 0.540951, 0.418098],
+    "vector": [0.566345, 0.540951, 0.418098, 0.5, 0.5],
     "surprise": 0.03628, "imbalance": 0.062759,
 }
 EXPECTED_SYS = {
     "dopamine": 0.424359, "serotonin": 0.598492, "norepinephrine": 0.700003,
-    "expectation_vec": [0.495359, 0.508601, 0.517466],
+    "expectation_vec": [0.495359, 0.508601, 0.517466, 0.5, 0.5],
     "gamma": 2.84317, "recent_rpe": -0.15, "self_imbalance": 0.215502,
-    "vector": [0.424359, 0.598492, 0.700003],
+    "vector": [0.424359, 0.598492, 0.700003, 0.5, 0.5],
 }
 EXPECTED_FREEZE = {
     "conflict_accumulator": 0.004225, "silence_pressure": 0.001984,

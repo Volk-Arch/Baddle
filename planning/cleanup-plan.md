@@ -13,7 +13,7 @@
 | Route | File:line | Гипотеза |
 |---|---|---|
 | `/assist/health` | assistant.py:1100 | Медицинские параметры — может для отдельного "Health" виджета |
-| `/assist/chemistry` | assistant.py:1107 | yaml/json snapshot 5-axis. **Useful for Lab/debug** — wire в /lab |
+| ~~`/assist/chemistry`~~ | удалён 2026-04-28 | 0 callsites; данные дублировали `/assist/state` (sync_error / chem axes / coupling). Унификация — всё через `/assist/state.get_metrics()` |
 | `/assist/history` | assistant.py:1186 | История interactions — может для timeline view |
 | `/assist/named-states` | assistant.py:1305 | 8 регионов карты — для UI legend / docs |
 | `/patterns`, `/patterns/run` | assistant.py:1154,1171 | Legacy pattern-detector? Или pre-Signal? |

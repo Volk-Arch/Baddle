@@ -110,9 +110,9 @@ sync_error_wave[axis] = |user[axis] − system[axis]| per component
 }
 ```
 
-Expose'ится через `/assist/chemistry` `coupling.sync_error_wave` + входит в
-`get_metrics()` для дашборда. UI: live `Δ AXIS value` indicator в Симбиоз
-block (виден когда max_value > 0.15). Тесты — `tests/test_rgk_properties.py`
+Expose'ится через `/assist/state` `sync_error_wave` (внутри `get_metrics()`).
+UI: live `Δ AXIS value` indicator в Симбиоз block (виден когда
+max_value > 0.15). Тесты — `tests/test_rgk_properties.py`
 `TestCouplingConsistency`.
 
 **5D clean break (2026-04-28):** scalar `sync_error` сам по себе теперь 5D
