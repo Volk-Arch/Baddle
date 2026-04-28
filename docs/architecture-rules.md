@@ -54,7 +54,7 @@
 
 **Контракт:** `d = distinct(A, B) ∈ [0, 1]` — мера различия двух идей. Все операции (SmartDC, Pump, Novelty, Embedding-first) — надстройки над `distinct`. Зоны (`τ_in=0.3`, `τ_out=0.7`) разбивают d на согласие / исследование / конфликт.
 
-**Каркас:** [src/main.py:distinct_decision](../src/main.py) + [src/tick_nand.py](../src/tick_nand.py). Адаптивная чувствительность `γ = 2.0 + 3.0·NE·(1−S)` — байесовское обновление в логарифмическом пространстве: `new_logit = old_logit − γ·d + log(prior)` → softmax с температурой T (адаптивна по KL между тиками).
+**Каркас:** [src/main.py:distinct_decision](../src/main.py) + [src/nand.py](../src/nand.py). Адаптивная чувствительность `γ = 2.0 + 3.0·NE·(1−S)` — байесовское обновление в логарифмическом пространстве: `new_logit = old_logit − γ·d + log(prior)` → softmax с температурой T (адаптивна по KL между тиками).
 
 **Дисциплина:** не писать cosine_similarity мимо `distinct()`. Один путь к мере различия — один файл констант — один трейс отладки.
 

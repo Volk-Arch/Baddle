@@ -1432,7 +1432,7 @@ def graph_tick():
     (общий NE-бюджет).
 
     Mode config тюнит Horizon пресеты (τ_in/τ_out/γ/policy); логика сама
-    эмерджентна из distinct-зон в tick_nand.
+    эмерджентна из distinct-зон в nand.tick_emergent.
     """
     from .cognitive_loop import get_cognitive_loop
 

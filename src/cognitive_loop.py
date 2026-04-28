@@ -822,7 +822,7 @@ class CognitiveLoop:
         Записываем timestamp в shared state чтобы background DMN не полез
         следующие FOREGROUND_COOLDOWN секунд.
         """
-        from .tick_nand import tick_emergent
+        from .nand import tick_emergent
         from .graph_logic import _compute_edges
 
         self._last_foreground_tick = time.time()
@@ -1328,7 +1328,7 @@ class CognitiveLoop:
         log.info(f"[cognitive_loop] DMN converge-loop starting "
                  f"(nodes={nodes_n} max_steps={max_steps} max_wall={max_wall_s}s stall={stall_window})")
 
-        from .tick_nand import tick_emergent
+        from .nand import tick_emergent
         from .graph_logic import _compute_edges, _add_node, _graph_generate
         # executor dispatcher server-side
         steps_taken = 0

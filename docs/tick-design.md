@@ -57,7 +57,7 @@
 
 ## NAND-emergent — единственный путь
 
-Классический тик с ветвлением по primitive удалён. Все 14 режимов проходят через **один тик** ([tick_emergent](../src/tick_nand.py)). Логика возникает из зон различия:
+Классический тик с ветвлением по primitive удалён. Все 14 режимов проходят через **один тик** ([tick_emergent](../src/nand.py)). Логика возникает из зон различия:
 
 - различие ниже порога согласия (τ_in) → зона согласия → collapse (merge)
 - различие в интервале (τ_in, τ_out) → зона исследования → pump / elaborate
@@ -136,9 +136,8 @@ Merge отслеживает происхождение: `collapsed_from: [3, 5,
 
 ## Где в коде
 
-- [src/tick_nand.py](../src/tick_nand.py) — `tick_emergent()` (единственный tick engine)
+- [src/nand.py](../src/nand.py) — `tick_emergent()` (единственный tick engine) + helpers (`classify_nodes`, `_pick_target`, `_pick_distant_pair`) + meta-tick (`analyze_tail`, `apply_policy_nudge`)
 - [src/cognitive_loop.py](../src/cognitive_loop.py) — `CognitiveLoop.tick_foreground()` для `/graph/tick` + фоновый поток
-- [src/thinking.py](../src/thinking.py) — helpers (`classify_nodes`, `_pick_target`, `_pick_distant_pair`)
 - [src/horizon.py](../src/horizon.py) — `select_phase`, `update`, `to_llm_params`, `apply_to_bayes`
 - [src/state_graph.py](../src/state_graph.py) — hook на каждый тик emit
 - Endpoint `/graph/tick` → `loop.tick_foreground()`

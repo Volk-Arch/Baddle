@@ -220,8 +220,9 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 
 `src/surprise_detector.py` (401 LOC) удалён, содержимое перенесено в `src/detectors.py` после `DETECTORS` registry. Move без сжатия (`detectors.py` 890 → 1296 LOC). Импортёр (`cognitive_loop.py:629`) переключён на `from .detectors import detect_user_surprise`. 4 docs ссылки обновлены (TECH_README, world-model, friston-loop). Module docstring расширен — отмечено что файл содержит два контракта (Signal-style + dict-based user_surprise). 473 passed pyflakes 0.
 
-### #2 NAND tick triplet → src/nand.py (medium)
-[`src/tick_nand.py`](../src/tick_nand.py) 499 + [`src/thinking.py`](../src/thinking.py) 186 + [`src/meta_tick.py`](../src/meta_tick.py) 172 = **857 LOC**. Все три — один tick: distinct → Bayes → policy nudge. `thinking.py` — generic name, на самом деле NAND helpers (classify_nodes, _filter_lineage, _pick_target). После consolidation: ~750 LOC после dedup общих imports/utils. Имя точнее отражает.
+### #2 NAND tick triplet → src/nand.py ✅ done 2026-04-28
+
+`tick_nand.py` 499 + `thinking.py` 186 + `meta_tick.py` 172 = 857 LOC удалены, объединены в `src/nand.py` 867 LOC (4 секции: classification helpers / force collapse / meta-tick / main tick). Без сжатия — move ради discoverability и удаления generic-имени `thinking.py`. 5 импортов в 3 файлах переключены на `from .nand import ...`. 9 docs обновлены (TECH_README, full-cycle, episodic-memory, nand-architecture, neurochem-design, storage, horizon-design, architecture-rules, tick-design, README, плюс 4 inline-комментария в src/). 473 passed pyflakes 0.
 
 ### #3 DMN heavy work → src/dmn.py (medium)
 [`src/pump_logic.py`](../src/pump_logic.py) 374 + [`src/consolidation.py`](../src/consolidation.py) 442 = **816 LOC**. REM прорастание + bridge pump = одна семантика «фоновая обработка графа». Сейчас split arbitrary. Ожидаемый ~750 LOC.
@@ -237,7 +238,7 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 
 **Ставка приоритета:**
 1. ~~#1 surprise_detector → detectors.py~~ ✅ 2026-04-28
-2. #2 NAND triplet (~1ч, средний win — лучший discoverability)
+2. ~~#2 NAND triplet → nand.py~~ ✅ 2026-04-28
 3. #4 Sensors package (~1ч, future-proof для real adapters)
 4. #3 DMN, #5 Chat, #6 Seed — opportunistic, когда касаешься этих файлов.
 

@@ -134,7 +134,7 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`.
 
 - [src/horizon.py](../src/horizon.py) — CognitiveState, `get_global_state()`, `create_horizon()`, 14 пресетов; методы `apply_to_bayes`, `update_neurochem`, `effective_temperature`, `horizon_budget`, `get_metrics`, `to_dict`/`from_dict`.
 - [src/neurochem.py](../src/neurochem.py) — композиция (self.neuro, self.freeze).
-- [src/tick_nand.py](../src/tick_nand.py) — тик загружает Horizon, считает матрицу различий, кормит нейрохимию, маршрутизирует по зонам.
+- [src/nand.py](../src/nand.py) — тик загружает Horizon, считает матрицу различий, кормит нейрохимию, маршрутизирует по зонам.
 - Endpoint `/graph/horizon-feedback` — autorun отправляет удивление обратно.
 
 ---

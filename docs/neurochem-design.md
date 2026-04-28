@@ -204,7 +204,7 @@ Append-rate растёт, когда юзер копирует одно и то 
 
 - [src/neurochem.py](../src/neurochem.py) — класс Neurochem + ProtectiveFreeze.
 - [src/horizon.py::CognitiveState](../src/horizon.py) держит `self.neuro` + `self.freeze`, делегирует через `apply_to_bayes`, `update_neurochem`, `inject_ne`.
-- [src/tick_nand.py](../src/tick_nand.py) — после матрицы различий вызывает `update_neurochem(d=mean_d, weights=confidences)` — замыкает контур: граф → нейрохимия → apply_to_bayes → граф.
+- [src/nand.py](../src/nand.py) — после матрицы различий вызывает `update_neurochem(d=mean_d, weights=confidences)` — замыкает контур: граф → нейрохимия → apply_to_bayes → граф.
 - [src/ema.py::Decays](../src/ema.py) — все константы затухания в одном месте.
 - Endpoint `/assist/state` выдаёт `neurochem: {dopamine, serotonin, norepinephrine, burnout, gamma, freeze_active, ...}`.
 

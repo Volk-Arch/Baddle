@@ -259,9 +259,9 @@ class StateGraph:
               "n":           сколько transitions учтено
             }
 
-        Используется meta_tick'ом для детекции «policy drift» — когда
+        Используется meta-tick'ом для детекции «policy drift» — когда
         текущий bigram сильно отклоняется от исторической вероятности.
-        Также tick_nand может использовать `most_likely_next()` для
+        Также `nand.tick_emergent` может использовать `most_likely_next()` для
         предиктивного policy_nudge.
 
         heartbeat/none отфильтрованы по умолчанию — это техническая

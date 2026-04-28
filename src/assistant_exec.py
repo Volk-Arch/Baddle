@@ -1019,7 +1019,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # Базовые шаги (seed/brainstorm/elaborate/smartdc) считаем как ~3
     # раунда. При mode_steps=5 делаем +2 раунда углубления на weakest
     # hypothesis. Exit через `should_stop(cl, graph, horizon, goal_node)` —
-    # тот же адаптивный алгоритм сходимости что в `tick_nand` STOP CHECK:
+    # тот же адаптивный алгоритм сходимости что в `nand.tick_emergent` STOP CHECK:
     #   (1) subgoals AND/OR, (2) synthesis близко к goal (d < τ_in),
     #   (3) convergence: 3+ verified, avg conf > 85%, нет pending,
     #   (4) novelty exhaustion: precision > 0.85 + нет работы.
@@ -1047,7 +1047,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # без snapshot ломался бы). Читаем один раз → shim-объект с атрибутами.
     try:
         from .horizon import get_global_state
-        from .thinking import classify_nodes
+        from .nand import classify_nodes
         from .modes import should_stop
         _live = get_global_state()
         class _HorizonSnap:

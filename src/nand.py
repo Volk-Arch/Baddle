@@ -1,25 +1,392 @@
-"""NAND emergent tick — logic emerges from distinct() zones, not primitives.
+"""NAND emergent tick — distinct → Bayes → policy nudge в одном движке.
 
-v8 architecture: instead of switch(primitive) → hardcoded logic,
-compute distinct() between pairs, let zones decide actions:
+v8 architecture: вместо `switch(primitive) → hardcoded logic`, считаем
+`distinct()` между парами, пусть зоны решают actions:
 
   d < tau_in             → CONFIRM  → merge similar (zone AND)
   tau_in < d < tau_out   → EXPLORE  → elaborate / pump (zone XOR)
   d > tau_out            → CONFLICT → doubt / branch / compare (zone NOR)
 
-No primitive switch. Same algorithm for all 14 modes — only thresholds differ.
-Stop condition: distinct(goal, best_verified) < τ_in, or subgoal-cluster
-convergence decided emergently by avg_d between subgoals.
+No primitive switch. Same algorithm для всех 14 mode'ов — отличаются только
+thresholds. Stop condition: `distinct(goal, best_verified) < τ_in`, или
+subgoal-cluster convergence через `avg_d` между subgoals.
 
-This is the single tick engine — exported as both `tick` and `tick_emergent`.
+Single tick engine — экспортируется как `tick` (alias) и `tick_emergent`.
+
+## Структура файла
+
+  1. Classification helpers — `classify_nodes`, lineage/target picking
+  2. Force collapse — batch finalization когда verified пул накопился
+  3. Meta-tick — анализ хвоста state_graph (паттерны второго порядка)
+  4. Main tick engine — `tick_emergent` + `tick` alias
+
+История: до W11 #2 жил в трёх файлах (`thinking.py`/`tick_nand.py`/
+`meta_tick.py`) по historical reasons. Семантически — одна единица.
+См. [docs/nand-architecture.md](../docs/nand-architecture.md).
 """
 import logging
-
-from .thinking import classify_nodes, _pick_target, _pick_distant_pair, _tick_force_collapse
-from .main import distinct, distinct_decision
+import random
+from collections import defaultdict, deque
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+# ════════════════════════════════════════════════════════════════════════════
+#  1. CLASSIFICATION HELPERS
+# ════════════════════════════════════════════════════════════════════════════
+
+def classify_nodes(nodes, edges, graph, stable_threshold=0.8):
+    """Classify active nodes into categories for tick decision-making."""
+    active_nodes = [(i, n) for i, n in enumerate(nodes) if n.get("depth", 0) >= 0]
+
+    goals = [(i, n) for i, n in active_nodes if n.get("type") == "goal"]
+    goal_idx = goals[0][0] if goals else None
+    goal_text = nodes[goal_idx]["text"][:60] if goal_idx is not None else ""
+
+    hypotheses = [(i, n) for i, n in active_nodes
+                  if n.get("type") in ("hypothesis", "thought")]
+
+    # Count directed children per node
+    directed_children = {}
+    for a, b in graph["edges"].get("directed", []):
+        directed_children[a] = directed_children.get(a, 0) + 1
+
+    # Bare = needs elaboration: no evidence, not yet verified, not a synthesis
+    bare = [h for h in hypotheses
+            if directed_children.get(h[0], 0) == 0
+            and h[1].get("confidence", 0.5) < stable_threshold
+            and not h[1].get("collapsed_from")]
+
+    unverified = [h for h in hypotheses if h[1].get("confidence", 0.5) < stable_threshold]
+    verified = [h for h in hypotheses if h[1].get("confidence", 0.5) >= stable_threshold]
+
+    return {
+        "active_nodes": active_nodes,
+        "goals": goals,
+        "goal_idx": goal_idx,
+        "goal_text": goal_text,
+        "hypotheses": hypotheses,
+        "bare": bare,
+        "unverified": unverified,
+        "verified": verified,
+    }
+
+
+# ── Merge: find similar to collapse ─────────────────────────────────────────
+
+MAX_MERGE_BATCH = 4  # merge at most 4 at a time — preserves diversity
+
+
+def _filter_lineage(indices, nodes):
+    """Find the largest group of nodes with no shared lineage.
+    Greedy: add nodes one by one, skip if conflicts with existing group."""
+    lineages = {}
+    for i in indices:
+        lineage = set(nodes[i].get("collapsed_from", []))
+        stack = list(lineage)
+        while stack:
+            s = stack.pop()
+            if s < len(nodes):
+                parents = set(nodes[s].get("collapsed_from", []))
+                new = parents - lineage
+                lineage |= new
+                stack.extend(new)
+        lineages[i] = lineage
+
+    # Greedy grouping: take each node if it doesn't overlap with group
+    group = []
+    group_lineage = set()  # union of all lineages + indices in group
+    for i in indices:
+        # Check: i not in any existing member's lineage, and no existing member in i's lineage
+        if i in group_lineage:
+            continue
+        conflict = False
+        for j in group:
+            if j in lineages[i] or i in lineages[j]:
+                conflict = True
+                break
+        if not conflict:
+            group.append(i)
+            group_lineage.add(i)
+            group_lineage |= lineages[i]
+    return group
+
+
+# ── Pick distant pair (for Pump in Scout) ────────────────────────────────────
+
+def _pick_distant_pair(candidates, edges):
+    """Pick two nodes with lowest similarity (most distant). For Pump in Scout mode."""
+    if len(candidates) < 2:
+        return None
+
+    # Build edge weight lookup
+    weights = {}
+    for e in edges:
+        key = (min(e["from"], e["to"]), max(e["from"], e["to"]))
+        weights[key] = e.get("weight", 0)
+
+    best_pair = None
+    best_sim = 1.0
+    idxs = [i for i, _ in candidates]
+
+    for a in range(len(idxs)):
+        for b in range(a + 1, len(idxs)):
+            key = (min(idxs[a], idxs[b]), max(idxs[a], idxs[b]))
+            sim = weights.get(key, 0)
+            if sim < best_sim:
+                best_sim = sim
+                best_pair = (idxs[a], idxs[b])
+
+    return best_pair
+
+
+# ── Pick target ──────────────────────────────────────────────────────────────
+
+def _pick_target(candidates, goal_idx, edges):
+    """Pick best candidate: closest to goal, with occasional random for diversity."""
+    if not candidates:
+        return None
+
+    count = getattr(_pick_target, '_count', 0)
+    _pick_target._count = count + 1
+    if count % 3 == 2 and len(candidates) > 1:
+        return random.choice(candidates)
+
+    if goal_idx is None:
+        return min(candidates, key=lambda x: x[1].get("confidence", 0.5))
+
+    adj = defaultdict(set)
+    for e in edges:
+        adj[e["from"]].add(e["to"])
+        adj[e["to"]].add(e["from"])
+
+    def bfs_dist(start):
+        if start == goal_idx:
+            return 0
+        visited = {start}
+        queue = deque([(start, 0)])
+        while queue:
+            cur, d = queue.popleft()
+            for nb in adj.get(cur, []):
+                if nb == goal_idx:
+                    return d + 1
+                if nb not in visited:
+                    visited.add(nb)
+                    queue.append((nb, d + 1))
+        return 999
+
+    return min(candidates, key=lambda x: (bfs_dist(x[0]), x[1].get("confidence", 0.5)))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  2. FORCE COLLAPSE
+# ════════════════════════════════════════════════════════════════════════════
+
+def _tick_force_collapse(active_nodes, stable_threshold=0.8):
+    """Force-collapse: batch verified into groups of 5."""
+    node_map = {i: n for i, n in active_nodes}
+    collapsable = [i for i, n in active_nodes
+                   if n.get("type") != "goal"
+                   and n.get("confidence", 0.5) >= stable_threshold]
+    collapsable.sort(key=lambda i: -node_map[i].get("confidence", 0.5))
+
+    if len(collapsable) > 5:
+        return {
+            "action": "collapse", "target": collapsable[:5], "phase": "merge",
+            "reason": f"FORCE MERGE: batch of 5 from {len(collapsable)}.",
+            "text": "batch collapse",
+        }
+    elif len(collapsable) >= 2:
+        return {
+            "action": "collapse", "target": collapsable, "phase": "merge",
+            "reason": f"FINAL MERGE: {len(collapsable)} remaining.",
+            "text": "final batch",
+        }
+
+    avg = sum(n.get("confidence", 0.5) for _, n in active_nodes) / max(len(active_nodes), 1)
+    return {
+        "action": "stable", "phase": "synthesize",
+        "reason": f"SYNTHESIZE: {len(active_nodes)} nodes, avg {avg:.0%}.",
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  3. META-TICK — second-order analysis (state_graph tail patterns)
+# ════════════════════════════════════════════════════════════════════════════
+#
+# До этого tick решал «что делать дальше» по мгновенному снимку графа +
+# CognitiveState. Meta-tick добавляет второй порядок: смотрим на **хвост
+# state_graph** (последние 20 tick'ов) и детектим паттерны которые не видны
+# в моменте.
+#
+# Примеры паттернов:
+#
+#   • stuck_execution    — 10+ подряд в EXECUTION, sync_error не падает
+#                          → рекомендуем `ask` (спросить юзера)
+#   • action_monotony    — 5 одинаковых actions подряд
+#                          → рекомендуем `compare` или policy nudge на doubt
+#   • rpe_negative_streak — recent_rpe < 0 в 6+ из 10 последних
+#                          → система стабильно переоценивает reward
+#                          → рекомендуем `stabilize` (force INTEGRATION)
+#   • high_rejection     — user_feedback=rejected в 3+ из 5 последних
+#                          → пересинхрон нужен
+#                          → рекомендуем `ask`
+#
+# Результат `analyze_tail(tail) → {pattern, recommend, policy_nudge}`.
+# `tick_emergent` ниже применяет рекомендацию: emit action или мутирует
+# `horizon.policy_weights` (лёгкий толчок ±0.1 к весам с нормализацией).
+
+
+def _safe_get(entry: dict, *path, default=None):
+    """Безопасно достать вложенное поле (для state_snapshot.neurochem.recent_rpe)."""
+    cur = entry
+    for k in path:
+        if isinstance(cur, dict):
+            cur = cur.get(k)
+        else:
+            return default
+    return cur if cur is not None else default
+
+
+def analyze_tail(tail: list[dict], transitions: Optional[dict] = None) -> dict:
+    """Анализ последних N state_nodes. Возвращает dict:
+
+        {
+          "pattern": "stuck_execution" | "action_monotony" | "rpe_negative_streak"
+                     | "high_rejection" | "markov_anomaly" | "normal" | "not_enough_data",
+          "recommend": "ask" | "compare" | "stabilize" | None,
+          "policy_nudge": {phase: delta, ...} | None,
+          "detail": "human-readable summary",
+          "markov": {...} | None       # прогноз next action если transitions дан
+        }
+
+    Возвращает первый сработавший паттерн (приоритет: rejection > stuck >
+    rpe streak > monotony > markov_anomaly). «Normal» если ничего не сработало.
+
+    transitions — опциональный результат `StateGraph.action_transitions()`.
+    Если передан, детектит markov_anomaly: текущий bigram редкий по истории
+    (< 10% при ≥20 наблюдениях) → система отклонилась от привычного паттерна.
+    """
+    if not tail or len(tail) < 5:
+        return {"pattern": "not_enough_data", "recommend": None,
+                "policy_nudge": None, "detail": f"tail={len(tail)} < 5"}
+
+    # Signal: high rejection rate (user пушит back)
+    feedbacks = [e.get("user_feedback") for e in tail[-5:]]
+    rejects = sum(1 for f in feedbacks if f == "rejected")
+    if rejects >= 3:
+        return {
+            "pattern": "high_rejection",
+            "recommend": "ask",
+            "policy_nudge": {"doubt": +0.1, "generate": -0.05, "elaborate": -0.05},
+            "detail": f"{rejects}/5 recent rejections — user out of sync",
+        }
+
+    # Signal: stuck in EXECUTION with no sync progress
+    if len(tail) >= 10:
+        last10 = tail[-10:]
+        states = [_safe_get(e, "state_snapshot", "state", default="") for e in last10]
+        sync_errors = [_safe_get(e, "state_snapshot", "sync_error", default=0.0)
+                       for e in last10]
+        if states.count("execution") >= 9:
+            sync_delta = abs(float(sync_errors[-1]) - float(sync_errors[0]))
+            if sync_delta < 0.05:
+                return {
+                    "pattern": "stuck_execution",
+                    "recommend": "ask",
+                    "policy_nudge": None,
+                    "detail": f"{states.count('execution')}/10 in execution, "
+                              f"sync Δ={sync_delta:.2f}",
+                }
+
+    # Signal: negative RPE streak → система над-ожидает reward
+    rpes = []
+    for e in tail[-10:]:
+        r = _safe_get(e, "state_snapshot", "neurochem", "recent_rpe", default=None)
+        if isinstance(r, (int, float)):
+            rpes.append(float(r))
+    if len(rpes) >= 10:
+        negative = sum(1 for r in rpes if r < -0.05)
+        if negative >= 6:
+            return {
+                "pattern": "rpe_negative_streak",
+                "recommend": "stabilize",
+                "policy_nudge": {"merge": +0.1, "generate": -0.1},
+                "detail": f"{negative}/10 recent_rpe < -0.05 — overpredicting",
+            }
+
+    # Signal: action monotony
+    if len(tail) >= 5:
+        actions = [e.get("action", "") for e in tail[-5:]]
+        if len(set(actions)) == 1 and actions[0] not in ("stable", "none", ""):
+            return {
+                "pattern": "action_monotony",
+                "recommend": "compare",
+                "policy_nudge": {"doubt": +0.1, "merge": -0.05, "generate": -0.05},
+                "detail": f"5x '{actions[0]}' подряд — выход из рут'а",
+            }
+
+    # Signal: markov_anomaly — последний bigram редок по истории
+    # (система делает нестандартный переход). Это не всегда плохо — новизна
+    # может означать адаптацию к новому контексту — но стоит зафиксировать.
+    markov_info = None
+    if transitions and len(tail) >= 2:
+        prev_a = tail[-2].get("action", "")
+        cur_a = tail[-1].get("action", "")
+        row = transitions.get("transitions", {}).get(prev_a, {})
+        total = transitions.get("totals", {}).get(prev_a, 0)
+        if row and total >= 20 and cur_a in row:
+            prob = row[cur_a]
+            top = max(row, key=row.get)
+            top_prob = row[top]
+            markov_info = {
+                "prev_action": prev_a,
+                "action": cur_a,
+                "prob": prob,
+                "typical_next": top,
+                "typical_prob": top_prob,
+                "total_observed": total,
+            }
+            if prob < 0.10 and cur_a != top:
+                return {
+                    "pattern": "markov_anomaly",
+                    "recommend": None,
+                    "policy_nudge": None,
+                    "detail": (f"Переход '{prev_a}→{cur_a}' редкий "
+                               f"({prob:.0%} по {total} записям); "
+                               f"обычно '{prev_a}→{top}' ({top_prob:.0%})"),
+                    "markov": markov_info,
+                }
+
+    return {"pattern": "normal", "recommend": None,
+            "policy_nudge": None, "detail": "no anomaly",
+            "markov": markov_info}
+
+
+def apply_policy_nudge(horizon, nudge: dict):
+    """Лёгкий сдвиг policy weights (±delta) с нормализацией.
+
+    Используется когда meta-tick детектит паттерн но не эмитит action.
+    Effect — следующий tick через `select_phase` выберет другую фазу.
+    """
+    if not nudge:
+        return
+    weights = getattr(horizon, "policy_weights", None)
+    if not isinstance(weights, dict):
+        return
+    for phase, delta in nudge.items():
+        if phase in weights:
+            weights[phase] = max(0.05, weights[phase] + float(delta))
+    total = sum(weights.values())
+    if total > 0:
+        for k in weights:
+            weights[k] = round(weights[k] / total, 3)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  4. MAIN NAND TICK
+# ════════════════════════════════════════════════════════════════════════════
 
 def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
                   force_collapse=False, max_meta=2, min_hyp=5, **kwargs):
@@ -29,6 +396,8 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     CONFIRM/EXPLORE/CONFLICT zones, and routes to collapse/pump/smartdc/compare
     accordingly.
     """
+    from .main import distinct, distinct_decision
+
     if not nodes:
         return {"action": "none", "reason": "Graph is empty.", "phase": "none"}
 
@@ -301,7 +670,6 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # мгновенного решения выше.
     try:
         from .state_graph import get_state_graph
-        from .meta_tick import analyze_tail, apply_policy_nudge
         from .horizon import INTEGRATION, PROTECTIVE_FREEZE
         sg = get_state_graph()
         tail = sg.tail(20)

@@ -1,6 +1,6 @@
 """baddle — 14 режимов мышления как компактные пресеты.
 
-Runtime на режимы не switch-ится (всё через NAND-зоны в tick_nand.py). MODES
+Runtime на режимы не switch-ится (всё через NAND-зоны в nand.py). MODES
 нужны для:
   - UI: селектор, поля формы, placeholder, intro
   - execute_via_zones: `renderer_style` определяет карточку

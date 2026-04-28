@@ -104,7 +104,7 @@
 
 **Динамическое состояние:** [user_state.py](../src/user_state.py) + [neurochem.py](../src/neurochem.py) + [horizon.py](../src/horizon.py) → [symbiosis-design.md](symbiosis-design.md), [friston-loop.md](friston-loop.md).
 
-**Динамическая работа:** [cognitive_loop.py](../src/cognitive_loop.py) + [tick_nand.py](../src/tick_nand.py) + [thinking.py](../src/thinking.py) + [meta_tick.py](../src/meta_tick.py) → [tick-design.md](tick-design.md), [dmn-scout-design.md](dmn-scout-design.md), [episodic-memory.md](episodic-memory.md).
+**Динамическая работа:** [cognitive_loop.py](../src/cognitive_loop.py) + [nand.py](../src/nand.py) → [tick-design.md](tick-design.md), [dmn-scout-design.md](dmn-scout-design.md), [episodic-memory.md](episodic-memory.md).
 
 **Операции:** [pump_logic.py](../src/pump_logic.py) + SmartDC + embedding-first → [thinking-operations.md](thinking-operations.md).
 
