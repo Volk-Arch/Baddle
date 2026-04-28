@@ -1097,13 +1097,6 @@ def assist_state():
     return jsonify(data)
 
 
-@assistant_bp.route("/assist/health", methods=["GET"])
-def assist_health():
-    """Quick LLM-connection health for UI badge. `status` ∈ {ok, degraded, offline, unknown}."""
-    from .api_backend import get_api_health
-    return jsonify(get_api_health())
-
-
 @assistant_bp.route("/patterns", methods=["GET"])
 def patterns_list():
     """Recent detected patterns (weekday × category × outcome).
@@ -1253,13 +1246,6 @@ def assist_prime_directive():
         summary["daily_chem"] = daily_bins(window_days=days, fields=_CHEM_DAILY_FIELDS)
         summary["daily_pe"]   = daily_bins(window_days=days, fields=_PE_DAILY_FIELDS)
     return jsonify({"ok": True, **summary})
-
-
-@assistant_bp.route("/assist/named-states", methods=["GET"])
-def assist_named_states():
-    """UI map: 10 регионов из MindBalance-Voronoi с координатами и advice."""
-    from .user_state_map import list_named_states
-    return jsonify({"states": list_named_states()})
 
 
 @assistant_bp.route("/assist/bookmark", methods=["POST"])
@@ -1528,23 +1514,6 @@ def goals_violation():
     return jsonify({"ok": True})
 
 
-@assistant_bp.route("/suggestions/pending", methods=["GET"])
-def suggestions_pending():
-    """Вернуть текущие observation-suggestions (on-demand).
-
-    Юзер может вызвать вручную «что ты мне предложишь?» вместо ждания
-    24ч cycle. Alert `observation_suggestion` — асинхронный путь;
-    этот endpoint — синхронный.
-    """
-    try:
-        from .suggestions import collect_suggestions, make_suggestion_card
-        items = collect_suggestions(lang="ru")
-        cards = [make_suggestion_card(it, lang="ru") for it in items]
-        return jsonify({"suggestions": cards, "count": len(cards)})
-    except Exception as e:
-        return jsonify({"error": str(e)[:200], "suggestions": []}), 500
-
-
 @assistant_bp.route("/goals/confirm-draft", methods=["POST"])
 def goals_confirm_draft():
     """Подтверждение черновика от intent_router.
@@ -1617,15 +1586,6 @@ def goals_abandon():
     from .goals_store import abandon_goal
     d = request.get_json(force=True) or {}
     abandon_goal(d.get("id", ""), reason=d.get("reason", ""))
-    return jsonify({"ok": True})
-
-
-@assistant_bp.route("/goals/update", methods=["POST"])
-def goals_update():
-    """Body: {id, fields: {priority, deadline, category, ...}}"""
-    from .goals_store import update_goal
-    d = request.get_json(force=True) or {}
-    update_goal(d.get("id", ""), d.get("fields") or {})
     return jsonify({"ok": True})
 
 
@@ -1912,19 +1872,6 @@ def activity_delete():
 
 # ── Plans: карта будущего (events + recurring habits) ──────────────────
 
-@assistant_bp.route("/plan", methods=["GET"])
-def plans_list():
-    """Query: ?status=active|done|all &kind=recurring|oneshot &limit=N"""
-    from .plans import list_plans
-    status = request.args.get("status", "active")
-    kind = request.args.get("kind")
-    try:
-        limit = int(request.args.get("limit", 200))
-    except ValueError:
-        limit = 200
-    return jsonify({"plans": list_plans(status=status, kind=kind, limit=limit)})
-
-
 @assistant_bp.route("/plan/today", methods=["GET"])
 def plans_today():
     """Расписание на сегодня (или ?date=YYYY-MM-DD). Разворачивает recurring."""
@@ -2013,17 +1960,6 @@ def plans_skip():
     if not d.get("id"):
         return jsonify({"error": "id_required"}), 400
     skip_plan(plan_id=d["id"], for_date=d.get("for_date"), reason=d.get("reason", ""))
-    return jsonify({"ok": True})
-
-
-@assistant_bp.route("/plan/update", methods=["POST"])
-def plans_update():
-    """Body: {id, fields:{name, category, ts_start, ts_end, recurring, expected_difficulty, note}}"""
-    from .plans import update_plan
-    d = request.get_json(force=True) or {}
-    if not d.get("id"):
-        return jsonify({"error": "id_required"}), 400
-    update_plan(plan_id=d["id"], fields=d.get("fields") or {})
     return jsonify({"ok": True})
 
 

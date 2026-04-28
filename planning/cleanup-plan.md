@@ -6,35 +6,54 @@
 
 ---
 
-## W6 — Routes manual review (1-2ч, low risk, possible feature wire-up)
+## W6 — Routes manual review
 
-**16 routes без вызова в `templates/*.html` / `static/*.js` / `partials/*`.** НЕ автоматически удалять — Игорь: "может просто не добавили использование". Каждый — отдельное решение: **keep + wire frontend** / **delete** / **leave dead для future**.
+**Полный аудит 2026-04-28** (Explore-агент, 104 routes — 58 в `assistant.py` + 46 в `graph_routes.py`):
 
-| Route | File:line | Гипотеза |
+| Категория | Кол-во |
+|---|---|
+| USED-UI | 83 |
+| DEAD (нет callsite, явный кандидат) | 21 |
+| DUPLICATE (overlap c другим route) | 2 пары |
+| DEV-ONLY (curl debug) | 1 |
+
+### ✅ Quick win 2026-04-28 — удалены 7 routes
+
+| Route | Причина |
+|---|---|
+| ~~`/assist/chemistry`~~ | 0 callsites; данные дублировали `/assist/state`. Унификация. |
+| ~~`/assist/health`~~ | Subset `/assist/state` (api_health field уже там). |
+| ~~`/assist/named-states`~~ | Voronoi regions уже в `/assist/state.user_state.named_state`. |
+| ~~`/goals/update`~~ | Generic CRUD — UI использует specific actions (`/complete`/`/abandon`/`/postpone`). |
+| ~~`/plan`~~ | Generic listing — UI использует только `/plan/today`. |
+| ~~`/plan/update`~~ | Как `/goals/update`, generic dead. |
+| ~~`/suggestions/pending`~~ | Orphan — нет UI integration; observation_suggestion идёт через alert-flow (`detectors.py:620` использует `collect_suggestions` напрямую). |
+
+**Pattern-урок:** **generic CRUD endpoints мертвы**, UI предпочитает **specific actions**. Не плодить новые `/X/update` — добавлять `/X/{action}`.
+
+### Investigate-tier — ждут workspace primitive (W14)
+
+Workspace primitive (W14.1+) станет промежуточным хранилищем: компоненты пишут туда → единый append в чат. Часть routes ниже либо мигрируют под workspace API, либо станут не нужны:
+
+| Route | Status | Причина оставить пока |
 |---|---|---|
-| `/assist/health` | assistant.py:1100 | Медицинские параметры — может для отдельного "Health" виджета |
-| ~~`/assist/chemistry`~~ | удалён 2026-04-28 | 0 callsites; данные дублировали `/assist/state` (sync_error / chem axes / coupling). Унификация — всё через `/assist/state.get_metrics()` |
-| `/assist/history` | assistant.py:1186 | История interactions — может для timeline view |
-| `/assist/named-states` | assistant.py:1305 | 8 регионов карты — для UI legend / docs |
-| `/patterns`, `/patterns/run` | assistant.py:1154,1171 | Legacy pattern-detector? Или pre-Signal? |
-| `/suggestions/pending` | assistant.py:1578 | Очередь — может для "What I'm thinking" UI |
-| `/goals/update` | assistant.py:1670 | Generic — vs `/goals/complete /abandon /postpone` (specific) |
-| `/goals/solved/<ref>` | assistant.py:1718 | По ref — vs `/goals/solved` без |
-| `/plan` | assistant.py:1962 | Весь план vs `/plan/today` |
-| `/sensor/readings`, `/sensor/aggregate` | assistant.py:2446,2475 | Сенсорный stream — wire когда Polar/AppleWatch адаптеры |
-| `/graph/compare` | graph_routes.py:1011 | Сравнение нод — может для diff UI |
-| `/graph/horizon-feedback` | graph_routes.py:1182 | Feedback в Horizon — для оценки confidence? |
-| `/graph/self/similar` | graph_routes.py:1238 | Найти похожие — для "related" блока |
-| `/graph/brainstorm-seed` | graph_routes.py:1262 | Seed для DMN bridge — internal? |
-| `/graph/render-node` | graph_routes.py:1316 | Один ноду — partial render? |
-| `/graph/consolidate`, `/graph/synthesize` | graph_routes.py:1382,1408 | Manual triggers — может для Lab |
-| `/graph/actions-timeline` | graph_routes.py:1659 | Action Memory timeline — wire в /lab |
-| `/hrv/calibrate` | graph_routes.py:1891 | HRV baseline reset — для setup-flow |
+| `/assist/history` | DEAD | Time-series snapshots — может пригодиться для timeline после workspace |
+| `/goals/solved/<ref>` | DEAD | Single snapshot retrieval — для UI deep-link на завершённую цель |
+| `/patterns`, `/patterns/run` | DEAD | Legacy weekday×category pattern-detector (pre-Signal) — оценить после workspace |
+| `/sensor/readings`, `/sensor/aggregate` | DEAD | Wire когда реальные адаптеры (Polar/AppleWatch) появятся |
+| `/graph/self`, `/graph/self/similar` | DEAD | History-as-graph view — может уйти в workspace timeline |
+| `/graph/actions-timeline` | DEAD | Action Memory timeline — wire в /lab или workspace |
+| `/graph/render-node` | DEAD | Partial render — orphan, скорее delete после W14 |
+| `/graph/brainstorm-seed` | DEAD | Seed для DMN bridge — internal? |
+| `/graph/consolidate`, `/graph/synthesize`, `/graph/tick` | DEAD/STUB | Manual triggers — часть может быть STUB логикой, exp-tier |
+| `/graph/horizon-feedback` | USED? | Feedback в Horizon — проверить deeper grep |
+| `/graph/compare` | USED? | Diff UI — проверить deeper grep |
+| `/hrv/calibrate` | DEAD | Для setup-flow physical device |
 
-**Process:** для каждого — открыть handler, прочитать docstring + body, решить:
-- Если route даёт UI value которого нет → **wire** (TODO frontend)
-- Если route для dev/debug → **keep + comment** "// dev-only, no UI"
-- Если route legacy/superseded → **delete**
+**Re-audit когда W14.1 (workspace primitive) готов** — часть routes исчезнет естественно.
+
+### Dev-only (keep, no UI)
+- `/debug/alerts/trigger-all` — force-run всех alert checkers, curl для отладки.
 
 ---
 
