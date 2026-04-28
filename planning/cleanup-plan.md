@@ -173,11 +173,14 @@ Cleanup продолжается пока явное не исчерпано —
 
 5-axis chem РГК уже = 5 component frequencies — substrate готов. Нужен только transfer protocol поверх.
 
-**Sub-waves:**
-- **W16.1** `sync_error_wave` per axis (вместо scalar L2) в `_rgk.project("freeze")`. Диагностика «на каких частотах расхождение» (1-2ч)
-- **W16.2** Onboarding analogies endpoint: `GET /onboarding/analogies` + `POST /onboarding/answer`. 5-7 questions с target named_state'ами из 8-region map. Embedding similarity → activation (2-3ч)
-- **W16.3** Few-shot bias calibration: при первом task в category — UI с 3-5 examples, linear fit → initial bias_coefficient (1-2ч)
-- **W16.4** Adiabatic adjustment: при больших sync_error_wave[axis] система генерирует analogies для axis в morning briefing — active learning loop (2-3ч)
+**Sub-waves (после углубления synchronization.md 2026-04-28 — 3 sub-task'а покрывают 3 узких места resonance transfer):**
+
+- **W16.1** `sync_error_wave` per axis + **phase-aware comparison** (вместо scalar L2). Не просто `|user[axis] − system[axis]|`, а phase + amplitude per component. Диагностика «на каких частотах расхождение и в какой фазе». Закрывает sub-task **«измерение рассогласования»**. (2-3ч)
+- **W16.2** Onboarding analogies endpoint: `GET /onboarding/analogies` + `POST /onboarding/answer`. 5-7 questions с target named_state'ами из 8-region map. Embedding similarity → activation. Закрывает sub-task **«генерация резонансных аналогий»** — аналогия = оператор преобразования базиса между пользовательским и target spectrum. (2-3ч)
+- **W16.3** Few-shot bias calibration: при первом task в category — UI с 3-5 examples, linear fit → initial bias_coefficient (1-2ч). **Calib CI band получает физический смысл**: ширина полосы резонанса. Узкий CI = узкая полоса (точная настройка). Это переинтерпретация existing Beta-prior infrastructure через wave optics — не новая метрика.
+- **W16.4** Adiabatic adjustment: при больших sync_error_wave[axis] система генерирует analogies для axis в morning briefing. Закрывает sub-task **«стабильность волны при передаче»** — система проверяет не дрифтует ли её spectrum под user input. Active learning loop. (2-3ч)
+
+**Главный архитектурный shift после W16:** качество понимания меряется не через perplexity, а через **коэффициент резонанса** (фазовое рассогласование + амплитудная корреляция per axis). Не LLM-фреймворк, **когнитивный резонатор**. См. [docs/synchronization.md § Углубление](../docs/synchronization.md).
 
 **Зависит:** W14 (workspace для onboarding flow) + W15.4 (calibration loop infrastructure). Без них transfer protocol работает на substrate готовом не до конца.
 

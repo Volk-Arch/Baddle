@@ -139,7 +139,14 @@ if active and active.get("_task_id"):
 
 **Effect:** workspace candidate metadata `current_power` обновляется в реалтайме. Dispatcher видит «эта задача растёт по cost» (drift < 0.8) — может escalate alert «может перенести?» или suggest defer.
 
-### W15.4 — Calibration loop (~2-3ч)
+### W15.4 — Calibration loop (~2-3ч) — **CI band = ширина полосы резонанса**
+
+После углубления synchronization.md (2026-04-28): Beta-prior `confidence_ci` получает физический смысл — это **bandwidth резонанса** для конкретного axis или конкретной category. Узкий CI = точная настройка (мало evidence для подтверждения), широкий CI = грубая настройка (много evidence ещё нужно).
+
+Это не новая метрика, переинтерпретация existing infrastructure ([rgk-spec testable claim 2](../docs/rgk-spec.md#testable-claims)) через wave optics. Применение:
+- Bias-coefficient для category с узким CI → confident apply, formula adjusts immediately
+- С широким CI → conservative apply (bias × 0.7 + 1.0 × 0.3), пока больше evidence не накопится
+- UI hint: «CI узкий → калибровка сошлась»
 
 После W15.2 + W15.3, ~2 недели данных накопится. Активация:
 

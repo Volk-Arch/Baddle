@@ -177,7 +177,13 @@ for new in today_batch:
 
 **Performance:** небольшой today_batch (типично 10-30 нод за день) × small old_sample → manageable. Heavy ops только на found bridges.
 
-### W14.11 — Synaptic homeostasis (~1-2ч)
+### W14.11 — Synaptic homeostasis (~1-2ч) — **astrocyte-pattern**
+
+Параллель с biological astrocytes (queue.txt 2026-04-28): non-neuronal слой который делает housekeeping ночью (глимфатическая clean-up). У нас — **отдельный async loop** от main cognitive_loop, не блокирует neurons-слой. Investigate возможность разделить:
+- **Neurons слой** = main cognitive_loop tick + workspace integration
+- **Glia слой** = ночной homeostasis + REM scout (W14.10) + cleanup
+
+Это даёт architectural separation of concerns: active processing vs passive maintenance. Не обязательно сейчас (W14.11 как single function работает), но research note для будущей декомпозиции.
 
 После W14.10 Phase 3: global rebalancing confidence на LTM.
 
