@@ -141,7 +141,7 @@ UI показывает максимум трёх. Усталость польз
 | Soft context blending | sync_regime, derived из continuous sync_error | [user_state.py](../src/user_state.py) | Не if/else, derived-state |
 | Recovery / return-to-baseline | ProtectiveFreeze.THETA_RECOVERY + падение давления тишины | [neurochem.py](../src/neurochem.py) | Гистерезис, не жёсткий reset |
 | Pre-activation / anticipatory computation (зрачки, [ixbt 2026-04](https://www.ixbt.com/live/science/)) | UserState.expectation_by_tod (baseline по времени суток) + CognitiveState.precision | [user_state.py](../src/user_state.py), [friston-loop.md](friston-loop.md) | Ожидание контекстуально (morning/day/evening/night), не один глобальный baseline |
-| User-side surprise detection | [src/surprise_detector.py](../src/surprise_detector.py) (HRV + текст + LLM) | см. [friston-loop.md § User-side surprise](friston-loop.md#user-side-surprise) | MVP A+B+C |
+| User-side surprise detection | [src/detectors.py](../src/detectors.py) `detect_user_surprise` (HRV + текст + LLM) | см. [friston-loop.md § User-side surprise](friston-loop.md#user-side-surprise) | MVP A+B+C |
 | Self-prediction (симметрия Friston-loop) | Neurochem.expectation_vec + self-дисбаланс | [neurochem.py](../src/neurochem.py) | Baddle предсказывает собственную (DA, S, NE) |
 
 **Что это значит на практике:**

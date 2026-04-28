@@ -626,7 +626,7 @@ class CognitiveLoop:
                                 self.USER_SURPRISE_CHECK_INTERVAL):
             return
         try:
-            from .surprise_detector import detect_user_surprise
+            from .detectors import detect_user_surprise
             from .sensor_stream import get_stream
         except Exception as e:
             log.debug(f"[cognitive_loop] user_surprise import failed: {e}")

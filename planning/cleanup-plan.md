@@ -216,8 +216,9 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 
 51 .py файл / 24.5k LOC сейчас. Несколько арбитрарных разделений по historical reasons. **Каждый шаг — отдельный commit** (одна группа за раз, не bulk).
 
-### #1 surprise_detector.py → detectors.py (low effort)
-[`src/surprise_detector.py`](../src/surprise_detector.py) (401 LOC) — фактически 14-й детектор по семантике. До Phase B (Signal/Dispatcher) был отдельным модулем. Сейчас должен жить рядом с 13 другими в `detectors.py`. Ожидаемый delta: 0 LOC (move без сжатия), но архитектурная честность.
+### #1 surprise_detector.py → detectors.py ✅ done 2026-04-28
+
+`src/surprise_detector.py` (401 LOC) удалён, содержимое перенесено в `src/detectors.py` после `DETECTORS` registry. Move без сжатия (`detectors.py` 890 → 1296 LOC). Импортёр (`cognitive_loop.py:629`) переключён на `from .detectors import detect_user_surprise`. 4 docs ссылки обновлены (TECH_README, world-model, friston-loop). Module docstring расширен — отмечено что файл содержит два контракта (Signal-style + dict-based user_surprise). 473 passed pyflakes 0.
 
 ### #2 NAND tick triplet → src/nand.py (medium)
 [`src/tick_nand.py`](../src/tick_nand.py) 499 + [`src/thinking.py`](../src/thinking.py) 186 + [`src/meta_tick.py`](../src/meta_tick.py) 172 = **857 LOC**. Все три — один tick: distinct → Bayes → policy nudge. `thinking.py` — generic name, на самом деле NAND helpers (classify_nodes, _filter_lineage, _pick_target). После consolidation: ~750 LOC после dedup общих imports/utils. Имя точнее отражает.
@@ -235,7 +236,7 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 [`demo.py`](../src/demo.py) 309 + [`defaults.py`](../src/defaults.py) 60 = **369 LOC**. Оба про initial bootstrap (demo seeder + roles/templates JSON). Объединить в `seed.py`. Maybe `dev_only` flag чтобы не тащить в prod.
 
 **Ставка приоритета:**
-1. #1 surprise_detector → detectors.py (15 минут, явный win архитектурно)
+1. ~~#1 surprise_detector → detectors.py~~ ✅ 2026-04-28
 2. #2 NAND triplet (~1ч, средний win — лучший discoverability)
 3. #4 Sensors package (~1ч, future-proof для real adapters)
 4. #3 DMN, #5 Chat, #6 Seed — opportunistic, когда касаешься этих файлов.

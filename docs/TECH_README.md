@@ -264,8 +264,7 @@ Continuous cycle над substrate. После W14 — workspace станет cen
 | Файл | LOC | Что |
 |---|---|---|
 | `cognitive_loop.py` | 2628 | Main background loop, `_advance_tick`, `_check_*` детекторы, throttle, briefings. **W14.7 split candidate**: bookkeeping + briefings + advance_tick |
-| `detectors.py` | 890 | 13 pure-function детекторов (Правило 1). `Signal`-producers, dispatch'ятся через signals.Dispatcher |
-| `surprise_detector.py` | 401 | 14-й детектор по факту, отдельно по historical reasons. **W11 #1**: move в detectors.py |
+| `detectors.py` | 1296 | 13 pure-function `Signal`-producer детекторов (Правило 1) + user-side `detect_user_surprise` (HRV/text/LLM, отдельный API в конце файла) |
 | `signals.py` | 301 | `Signal` + `Dispatcher` (budget, dedup, expires, counter-wave penalty). Правило 1 каркас |
 
 ### Graph — knowledge structures (≈3527 LOC)

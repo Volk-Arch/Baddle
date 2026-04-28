@@ -163,7 +163,7 @@ curl http://localhost:7860/assist/prime-directive?window_days=1
 - [src/user_state.py](../src/user_state.py) — ожидание, ожидание по времени суток, вектор ожидания, baseline HRV по времени суток, вектор surprise, дисбаланс, attribution, apply_surprise_boost
 - [src/neurochem.py](../src/neurochem.py) — вектор self-ожидания Neurochem, self-дисбаланс; ProtectiveFreeze.feed_tick (EMA sync_error + дисбаланс)
 - [src/cognitive_loop.py](../src/cognitive_loop.py) — `_advance_tick` (агрегация 5 каналов), `_check_user_surprise` (детектор user-side surprise), `_check_prime_directive_record`
-- [src/surprise_detector.py](../src/surprise_detector.py) — HRV + текст + LLM детекторы
+- [src/detectors.py](../src/detectors.py) `detect_user_surprise` — HRV + текст + LLM каналы (отдельный API внизу файла, не Signal-style)
 - [src/prime_directive.py](../src/prime_directive.py) — JSONL-writer + backend aggregate-endpoint'а
 - [src/ema.py](../src/ema.py) — реестр Decays (все константы затухания) + EMA / VectorEMA
 
