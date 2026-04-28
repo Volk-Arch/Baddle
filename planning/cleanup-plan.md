@@ -249,34 +249,45 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 ### #6 Seed → src/seed.py (low effort, low value)
 [`demo.py`](../src/demo.py) 309 + [`defaults.py`](../src/defaults.py) 60 = **369 LOC**. Оба про initial bootstrap (demo seeder + roles/templates JSON). Объединить в `seed.py`. Maybe `dev_only` flag чтобы не тащить в prod.
 
-### #7 Mental operators → src/operators/ package (research, не сегодня)
+### #7 Mental operators → src/operators/ package — preconditions нужны
 
-Сейчас mental operators (то чем система **думает** — берёт ноды → возвращает результат) разбросаны по 4-5 файлам по historical reasons:
+Audit 2026-04-28 (Explore-агент): **прямой extract сейчас = false modularity**, тот же anti-pattern что W11 #3 (склейка прячущая inconsistencies). Конкретные verdict'ы по операторам:
 
-| Operator | Где живёт | Что делает |
-|---|---|---|
-| `distinct(a, b)` | [src/main.py](../src/main.py) | мера различия embedding'ов |
-| `classify_nodes`, `_pick_target`, `_filter_lineage`, `_pick_distant_pair` | [src/nand.py](../src/nand.py) | tick helpers |
-| `pump(a, b)` | [src/pump.py](../src/pump.py) | LLM bridge между двумя идеями |
-| `elaborate` | [src/graph_logic.py](../src/graph_logic.py) | расширить конкретную ноду |
-| `smartdc` | [src/assistant_exec.py](../src/assistant_exec.py)? | dialectical check |
-| `collapse` | helpers в [graph_logic.py](../src/graph_logic.py) + tick path в [nand.py](../src/nand.py) | merge similar nodes |
+| Operator | Location | Verdict | Что мешает |
+|---|---|---|---|
+| `distinct` + `distinct_decision` | [main.py:37-65](../src/main.py) | **A pure** | — |
+| `classify_nodes` | [nand.py:39-73](../src/nand.py) | **A pure** | — |
+| `_filter_lineage` | [nand.py:81-113](../src/nand.py) | **A pure** | — |
+| `_pick_distant_pair` | [nand.py:118-141](../src/nand.py) | **A pure** | — |
+| `_tick_force_collapse` | [nand.py:186-211](../src/nand.py) | **A pure** | — |
+| `_pick_target` | [nand.py:146-179](../src/nand.py) | **B isolatable** | Stateful `_count` attribute (3-round diversity counter) — нужен decouple в session param |
+| `pump` | [pump.py:25-148](../src/pump.py) | **C entangled** | 6 local helpers + `_graph` global + 10+ LLM calls + `touch_node` mutations |
+| `elaborate` | [assistant_exec.py:552-637](../src/assistant_exec.py) | **C entangled** | LLM + 3 graph mutations + 4 imports от graph_logic (`_graph_generate`, `_add_node`, `parse_lines_clean`, `parse_smartdc_triple`) |
+| `smartdc` | [assistant_exec.py:596-637](../src/assistant_exec.py) | **C inlined** | Не отдельная функция, embedded в `_deepen_round` |
+| `collapse` | — | **action-only** | Не функция. Decision из `_tick_force_collapse` (`{"action": "collapse"}`) + execution handler в [cognitive_loop.py:1400](../src/cognitive_loop.py) (bumps confidence) |
 
-**Гипотеза:** все они — **символьные операторы над графом**, заслуживают отдельного package `src/operators/{distinct,pump,elaborate,smartdc,collapse}.py`. `nand.py` остаётся NAND tick engine который **диспетчеризует** к ним по distinct-зонам.
+**Главный insight:** pump/elaborate/smartdc/collapse — это **не operators, а graph transactions** (think → mutate). Их extract в `src/operators/` сделает thin wrappers с обратным импортом из graph_logic — false modularity.
 
-**Что нужно проверить перед merge:**
-1. Реально ли каждый — pure operator (input nodes → output)? Или там переплетены IO + LLM-prompt + state mutations?
-2. Есть ли общий контракт (Operator base class? signature `op(graph, *args) → result_dict`)?
-3. Не создаст ли это бутылочное горлышко (всё через одну точку диспетчеризации)?
+Реально вынести сейчас можно только tier A (5 nand helpers + distinct). Но это будет «pure graph helpers», не «mental operators» — главная цель (собрать `pump/elaborate/smartdc/collapse` рядом) не достигается, имя package вводит в заблуждение.
 
-**Польза:**
-- Discoverability — «где определена операция X» становится тривиальным.
-- Документ thinking-operations.md получает зеркало в коде (1-к-1 file → operator).
-- W16 (resonance transfer) — analogies можно сформулировать как «оператор преобразования базиса» = ещё один operator (см. [synchronization.md § Углубление](../docs/synchronization.md)).
+**Preconditions для honest W11 #7:**
 
-**Когда делать:** не блокер. После W14/W15 substrate расширения — там добавятся ещё операторы. Если их к тому моменту накопится >7-8 — package становится явным выигрышем. Если останутся 5-6 — splitting может быть premature.
+1. **Decouple `_pick_target`** — переписать `_count` через session-state, передаваемый в аргументах (~30 мин).
+2. **Extract `smartdc`** из `_deepen_round` в отдельную функцию (assistant_exec.py:596-637 → standalone) (~1ч).
+3. **Decouple `elaborate`** от mutations: возвращать **draft** (что добавить / какие edges создать) вместо прямого вызова `_add_node`. Caller применяет. (~2-3ч, нужны tests)
+4. **Создать `collapse_nodes(graph, indices, ...)`** функцию которая делает работу что сейчас в `cognitive_loop.py:1400` execution handler. (~1ч)
+5. **Decouple `pump`** от `_graph` global — принимать nodes/embeddings явно. 6 helpers оставить рядом (внутри pump.py). (~2ч)
 
-**Ориентир effort:** research wave ~2ч (audit existing operators) + impl wave ~3-5ч (extract без сжатия). Не одна сессия.
+**После всех 5 preconditions** — extract в `src/operators/` становится механическим move (~1-2ч). Но тогда package реально содержит то что обещает.
+
+**Tier-A only сейчас** возможно (~30 мин), но без tier B/C толку мало. Решение: **не делать.** Вернёмся к W11 #7 когда будет appetite на 5-сессионный refactor самих операторов.
+
+**Связь с W16:** при resonance transfer аналогии = «оператор преобразования базиса». Это ещё один operator — добавится после реализации W16.1+. К тому моменту, может, накопится критическая масса для package.
+
+**Польза для будущего (если сделаем):**
+- Discoverability — «где определена операция X» тривиально.
+- thinking-operations.md получает 1-к-1 mirror в коде.
+- Тестирование операторов в изоляции (сейчас pump-test = full graph fixture).
 
 **Ставка приоритета:**
 1. ~~#1 surprise_detector → detectors.py~~ ✅ 2026-04-28
@@ -284,7 +295,7 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 3. ~~#4 Sensors → sensors/ package~~ ✅ 2026-04-28
 4. ~~#3 DMN склейка~~ ❌ rejected 2026-04-28 (вместо: pump_logic→pump rename)
 5. #5 Chat, #6 Seed — opportunistic, когда касаешься этих файлов.
-6. #7 Mental operators package — research-tier, после W14/W15.
+6. #7 Mental operators package — заблокирован 5 preconditions (decouple smartdc/elaborate/pump/collapse/_pick_target). Не делать прямой extract — будет false modularity.
 
 ---
 
