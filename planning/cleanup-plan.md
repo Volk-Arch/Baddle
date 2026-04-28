@@ -227,8 +227,9 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 ### #3 DMN heavy work → src/dmn.py (medium)
 [`src/pump_logic.py`](../src/pump_logic.py) 374 + [`src/consolidation.py`](../src/consolidation.py) 442 = **816 LOC**. REM прорастание + bridge pump = одна семантика «фоновая обработка графа». Сейчас split arbitrary. Ожидаемый ~750 LOC.
 
-### #4 Sensors → src/sensors/ package (medium)
-[`hrv_manager`](../src/hrv_manager.py) 205 + [`hrv_metrics`](../src/hrv_metrics.py) 272 + [`sensor_stream`](../src/sensor_stream.py) 290 + [`sensor_adapters`](../src/sensor_adapters.py) 95 = **862 LOC**. Логически один subsystem. Package с 4 sub-files (`manager.py`, `metrics.py`, `stream.py`, `adapters.py`) или один `sensors.py`. Когда добавятся реальные адаптеры (Polar, Apple Watch) — package масштабируется.
+### #4 Sensors → src/sensors/ package ✅ done 2026-04-28
+
+`hrv_manager` 205 + `hrv_metrics` 272 + `sensor_stream` 290 + `sensor_adapters` 95 = 862 LOC переехали в `src/sensors/{manager,metrics,stream,adapters}.py` через `git mv` (rename history preserved). `__init__.py` минимальный — production code использует прямые sub-module импорты (`from .sensors.manager import get_manager`), test patches симметричны (`src.sensors.manager.get_manager`). 11 импортов в src/ (assistant/cognitive_loop/detectors/graph_routes/checkins) + ui.py + 8 test patches переключены. 4 docs обновлены (TECH_README, storage, hrv-design, foundation). Package готов к расширению — реальный Polar BLE / Apple Watch / EEG добавляются как отдельные модули. 473 passed pyflakes 0.
 
 ### #5 Chat → src/chat/ package (low)
 [`chat.py`](../src/chat.py) 65 + [`chat_history.py`](../src/chat_history.py) 189 + [`chat_commands.py`](../src/chat_commands.py) 425 = **679 LOC**. Один UI-слой, split по historical reasons. `src/chat/{routes.py, history.py, commands.py}`. Польза не огромна — но naming чище.
@@ -239,7 +240,7 @@ W12 (tasks redesign) **поглощается** в W15.2 — реализуем 
 **Ставка приоритета:**
 1. ~~#1 surprise_detector → detectors.py~~ ✅ 2026-04-28
 2. ~~#2 NAND triplet → nand.py~~ ✅ 2026-04-28
-3. #4 Sensors package (~1ч, future-proof для real adapters)
+3. ~~#4 Sensors → sensors/ package~~ ✅ 2026-04-28
 4. #3 DMN, #5 Chat, #6 Seed — opportunistic, когда касаешься этих файлов.
 
 ---

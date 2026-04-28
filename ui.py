@@ -66,7 +66,7 @@ get_cognitive_loop().start()
 # и sync_error всегда фикция). Закрывает блокер daily-use.
 try:
     from src.user_profile import load_profile
-    from src.hrv_manager import get_manager as get_hrv_manager
+    from src.sensors.manager import get_manager as get_hrv_manager
     _prof = load_profile()
     if (_prof.get("context") or {}).get("hrv_autostart"):
         get_hrv_manager().start(mode="simulator")

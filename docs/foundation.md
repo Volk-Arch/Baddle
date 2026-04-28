@@ -93,7 +93,7 @@ Task tracker (Telegram Mini App). Планирование дня, задачи 
 
 Чтение вариабельности сердечного ритма через Polar H10: Bluetooth → межсокращательные интервалы (RR, миллисекунды) → HRV-метрики → реалтайм-UI. Метрики: **корень из среднеквадратичного изменения RR** (RMSSD — парасимпатический тонус), **стандартное отклонение RR** (SDNN — общая вариабельность), **доля пар RR различающихся более чем на 50 мс** (pNN50), **отношение мощностей в низко- и высокочастотной полосах** (LF/HF — баланс симпатика/парасимпатики через FFT), **когерентность** (синхронизация дыхания и сердца).
 
-**В Baddle:** `src/hrv_manager.py` + `src/hrv_metrics.py` уже реализуют симулятор + интеграцию в UserState. Реальный Polar через BLE — задача в TODO. Детали — [hrv-design.md](hrv-design.md).
+**В Baddle:** `src/sensors/manager.py` + `src/sensors/metrics.py` уже реализуют симулятор + интеграцию в UserState. Реальный Polar через BLE — задача в TODO. Детали — [hrv-design.md](hrv-design.md).
 
 ---
 
@@ -101,7 +101,7 @@ Task tracker (Telegram Mini App). Планирование дня, задачи 
 
 ```
 ┌────────────────────┐
-│  Polar H10 (BLE)   │──→ hrv_manager → hrv_metrics
+│  Polar H10 (BLE)   │──→ sensors.manager → sensors.metrics
 └────────────────────┘                      │
                               RMSSD, LF/HF, coherence
                                             │

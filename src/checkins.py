@@ -92,7 +92,7 @@ def add_checkin(energy: Optional[int] = None,
     # Дублируем в sensor_stream — UserState читает и HRV и manual как единый
     # полиморфный поток. Источник = 'manual', confidence = 0.7 (субъективно).
     try:
-        from .sensor_stream import push_subjective
+        from .sensors.stream import push_subjective
         # Приводим к [0,1] нормализованные копии для HRV-совместимости
         energy_norm = (entry["energy"] / 100.0) if entry.get("energy") is not None else None
         focus_norm = (entry["focus"] / 100.0) if entry.get("focus") is not None else None

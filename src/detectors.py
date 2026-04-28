@@ -141,7 +141,7 @@ def detect_coherence_crit(ctx: DetectorContext) -> Optional[Signal]:
     Defensive: внешние вызовы (hrv_manager) могут упасть — возвращаем None.
     """
     try:
-        from .hrv_manager import get_manager as get_hrv_manager
+        from .sensors.manager import get_manager as get_hrv_manager
         mgr = get_hrv_manager()
         if not mgr.is_running:
             return None
@@ -964,7 +964,7 @@ def detect_hrv_surprise(activity_magnitude: Optional[float] = None) -> dict:
         }
     """
     try:
-        from .sensor_stream import get_stream, KIND_HRV_SNAPSHOT
+        from .sensors.stream import get_stream, KIND_HRV_SNAPSHOT
     except Exception as e:
         return {"event": False, "reason": f"import_failed:{e}", "score": 0.0}
 

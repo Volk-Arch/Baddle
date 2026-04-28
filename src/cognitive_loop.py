@@ -28,7 +28,7 @@ import random
 from typing import Optional, Tuple
 
 from .graph_logic import _graph
-from .hrv_manager import get_manager as get_hrv_manager
+from .sensors.manager import get_manager as get_hrv_manager
 from .horizon import get_global_state, PROTECTIVE_FREEZE
 # NOTE: get_user_state удалён в W5; используем get_global_state().rgk напрямую
 from .signals import Signal, Dispatcher
@@ -627,7 +627,7 @@ class CognitiveLoop:
             return
         try:
             from .detectors import detect_user_surprise
-            from .sensor_stream import get_stream
+            from .sensors.stream import get_stream
         except Exception as e:
             log.debug(f"[cognitive_loop] user_surprise import failed: {e}")
             return
@@ -1715,7 +1715,7 @@ class CognitiveLoop:
         Не вызывает LLM — быстрая агрегация из state. UI показывает как alert;
         если юзер откроет /assist/morning — получит расширенную LLM-версию.
         """
-        from .hrv_manager import get_manager as get_hrv_manager
+        from .sensors.manager import get_manager as get_hrv_manager
         from .goals_store import list_goals
 
         bits = ["Доброе утро."]
@@ -2458,7 +2458,7 @@ def _briefing_checkin(loop) -> Optional[dict]:
 
 
 def _briefing_recovery(loop) -> Optional[dict]:
-    from .hrv_manager import get_manager as get_hrv_mgr
+    from .sensors.manager import get_manager as get_hrv_mgr
     recovery_pct = None
     named_label = None
     try:

@@ -91,7 +91,7 @@ def ctx(stub_loop):
 # ── detect_coherence_crit ──────────────────────────────────────────────────
 
 def test_coherence_crit_emits_when_low(ctx):
-    with patch("src.hrv_manager.get_manager") as mock_get:
+    with patch("src.sensors.manager.get_manager") as mock_get:
         mgr = MagicMock()
         mgr.is_running = True
         mgr.get_baddle_state.return_value = {"coherence": 0.2}
@@ -105,7 +105,7 @@ def test_coherence_crit_emits_when_low(ctx):
 
 
 def test_coherence_crit_critical_when_very_low(ctx):
-    with patch("src.hrv_manager.get_manager") as mock_get:
+    with patch("src.sensors.manager.get_manager") as mock_get:
         mgr = MagicMock()
         mgr.is_running = True
         mgr.get_baddle_state.return_value = {"coherence": 0.05}
@@ -116,7 +116,7 @@ def test_coherence_crit_critical_when_very_low(ctx):
 
 
 def test_coherence_crit_none_when_above_threshold(ctx):
-    with patch("src.hrv_manager.get_manager") as mock_get:
+    with patch("src.sensors.manager.get_manager") as mock_get:
         mgr = MagicMock()
         mgr.is_running = True
         mgr.get_baddle_state.return_value = {"coherence": 0.5}
@@ -125,7 +125,7 @@ def test_coherence_crit_none_when_above_threshold(ctx):
 
 
 def test_coherence_crit_none_when_hrv_off(ctx):
-    with patch("src.hrv_manager.get_manager") as mock_get:
+    with patch("src.sensors.manager.get_manager") as mock_get:
         mgr = MagicMock()
         mgr.is_running = False
         mock_get.return_value = mgr
@@ -133,7 +133,7 @@ def test_coherence_crit_none_when_hrv_off(ctx):
 
 
 def test_coherence_crit_none_when_no_data(ctx):
-    with patch("src.hrv_manager.get_manager") as mock_get:
+    with patch("src.sensors.manager.get_manager") as mock_get:
         mgr = MagicMock()
         mgr.is_running = True
         mgr.get_baddle_state.return_value = {"coherence": None}
@@ -633,7 +633,7 @@ def test_all_detectors_handle_exceptions_gracefully(ctx):
     """
     from src.signals import Signal as _Sig
     from src.detectors import DETECTORS
-    with patch("src.hrv_manager.get_manager", side_effect=RuntimeError("boom")), \
+    with patch("src.sensors.manager.get_manager", side_effect=RuntimeError("boom")), \
          patch("src.assistant._get_context", side_effect=RuntimeError("boom")), \
          patch("src.assistant._load_state", side_effect=RuntimeError("boom")), \
          patch("src.plans.schedule_for_day", side_effect=RuntimeError("boom")), \

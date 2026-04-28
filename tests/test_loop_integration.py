@@ -34,7 +34,7 @@ def test_all_run_methods_exist():
 def test_build_context_works(tmp_path, monkeypatch):
     """Build context from real loop without crashing."""
     # Patch hrv_manager чтобы не требовать сенсоры
-    with patch("src.hrv_manager.get_manager") as mock_hrv:
+    with patch("src.sensors.manager.get_manager") as mock_hrv:
         mgr = MagicMock()
         mgr.is_running = False
         mock_hrv.return_value = mgr
@@ -108,7 +108,7 @@ def test_loop_body_one_iteration(tmp_path):
     Все детекторы должны либо вернуть None, либо валидный Signal — без
     исключений в наружу.
     """
-    with patch("src.hrv_manager.get_manager") as mock_hrv, \
+    with patch("src.sensors.manager.get_manager") as mock_hrv, \
          patch("src.api_backend.api_get_embedding", return_value=None), \
          patch("src.suggestions.collect_suggestions", return_value=[]), \
          patch("src.user_profile.load_profile",

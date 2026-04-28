@@ -14,7 +14,7 @@ from flask import Blueprint, request, jsonify, Response
 log = logging.getLogger(__name__)
 
 from .modes import get_mode
-from .hrv_manager import get_manager as get_hrv_manager
+from .sensors.manager import get_manager as get_hrv_manager
 from .cognitive_loop import get_cognitive_loop
 from .assistant_exec import execute as execute_mode
 
@@ -2441,7 +2441,7 @@ def assist_decompose():
 # ── Sensor stream (polymorphic body sensors) ──────────────────────────
 # Unified поток от любого источника: simulator, Polar, Apple Watch,
 # manual check-in. UserState читает агрегат отсюда (не из конкретного
-# HRVManager). См. docs/alerts-and-cycles.md + src/sensor_stream.py
+# HRVManager). См. docs/alerts-and-cycles.md + src/sensors/stream.py
 
 @assistant_bp.route("/sensor/readings", methods=["GET"])
 def sensor_readings():
@@ -2449,7 +2449,7 @@ def sensor_readings():
 
     Query: ?kind=hrv_snapshot&since=300&source=simulator
     """
-    from .sensor_stream import get_stream
+    from .sensors.stream import get_stream
     kind = request.args.get("kind")
     source = request.args.get("source")
     try:
@@ -2478,7 +2478,7 @@ def sensor_aggregate():
 
     Query: ?window=180
     """
-    from .sensor_stream import get_stream
+    from .sensors.stream import get_stream
     try:
         window = float(request.args.get("window", 180))
     except ValueError:

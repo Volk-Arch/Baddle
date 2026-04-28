@@ -2,14 +2,14 @@
 
 Все адаптеры имеют один интерфейс:
   .start() / .stop() / .is_running
-Реализация push'ит данные в `sensor_stream.get_stream()` через хелперы
+Реализация push'ит данные в `sensors.stream.get_stream()` через хелперы
 `push_rr / push_hrv_snapshot / push_activity / push_subjective`.
 
 Polar H10 — готов по структуре, реальный BLE (bleak) не подключён.
 Apple Watch — заготовка, HealthKit-импорт не реализован.
 
-simulator уже работает — он внутри HRVManager._start_simulator, пушит
-в stream автоматически (см. hrv_manager.py).
+simulator уже работает — он внутри `HRVManager._start_simulator`, пушит
+в stream автоматически (см. `sensors.manager`).
 
 Manual — сразу работает: /checkin endpoint пушит subjective через
 push_subjective. Не требует отдельного адаптера.
@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from .sensor_stream import SOURCE_POLAR, SOURCE_APPLE
+from .stream import SOURCE_POLAR, SOURCE_APPLE
 
 log = logging.getLogger(__name__)
 

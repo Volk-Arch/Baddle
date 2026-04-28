@@ -192,8 +192,8 @@ Neurochem (системная сторона) эволюционирует по 
 
 ## Где в коде
 
-- [src/hrv_manager.py](../src/hrv_manager.py) — HRVManager с симулятором и скелетом для Polar.
-- [src/hrv_metrics.py](../src/hrv_metrics.py) — `calculate_rmssd`, `calculate_hrv_metrics`, `hrv_to_baddle_state` (mapping в ширину/ориентацию).
+- [src/sensors/manager.py](../src/sensors/manager.py) — HRVManager с симулятором и скелетом для Polar.
+- [src/sensors/metrics.py](../src/sensors/metrics.py) — `calculate_rmssd`, `calculate_hrv_metrics`, `hrv_to_baddle_state` (mapping в ширину/ориентацию).
 - [cognitive_loop._check_hrv_push](../src/cognitive_loop.py) — раз в 15 секунд синхронизирует stream → UserState.
 - Endpoints `/hrv/*` в [assistant.py](../src/assistant.py).
 

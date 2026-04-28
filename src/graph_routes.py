@@ -22,7 +22,7 @@ from .graph_logic import (
     sample_in_embedding_space,
     touch_node, TOUCH_BOOST_DEFAULT,
 )
-from .hrv_manager import get_manager as get_hrv_manager
+from .sensors.manager import get_manager as get_hrv_manager
 
 log = logging.getLogger(__name__)
 

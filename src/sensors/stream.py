@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, Iterable
 
-from .paths import SENSOR_READINGS_FILE
+from ..paths import SENSOR_READINGS_FILE
 
 log = logging.getLogger(__name__)
 

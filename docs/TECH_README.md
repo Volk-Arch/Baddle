@@ -334,14 +334,14 @@ Three storage layers с overlapping API patterns. **W12 candidate** (погло�
 
 ### Sensors / HRV (≈862 LOC)
 
-**W11 #4 candidate**: `src/sensors/` package.
+`src/sensors/` package — растёт, новые адаптеры (real Polar BLE / Apple Watch / EEG) добавляются как отдельные модули.
 
 | Файл | LOC | Что |
 |---|---|---|
-| `sensor_stream.py` | 290 | Generic sensor reading stream + adapter abstraction |
-| `hrv_metrics.py` | 272 | RMSSD, coherence, stress derivation из RR-интервалов |
-| `hrv_manager.py` | 205 | HRV state manager (running / paused), simulator + real adapter dispatch |
-| `sensor_adapters.py` | 95 | Polar H10 (in development), simulator |
+| `sensors/stream.py` | 290 | Generic sensor reading stream + adapter abstraction |
+| `sensors/metrics.py` | 272 | RMSSD, coherence, stress derivation из RR-интервалов |
+| `sensors/manager.py` | 205 | HRV state manager (running / paused), simulator + real adapter dispatch |
+| `sensors/adapters.py` | 95 | Polar H10 (in development), simulator |
 
 ### Utility / specialized helpers
 

@@ -5,7 +5,7 @@ Two modes:
   - "polar": real Polar H10 via BLE (requires bleak + bleakheart)
 
 Usage:
-    from .hrv_manager import get_manager
+    from .sensors.manager import get_manager
     mgr = get_manager()
     mgr.start(mode="simulator")
     metrics = mgr.get_metrics()
@@ -17,8 +17,8 @@ import logging
 from typing import Dict, Optional, Callable
 from collections import deque
 
-from .hrv_metrics import calculate_hrv_metrics, hrv_to_baddle_state, HRVSimulator
-from .sensor_stream import (
+from .metrics import calculate_hrv_metrics, hrv_to_baddle_state, HRVSimulator
+from .stream import (
     push_rr, push_hrv_snapshot, push_activity, SOURCE_SIMULATOR,
 )
 
