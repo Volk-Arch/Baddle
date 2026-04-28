@@ -341,6 +341,59 @@ class JsonlStore:
 
 ---
 
+## W17 — Naming consolidation: bio_physics compound names в API (1.5-2ч, medium risk)
+
+**Мотивация.** Сейчас в API output (`/assist/state`, `serialize_user`,
+`serialize_system`, `project()`) chem-axes отдаются по биологическим
+именам: `dopamine`, `serotonin`, `norepinephrine`, `acetylcholine`, `gaba`.
+Внутри РГК физические имена: `gain`, `hyst`, `aperture`, `plasticity`,
+`damping`. Mapping bio↔physics есть только в [rgk.py:55-60 docstring](../src/rgk.py)
+и [docs/rgk-spec.md](../docs/rgk-spec.md). API self-documenting не даёт.
+
+Compound naming (`dopamine_gain`, `serotonin_hysteresis`,
+`norepinephrine_aperture`, `acetylcholine_plasticity`, `gaba_damping`)
+показывает связь биологии и физики **прямо в JSON**. Ранее жил в удалённом
+`/assist/chemistry` endpoint (deleted 2026-04-28), но только там.
+
+**Scope (audit 2026-04-28):**
+- **67 occurrences** в `src/*.py` — keys в dict literals, `.get()` access
+  (`graph_logic.py` snapshots, `cognitive_loop.py` chem fields, `assistant.py`,
+  `assistant_exec.py`, `horizon.get_metrics`, `rgk.serialize_*`/`load_*`/`project`).
+- **6 occurrences** в `static/*.js` — UI читает `metrics.user_state.dopamine`,
+  `metrics.neurochem.dopamine` etc.
+- **21 occurrences** в `tests/*.py` — `EXPECTED_USER_STATE["dopamine"]` etc.
+- **state.json + prime_directive.jsonl** — persistence keys; full rename
+  ломает старые saves. По правилу [no backward-compat](../memory) — это OK.
+
+**Подход (incremental по 1 файлу — bisect-friendly):**
+1. `serialize_user` / `serialize_system` / `load_user` / `load_system` —
+   output + input keys в РГК (rgk.py).
+2. `project()` returns в РГК — `user_state` / `system` / `freeze` projections.
+3. `get_metrics()` (horizon.py) — `neurochem` секция keys.
+4. `compute_sync_error_wave` axes keys + `_AXIS_NAMES` + `_WAVE_AXES`.
+5. Consumers в src/ — `cognitive_loop.py`, `assistant.py`,
+   `assistant_exec.py`, `graph_logic.py`. Каждый — отдельный commit.
+6. UI JS (`assistant.js` + другие) — обновить access paths.
+7. Tests — `EXPECTED_USER_STATE`, `EXPECTED_NEUROCHEM`, identity sentinels
+   в rgk.py.
+8. Docs sync — `neurochem-design.md`, `rgk-spec.md`, `synchronization.md`,
+   `architecture-rules.md` upda mapping references.
+
+**Effort:** ~1.5-2ч аккуратно. Зелёные tests после каждого шага. Risk
+medium — много touchpoints, missed grep даст пустые поля в UI.
+
+**Альтернатива (если больших изменений не хочется):** API-only rename —
+менять только output в `serialize_*` + `get_metrics`, internal код
+оставить с short keys (~20-30 мин). Минус — двойная карта (compound в API,
+short в РГК.user/system attribute access — последнее уже физика).
+
+**Не блокирует:** W14, W15, W16. Делать когда appetite на чистый refactor.
+
+**Не делать:** не делать одновременно с другим feature burst — много
+occurrences, грязный merge с любым параллельным изменением chem polling.
+
+---
+
 ## W10 — Optional: UserState shim deletion (2-4ч, high risk)
 
 UserState shim 393 LOC — backward-compat для **132 test refs**. Production не использует. Если sweep:
