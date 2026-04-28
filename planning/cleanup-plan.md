@@ -211,9 +211,65 @@ Cleanup продолжается пока явное не исчерпано —
 
 - **W16.1a** ✅ done 2026-04-28 — `compute_sync_error_wave(rgk)` в `user_state.py` + `РГК.sync_error_wave()` method + `CognitiveState.sync_error_wave` property. Возвращает 5-axis amplitude breakdown + max_axis + scalar_5d. Expose через `/assist/chemistry coupling.sync_error_wave` + `get_metrics()`. 5 property tests в test_rgk_properties.py. Диагностика «по которой частоте расхождение». 487 passed pyflakes 0. Spec — [docs/synchronization.md § Компоненты](../docs/synchronization.md#1-sync_error_wave-per-axis--mvp-сделан-2026-04-28).
 - **W16.1b** ✅ done 2026-04-28 — `РГК.phase_per_axis()` + поле `phases` в `compute_sync_error_wave`. Lazy `_phase_snapshot` (ts/user/system) с min-age 30s — refresh window. Per-axis `user_velocity`, `system_velocity`, `mismatch` flag (signs opposite AND обе > noise 0.005/s). `_mismatch_count` total. 5 property tests (`test_phase_*`). Smoke verified: при user↑/system↓ на DA — `mismatch=True`, при ACh velocity ниже noise — не считается mismatch. Self-contained — без hooks в loop, ленивое обновление. 492 passed pyflakes 0.
-- **W16.2** Onboarding analogies endpoint: `GET /onboarding/analogies` + `POST /onboarding/answer`. 5-7 questions с target named_state'ами из 8-region map. Embedding similarity → activation. Закрывает sub-task **«генерация резонансных аналогий»** — аналогия = оператор преобразования базиса между пользовательским и target spectrum. (2-3ч)
+- **W16.2** Analogy injection layer (3-3.5ч, **зависит от W14 chat refactor**)
+
+  **Сдвиг от первоначального plan'а:** не отдельный onboarding endpoint в Settings (никто туда не зайдёт), а **слой analogy injection** в существующие chat/alert flows — там где deficit замечается. Делать **после** W14 chat unification (промежуточное хранилище куда все компоненты пишут → append в чат), потому что probe = ещё один component с тем же контрактом. До W14 implementation будет fragmented через alert system.
+
+  ### Concept: «sync deficit → analogy injection»
+
+  Всё что блокирует синхронизацию = повод для probe. Категории deficit → разные probes:
+
+  | Deficit | Detector | Probe |
+  |---|---|---|
+  | **Empty content** ⭐ critical first contact | no goals + empty profile + low activity | «что для тебя сейчас важно? опиши день идеальный» |
+  | Axis amplitude mismatch | `sync_error_wave.max_value > 0.4` | «вспомни случай когда [target_state]» (axis-specific) |
+  | Phase mismatch | `_mismatch_count >= 2` | «опиши что сейчас меняется в твоём состоянии» |
+  | Valence drift | sentiment EMA дрейф от user-baseline | «что радует/беспокоит?» |
+  | Physical strain | NE high + HRV low + capacity red | «устал? что делал сегодня?» |
+  | **Dislike-reformulate** | feedback=rejected with rephrase intent | LLM analogy через user's known patterns (outbound — отдельная W16.5) |
+
+  **Empty state — самое главное.** Новый юзер пустой → нет goals → Baddle буквально не с чем sync'аться → sync_error_wave всегда максимальный по дефолту. Сильно ценнее axis mismatch для real-world деплоя.
+
+  ### Implementation breakdown (Path B сегодняшнего обсуждения)
+
+  1. **Core engine** (`src/analogies.py`):
+     - Question library — 10-15 questions по contexts (cognitive/emotional/physical/sync/empty), каждый с `target_axes` из 8-region map ([user_state_map.py](../src/user_state_map.py)) — single source of truth.
+     - `pick_analogy(context, rgk_state)` — выбирает relevant question по текущему wave/deficit kind.
+     - `apply_response(text, target_axes)` — embedding similarity к anchor_text → resonance score → blend `current = α·current + (1−α)·target` с α scaled на resonance (`α = 0.5 · resonance_score`).
+     - Rate limiting — 1-2 probe в день, dedup by deficit kind.
+     - Persistence — `data/analogies_log.jsonl` для replay + cross-reference в outbound (W16.5).
+
+  2. **Detectors** (`src/detectors.py`):
+     - `detect_empty_state_probe` — empty профиль + нет goals + low activity.
+     - `detect_axis_mismatch_probe` — `sync_error_wave.max_value > 0.4`.
+     - `detect_phase_mismatch_probe` — `_mismatch_count >= 2`.
+     - (valence/physical — opportunistic, opt-in последующие waves)
+
+  3. **Signal kind** = новый `analogy_probe` (semantically отличается от `observation_suggestion` — request user content, не feed). Card kind=`analogy_probe` рендерится в чате с textarea + submit.
+
+  4. **Endpoint** (1 новый):
+     - `POST /analogy/answer` body `{key, text}` → `{target_state, resonance, axes_updated, accepted}`.
+
+  5. **Like/Dislike segmentation** на 👎 (existing [assistant.js:1014](../static/js/assistant.js)):
+     - На 👎 → modal popup «плохой ответ / надо переформулировать?» (2 кнопки).
+     - «плохой» → existing rejected feedback flow (−DA, S↓).
+     - «переформулировать» → log в `data/feedback_refinements.jsonl` с reason=`rephrase_requested` + endpoint `POST /feedback/refine`.
+     - LLM-генерация reformulation = W16.5 (отдельно).
+
+  ### Empty state behaviour (mild + повторение)
+
+  - **Initial trigger:** при первом запуске когда профиль пустой + нет goals → 1 probe («опиши свой типичный день»).
+  - **Repeat если still empty:** каждые 2-3 дня повторение с другим вопросом из set (что сейчас важно / чему учишься / опиши идеальный день и т.п.). Не спам, но не теряем шанс калибровки.
+  - **Stop:** после первого goal или 3+ profile entries.
+
+  ### Что НЕ входит — отдельные waves
+
+  - **W16.5 — Outbound LLM analogies:** на dislike-rephrase → LLM генерит analogy через user's known patterns (read из analogies_log.jsonl). ~2-3ч, требует prompt engineering. Substrate W16.2 готов: feedback_refinements log + analogies log.
+  - **W16.2b — Multi-injection (morning_briefing / long-pause-return / streak break):** opportunistic интеграции после W16.2 готов как foundation.
+
 - **W16.3** Few-shot bias calibration: при первом task в category — UI с 3-5 examples, linear fit → initial bias_coefficient (1-2ч). **Calib CI band получает физический смысл**: ширина полосы резонанса. Узкий CI = узкая полоса (точная настройка). Это переинтерпретация existing Beta-prior infrastructure через wave optics — не новая метрика.
-- **W16.4** Adiabatic adjustment: при больших sync_error_wave[axis] система генерирует analogies для axis в morning briefing. Закрывает sub-task **«стабильность волны при передаче»** — система проверяет не дрифтует ли её spectrum под user input. Active learning loop. (2-3ч)
+- **W16.4** Adiabatic adjustment: при больших sync_error_wave[axis] система генерирует analogies для axis в morning briefing. Закрывает sub-task **«стабильность волны при передаче»** — система проверяет не дрифтует ли её spectrum под user input. Active learning loop. (2-3ч). После W16.2 (analogy engine) и W16.5 (outbound) — может быть thin glue layer над ними.
+- **W16.5** Outbound LLM analogies: при feedback=rejected + reason=`rephrase_requested` (segmented dislike из W16.2) → LLM генерит reformulation через user's known patterns (analogies_log + accepted responses). Hook в deep response retry path. ~2-3ч. **Substrate** для этого готовится в W16.2 — feedback_refinements jsonl + analogies log.
 
 **Главный архитектурный shift после W16:** качество понимания меряется не через perplexity, а через **коэффициент резонанса** (фазовое рассогласование + амплитудная корреляция per axis). Не LLM-фреймворк, **когнитивный резонатор**. См. [docs/synchronization.md § Углубление](../docs/synchronization.md).
 
