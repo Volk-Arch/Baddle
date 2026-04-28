@@ -334,6 +334,45 @@ W16.1a (amplitude per axis) + W16.1b (phase-aware) — см. Done log. Spectral 
 
 ---
 
+### W18 — File structure as physical model (meta-wave, research-tier)
+
+**Идея Игоря 2026-04-28 (закрытие сессии):** структура файлов порождает сложность реализаций. По закону Конвея — система повторяет структуру коммуникации; для single-developer проекта это значит структура файлов = mental model для следующих сессий и LLM при bootstrapping. Текущая структура — **исторические разрезы**, не физика.
+
+**Симптомы текущей структуры:**
+- РГК substrate разбит между `rgk.py` + `horizon.py` + `user_state.py` (последний — shim под W10).
+- Mental operators (distinct / pump / elaborate / smartdc / collapse) разбросаны по 4-5 файлам — W11 #7 audit показал почему extract сейчас = false modularity.
+- Storage primitives (`goals_store` + `plans` + `recurring` + `activity_log`) дублируют API — знает W12 part Б.
+- `assistant.py` 3105 LOC + `cognitive_loop.py` 2628 LOC = mega-orchestrators без clear separation — знает W14.6/.7.
+- `signals.py` + `detectors.py` + Dispatcher — близко но не вместе.
+
+**Гипотеза реструктуризации (направление, не план):**
+```
+src/
+  substrate/    # РГК ядро (state + dynamics + pressure + feeders)
+  cycle/        # nand tick + horizon + cognitive_loop background
+  operators/    # distinct / pump / elaborate / smartdc / collapse (после preconditions)
+  signals/      # signals + dispatcher + detectors
+  memory/       # graph_logic + workspace + consolidation + state_graph
+  storage/      # jsonl_store + goals + plans + recurring + activity_log + tasks
+  sensors/      # уже package
+  io/           # HTTP routes + background hooks
+  ui/           # chat + frontend support
+```
+
+**Связь с existing waves:**
+- W11 #5 (chat package), W11 #7 (operators), W12 part Б (storage primitive), W14.6/.7 (assistant/cognitive_loop split) — **это всё кусочки W18**. Сделанные отдельно дадут частичное решение. Сделанные **под единый план** дадут согласованную физическую структуру.
+
+**Не делать сейчас.** Это design wave требующая trace физики через ВСЁ дерево, плюс multi-session implementation. Реалистично — после W14 (workspace primitive разблокирует чёткое разделение memory/storage/operators).
+
+**Substrate готов к проектированию когда:**
+- W14.1+ workspace primitive живёт (clean memory/ subdomain)
+- W11 #7 preconditions решены (operators extract'абельны)
+- W12 part Б storage primitive (jsonl_store) готов
+
+**Артефакт когда придёт время:** `planning/file-structure-physics.md` — narrative design doc с rationale per группа + migration plan.
+
+---
+
 ## Что НЕ закрывается
 
 - **89 live Flask routes** — inherent IO; generic dispatcher = net negative.
