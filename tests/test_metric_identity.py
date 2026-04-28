@@ -1,6 +1,8 @@
 """Identity sentinel: фиксированный event-sequence через UserState /
 Neurochem / ProtectiveFreeze должен давать тот же snapshot. EXPECTED
-захвачен 2026-04-24. Если тест падает — семантика формул изменилась.
+захвачен 2026-04-24, расширен на 5D 2026-04-28 (vector/expectation_vec
+с 3 → 5 элементов, скаляры идентичны — формулы не изменились).
+Если тест падает — семантика формул изменилась.
 
 Пересоздать EXPECTED: capture-script + вставка. Валидно только при
 сознательной смене формулы — иначе тест ловит регрессию.
@@ -27,14 +29,14 @@ EXPECTED_USER_STATE = {
         "evening": 0.5,
         "night": 0.5,
     },
-    "expectation_vec": [0.529848, 0.518119, 0.463763],
+    "expectation_vec": [0.529848, 0.518119, 0.463763, 0.5, 0.5],
     "hrv_baseline_by_tod": {
         "morning": None,
         "day": 0.6,
         "evening": None,
         "night": None,
     },
-    "vector": [0.566345, 0.540951, 0.418098],
+    "vector": [0.566345, 0.540951, 0.418098, 0.5, 0.5],
     "surprise": 0.03628,
     "imbalance": 0.062759,
 }
@@ -43,11 +45,11 @@ EXPECTED_NEUROCHEM = {
     "dopamine": 0.424359,
     "serotonin": 0.598492,
     "norepinephrine": 0.700003,
-    "expectation_vec": [0.495359, 0.508601, 0.517466],
+    "expectation_vec": [0.495359, 0.508601, 0.517466, 0.5, 0.5],
     "gamma": 2.84317,
     "recent_rpe": -0.15,
     "self_imbalance": 0.215502,
-    "vector": [0.424359, 0.598492, 0.700003],
+    "vector": [0.424359, 0.598492, 0.700003, 0.5, 0.5],
 }
 
 EXPECTED_FREEZE = {

@@ -106,13 +106,23 @@ sync_error_wave[axis] = |user[axis] − system[axis]| per component
     },
     "max_axis": "norepinephrine",  # axis с наибольшим расхождением
     "max_value": 0.42,
-    "scalar_5d": 0.61,             # L2 over 5 axes (legacy 3D игнорировал ACh+GABA)
+    "scalar_5d": 0.61,             # L2 over 5 axes (== sync_error после 5D перехода)
 }
 ```
 
 Expose'ится через `/assist/chemistry` `coupling.sync_error_wave` + входит в
-`get_metrics()` для дашборда. Тесты — `tests/test_rgk_properties.py`
-`TestCouplingConsistency` (5 новых).
+`get_metrics()` для дашборда. UI: live `Δ AXIS value` indicator в Симбиоз
+block (виден когда max_value > 0.15). Тесты — `tests/test_rgk_properties.py`
+`TestCouplingConsistency`.
+
+**5D clean break (2026-04-28):** scalar `sync_error` сам по себе теперь 5D
+(`compute_sync_error()` использует `rgk.user.vector()` который расширен с
+3D на 5D). `Resonator.vector()` возвращает все 5 chem-axes (DA/5HT/NE/ACh/GABA).
+Threshold'ы пересчитаны под max=√5≈2.24: `> 0.75` → `> 1.0` (CONFLICT),
+`> 0.5` → `> 0.7`, `SYNC_HIGH_THRESHOLD = 0.3` → `0.4`. `u_exp_vec` /
+`s_exp_vec` (VectorEMA) — 3 → 5 элементов с graceful pad для legacy saves.
+Identity tests preserved — все скаляры (gamma/surprise/imbalance/...)
+идентичны, только vector dimensions расширились.
 
 **Что осталось (W16.1b, не сегодня):** phase-aware comparison — текущий
 MVP сравнивает amplitudes (мгновенный snapshot). Phase требует velocity

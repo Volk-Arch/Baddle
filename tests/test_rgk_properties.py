@@ -197,40 +197,44 @@ class TestCouplingConsistency:
     См. docs/neurochem-design.md §10A.
     """
 
+    _ALL_AXES = ("gain", "hyst", "aperture", "plasticity", "damping")
+
     def test_sync_error_zero_when_vectors_equal(self):
         r = РГК()
-        for axis in ("gain", "hyst", "aperture"):
+        for axis in self._ALL_AXES:
             getattr(r.user, axis).value = 0.5
             getattr(r.system, axis).value = 0.5
         assert r.sync_error() == pytest.approx(0.0, abs=TOL)
 
     def test_sync_error_symmetric(self):
-        """‖a-b‖ == ‖b-a‖."""
+        """‖a-b‖ == ‖b-a‖ через все 5 axes."""
         r = РГК()
-        r.user.gain.value, r.user.hyst.value, r.user.aperture.value = 0.7, 0.3, 0.5
-        r.system.gain.value, r.system.hyst.value, r.system.aperture.value = 0.3, 0.7, 0.5
+        u_vals = {"gain": 0.7, "hyst": 0.3, "aperture": 0.5, "plasticity": 0.8, "damping": 0.2}
+        s_vals = {"gain": 0.3, "hyst": 0.7, "aperture": 0.5, "plasticity": 0.2, "damping": 0.8}
+        for axis in self._ALL_AXES:
+            getattr(r.user, axis).value = u_vals[axis]
+            getattr(r.system, axis).value = s_vals[axis]
         e1 = r.sync_error()
-        # Swap user ↔ system
-        for axis in ("gain", "hyst", "aperture"):
+        for axis in self._ALL_AXES:
             u, s = getattr(r.user, axis), getattr(r.system, axis)
             u.value, s.value = s.value, u.value
         e2 = r.sync_error()
         assert e1 == pytest.approx(e2, abs=TOL)
 
     def test_sync_error_max_distance(self):
-        """Worst case [0,0,0] vs [1,1,1] = √3."""
+        """Worst case [0,0,0,0,0] vs [1,1,1,1,1] = √5 (5D chem-space)."""
         r = РГК()
-        for axis in ("gain", "hyst", "aperture"):
+        for axis in self._ALL_AXES:
             getattr(r.user, axis).value = 0.0
             getattr(r.system, axis).value = 1.0
-        assert r.sync_error() == pytest.approx(math.sqrt(3), abs=TOL)
+        assert r.sync_error() == pytest.approx(math.sqrt(5), abs=TOL)
 
     @pytest.mark.parametrize("seed", SEEDS)
     def test_sync_error_in_bounds_random(self, seed):
         r = _run_random_trace(seed, steps=100)
         e = r.sync_error()
-        assert 0.0 <= e <= math.sqrt(3) + TOL, \
-            f"seed={seed} sync_error={e:.4f} out of [0, √3]"
+        assert 0.0 <= e <= math.sqrt(5) + TOL, \
+            f"seed={seed} sync_error={e:.4f} out of [0, √5]"
 
     # ── W16.1: per-axis breakdown ──────────────────────────────────────
 
@@ -283,23 +287,22 @@ class TestCouplingConsistency:
         assert 0.0 <= wave["scalar_5d"] <= math.sqrt(5) + TOL, \
             f"seed={seed} scalar_5d={wave['scalar_5d']}"
 
-    def test_sync_error_wave_scalar_5d_includes_extra_axes(self):
-        """scalar_5d ≥ legacy 3D scalar_error (т.к. включает ACh+GABA вклад)."""
+    def test_sync_error_wave_scalar_5d_matches_compute_sync_error(self):
+        """После 5D clean break (2026-04-28) scalar_5d == compute_sync_error.
+        Wave всё равно полезен для axes/max_axis breakdown.
+
+        Tol 1e-3 потому что wave round'ит scalar_5d до 4 знаков перед exposure.
+        """
         r = РГК()
-        # Set 5D расхождение: 3 legacy axes равны, ACh+GABA расходятся
-        for axis in ("gain", "hyst", "aperture"):
-            getattr(r.user, axis).value = 0.5
-            getattr(r.system, axis).value = 0.5
         r.user.plasticity.value = 0.8
         r.system.plasticity.value = 0.3
         r.user.damping.value = 0.3
         r.system.damping.value = 0.7
-        scalar_3d = r.sync_error()
+        r.user.gain.value = 0.6
+        r.system.gain.value = 0.4
+        scalar = r.sync_error()
         wave = r.sync_error_wave()
-        # 3D legacy игнорирует ACh+GABA → scalar_3d = 0;
-        # scalar_5d ловит реальное расхождение через ACh+GABA
-        assert wave["scalar_5d"] > scalar_3d + TOL, \
-            f"scalar_5d {wave['scalar_5d']} should exceed 3D {scalar_3d}"
+        assert wave["scalar_5d"] == pytest.approx(scalar, abs=1e-3)
 
     @pytest.mark.skip(reason="Requires actual counter-wave generation (step(obs, dt) with delay buffer), Tier 2 — see TODO.md")
     def test_counter_wave_reduces_sync_error(self):

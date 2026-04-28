@@ -81,8 +81,14 @@ class Resonator:
         self.mode = "R"
 
     def vector(self) -> np.ndarray:
-        """3D legacy projection (gain, hyst, aperture) для sync_error."""
-        return np.array([self.gain.value, self.hyst.value, self.aperture.value],
+        """5D projection (DA, 5HT, NE, ACh, GABA) для sync_error.
+
+        Ось: gain (DA), hyst (5HT), aperture (NE), plasticity (ACh), damping (GABA).
+        Legacy 3D version (только первые три) удалена 2026-04-28 при clean break
+        на полный chem-space. См. compute_sync_error / sync_error_wave.
+        """
+        return np.array([self.gain.value, self.hyst.value, self.aperture.value,
+                         self.plasticity.value, self.damping.value],
                         dtype=np.float32)
 
     def balance(self) -> float:
@@ -152,12 +158,12 @@ class РГК:
         # Predictive baselines (Friston) — user side
         self.u_exp        = EMA(0.5, decay=Decays.EXPECTATION)
         self.u_exp_tod    = {t: EMA(0.5, decay=Decays.EXPECTATION) for t in _TOD}
-        self.u_exp_vec    = VectorEMA([0.5, 0.5, 0.5], decay=Decays.EXPECTATION_VEC)
+        self.u_exp_vec    = VectorEMA([0.5, 0.5, 0.5, 0.5, 0.5], decay=Decays.EXPECTATION_VEC)
         self.hrv_base_tod = {t: EMA(0.0, decay=Decays.HRV_BASELINE,
                                      seed_on_first=True) for t in _TOD}
 
         # System self-prediction baseline
-        self.s_exp_vec = VectorEMA([0.5, 0.5, 0.5], decay=Decays.SELF_EXPECTATION)
+        self.s_exp_vec = VectorEMA([0.5, 0.5, 0.5, 0.5, 0.5], decay=Decays.SELF_EXPECTATION)
 
         # Pressure accumulators (mirror ProtectiveFreeze)
         self.conflict        = EMA(0.0, decay=Decays.NEURO_CONFLICT_ACCUMULATOR)
@@ -502,9 +508,12 @@ class РГК:
         self.recent_rpe = float(d.get("recent_rpe", 0.0))
         self._rpe_hist = list(d.get("_delta_history", []))
         vec = d.get("expectation_vec")
-        if isinstance(vec, (list, tuple)) and len(vec) == 3:
+        if isinstance(vec, (list, tuple)) and 1 <= len(vec) <= 5:
             try:
-                arr = np.array([float(x) for x in vec], dtype=np.float32)
+                # Graceful pad: legacy 3-element saves расширяются до 5 (default 0.5).
+                # 5D переход 2026-04-28 (clean break).
+                vals = [float(x) for x in vec] + [0.5] * (5 - len(vec))
+                arr = np.array(vals, dtype=np.float32)
                 self.s_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
             except Exception:
                 pass
@@ -585,9 +594,12 @@ class РГК:
                     except Exception:
                         pass
         vec = d.get("expectation_vec")
-        if isinstance(vec, (list, tuple)) and len(vec) == 3:
+        if isinstance(vec, (list, tuple)) and 1 <= len(vec) <= 5:
             try:
-                arr = np.array([float(x) for x in vec], dtype=np.float32)
+                # Graceful pad: legacy 3-element saves расширяются до 5 (default 0.5).
+                # 5D переход 2026-04-28 (clean break).
+                vals = [float(x) for x in vec] + [0.5] * (5 - len(vec))
+                arr = np.array(vals, dtype=np.float32)
                 self.u_exp_vec.value = np.clip(arr, 0.0, 1.0).astype(np.float32)
             except Exception:
                 pass
@@ -640,7 +652,7 @@ class РГК:
         s  = float(self.system.hyst.value)
         return 2.0 + 3.0 * ne * (1.0 - s)
 
-    _AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine")
+    _AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine", "acetylcholine", "gaba")
 
     # ── B4 Wave 2: non-chem state with clamped setters ─────────────────────
 

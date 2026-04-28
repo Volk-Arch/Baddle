@@ -1820,6 +1820,23 @@ function _updateNeurochemPanel(metrics) {
     if (dashSE) dashSE.textContent = (syncErr !== undefined && syncErr !== null)
       ? `sync ${Math.round((1 - Math.min(1, syncErr)) * 100)}% · err ${syncErr.toFixed(2)}`
       : 'sync —';
+    // Live max-axis indicator (W16.1a) — показываем только при значительном расхождении.
+    // Полная картина по 5 осям — Outcome 🪞 Spread.
+    const dashMA = document.getElementById('dash-max-axis');
+    if (dashMA) {
+      const wave = metrics.sync_error_wave;
+      const AXIS_SHORT = {
+        dopamine: 'DA', serotonin: '5HT', norepinephrine: 'NE',
+        acetylcholine: 'ACh', gaba: 'GABA',
+      };
+      if (wave && wave.max_axis && wave.max_value > 0.15) {
+        const label = AXIS_SHORT[wave.max_axis] || wave.max_axis;
+        dashMA.textContent = `Δ ${label} ${wave.max_value.toFixed(2)}`;
+        dashMA.style.display = '';
+      } else {
+        dashMA.style.display = 'none';
+      }
+    }
   } catch(e) {}
 
   // Activity zone badge (HRV × activity — 4 зоны)

@@ -8,9 +8,9 @@
 
 Bayesian update делегирован в `self.rgk.bayes_step`. См. rgk.py для формул.
 
-Прайм-директива: sync_error = ‖user − system‖ в 4-мерном нейрохимическом
-пространстве. UserState питается сигналами юзера (HRV, тайминги, feedback),
-SystemState — динамикой графа. См. docs/symbiosis-design.md.
+Прайм-директива: sync_error = ‖user − system‖ в 5-мерном chem пространстве
+(DA/5HT/NE/ACh/GABA). UserState питается сигналами юзера (HRV, тайминги,
+feedback), SystemState — динамикой графа. См. docs/symbiosis-design.md.
 
 States (гистерезис + debounce):
   EXPLORATION  (precision 0.3–0.5, широкий фокус)
@@ -18,7 +18,7 @@ States (гистерезис + debounce):
   RECOVERY     (post-surprise drop)
   INTEGRATION  (0.5–0.6, синтез)
   STABILIZE    (HRV coherence < 0.3 — derived из UserState)
-  CONFLICT     (sync_error > 0.75 — расхождение user/system)
+  CONFLICT     (sync_error > 1.0 — расхождение user/system, max √5 ≈ 2.24)
   PROTECTIVE_FREEZE (freeze.accumulator > 0.15)
 """
 
@@ -197,9 +197,9 @@ class CognitiveState:
         self._prev_policy_weights = dict(self.policy_weights)
 
     # ── Derived: sync_error + hrv passthrough from UserState ──────────────
-    # Prime-directive: sync_error = ‖user − system‖ (L2 в 4-мерном пространстве
-    # dopamine/serotonin/norepinephrine/burnout). Не скаляр, не хранится — вычисляется
-    # из глобального UserState. См. src/user_state.py и docs/symbiosis-design.md.
+    # Prime-directive: sync_error = ‖user − system‖ (L2 в 5-мерном chem-пространстве
+    # DA/5HT/NE/ACh/GABA). Не скаляр, не хранится — вычисляется из глобального
+    # UserState. См. src/user_state.py и docs/symbiosis-design.md.
 
     @property
     def sync_error(self) -> float:
@@ -385,7 +385,8 @@ class CognitiveState:
             if self.hrv_coherence < 0.3:
                 return STABILIZE
             # Sync error growing → CONFLICT (system doesn't understand user)
-            if self.sync_error > 0.75:
+            # Threshold 1.0 ≈ 45% от max √5 (5D chem-space).
+            if self.sync_error > 1.0:
                 return CONFLICT
 
         # Exit thresholds (harder to leave current state)
@@ -399,7 +400,7 @@ class CognitiveState:
             return INTEGRATION
         if self.state == STABILIZE and self.hrv_coherence is not None and self.hrv_coherence < 0.5:
             return STABILIZE
-        if self.state == CONFLICT and self.sync_error > 0.5:
+        if self.state == CONFLICT and self.sync_error > 0.7:
             return CONFLICT
 
         # Entry thresholds (need clear signal to enter)

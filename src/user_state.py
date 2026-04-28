@@ -27,7 +27,7 @@ REST = "rest"
 PROTECT = "protect"
 CONFESS = "confess"
 
-SYNC_HIGH_THRESHOLD = 0.3       # err < 0.3 → sync высокий (max √3 ≈ 1.73)
+SYNC_HIGH_THRESHOLD = 0.4       # err < 0.4 → sync высокий (max √5 ≈ 2.24)
 STATE_HIGH_THRESHOLD = 0.55     # mean(D,S) > 0.55 → state высокий
 STATE_LOW_THRESHOLD = 0.35
 
@@ -73,12 +73,15 @@ def compute_capacity_indicators(user) -> dict:
 
 
 def system_vector(rgk_or_neuro, freeze=None) -> np.ndarray:
-    """3D system vector. Принимает РГК (production) или legacy Neurochem (deprecated)."""
+    """5D system vector (DA/5HT/NE/ACh/GABA). Принимает РГК (production) или
+    legacy Neurochem (deprecated, 3D — pad'ится 0.5 для ACh/GABA)."""
     sys = rgk_or_neuro.system if hasattr(rgk_or_neuro, "system") else rgk_or_neuro
     return np.array([
-        float(sys.gain.value)     if hasattr(sys, "gain") else float(sys.dopamine),
-        float(sys.hyst.value)     if hasattr(sys, "hyst") else float(sys.serotonin),
-        float(sys.aperture.value) if hasattr(sys, "aperture") else float(sys.norepinephrine),
+        float(sys.gain.value)       if hasattr(sys, "gain")       else float(sys.dopamine),
+        float(sys.hyst.value)       if hasattr(sys, "hyst")       else float(sys.serotonin),
+        float(sys.aperture.value)   if hasattr(sys, "aperture")   else float(sys.norepinephrine),
+        float(sys.plasticity.value) if hasattr(sys, "plasticity") else 0.5,
+        float(sys.damping.value)    if hasattr(sys, "damping")    else 0.5,
     ], dtype=np.float32)
 
 
@@ -91,7 +94,11 @@ def system_state_level(rgk_or_neuro) -> float:
 
 
 def compute_sync_error(rgk) -> float:
-    """‖user_vec − system_vec‖ (L2, 3D). Max ≈ √3 ≈ 1.732."""
+    """‖user_vec − system_vec‖ (L2, 5D). Max = √5 ≈ 2.236.
+
+    5 chem-axes: DA/5HT/NE/ACh/GABA. Расширено с 3D 2026-04-28 (clean break).
+    Per-axis breakdown — см. `compute_sync_error_wave`.
+    """
     diff = rgk.user.vector() - system_vector(rgk)
     return float(np.linalg.norm(diff))
 
