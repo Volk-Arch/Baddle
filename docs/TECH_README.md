@@ -275,8 +275,8 @@ Continuous cycle над substrate. После W14 — workspace станет cen
 |---|---|---|
 | `graph_logic.py` | 1682 | Operations: nodes/edges, `record_action`, `_bayesian_update_distinct`, snapshot, capacity-aware Bayes-freeze. Правило 3+4 |
 | `nand.py` | 867 | NAND tick engine: classify → distinct-zones → Bayes → emit + meta-tick (state_graph tail patterns) + policy nudge. Inner loop |
-| `consolidation.py` | 442 | Hebbian decay, REM-style сборка, archive. **W11 #3 + W14.8 candidate**: merge с pump_logic в `dmn.py`; расширить sequential integration |
-| `pump_logic.py` | 374 | Scout — поиск мостов между далёкими нодами. **W11 #3**: merge с consolidation |
+| `consolidation.py` | 442 | Hebbian decay, REM-style сборка, archive. Night cycle housekeeping (24ч авто + manual `/graph/consolidate`). W14.8 расширит sequential integration |
+| `pump.py` | 374 | Mental operator: bridge-finding между двумя идеями (LLM hidden axis). 4 callsite — scout/DMN/EXPLORE/UI. Кандидат на `src/operators/` package (W11 #7) |
 | `state_graph.py` | 368 | History тиков (otdellsy от main graph). Pulse heartbeat, state replay |
 | `graph_store.py` | 122 | Persistence для graph (jsonl + atomic write) |
 

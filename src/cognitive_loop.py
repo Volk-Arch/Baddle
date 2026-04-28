@@ -1058,7 +1058,7 @@ class CognitiveLoop:
         рождаются новые связи именно поверх тех нод которые удивили.
         """
         from .state_graph import get_state_graph
-        from .pump_logic import pump
+        from .pump import pump
 
         try:
             entries = get_state_graph().read_all()
@@ -1596,7 +1596,7 @@ class CognitiveLoop:
         save=False → только возвращаем bridge-дикт (DMN suggest).
         """
         from .graph_logic import _add_node, _ensure_embeddings
-        from .pump_logic import pump
+        from .pump import pump
 
         nodes = _graph.get("nodes", [])
         if len(nodes) < 4:

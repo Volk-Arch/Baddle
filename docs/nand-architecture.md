@@ -137,7 +137,7 @@ State_graph линейный. Зона конфликта (d выше порог
 
 **Фоновый поиск** (DMN, default mode network):
 - ночная творческая фаза ищет пары близкие в embedding-пространстве, но далёкие в графе ([cognitive_loop._rem_creative](../src/cognitive_loop.py))
-- pump-мосты между парами ([pump_logic.pump](../src/pump_logic.py)) в continuous-режиме
+- pump-мосты между парами ([pump.pump](../src/pump.py)) в continuous-режиме
 - детали — [dmn-scout-design.md](dmn-scout-design.md)
 
 Переключение: высокая нагрузка → активный фокус доминирует, фоновый поиск в low-priority. Покой → фоновый поиск сканирует граф, готовит инсайты через hash-chain в state_graph.

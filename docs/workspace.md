@@ -148,7 +148,7 @@ NIGHT (когда _idle_multiplier > threshold):
 
   Phase 2 — Cross-batch scout (REM-style remote associations):
     today's batch = свежие promoted-ноды
-    pump_logic.scout(today's batch ↔ today's batch + random LTM sample)
+    pump.scout(today's batch ↔ today's batch + random LTM sample)
     found bridges с quality > threshold → next-morning insight cards
 
   Phase 3 — Synaptic homeostasis (overall calibration):
@@ -216,7 +216,7 @@ User message проходит через тот же workspace, просто imm
 - [Signal/Dispatcher (Правило 1)](architecture-rules.md#правило-1--любое-событие-к-юзеру-это-signal). Dispatcher остаётся для UI-overlay alerts (баннеры в шапке вне chat-ленты). Workspace — chat-history convergence. Возможна полная унификация — решить после prototype.
 - [Action Memory](action-memory-design.md). Workspace-кандидаты могут стать action-нодами при commit (если actor=baddle). Outcome-tracking работает после broadcast (как сейчас).
 - [Friston-loop / PE (Правило 5)](architecture-rules.md#правило-5--pe-единственный-драйвер-автономного-поведения). Workspace накопление = форма PE: чем дольше кандидат не пробивается в broadcast, тем выше его pressure (через urgency growth). Можно ввести linear ramp как у silence_pressure.
-- [DMN/REM (`pump_logic` + `consolidation`)](world-model.md). Workspace становится их естественным **target**: ночной cycle прогоняет workspace-ноды через те же scout/REM операции, transfer в LTM выживших.
+- [DMN/REM (`pump` + `consolidation`)](world-model.md). Workspace становится их естественным **target**: ночной cycle прогоняет workspace-ноды через те же scout/REM операции, transfer в LTM выживших.
 
 ---
 

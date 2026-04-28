@@ -799,7 +799,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             log.info(f"[execute_deep] diversity={avg_d:.2f} < {div_min} — "
                      f"pumping {closest_pair} for axis injection")
             try:
-                from .pump_logic import pump
+                from .pump import pump
                 pres = pump(closest_pair[0], closest_pair[1],
                             max_iterations=1, lang=lang,
                             temp=_nd_temp, top_k=_nd_topk)

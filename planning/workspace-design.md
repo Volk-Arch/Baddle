@@ -92,7 +92,7 @@ User message — через `workspace.add(source="user_msg", accumulate=False, 
 - `bookkeeping.py` — `_check_heartbeat` / `_check_graph_flush` / `_check_activity_cost` / `_check_cognitive_load_update` (~400)
 - `briefings.py` — `_build_morning_briefing_*` / `_build_current_state_signature` (~500)
 
-DMN/REM heavy work уже идёт в W11 #3 (`pump_logic` + `consolidation` → `dmn.py`).
+DMN/REM heavy work остаётся отдельно: `pump.py` (mental operator, day+night) и `consolidation.py` (night housekeeping) — разная семантика, склейка отвергнута. См. cleanup-plan W11 #3.
 
 ### W14.8 — Sequential integration (NREM + emergent REM в одном проходе, ~3-4ч)
 
@@ -154,7 +154,7 @@ today_batch = nodes_promoted_this_night  # из W14.8
 
 # pairs внутри batch — cross-batch insight'ы
 for pair in random.sample(combinations(today_batch, 2), k=N):
-    bridge = pump_logic.scout(pair[0], pair[1])
+    bridge = pump.scout(pair[0], pair[1])
     if bridge and bridge.quality > 0.5:
         workspace.add(source="cross_batch_insight",
                       expires_at=next_morning + 24h,
@@ -164,7 +164,7 @@ for pair in random.sample(combinations(today_batch, 2), k=N):
 random_old = sample(old_ltm_nodes, k=N, where=touched_at_old)
 for new in today_batch:
     for old in random_old[:3]:
-        bridge = pump_logic.scout(new, old)
+        bridge = pump.scout(new, old)
         if bridge and bridge.quality > 0.6:
             workspace.add(source="remote_association",
                           expires_at=next_morning + 24h,

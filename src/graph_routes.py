@@ -977,7 +977,7 @@ def graph_smartdc():
 @_with_thinking("pump")
 def graph_pump():
     """Find the hidden axis between two ideas via bilateral expansion."""
-    from .pump_logic import pump
+    from .pump import pump
 
     d = _p_data()
     node_a = int(d.get("node_a", -1))

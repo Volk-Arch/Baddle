@@ -106,7 +106,7 @@
 
 **Динамическая работа:** [cognitive_loop.py](../src/cognitive_loop.py) + [nand.py](../src/nand.py) → [tick-design.md](tick-design.md), [dmn-scout-design.md](dmn-scout-design.md), [episodic-memory.md](episodic-memory.md).
 
-**Операции:** [pump_logic.py](../src/pump_logic.py) + SmartDC + embedding-first → [thinking-operations.md](thinking-operations.md).
+**Операции:** [pump.py](../src/pump.py) + SmartDC + embedding-first → [thinking-operations.md](thinking-operations.md).
 
 **Граф / persistence:** [graph_logic.py](../src/graph_logic.py) + [state_graph.py](../src/state_graph.py) + [consolidation.py](../src/consolidation.py) → [nand-architecture.md](nand-architecture.md), [episodic-memory.md](episodic-memory.md).
 

@@ -229,7 +229,7 @@ active workspace с unverified hypotheses).
   `CognitiveLoop._loop` + все `_check_*` methods + интервал constants
   (DMN_INTERVAL / DMN_DEEP_INTERVAL / DMN_CONVERGE_INTERVAL /
   DMN_CROSS_GRAPH_INTERVAL / NIGHT_CYCLE_INTERVAL / HEARTBEAT_INTERVAL)
-- **Pump core:** [src/pump_logic.py](../src/pump_logic.py) —
+- **Pump core:** [src/pump.py](../src/pump.py) —
   `pump()`, `_verify_bridge()` используется всеми DMN-check'ами
 - **State graph:** [src/state_graph.py](../src/state_graph.py) —
   `query_similar`, `tail`, heartbeat append

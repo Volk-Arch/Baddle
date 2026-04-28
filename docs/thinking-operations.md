@@ -147,7 +147,7 @@ text подстраивается под неё.
 
 - `src/graph_routes.py` — endpoints `/graph/smartdc`, `/graph/pump`,
   `/graph/think`, `/graph/brainstorm-seed`, `/graph/render-node`
-- `src/pump_logic.py` — `pump()`, `_expand_cloud()`, `_find_bridges()`,
+- `src/pump.py` — `pump()`, `_expand_cloud()`, `_find_bridges()`,
   `_verify_bridge()`, `_compute_bridge_quality()`
 - `src/graph_logic.py` — `sample_in_embedding_space()`,
   `_ensure_embeddings()`, novelty check в `/graph/think` path
