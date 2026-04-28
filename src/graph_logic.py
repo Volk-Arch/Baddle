@@ -437,9 +437,9 @@ def _current_snapshot() -> dict:
         from .rgk import get_global_rgk
         r = get_global_rgk()
         snap["user_state_before"] = {
-            "dopamine":        round(float(r.user.gain.value), 3),
-            "serotonin":       round(float(r.user.hyst.value), 3),
-            "norepinephrine":  round(float(r.user.aperture.value), 3),
+            "dopamine_gain":        round(float(r.user.gain.value), 3),
+            "serotonin_hysteresis":       round(float(r.user.hyst.value), 3),
+            "norepinephrine_aperture":  round(float(r.user.aperture.value), 3),
             "burnout":         round(float(r.burnout.value), 3),
             "agency":          round(float(r.agency.value), 3),
             "valence":         round(float(r.valence.value), 3),
@@ -452,9 +452,9 @@ def _current_snapshot() -> dict:
         from .horizon import get_global_state
         gs = get_global_state()
         snap["system_state_before"] = {
-            "dopamine":             round(gs.rgk.system.gain.value, 3),
-            "serotonin":            round(gs.rgk.system.hyst.value, 3),
-            "norepinephrine":       round(gs.rgk.system.aperture.value, 3),
+            "dopamine_gain":             round(gs.rgk.system.gain.value, 3),
+            "serotonin_hysteresis":            round(gs.rgk.system.hyst.value, 3),
+            "norepinephrine_aperture":       round(gs.rgk.system.aperture.value, 3),
             "conflict_accumulator": round(gs.rgk.conflict.value, 3),
             "silence_pressure":     round(gs.rgk.silence_press, 3),
             "imbalance_pressure":   round(gs.rgk.imbalance_press.value, 3),

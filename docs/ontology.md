@@ -21,11 +21,11 @@ per-workspace в `graphs/<ws>/`, registry в `workspaces/index.json` —
   "history": [...],              // last 100 interactions (trimmed)
   "last_briefing_ts": 1776510400.0,  // для dedup briefing между рестартами
   "user_state_dump": {           // → UserState.from_dict() на старте
-    "dopamine": 0.5,
-    "serotonin": 0.5,
-    "norepinephrine": 0.5,
-    "acetylcholine": 0.5,
-    "gaba": 0.5,
+    "dopamine_gain": 0.5,
+    "serotonin_hysteresis": 0.5,
+    "norepinephrine_aperture": 0.5,
+    "acetylcholine_plasticity": 0.5,
+    "gaba_damping": 0.5,
     "balance": 1.0,
     "mode": "R",                 // R/C bit (Counter-wave Правило 7)
     "burnout": 0.02,

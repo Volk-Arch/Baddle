@@ -110,13 +110,13 @@ def compute_sync_error(rgk) -> float:
 # Phase-aware comparison (W16.1b) — отложен до velocity tracking. Сейчас
 # MVP: amplitude per axis (absolute |user − system| на тике).
 
-_WAVE_AXES = ("dopamine", "serotonin", "norepinephrine", "acetylcholine", "gaba")
+_WAVE_AXES = ("dopamine_gain", "serotonin_hysteresis", "norepinephrine_aperture", "acetylcholine_plasticity", "gaba_damping")
 _AXIS_FIELDS = {
-    "dopamine":       "gain",
-    "serotonin":      "hyst",
-    "norepinephrine": "aperture",
-    "acetylcholine":  "plasticity",
-    "gaba":           "damping",
+    "dopamine_gain":       "gain",
+    "serotonin_hysteresis":      "hyst",
+    "norepinephrine_aperture": "aperture",
+    "acetylcholine_plasticity":  "plasticity",
+    "gaba_damping":           "damping",
 }
 
 

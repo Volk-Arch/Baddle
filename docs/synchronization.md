@@ -98,13 +98,13 @@ sync_error_wave[axis] = |user[axis] − system[axis]| per component
 ```python
 {
     "axes": {
-        "dopamine":       abs(user.gain.value       - system.gain.value),
-        "serotonin":      abs(user.hyst.value       - system.hyst.value),
-        "norepinephrine": abs(user.aperture.value   - system.aperture.value),
-        "acetylcholine":  abs(user.plasticity.value - system.plasticity.value),
-        "gaba":           abs(user.damping.value    - system.damping.value),
+        "dopamine_gain":           abs(user.gain.value       - system.gain.value),
+        "serotonin_hysteresis":    abs(user.hyst.value       - system.hyst.value),
+        "norepinephrine_aperture": abs(user.aperture.value   - system.aperture.value),
+        "acetylcholine_plasticity": abs(user.plasticity.value - system.plasticity.value),
+        "gaba_damping":            abs(user.damping.value    - system.damping.value),
     },
-    "max_axis": "norepinephrine",  # axis с наибольшим расхождением
+    "max_axis": "norepinephrine_aperture",  # axis с наибольшим расхождением
     "max_value": 0.42,
     "scalar_5d": 0.61,             # L2 over 5 axes (== sync_error после 5D перехода)
 }

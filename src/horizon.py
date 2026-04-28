@@ -453,12 +453,12 @@ class CognitiveState:
                 "stress": self.hrv_stress,
             } if self.hrv_coherence is not None else None,
             "neurochem": {
-                "dopamine":       neuro_dict["dopamine"],
-                "serotonin":      neuro_dict["serotonin"],
-                "norepinephrine": neuro_dict["norepinephrine"],
+                "dopamine_gain":       neuro_dict["dopamine_gain"],
+                "serotonin_hysteresis":      neuro_dict["serotonin_hysteresis"],
+                "norepinephrine_aperture": neuro_dict["norepinephrine_aperture"],
                 # Phase D: 5-axis chem + balance diagnostic
-                "acetylcholine":  neuro_dict.get("acetylcholine", 0.5),
-                "gaba":           neuro_dict.get("gaba", 0.5),
+                "acetylcholine_plasticity":  neuro_dict.get("acetylcholine_plasticity", 0.5),
+                "gaba_damping":           neuro_dict.get("gaba_damping", 0.5),
                 "balance":        neuro_dict.get("balance", 1.0),
                 # R/C bit (Правило 7): R = passive resonance, C = active
                 # counter-wave (system-side imbalance >0.15). UI рисует значок.

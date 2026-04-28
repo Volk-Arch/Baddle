@@ -261,7 +261,7 @@ class TestCouplingConsistency:
         r.user.plasticity.value = 0.9
         r.system.plasticity.value = 0.1  # 0.8 расхождение по ACh
         wave = r.sync_error_wave()
-        assert wave["max_axis"] == "acetylcholine"
+        assert wave["max_axis"] == "acetylcholine_plasticity"
         assert wave["max_value"] == pytest.approx(0.8, abs=TOL)
 
     def test_sync_error_wave_keys_complete(self):
@@ -269,7 +269,7 @@ class TestCouplingConsistency:
         r = РГК()
         wave = r.sync_error_wave()
         assert set(wave["axes"].keys()) == {
-            "dopamine", "serotonin", "norepinephrine", "acetylcholine", "gaba"
+            "dopamine_gain", "serotonin_hysteresis", "norepinephrine_aperture", "acetylcholine_plasticity", "gaba_damping"
         }
         assert "max_axis" in wave
         assert "max_value" in wave
@@ -417,7 +417,7 @@ class TestPhaseAIdentity:
 
     def test_user_state_scalars(self, rgk):
         got = rgk.project("user_state")
-        for k in ("dopamine", "serotonin", "norepinephrine",
+        for k in ("dopamine_gain", "serotonin_hysteresis", "norepinephrine_aperture",
                   "valence", "burnout", "agency", "expectation",
                   "surprise", "imbalance"):
             assert got[k] == pytest.approx(EXPECTED_USER[k], abs=TOL), \
@@ -444,7 +444,7 @@ class TestPhaseAIdentity:
 
     def test_system_identity(self, rgk):
         got = rgk.project("system")
-        for k in ("dopamine", "serotonin", "norepinephrine",
+        for k in ("dopamine_gain", "serotonin_hysteresis", "norepinephrine_aperture",
                   "gamma", "recent_rpe", "self_imbalance"):
             assert got[k] == pytest.approx(EXPECTED_SYS[k], abs=TOL), \
                 f"{k}: got={got[k]} exp={EXPECTED_SYS[k]}"
@@ -798,8 +798,8 @@ class TestProjectExpansion:
         r = РГК()
         p = r.project("user_state")
         # Phase D 5-axis + B0 mode
-        assert "acetylcholine" in p
-        assert "gaba" in p
+        assert "acetylcholine_plasticity" in p
+        assert "gaba_damping" in p
         assert "balance" in p
         assert "mode" in p
         assert p["mode"] == "R"
@@ -812,7 +812,7 @@ class TestProjectExpansion:
         r.user.hyst.value = 0.5
         r.user.aperture.value = 0.5
         p = r.project("user_state")
-        assert p["attribution"] == "dopamine"
+        assert p["attribution"] == "dopamine_gain"
         assert p["attribution_signed"] > 0
         assert p["attribution_magnitude"] > 0
 
@@ -835,8 +835,8 @@ class TestProjectExpansion:
         from src.rgk import РГК
         r = РГК()
         p = r.project("system")
-        assert "acetylcholine" in p
-        assert "gaba" in p
+        assert "acetylcholine_plasticity" in p
+        assert "gaba_damping" in p
         assert "balance" in p
         assert "mode" in p
 

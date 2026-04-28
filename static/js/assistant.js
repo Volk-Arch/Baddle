@@ -23,11 +23,11 @@ const _CAPACITY_REASON_RU = {
 // длина пропорциональна |user[axis] - system[axis]|. Большая площадь = больше
 // рассинхрон. Static background рисуется один раз при инициализации.
 const _RADAR_AXES = [
-  { key: 'dopamine',       label: 'DA' },
-  { key: 'norepinephrine', label: 'NE' },
-  { key: 'gaba',           label: 'GABA' },
-  { key: 'acetylcholine',  label: 'ACh' },
-  { key: 'serotonin',      label: '5HT' },
+  { key: 'dopamine_gain',          label: 'DA' },
+  { key: 'norepinephrine_aperture', label: 'NE' },
+  { key: 'gaba_damping',           label: 'GABA' },
+  { key: 'acetylcholine_plasticity', label: 'ACh' },
+  { key: 'serotonin_hysteresis',   label: '5HT' },
 ];
 const _RADAR_CX = 60, _RADAR_CY = 60, _RADAR_R = 38;
 
@@ -1781,9 +1781,9 @@ function assistStartNeurochemPolling() {
 function _updateNeurochemPanel(metrics) {
   if (!metrics) return;
   const neuro = metrics.neurochem || {};
-  const serotonin = neuro.serotonin || 0;
-  const norepi    = neuro.norepinephrine || 0;
-  const dopamine  = neuro.dopamine || 0;
+  const serotonin = neuro.serotonin_hysteresis || 0;
+  const norepi    = neuro.norepinephrine_aperture || 0;
+  const dopamine  = neuro.dopamine_gain || 0;
   const burnout   = neuro.burnout || 0;
 
   const setBar = (fillId, valId, value, isBurnout) => {
@@ -1804,9 +1804,9 @@ function _updateNeurochemPanel(metrics) {
 
   // User-side (symbiosis mirror) — same bars, different source
   const user = metrics.user_state || {};
-  setBar('user-da-fill',   'user-da-val',   user.dopamine || 0);
-  setBar('user-s-fill',    'user-s-val',    user.serotonin || 0);
-  setBar('user-ne-fill',   'user-ne-val',   user.norepinephrine || 0);
+  setBar('user-da-fill',   'user-da-val',   user.dopamine_gain || 0);
+  setBar('user-s-fill',    'user-s-val',    user.serotonin_hysteresis || 0);
+  setBar('user-ne-fill',   'user-ne-val',   user.norepinephrine_aperture || 0);
   setBar('user-burn-fill', 'user-burn-val', user.burnout || 0);
   // Agency — 5-я ось (OQ #2), собираем данные пока НЕ в sync_error vector.
   // Default 0.5 = нет данных (planned=0 → не обновлялось).

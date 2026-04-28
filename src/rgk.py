@@ -483,11 +483,11 @@ class РГК:
         """System (Neurochem) snapshot для state.json. Симметрично старому
         Neurochem.to_dict — keys preserved."""
         return {
-            "dopamine":       round(float(self.system.gain.value), 3),
-            "serotonin":      round(float(self.system.hyst.value), 3),
-            "norepinephrine": round(float(self.system.aperture.value), 3),
-            "acetylcholine":  round(float(self.system.plasticity.value), 3),
-            "gaba":           round(float(self.system.damping.value), 3),
+            "dopamine_gain":       round(float(self.system.gain.value), 3),
+            "serotonin_hysteresis":      round(float(self.system.hyst.value), 3),
+            "norepinephrine_aperture": round(float(self.system.aperture.value), 3),
+            "acetylcholine_plasticity":  round(float(self.system.plasticity.value), 3),
+            "gaba_damping":           round(float(self.system.damping.value), 3),
             "balance":        round(self.system.balance(), 3),
             "mode":           self.system.mode,
             "gamma":          round(self.gamma(), 3),
@@ -500,11 +500,11 @@ class РГК:
     def load_system(self, d: dict) -> None:
         """Restore system layer из state.json dump. Симметрично старому
         Neurochem.from_dict (incl. Phase D 5-axis defaults для legacy)."""
-        self.system.gain.value     = max(0.0, min(1.0, float(d.get("dopamine", 0.5))))
-        self.system.hyst.value     = max(0.0, min(1.0, float(d.get("serotonin", 0.5))))
-        self.system.aperture.value = max(0.0, min(1.0, float(d.get("norepinephrine", 0.5))))
-        self.system.plasticity.value = max(0.0, min(1.0, float(d.get("acetylcholine", 0.5))))
-        self.system.damping.value  = max(0.0, min(1.0, float(d.get("gaba", 0.5))))
+        self.system.gain.value     = max(0.0, min(1.0, float(d.get("dopamine_gain", 0.5))))
+        self.system.hyst.value     = max(0.0, min(1.0, float(d.get("serotonin_hysteresis", 0.5))))
+        self.system.aperture.value = max(0.0, min(1.0, float(d.get("norepinephrine_aperture", 0.5))))
+        self.system.plasticity.value = max(0.0, min(1.0, float(d.get("acetylcholine_plasticity", 0.5))))
+        self.system.damping.value  = max(0.0, min(1.0, float(d.get("gaba_damping", 0.5))))
         self.recent_rpe = float(d.get("recent_rpe", 0.0))
         self._rpe_hist = list(d.get("_delta_history", []))
         vec = d.get("expectation_vec")
@@ -522,11 +522,11 @@ class РГК:
         named = self.project("named_state")
         az = self.activity_zone()
         return {
-            "dopamine":       round(float(self.user.gain.value), 3),
-            "serotonin":      round(float(self.user.hyst.value), 3),
-            "norepinephrine": round(float(self.user.aperture.value), 3),
-            "acetylcholine":  round(float(self.user.plasticity.value), 3),
-            "gaba":           round(float(self.user.damping.value), 3),
+            "dopamine_gain":       round(float(self.user.gain.value), 3),
+            "serotonin_hysteresis":      round(float(self.user.hyst.value), 3),
+            "norepinephrine_aperture": round(float(self.user.aperture.value), 3),
+            "acetylcholine_plasticity":  round(float(self.user.plasticity.value), 3),
+            "gaba_damping":           round(float(self.user.damping.value), 3),
             "balance":        round(self.user.balance(), 3),
             "mode":           self.user.mode,
             "burnout":        round(float(self.burnout.value), 3),
@@ -538,7 +538,7 @@ class РГК:
             "hrv_baseline_by_tod": {t: (round(float(self.hrv_base_tod[t].value), 3)
                                           if self.hrv_base_tod[t]._seeded else None)
                                       for t in _TOD},
-            "reality":   round((proj["dopamine"] + proj["serotonin"]) / 2.0, 3),
+            "reality":   round((proj["dopamine_gain"] + proj["serotonin_hysteresis"]) / 2.0, 3),
             "surprise":  round(float(proj["surprise"]), 3),
             "imbalance": round(float(proj["imbalance"]), 3),
             "attribution":            proj["attribution"],
@@ -565,11 +565,11 @@ class РГК:
 
     def load_user(self, d: dict) -> None:
         """Restore user layer из state.json dump. Симметрично UserState.from_dict."""
-        self.user.gain.value     = max(0.0, min(1.0, float(d.get("dopamine", 0.5))))
-        self.user.hyst.value     = max(0.0, min(1.0, float(d.get("serotonin", 0.5))))
-        self.user.aperture.value = max(0.0, min(1.0, float(d.get("norepinephrine", 0.5))))
-        self.user.plasticity.value = max(0.0, min(1.0, float(d.get("acetylcholine", 0.5))))
-        self.user.damping.value  = max(0.0, min(1.0, float(d.get("gaba", 0.5))))
+        self.user.gain.value     = max(0.0, min(1.0, float(d.get("dopamine_gain", 0.5))))
+        self.user.hyst.value     = max(0.0, min(1.0, float(d.get("serotonin_hysteresis", 0.5))))
+        self.user.aperture.value = max(0.0, min(1.0, float(d.get("norepinephrine_aperture", 0.5))))
+        self.user.plasticity.value = max(0.0, min(1.0, float(d.get("acetylcholine_plasticity", 0.5))))
+        self.user.damping.value  = max(0.0, min(1.0, float(d.get("gaba_damping", 0.5))))
         self.burnout.value       = max(0.0, min(1.0, float(d.get("burnout", 0.0))))
         self.agency.value        = max(0.0, min(1.0, float(d.get("agency", 0.5))))
         self.valence.value       = max(-1.0, min(1.0, float(d.get("valence", 0.0))))
@@ -646,7 +646,7 @@ class РГК:
         s  = float(self.system.hyst.value)
         return 2.0 + 3.0 * ne * (1.0 - s)
 
-    _AXIS_NAMES = ("dopamine", "serotonin", "norepinephrine", "acetylcholine", "gaba")
+    _AXIS_NAMES = ("dopamine_gain", "serotonin_hysteresis", "norepinephrine_aperture", "acetylcholine_plasticity", "gaba_damping")
 
     # ── B4 Wave 2: non-chem state with clamped setters ─────────────────────
 
@@ -751,11 +751,11 @@ class РГК:
                 attribution = self._AXIS_NAMES[idx]
                 attribution_signed = float(surprise_vec[idx])
             return {
-                "dopamine":       float(self.user.gain.value),
-                "serotonin":      float(self.user.hyst.value),
-                "norepinephrine": float(self.user.aperture.value),
-                "acetylcholine":  float(self.user.plasticity.value),
-                "gaba":           float(self.user.damping.value),
+                "dopamine_gain":       float(self.user.gain.value),
+                "serotonin_hysteresis":      float(self.user.hyst.value),
+                "norepinephrine_aperture": float(self.user.aperture.value),
+                "acetylcholine_plasticity":  float(self.user.plasticity.value),
+                "gaba_damping":           float(self.user.damping.value),
                 "balance":        self.user.balance(),
                 "mode":           self.user.mode,
                 "valence":        float(self.valence.value),
@@ -786,11 +786,11 @@ class РГК:
         if domain == "system":
             sv = self.system.vector()
             return {
-                "dopamine":       float(self.system.gain.value),
-                "serotonin":      float(self.system.hyst.value),
-                "norepinephrine": float(self.system.aperture.value),
-                "acetylcholine":  float(self.system.plasticity.value),
-                "gaba":           float(self.system.damping.value),
+                "dopamine_gain":       float(self.system.gain.value),
+                "serotonin_hysteresis":      float(self.system.hyst.value),
+                "norepinephrine_aperture": float(self.system.aperture.value),
+                "acetylcholine_plasticity":  float(self.system.plasticity.value),
+                "gaba_damping":           float(self.system.damping.value),
                 "balance":        self.system.balance(),
                 "mode":           self.system.mode,
                 "expectation_vec": [float(x) for x in self.s_exp_vec.value.tolist()],
@@ -957,7 +957,7 @@ def _run_identity_sequence() -> "РГК":
 
 # EXPECTED captured 2026-04-24 на legacy commit (mirror tests/test_metric_identity.py)
 EXPECTED_USER = {
-    "dopamine": 0.566345, "serotonin": 0.540951, "norepinephrine": 0.418098,
+    "dopamine_gain": 0.566345, "serotonin_hysteresis": 0.540951, "norepinephrine_aperture": 0.418098,
     "valence": 0.103027, "burnout": 0.19, "agency": 0.505,
     "expectation": 0.517369,
     "expectation_by_tod": {"morning": 0.5, "day": 0.517369,
@@ -969,7 +969,7 @@ EXPECTED_USER = {
     "surprise": 0.03628, "imbalance": 0.062759,
 }
 EXPECTED_SYS = {
-    "dopamine": 0.424359, "serotonin": 0.598492, "norepinephrine": 0.700003,
+    "dopamine_gain": 0.424359, "serotonin_hysteresis": 0.598492, "norepinephrine_aperture": 0.700003,
     "expectation_vec": [0.495359, 0.508601, 0.517466, 0.5, 0.5],
     "gamma": 2.84317, "recent_rpe": -0.15, "self_imbalance": 0.215502,
     "vector": [0.424359, 0.598492, 0.700003, 0.5, 0.5],

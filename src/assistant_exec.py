@@ -273,9 +273,9 @@ def execute_rhythm(message: str, lang: str = "ru") -> Dict:
             cs_metrics = get_global_state().get_metrics()
             chem = cs_metrics.get("neurochem", {})
             entry["state"] = {
-                "norepinephrine": chem.get("norepinephrine"),
-                "dopamine": chem.get("dopamine"),
-                "serotonin": chem.get("serotonin"),
+                "norepinephrine_aperture": chem.get("norepinephrine_aperture"),
+                "dopamine_gain": chem.get("dopamine_gain"),
+                "serotonin_hysteresis": chem.get("serotonin_hysteresis"),
                 "burnout": chem.get("burnout"),
                 "hrv_coherence": (cs_metrics.get("hrv") or {}).get("coherence"),
             }

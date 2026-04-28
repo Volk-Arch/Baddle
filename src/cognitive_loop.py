@@ -753,12 +753,12 @@ class CognitiveLoop:
                 mode_user=us["mode"],
                 mode_system=sys_["mode"],
                 chem={
-                    "da_user":   us["dopamine"],   "s_user":    us["serotonin"],
-                    "ne_user":   us["norepinephrine"],
-                    "ach_user":  us["acetylcholine"], "gaba_user": us["gaba"],
-                    "da_sys":    sys_["dopamine"], "s_sys":     sys_["serotonin"],
-                    "ne_sys":    sys_["norepinephrine"],
-                    "ach_sys":   sys_["acetylcholine"], "gaba_sys":  sys_["gaba"],
+                    "da_user":   us["dopamine_gain"],   "s_user":    us["serotonin_hysteresis"],
+                    "ne_user":   us["norepinephrine_aperture"],
+                    "ach_user":  us["acetylcholine_plasticity"], "gaba_user": us["gaba_damping"],
+                    "da_sys":    sys_["dopamine_gain"], "s_sys":     sys_["serotonin_hysteresis"],
+                    "ne_sys":    sys_["norepinephrine_aperture"],
+                    "ach_sys":   sys_["acetylcholine_plasticity"], "gaba_sys":  sys_["gaba_damping"],
                 },
             )
         except Exception as e:
@@ -1954,9 +1954,9 @@ class CognitiveLoop:
             neuro = m.get("neurochem", {})
             us = m.get("user_state", {})
             snapshot["neuro"] = {
-                "da": round(neuro.get("dopamine", 0), 2),
-                "s":  round(neuro.get("serotonin", 0), 2),
-                "ne": round(neuro.get("norepinephrine", 0), 2),
+                "da": round(neuro.get("dopamine_gain", 0), 2),
+                "s":  round(neuro.get("serotonin_hysteresis", 0), 2),
+                "ne": round(neuro.get("norepinephrine_aperture", 0), 2),
                 "burnout": round(neuro.get("burnout", 0), 2),
             }
             snapshot["user"] = {

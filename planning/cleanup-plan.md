@@ -341,9 +341,39 @@ class JsonlStore:
 
 ---
 
-## W17 — Naming consolidation: bio_physics compound names в API (1.5-2ч, medium risk)
+## W17 — Naming consolidation: bio_physics compound names в API ✅ done 2026-04-28
 
-**Мотивация.** Сейчас в API output (`/assist/state`, `serialize_user`,
+Full rename: `dopamine` → `dopamine_gain`, `serotonin` → `serotonin_hysteresis`,
+`norepinephrine` → `norepinephrine_aperture`, `acetylcholine` →
+`acetylcholine_plasticity`, `gaba` → `gaba_damping`. Сделан incremental по
+файлам (rgk → horizon → user_state → consumers → JS → tests → docs).
+
+**Затронуты:** `rgk.py` (serialize_user/system, load_user/system, project()
+returns, _AXIS_NAMES, EXPECTED_USER/SYS), `horizon.get_metrics`,
+`user_state` (_WAVE_AXES, _AXIS_FIELDS, compute_sync_error_wave),
+`cognitive_loop.py` (chem snapshot writes), `assistant.py`/`assistant_exec.py`/
+`graph_logic.py` (output dicts), `static/js/assistant.js` (6 dot-accesses +
+_RADAR_AXES keys), `test_metric_identity.py` + `test_rgk_properties.py`
+(EXPECTED + assertions), `docs/{synchronization,ontology}.md`.
+
+**Не трогали:** `_low` capacity reasons (semantic codes, не chem-axes),
+named_state map (отдельный namespace `da/ne/ach/gaba`), UserState shim
+attributes (`us.dopamine` — Python property, под W10 deletion), neurochem.py
+deprecated stub historical mapping.
+
+**Верифицировано:** 487 passed, pyflakes 0, smoke в preview — radar с new
+keys рендерит pentagon корректно (mock NE 0.7 → vertex вытянут upper-right),
+console errors 0, `/assist/state` отдаёт compound keys, legacy `dopamine` =
+undefined.
+
+API теперь self-documenting: `dopamine_gain` сразу показывает bio↔physics
+mapping (DA → амплитуда захвата). `/assist/chemistry` deletion-decision
+2026-04-28 закрыта правильно — наследие compound naming живёт в основном
+API.
+
+(Архив изначального plan'а:)
+
+**Мотивация.** В API output (`/assist/state`, `serialize_user`,
 `serialize_system`, `project()`) chem-axes отдаются по биологическим
 именам: `dopamine`, `serotonin`, `norepinephrine`, `acetylcholine`, `gaba`.
 Внутри РГК физические имена: `gain`, `hyst`, `aperture`, `plasticity`,

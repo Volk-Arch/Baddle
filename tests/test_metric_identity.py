@@ -16,9 +16,9 @@ from src.rgk import РГК
 # ── Expected snapshot (captured 2026-04-24, pre-migration) ─────────────────
 
 EXPECTED_USER_STATE = {
-    "dopamine": 0.566345,
-    "serotonin": 0.540951,
-    "norepinephrine": 0.418098,
+    "dopamine_gain": 0.566345,
+    "serotonin_hysteresis": 0.540951,
+    "norepinephrine_aperture": 0.418098,
     "valence": 0.103027,
     "burnout": 0.19,
     "agency": 0.505,
@@ -42,9 +42,9 @@ EXPECTED_USER_STATE = {
 }
 
 EXPECTED_NEUROCHEM = {
-    "dopamine": 0.424359,
-    "serotonin": 0.598492,
-    "norepinephrine": 0.700003,
+    "dopamine_gain": 0.424359,
+    "serotonin_hysteresis": 0.598492,
+    "norepinephrine_aperture": 0.700003,
     "expectation_vec": [0.495359, 0.508601, 0.517466, 0.5, 0.5],
     "gamma": 2.84317,
     "recent_rpe": -0.15,
@@ -124,10 +124,10 @@ def states(monkeypatch):
 
 def test_user_state_scalar_metrics(states):
     us, _, _ = states
-    assert us.dopamine == pytest.approx(EXPECTED_USER_STATE["dopamine"], abs=TOL)
-    assert us.serotonin == pytest.approx(EXPECTED_USER_STATE["serotonin"], abs=TOL)
+    assert us.dopamine == pytest.approx(EXPECTED_USER_STATE["dopamine_gain"], abs=TOL)
+    assert us.serotonin == pytest.approx(EXPECTED_USER_STATE["serotonin_hysteresis"], abs=TOL)
     assert us.norepinephrine == pytest.approx(
-        EXPECTED_USER_STATE["norepinephrine"], abs=TOL)
+        EXPECTED_USER_STATE["norepinephrine_aperture"], abs=TOL)
     assert us.valence == pytest.approx(EXPECTED_USER_STATE["valence"], abs=TOL)
     assert us.burnout == pytest.approx(EXPECTED_USER_STATE["burnout"], abs=TOL)
     assert us.agency == pytest.approx(EXPECTED_USER_STATE["agency"], abs=TOL)
@@ -172,10 +172,10 @@ def test_user_state_vector_and_derived(states):
 
 def test_neurochem_scalars(states):
     _, nc, _ = states
-    assert nc.system.gain.value == pytest.approx(EXPECTED_NEUROCHEM["dopamine"], abs=TOL)
-    assert nc.system.hyst.value == pytest.approx(EXPECTED_NEUROCHEM["serotonin"], abs=TOL)
+    assert nc.system.gain.value == pytest.approx(EXPECTED_NEUROCHEM["dopamine_gain"], abs=TOL)
+    assert nc.system.hyst.value == pytest.approx(EXPECTED_NEUROCHEM["serotonin_hysteresis"], abs=TOL)
     assert nc.system.aperture.value == pytest.approx(
-        EXPECTED_NEUROCHEM["norepinephrine"], abs=TOL)
+        EXPECTED_NEUROCHEM["norepinephrine_aperture"], abs=TOL)
 
 
 def test_neurochem_predictive_and_derived(states):
