@@ -124,12 +124,12 @@ Mode C активен пока S(t) > Thr_high
 
 | РГК | Baddle |
 |---|---|
-| Gain (DA) | `Neurochem.dopamine` EMA ✓ |
-| Hysteresis (5-HT) | `serotonin` EMA + `ProtectiveFreeze.THETA_ACTIVE/RECOVERY` ✓ |
-| Aperture (NE) | `norepinephrine` EMA + γ-формула ✓ (UI-aperture для depth engine — Tier 2) |
-| Threshold + hysteresis | `ProtectiveFreeze.THETA_ACTIVE=0.15` / `THETA_RECOVERY=0.08` ✓ |
-| Perturbation | `sync_error = ‖user − system‖` или `imbalance_pressure` ✓ |
-| Mode switching | `sync_regime` FLOW/REST/PROTECT/CONFESS (близко но 4 режима, не R/C) |
+| Gain (DA) | `_rgk.system.gain` EMA ✓ (после B5 W4 — Neurochem удалён) |
+| Hysteresis (5-HT) | `_rgk.system.hyst` EMA + `_rgk.FREEZE_ACTIVE/RECOVERY_THRESHOLD` ✓ |
+| Aperture (NE) | `_rgk.system.aperture` EMA + γ-формула ✓ (UI-aperture для depth engine — Tier 2) |
+| Threshold + hysteresis | `FREEZE_ACTIVE_THRESHOLD=0.15` / `FREEZE_RECOVERY_THRESHOLD=0.08` ✓ |
+| Perturbation | `sync_error = ‖user − system‖` (5D) или `imbalance_press` ✓ |
+| Mode switching | R/C bit на резонаторе ✓ (Counter-wave Правило 7); legacy `sync_regime` FLOW/REST/PROTECT/CONFESS — derived label для UI |
 
 ### Расхождения
 
@@ -191,17 +191,28 @@ class РГК:
 
 ### Размер
 
-Текущий код:
+Pre-B5 (2026-04-25 prediction):
 - `src/user_state.py`: 1300 строк
 - `src/neurochem.py`: 400 строк
 - `src/horizon.py`: 600 строк
 - `src/signals.py` + `src/detectors.py`: 1200 строк
 - `src/cognitive_loop.py`: 2500 строк
 
-≈ **6150 строк state + dynamics**, всё это в РГК сворачивается в **~200 строк ядра + 5 проекторов по ~50 строк**.
+≈ **6150 строк state + dynamics**, прогноз — коллапс в **~200 строк ядра + 5 проекторов по ~50 строк**.
+
+**Фактически после B5 (2026-04-26):**
+- `src/rgk.py`: 1053 строки (РГК-ядро + 5 проекторов)
+- `src/user_state.py`: 451 строка (shim для test fixtures, под W10 deletion)
+- `src/neurochem.py`: 35 строк (deprecated stub — historical mapping table)
+- `src/horizon.py`: 597 строк
+- `src/signals.py` + `src/detectors.py`: 301 + 1296 = 1597 строк (включая user-side surprise после W11 #1)
+- `src/cognitive_loop.py`: 2628 строк
+- `src/nand.py`: 867 строк (NAND tick engine, после W11 #2)
+
+Substrate (state + dynamics) = 1053 + 451 + 35 + 597 = **2136 строк** (vs prognozed 6150). Реальный коллапс substrate: **−65%** через delete facades в B5 W3-W5.
 
 После коллапса:
-- РГК-ядро: ~200 строк
+- РГК-ядро: ~200 строк (формулы)
 - Проекции (signal/capacity/regime/ui/heartbeat): ~250 строк
 - IO (HRV/LLM/HTTP/persistence): ~500 строк (нельзя сжать)
 - DMN/REM heavy work (pump_bridge, REM emotional): ~1000 строк (реальные алгоритмы)
@@ -239,7 +250,7 @@ Phase A identity (10 тестов) фиксирует bit-identical EMA values. 
 
 ## 9. Реализация
 
-Реализовано 2026-04-25: `src/rgk.py` (Resonator + 2 связанных + balance + проекторы); UserState / Neurochem / ProtectiveFreeze работают как facades поверх `_rgk`. 5-axis ACh+GABA с feeders v1 — ограничения описаны в [docs/neurochem-design.md § 5-axis](../docs/neurochem-design.md). Mapping наших полей к внешним психологическим словарям — [docs/world-model.md § Mapping](../docs/world-model.md).
+Реализовано 2026-04-25 (Phase D): `src/rgk.py` (Resonator + 2 связанных + balance + проекторы). После B5 (2026-04-26): facades `Neurochem` (W4) и `ProtectiveFreeze` (W3) удалены полностью; `UserState` остался как 451-LOC shim для test fixtures (под W10 deletion). РГК — единственный substrate state + dynamics. 5-axis ACh+GABA с feeders v1 — ограничения описаны в [docs/neurochem-design.md § Источники сигнала](../docs/neurochem-design.md). Mapping наших полей к внешним психологическим словарям — [docs/world-model.md § Mapping](../docs/world-model.md).
 
 История миграции — `memory/project_session_20260425_phase_d.md`.
 

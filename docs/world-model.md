@@ -136,10 +136,10 @@ UI показывает максимум трёх. Усталость польз
 | Belief space / state distribution | UserState.vector() (3D DA/5HT/NE) | [user_state.py](../src/user_state.py) | Непрерывный, EMA-сглаженный, выгорание/agency отдельным полем |
 | Precision weighting | CognitiveState.precision, effective_precision | [horizon.py](../src/horizon.py) | Уже есть, гейтит policy weights |
 | Cost of control / регуляторное усилие | 3-zone capacity (физио/эмо/когн контуры) + cognitive_load_today | [user_state.py](../src/user_state.py), [capacity-design.md](capacity-design.md) | Three-channel capacity gate, не статический счётчик; dual-pool legacy удалён в Phase C |
-| Allostatic load | ProtectiveFreeze (conflict + silence + imbalance feeders) | [neurochem.py](../src/neurochem.py) | Три feeder'а, один display_burnout, плюс совмещённое выгорание с user для множителя простоя |
+| Allostatic load | `_rgk` pressure layer (conflict + silence + imbalance feeders) | [rgk.py](../src/rgk.py) | Три feeder'а, один display_burnout, плюс совмещённое выгорание с user для множителя простоя |
 | Affective inertia / smoothing | EMA затухание (0.9–0.98) во всех апдейтах | везде | Даёт ту же плавность что explicit velocity, без второго поля |
 | Soft context blending | sync_regime, derived из continuous sync_error | [user_state.py](../src/user_state.py) | Не if/else, derived-state |
-| Recovery / return-to-baseline | ProtectiveFreeze.THETA_RECOVERY + падение давления тишины | [neurochem.py](../src/neurochem.py) | Гистерезис, не жёсткий reset |
+| Recovery / return-to-baseline | `_rgk.FREEZE_RECOVERY_THRESHOLD` + падение `silence_press` | [rgk.py](../src/rgk.py) | Гистерезис, не жёсткий reset |
 | Pre-activation / anticipatory computation (зрачки, [ixbt 2026-04](https://www.ixbt.com/live/science/)) | UserState.expectation_by_tod (baseline по времени суток) + CognitiveState.precision | [user_state.py](../src/user_state.py), [friston-loop.md](friston-loop.md) | Ожидание контекстуально (morning/day/evening/night), не один глобальный baseline |
 | User-side surprise detection | [src/detectors.py](../src/detectors.py) `detect_user_surprise` (HRV + текст + LLM) | см. [friston-loop.md § User-side surprise](friston-loop.md#user-side-surprise) | MVP A+B+C |
 | Self-prediction (симметрия Friston-loop) | Neurochem.expectation_vec + self-дисбаланс | [neurochem.py](../src/neurochem.py) | Baddle предсказывает собственную (DA, S, NE) |

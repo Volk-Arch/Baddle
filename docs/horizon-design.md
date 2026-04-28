@@ -1,6 +1,6 @@
 # CognitiveState — адаптивный контроллер
 
-Один объект контроля для всей системы: Horizon-слой (точность, политика, чувствительность γ, пороги τ) + нейрохимия через композицию с [Neurochem и ProtectiveFreeze](neurochem-design.md).
+Один объект контроля для всей системы: Horizon-слой (точность, политика, чувствительность γ, пороги τ) + нейрохимия через композицию с [`_rgk` (Resonator + pressure layer)](neurochem-design.md).
 
 Без контроллера все фазы тика использовали бы одинаковые LLM-параметры (температура 0.9, top_k 40) — brainstorm, SmartDC, collapse в одной «ширине мышления». Это как ехать на одной передаче. **Когнитивное состояние** (CognitiveState, [src/horizon.py](../src/horizon.py)) — контроллер между тиком и LLM: не генерирует контент, управляет **как** генерировать.
 
@@ -133,10 +133,10 @@ UI overlay: `Step 15 · EXECUTION · Π=0.78 · 4/6 verified`.
 ## Где в коде
 
 - [src/horizon.py](../src/horizon.py) — CognitiveState, `get_global_state()`, `create_horizon()`, 14 пресетов; методы `apply_to_bayes`, `update_neurochem`, `effective_temperature`, `horizon_budget`, `get_metrics`, `to_dict`/`from_dict`.
-- [src/neurochem.py](../src/neurochem.py) — композиция (self.neuro, self.freeze).
+- [src/rgk.py](../src/rgk.py) — `Resonator` + `РГК` substrate. После B5 W3+W4 классы `Neurochem` и `ProtectiveFreeze` удалены, всё в `_rgk` напрямую (CognitiveState держит `self.rgk`).
 - [src/nand.py](../src/nand.py) — тик загружает Horizon, считает матрицу различий, кормит нейрохимию, маршрутизирует по зонам.
 - Endpoint `/graph/horizon-feedback` — autorun отправляет удивление обратно.
 
 ---
 
-**Навигация:** [← Tick](tick-design.md) · [Индекс](README.md) · [Следующее: Neurochem →](neurochem-design.md)
+**Навигация:** [← Tick](tick-design.md) · [Индекс](README.md) · [Следующее: Нейрохимия →](neurochem-design.md)

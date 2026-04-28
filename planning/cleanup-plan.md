@@ -38,7 +38,20 @@
 
 ---
 
-## W7 — Docs sync с post-B5 (1-2ч, doc-only)
+## W7 — Docs sync с post-B5 ✅ done 2026-04-28
+
+Активные ссылки на удалённые `Neurochem` + `ProtectiveFreeze` в docs обновлены на `_rgk` substrate. Затронуты:
+
+- `docs/neurochem-design.md` — Pressure layer секция переписана через `_rgk.{conflict,silence_press,imbalance_press,freeze_active}`, FREEZE_* thresholds (вместо TAU_STABLE/THETA_*), Self-prediction → `_rgk.s_exp_vec`, balance() → `_rgk.user/system.balance()`, `/assist/chemistry` ссылка убрана (endpoint deleted), «Где в коде» обновлено.
+- `docs/architecture-rules.md` — Правило 6 (B5 facades удалены note), Правило 5 каркас (`_rgk.p_tick`), Правило 7 (Resonator MODE_* thresholds).
+- `docs/rgk-spec.md` — Маппинг таблица обновлена (Neurochem.dopamine → _rgk.system.gain), § Размер расширен фактическими post-B5 LOC (substrate 2479→2136 = −65% vs prognozed 6150), § Реализация — facades удалены note.
+- `docs/horizon-design.md`, `docs/friston-loop.md`, `docs/full-cycle.md`, `docs/hrv-design.md`, `docs/resonance-model.md`, `docs/symbiosis-design.md`, `docs/world-model.md`, `docs/README.md` — точечные refs.
+
+Sync_error везде обновлён 3D → 5D после W16.1 clean break.
+
+Historical narratives (`foundation.md` про эволюцию, `README.md` glossary с *(deprecated)* tags, `TECH_README.md` neurochem.py 34-line stub) оставлены — это правильное описание истории миграции.
+
+(Архив plan'а:)
 
 После W3+W4 удалены `Neurochem` + `ProtectiveFreeze`. Несколько docs упоминают их как живые.
 

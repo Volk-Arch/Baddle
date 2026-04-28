@@ -1,6 +1,6 @@
 # Нейрохимия Baddle
 
-Симметрично с UserState (который моделирует пользователя — [user-model-design.md](user-model-design.md)) Baddle держит свой собственный вектор состояния — Neurochem. Три скаляра + защитный режим. Минимальный набор сигналов, который даёт системе «настроение», любопытство и защиту от перегрузки — без того чтобы копировать состояние пользователя. Расстояние между двумя векторами — `sync_error`, прайм-директива проекта; симметрия раскрывается в [symbiosis-design.md](symbiosis-design.md).
+Симметрично с user-стороной (моделирует пользователя — [user-model-design.md](user-model-design.md)) Baddle держит свой собственный вектор состояния в `_rgk.system` (Resonator). Пять скаляров + pressure layer (`_rgk.conflict/silence_press/imbalance_press`). Минимальный набор сигналов, который даёт системе «настроение», любопытство и защиту от перегрузки — без того чтобы копировать состояние пользователя. Расстояние между двумя векторами — `sync_error`, прайм-директива проекта; симметрия раскрывается в [symbiosis-design.md](symbiosis-design.md).
 
 ---
 
@@ -12,7 +12,7 @@
 - **Серотонин** (serotonin, S) — стабильность весов. EMA от величины 1 − стандартное отклонение изменений весов.
 - **Норадреналин** (norepinephrine, NE) — неопределённость. EMA от энтропии распределения весов.
 
-Плюс **защитный режим** (ProtectiveFreeze) — накапливает «усталость» и блокирует байесовское обновление при перегрузке.
+Плюс **pressure layer** (`_rgk.conflict` + `silence_press` + `imbalance_press` + `freeze_active` flag) — накапливает «усталость» и блокирует байесовское обновление при перегрузке.
 
 ---
 
@@ -52,7 +52,7 @@
 | Серотонин (S) | изменения весов (ΔW) от байесовских обновлений | Стабильность — меняются ли убеждения |
 | Норадреналин (NE) | энтропия распределения весов | Неопределённость — размыто ли распределение |
 | Ацетилхолин (ACh) | частота добавления нод (cap=10/час) + качество DMN-мостов | Пластичность — текучесть ткани (proxy v1, см. § Источники сигнала для ACh и GABA) |
-| ГАМК (GABA) | `ProtectiveFreeze.active` boolean | Демпфирование — стенки стоячей волны (proxy v1) |
+| ГАМК (GABA) | `_rgk.freeze_active` boolean | Демпфирование — стенки стоячей волны (proxy v1) |
 
 Пользовательский feedback конвертируется в **псевдо-различие**: accepted → d = 0.2 (слабая новизна = подтверждение), rejected → d = 0.8 (сильная новизна = система была неправа). Feedback входит через тот же канал что и весь граф.
 
@@ -69,19 +69,19 @@
 
 ---
 
-## Защитный режим (ProtectiveFreeze)
+## Pressure layer
 
-Три независимых накопителя → одно **отображаемое выгорание** (display_burnout):
+Три независимых накопителя в `_rgk` → одно **отображаемое выгорание** (display_burnout):
 
-| Feeder | Откуда | Активирует байесовскую заморозку? |
-|---|---|---|
-| **Накопитель конфликтов** (conflict_accumulator) | EMA графовых конфликтов (различие выше порога при низкой стабильности) | **ДА** |
-| **Давление тишины** (silence_pressure) | Линейный таймер: плюс dt/7 суток, минус 0.05 на user-событие | Нет |
-| **Давление дисбаланса** (imbalance_pressure) | EMA агрегированной ошибки предсказания (см. friston-loop) | Нет |
+| Feeder | Поле в _rgk | Откуда | Активирует байесовскую заморозку? |
+|---|---|---|---|
+| **Накопитель конфликтов** | `_rgk.conflict.value` | EMA графовых конфликтов (различие выше порога при низкой стабильности) | **ДА** |
+| **Давление тишины** | `_rgk.silence_press` | Линейный таймер: плюс dt/7 суток, минус 0.05 на user-событие | Нет |
+| **Давление дисбаланса** | `_rgk.imbalance_press.value` | EMA агрегированной ошибки предсказания (см. friston-loop) | Нет |
 
-Отображаемое выгорание = максимум трёх feeder'ов. В UI показывается как «Усталость Baddle». **Совмещённое выгорание** (combined_burnout) = максимум из отображаемого и пользовательского — используется в множителе простоя (_idle_multiplier): эмпатия встроена, пользователь устал → Baddle тоже тише.
+Отображаемое выгорание = максимум трёх feeder'ов. В UI показывается как «Усталость Baddle». **Совмещённое выгорание** = максимум из отображаемого и пользовательского — используется в множителе простоя (_idle_multiplier): эмпатия встроена, пользователь устал → Baddle тоже тише.
 
-**Только накопитель конфликтов активирует байесовскую заморозку** — жёсткий режим, в котором apply_to_bayes возвращает prior, обновления весов блокируются. Вход при значении выше 0.15, выход — ниже 0.08 (гистерезис). Давление тишины и давление дисбаланса только **замедляют** фоновые циклы через регулятор простоя (_throttled_idle), не блокируют обучение графа.
+**Только накопитель конфликтов активирует байесовскую заморозку** (`_rgk.freeze_active = True`) — жёсткий режим, в котором `bayes_step` возвращает prior, обновления весов блокируются. Вход при значении выше `FREEZE_ACTIVE_THRESHOLD=0.15`, выход — ниже `FREEZE_RECOVERY_THRESHOLD=0.08` (гистерезис). Давление тишины и давление дисбаланса только **замедляют** фоновые циклы через регулятор простоя (_throttled_idle), не блокируют обучение графа.
 
 Подробно про 4 канала ошибки предсказания, агрегирующиеся в давление дисбаланса, — в [friston-loop.md](friston-loop.md).
 
@@ -91,7 +91,7 @@
 
 Помимо предсказания пользователя, Baddle предсказывает **себя**:
 
-- **Вектор self-ожидания** (Neurochem.expectation_vec) — трёхмерная EMA (DA, S, NE), baseline «что Baddle ждёт от себя».
+- **Вектор self-ожидания** (`_rgk.s_exp_vec`) — пятимерная EMA (DA, 5HT, NE, ACh, GABA), baseline «что Baddle ждёт от себя».
 - **Вектор self-surprise** — разность текущего нейрохимического вектора и вектора ожидания.
 - **Self-дисбаланс** (self_imbalance) — норма self-surprise-вектора, PE Baddle на самой себе.
 
@@ -101,7 +101,7 @@
 
 ## Пять модуляторов и балансовая формула
 
-Нейрохимия Neurochem — пять модуляторов: **дофамин** (DA, gain — амплитуда захвата фазы), **серотонин** (5-HT, hysteresis — окно переключения, гашение шума), **норадреналин** (NE, aperture — ширина полосы), **ацетилхолин** (ACh, plasticity — текучесть ткани, открытость новому) и **ГАМК** (GABA, damping — стенки стоячей волны, чёткость границ). Симметрично на user-стороне в UserState — тот же набор для зеркального резонатора.
+Нейрохимия system-стороны (`_rgk.system`) — пять модуляторов: **дофамин** (DA, gain — амплитуда захвата фазы), **серотонин** (5-HT, hysteresis — окно переключения, гашение шума), **норадреналин** (NE, aperture — ширина полосы), **ацетилхолин** (ACh, plasticity — текучесть ткани, открытость новому) и **ГАМК** (GABA, damping — стенки стоячей волны, чёткость границ). Симметрично на user-стороне (`_rgk.user`) — тот же набор для зеркального резонатора.
 
 Поверх индивидуальных осей живёт балансовая формула как диагностический скаляр:
 
@@ -109,13 +109,11 @@
 balance = (DA · NE · ACh) / (5HT · GABA)
 ```
 
-Корридор `[0.3, 1.5]` маркирует здоровый резонанс. Выход вверх (>1.5) читается как срыв в шум — гиперрезонанс, мания, аддикция. Выход вниз (<0.3) — застревание, апатия, изоляция. `UserState.balance()` и `Neurochem.balance()` отдаются в `/assist/state` response и видны в UI Header виджетом `🌊 U {user_balance} · S {system_balance}` рядом с capacity-индикаторами. Цвет каждого числа зависит от corridor: зелёный в `[0.5, 1.5]`, жёлтый в `[0.3, 0.5] ∪ [1.5, 2.0]`, красный иначе.
-
-Для доступа к полному 5-axis snapshot обоих резонаторов есть отдельный endpoint `GET /assist/chemistry` — возвращает yaml с user/system профилями + coupling (sync_error, sync_regime). Опционально `?format=json` для JSON-эквивалента. Удобно для Lab, копирования в внешние tools, debug. Структура совпадает с «Параметрический профиль сессии» из РГК v1.0 spec.
+Корридор `[0.3, 1.5]` маркирует здоровый резонанс. Выход вверх (>1.5) читается как срыв в шум — гиперрезонанс, мания, аддикция. Выход вниз (<0.3) — застревание, апатия, изоляция. `_rgk.user.balance()` и `_rgk.system.balance()` отдаются в `/assist/state` response (полная picture: 5-axis chem + balance + sync_error_wave per axis) и видны в UI Header виджетом `🌊 U {user_balance} · S {system_balance}` рядом с capacity-индикаторами. Цвет каждого числа зависит от corridor: зелёный в `[0.5, 1.5]`, жёлтый в `[0.3, 0.5] ∪ [1.5, 2.0]`, красный иначе.
 
 ### R/C mode — две роли резонатора
 
-Помимо пяти chem-параметров, Resonator несёт один битовый флаг — **mode** ∈ {R, C}. R (resonance) — пассивный приёмник, ткань следует за полем. C (counter-wave) — активный генератор инвертированной волны, разрывает деструктивный аттрактор. Переключение через `Resonator.update_mode(perturbation)` с гистерезисом ACT=0.15 / REC=0.08 — те же пороги что у `ProtectiveFreeze`, физически это одно и то же явление с разных точек зрения. `cognitive_loop._advance_tick` каждый tick подаёт perturbation = sync_error (для user mirror) и combined_imbalance (для system mirror).
+Помимо пяти chem-параметров, Resonator несёт один битовый флаг — **mode** ∈ {R, C}. R (resonance) — пассивный приёмник, ткань следует за полем. C (counter-wave) — активный генератор инвертированной волны, разрывает деструктивный аттрактор. Переключение через `Resonator.update_mode(perturbation)` с гистерезисом `ACT=0.15 / REC=0.08` — те же пороги что у `_rgk.freeze_active`, физически это одно и то же явление с разных точек зрения. `cognitive_loop._advance_tick` каждый tick подаёт perturbation = sync_error (для user mirror) и combined_imbalance (для system mirror).
 
 Когда `user.mode == 'C'`, dispatcher понижает urgency push-style сигналов (sync_seeking, recurring_lag, observation_suggestion, morning_briefing) на 0.3 — система перестаёт давить на юзера в режиме рассогласования. Полная теория — [resonance-model § Две роли одного резонатора](resonance-model.md), implementation pattern — [architecture-rules § Правило 7](architecture-rules.md).
 
@@ -137,7 +135,7 @@ balance = (DA · NE · ACh) / (5HT · GABA)
 
 У Baddle нет прямых сенсоров пластичности или торможения ткани, поэтому feeders для ACh и GABA — **proxy**, ловят форму а не семантику. Это явное ограничение реализации.
 
-На системной стороне ацетилхолин кормится частотой добавления нод за час (cap=10 нод → 1.0) и качеством DMN-мостов когда они находятся (continuous, deep research и converge loop — все три DMN entry points). ГАМК получает сигнал от `ProtectiveFreeze.active` как дискретный boolean плюс scattering-proxy: количество recent bridges за час (cap=5) — больше мостов в разные стороны = больше distributed attention = ниже damping. На user-стороне ACh поднимается только при детектированном surprise через `_check_user_surprise`; GABA derived из существующего `focus_residue` как `1 − focus_residue`.
+На системной стороне ацетилхолин кормится частотой добавления нод за час (cap=10 нод → 1.0) и качеством DMN-мостов когда они находятся (continuous, deep research и converge loop — все три DMN entry points). ГАМК получает сигнал от `_rgk.freeze_active` как дискретный boolean плюс scattering-proxy: количество recent bridges за час (cap=5) — больше мостов в разные стороны = больше distributed attention = ниже damping. На user-стороне ACh поднимается только при детектированном surprise через `_check_user_surprise`; GABA derived из существующего `focus_residue` как `1 − focus_residue`.
 
 Append-rate растёт, когда юзер копирует одно и то же — реальная пластичность при этом нулевая. Freeze-флаг как медленный индикатор даёт GABA→0 между активациями. Bridge-count как proxy scattering ловит количество, не семантическое разнообразие — 5 мостов на одну тему читаются как scattered. Continuous novelty без surprise-триггера и breathing-детектор для GABA — не реализованы. В стабильном состоянии ACh/GABA дрейфуют около 0.5, балансовая формула вырождается в `(DA·NE)/5HT` — частная γ-проекция, описывающая режим «фокус vs поиск» по двум осям. Полная 5-axis активируется на events — при surprise, freeze, всплеске создания нод, или нахождении DMN-моста.
 
@@ -192,9 +190,9 @@ Append-rate растёт, когда юзер копирует одно и то 
 | decay_S | 0.95 | Медленная (стабильность копится) |
 | decay_NE | 0.9 | Быстрая (реакция на неопределённость) |
 | RPE_GAIN | 0.15 | Сила спайка по ошибке предсказания награды |
-| TAU_STABLE | 0.6 | Порог различия, за которым начинается конфликт |
-| THETA_ACTIVE | 0.15 | Вход в защитный режим |
-| THETA_RECOVERY | 0.08 | Выход из защитного режима (гистерезис) |
+| FREEZE_CONFLICT_THRESHOLD | 0.6 | Порог различия, за которым начинается конфликт |
+| FREEZE_ACTIVE_THRESHOLD | 0.15 | Вход в байесовскую заморозку (`freeze_active = True`) |
+| FREEZE_RECOVERY_THRESHOLD | 0.08 | Выход из заморозки (гистерезис) |
 
 Все EMA-константы живут в [src/ema.py::Decays](../src/ema.py).
 
@@ -202,11 +200,11 @@ Append-rate растёт, когда юзер копирует одно и то 
 
 ## Где в коде
 
-- [src/neurochem.py](../src/neurochem.py) — класс Neurochem + ProtectiveFreeze.
-- [src/horizon.py::CognitiveState](../src/horizon.py) держит `self.neuro` + `self.freeze`, делегирует через `apply_to_bayes`, `update_neurochem`, `inject_ne`.
+- [src/rgk.py](../src/rgk.py) — `Resonator` (5-axis chem) + `РГК` (composition: user/system Resonator'ы + pressure layer + auxiliary state). Класс `Neurochem` удалён в B5 W4, `ProtectiveFreeze` — в B5 W3; всё в `_rgk` напрямую.
+- [src/horizon.py::CognitiveState](../src/horizon.py) держит `self.rgk`, делегирует через `apply_to_bayes`, `update_neurochem`, `inject_ne`.
 - [src/nand.py](../src/nand.py) — после матрицы различий вызывает `update_neurochem(d=mean_d, weights=confidences)` — замыкает контур: граф → нейрохимия → apply_to_bayes → граф.
 - [src/ema.py::Decays](../src/ema.py) — все константы затухания в одном месте.
-- Endpoint `/assist/state` выдаёт `neurochem: {dopamine, serotonin, norepinephrine, burnout, gamma, freeze_active, ...}`.
+- Endpoint `/assist/state` выдаёт `neurochem: {dopamine_gain, serotonin_hysteresis, norepinephrine_aperture, acetylcholine_plasticity, gaba_damping, balance, mode, burnout, gamma, freeze_active, ...}`.
 
 **Открыто:** REM-переработка эпизодов с высоким модулем RPE через pump; внутренняя тяга в DMN (цель = argmax от произведения дофамина и новизны); циркадный дрейф baseline (DA утром, S вечером).
 

@@ -66,7 +66,7 @@
 
 **Контракт:** 5 PE-каналов (`user_pe`, `agency_gap`, `hrv_pe`, `self_pe`, plus optional channels) → max → `imbalance_pressure` (EMA) → `_idle_multiplier` (замедляет циклы при перегрузе) и intensity для alerts. Всё что система делает «сама» — отсюда.
 
-**Каркас:** агрегация в [cognitive_loop._advance_tick](../src/cognitive_loop.py) — `combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)`. ProtectiveFreeze получает feed_tick + sync_error EMA. `imbalance_pressure` peak'ит когда модель stale → idle slowdown сохраняет budget.
+**Каркас:** агрегация в [cognitive_loop._advance_tick](../src/cognitive_loop.py) — `combined_imbalance = max(user_pe, self_pe, agency_gap, hrv_pe)`. `_rgk.p_tick(dt, sync_err, imbalance)` обновляет pressure layer. `_rgk.imbalance_press` peak'ит когда модель stale → idle slowdown сохраняет budget.
 
 **Что коллапсируется:** мета-controller decisions (когда замедлить, когда гасить, когда тревожить) — все из одной величины. Новые PE-каналы добавляются в max, поведение наследуется.
 
@@ -78,7 +78,7 @@
 
 **Контракт:** один `Resonator` (5 chem axes — gain/hyst/aperture/plasticity/damping = DA/5HT/NE/ACh/GABA + R/C bit + balance()). `РГК = два связанных резонатора` (user mirror + system mirror) + auxiliary state (valence/agency/burnout, predictive baselines, pressure accumulators). Всё остальное — проекции через `project(domain)`.
 
-**Каркас:** [src/rgk.py](../src/rgk.py) — `Resonator` + `РГК` + `project()`. Singleton `get_global_rgk()` (B0): production bootstrap shares один объект между UserState/Neurochem/ProtectiveFreeze (каскад зеркал — один резонатор, не три). UserState/Neurochem facades остаются как thin proxies через `@property`.
+**Каркас:** [src/rgk.py](../src/rgk.py) — `Resonator` + `РГК` + `project()`. Singleton `get_global_rgk()`: production bootstrap shares один объект (каскад зеркал — один резонатор, не три). После B5 facades удалены: `Neurochem` (W4) и `ProtectiveFreeze` (W3) — нет, всё в `_rgk` напрямую; `UserState` — shim 393 LOC только для test fixtures, под W10 deletion.
 
 **Балансовая формула:** `balance = (DA · NE · ACh) / (5HT · GABA)`. Корридор `[0.3, 1.5]` маркирует здоровый резонанс. Diagnostic скаляр для долгосрочного здоровья системы.
 
@@ -90,7 +90,7 @@
 
 ## Правило 7 — Не давить, а инвертировать
 
-**Контракт:** R/C bit на резонаторе через гистерезис (THETA_ACT=0.15 / THETA_REC=0.08). Mode `R` (passive resonance) — пассивный приёмник, следует за полем. Mode `C` (counter-wave) — генератор инверсной волны, разрывает деструктивный аттрактор. При `user.mode == 'C'` push-style сигналы (sync_seeking, recurring_lag, observation_suggestion, morning_briefing) понижают urgency на 0.3 — не усиливают давление.
+**Контракт:** R/C bit на резонаторе через гистерезис (`Resonator.MODE_ACT=0.15 / MODE_REC=0.08` — численно совпадают с `_rgk.FREEZE_*` thresholds, физически одно явление с разных точек зрения). Mode `R` (passive resonance) — пассивный приёмник, следует за полем. Mode `C` (counter-wave) — генератор инверсной волны, разрывает деструктивный аттрактор. При `user.mode == 'C'` push-style сигналы (sync_seeking, recurring_lag, observation_suggestion, morning_briefing) понижают urgency на 0.3 — не усиливают давление.
 
 **Каркас:** `Resonator.update_mode(perturbation)` — гистерезисный flip. `cognitive_loop._advance_tick` вызывает каждый tick с `sync_err` (user mirror) и `combined_imbalance` (system mirror). `signals.py` определяет `COUNTER_WAVE_PUSH_TYPES`; `Dispatcher.dispatch()` принимает `user_mode='R'/'C'` параметр.
 

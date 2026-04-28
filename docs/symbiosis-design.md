@@ -111,8 +111,8 @@ Header таба — две симметричные панели вокруг sy
 ## Где в коде
 
 - [src/user_state.py](../src/user_state.py) — UserState, `compute_sync_error`, `compute_sync_regime`, пороги `SYNC_HIGH_THRESHOLD` и друзья.
-- [src/neurochem.py](../src/neurochem.py) — Neurochem + ProtectiveFreeze.
-- [src/horizon.py](../src/horizon.py) — CognitiveState (держит оба), производные свойства sync_error и sync_regime.
+- [src/rgk.py](../src/rgk.py) — `_rgk.system` Resonator (5 chem) + pressure layer (`conflict / silence_press / imbalance_press / freeze_active`). После B5 W3+W4 классы Neurochem и ProtectiveFreeze удалены.
+- [src/horizon.py](../src/horizon.py) — CognitiveState (держит `self.rgk`), производные свойства sync_error и sync_regime.
 - [src/assistant.py](../src/assistant.py) — endpoint `/assist/state` (возвращает обе стороны + синхронизацию), `/assist/alerts` (regime-based advice).
 
 ---

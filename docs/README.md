@@ -91,7 +91,7 @@ hypotheses с validation paths через `data/prime_directive.jsonl` и accumu
 
 7. [tick-design.md](tick-design.md) *(15 мин)* — атомарный шаг мышления, фазы NAND-tick'а, emergent через distinct-зоны.
 8. [horizon-design.md](horizon-design.md) *(20 мин)* — `CognitiveState`: precision, policy, γ, T, семь когнитивных состояний.
-9. [neurochem-design.md](neurochem-design.md) *(15 мин)* — dopamine / serotonin / norepinephrine, формулы EMA, RPE, ProtectiveFreeze.
+9. [neurochem-design.md](neurochem-design.md) *(15 мин)* — DA / 5HT / NE / ACh / GABA (5-axis chem), формулы EMA, RPE, pressure layer (`_rgk.freeze_active`).
 10. [symbiosis-design.md](symbiosis-design.md) *(15 мин)* — двойной state-вектор USER ↕ SYSTEM, `sync_error` как прайм-директива, 4 режима (flow/rest/protect/confess), таблица трёх схем классификации состояния.
 11. [user-model-design.md](user-model-design.md) *(20 мин)* — `UserState`: surprise, 10 named_states (Voronoi), day simulator.
 12. [hrv-design.md](hrv-design.md) *(20 мин)* — HRV как физический вход: coherence → θ/φ конуса, 4 activity zones, ВНС как переключатель несущей.
