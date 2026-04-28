@@ -88,22 +88,41 @@ sync_error_wave[axis] = |user[axis] − system[axis]| per component
 
 ## Компоненты в коде (что нужно добавить)
 
-### 1. `sync_error_wave` per axis
+### 1. `sync_error_wave` per axis ✅ MVP сделан 2026-04-28
 
-Расширение [friston-loop](friston-loop.md):
+`compute_sync_error_wave(rgk)` в [user_state.py](../src/user_state.py) +
+`РГК.sync_error_wave()` method в [rgk.py](../src/rgk.py) +
+`CognitiveState.sync_error_wave` property в [horizon.py](../src/horizon.py).
+
+Возвращает:
 ```python
-# в _rgk.project("freeze")
-"sync_error_per_axis": {
-    "dopamine":      abs(user.gain.value - system.gain.value),
-    "serotonin":     abs(user.hyst.value - system.hyst.value),
-    "norepinephrine": abs(user.aperture.value - system.aperture.value),
-    "acetylcholine": abs(user.plasticity.value - system.plasticity.value),
-    "gaba":          abs(user.damping.value - system.damping.value),
-    "valence":       abs(user.valence - system_proxy.valence),
-    "agency":        abs(user.agency - system_proxy.agency),
+{
+    "axes": {
+        "dopamine":       abs(user.gain.value       - system.gain.value),
+        "serotonin":      abs(user.hyst.value       - system.hyst.value),
+        "norepinephrine": abs(user.aperture.value   - system.aperture.value),
+        "acetylcholine":  abs(user.plasticity.value - system.plasticity.value),
+        "gaba":           abs(user.damping.value    - system.damping.value),
+    },
+    "max_axis": "norepinephrine",  # axis с наибольшим расхождением
+    "max_value": 0.42,
+    "scalar_5d": 0.61,             # L2 over 5 axes (legacy 3D игнорировал ACh+GABA)
 }
-"sync_error_wave_max_axis": "norepinephrine"  # где наибольшее расхождение
 ```
+
+Expose'ится через `/assist/chemistry` `coupling.sync_error_wave` + входит в
+`get_metrics()` для дашборда. Тесты — `tests/test_rgk_properties.py`
+`TestCouplingConsistency` (5 новых).
+
+**Что осталось (W16.1b, не сегодня):** phase-aware comparison — текущий
+MVP сравнивает amplitudes (мгновенный snapshot). Phase требует velocity
+tracking (∂axis/∂t — направление изменения за tick). Реализуется когда
+понадобится диагностика «не просто разница, но в каких axis user
+**ускоряется** относительно system».
+
+**valence/agency** не включены в wave: они только user-side, system
+equivalent отсутствует — per-axis сравнение бессмысленно. Останутся
+скалярами в общем state.
 
 Это даёт **диагностику** — не просто «sync_error 0.4 worsening», а «расхождение по NE — система слишком напряжена относительно тебя сейчас».
 

@@ -232,6 +232,75 @@ class TestCouplingConsistency:
         assert 0.0 <= e <= math.sqrt(3) + TOL, \
             f"seed={seed} sync_error={e:.4f} out of [0, √3]"
 
+    # ── W16.1: per-axis breakdown ──────────────────────────────────────
+
+    def test_sync_error_wave_zero_when_vectors_equal(self):
+        """Все 5 axes = 0 когда user/system совпадают."""
+        r = РГК()
+        for axis in ("gain", "hyst", "aperture", "plasticity", "damping"):
+            getattr(r.user, axis).value = 0.5
+            getattr(r.system, axis).value = 0.5
+        wave = r.sync_error_wave()
+        for axis_name, val in wave["axes"].items():
+            assert val == pytest.approx(0.0, abs=TOL), \
+                f"{axis_name} expected 0.0, got {val}"
+        assert wave["max_value"] == pytest.approx(0.0, abs=TOL)
+        assert wave["scalar_5d"] == pytest.approx(0.0, abs=TOL)
+
+    def test_sync_error_wave_max_axis_correct(self):
+        """Max axis identifier правильно показывает наибольшее расхождение."""
+        r = РГК()
+        # baseline 0.5/0.5 на всех; намеренно разводим ACh
+        for axis in ("gain", "hyst", "aperture", "plasticity", "damping"):
+            getattr(r.user, axis).value = 0.5
+            getattr(r.system, axis).value = 0.5
+        r.user.plasticity.value = 0.9
+        r.system.plasticity.value = 0.1  # 0.8 расхождение по ACh
+        wave = r.sync_error_wave()
+        assert wave["max_axis"] == "acetylcholine"
+        assert wave["max_value"] == pytest.approx(0.8, abs=TOL)
+
+    def test_sync_error_wave_keys_complete(self):
+        """Wave dict содержит все 5 chem axes + meta-поля."""
+        r = РГК()
+        wave = r.sync_error_wave()
+        assert set(wave["axes"].keys()) == {
+            "dopamine", "serotonin", "norepinephrine", "acetylcholine", "gaba"
+        }
+        assert "max_axis" in wave
+        assert "max_value" in wave
+        assert "scalar_5d" in wave
+
+    @pytest.mark.parametrize("seed", SEEDS)
+    def test_sync_error_wave_axes_in_bounds_random(self, seed):
+        """Каждое axis amplitude ∈ [0, 1] на random traces."""
+        r = _run_random_trace(seed, steps=100)
+        wave = r.sync_error_wave()
+        for axis_name, val in wave["axes"].items():
+            assert 0.0 <= val <= 1.0 + TOL, \
+                f"seed={seed} {axis_name}={val} out of [0, 1]"
+        # scalar_5d ≤ √5 (worst case all 5 axes maxed)
+        assert 0.0 <= wave["scalar_5d"] <= math.sqrt(5) + TOL, \
+            f"seed={seed} scalar_5d={wave['scalar_5d']}"
+
+    def test_sync_error_wave_scalar_5d_includes_extra_axes(self):
+        """scalar_5d ≥ legacy 3D scalar_error (т.к. включает ACh+GABA вклад)."""
+        r = РГК()
+        # Set 5D расхождение: 3 legacy axes равны, ACh+GABA расходятся
+        for axis in ("gain", "hyst", "aperture"):
+            getattr(r.user, axis).value = 0.5
+            getattr(r.system, axis).value = 0.5
+        r.user.plasticity.value = 0.8
+        r.system.plasticity.value = 0.3
+        r.user.damping.value = 0.3
+        r.system.damping.value = 0.7
+        scalar_3d = r.sync_error()
+        wave = r.sync_error_wave()
+        # 3D legacy игнорирует ACh+GABA → scalar_3d = 0;
+        # scalar_5d ловит реальное расхождение через ACh+GABA
+        assert wave["scalar_5d"] > scalar_3d + TOL, \
+            f"scalar_5d {wave['scalar_5d']} should exceed 3D {scalar_3d}"
+
     @pytest.mark.skip(reason="Requires actual counter-wave generation (step(obs, dt) with delay buffer), Tier 2 — see TODO.md")
     def test_counter_wave_reduces_sync_error(self):
         """Когда оба resonator в mode=C и генерируют counter-wave,

@@ -1140,6 +1140,7 @@ def assist_chemistry():
             },
             "coupling": {
                 "sync_error": round(float(get_global_state().sync_error), 3),
+                "sync_error_wave": rgk.sync_error_wave(),
                 "sync_regime": get_global_state().sync_regime,
             },
         }

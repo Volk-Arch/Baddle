@@ -626,6 +626,15 @@ class РГК:
     def sync_error(self) -> float:
         return float(np.linalg.norm(self.user.vector() - self.system.vector()))
 
+    def sync_error_wave(self) -> dict:
+        """Per-axis breakdown sync_error (5D, MVP W16.1).
+
+        Spec: docs/synchronization.md. Возвращает dict с axes/max_axis/scalar_5d.
+        Spectral diagnosis — «по какой частоте расхождение», не только «насколько».
+        """
+        from .user_state import compute_sync_error_wave
+        return compute_sync_error_wave(self)
+
     def gamma(self) -> float:
         ne = float(self.system.aperture.value)
         s  = float(self.system.hyst.value)

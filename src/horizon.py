@@ -210,6 +210,14 @@ class CognitiveState:
             return 0.0
 
     @property
+    def sync_error_wave(self) -> dict:
+        """Per-axis breakdown (W16.1). См. user_state.compute_sync_error_wave."""
+        try:
+            return self.rgk.sync_error_wave()
+        except Exception:
+            return {"axes": {}, "max_axis": None, "max_value": 0.0, "scalar_5d": 0.0}
+
+    @property
     def sync_regime(self) -> str:
         try:
             from .user_state import compute_sync_regime
@@ -434,6 +442,7 @@ class CognitiveState:
             "temperature_nand": round(self.temperature_nand, 3),
             "kl_divergence": round(self.kl_divergence, 4),
             "sync_error": round(self.sync_error, 3),
+            "sync_error_wave": self.sync_error_wave,
             "sync_regime": self.sync_regime,
             "tau_in": round(self.tau_in, 3),
             "tau_out": round(self.tau_out, 3),

@@ -96,6 +96,59 @@ def compute_sync_error(rgk) -> float:
     return float(np.linalg.norm(diff))
 
 
+# ── W16.1: per-axis breakdown (resonance transfer protocol) ───────────────
+#
+# Скалярный sync_error даёт «насколько» рассогласование, но не **по какой
+# частоте**. Per-axis breakdown превращает это в спектральную диагностику:
+# «расхождение по NE — система слишком напряжена относительно тебя».
+#
+# Spec: docs/synchronization.md § Применение к Baddle.
+# Phase-aware comparison (W16.1b) — отложен до velocity tracking. Сейчас
+# MVP: amplitude per axis (absolute |user − system| на тике).
+
+_WAVE_AXES = ("dopamine", "serotonin", "norepinephrine", "acetylcholine", "gaba")
+_AXIS_FIELDS = {
+    "dopamine":       "gain",
+    "serotonin":      "hyst",
+    "norepinephrine": "aperture",
+    "acetylcholine":  "plasticity",
+    "gaba":           "damping",
+}
+
+
+def compute_sync_error_wave(rgk) -> dict:
+    """Per-axis breakdown sync_error в 5D chem-пространстве.
+
+    Возвращает:
+        {
+            "axes": {dopamine, serotonin, norepinephrine, acetylcholine, gaba},
+                       # |user[axis] − system[axis]|, каждый ∈ [0, 1]
+            "max_axis": str,    # axis с наибольшим расхождением
+            "max_value": float,
+            "scalar_5d": float, # L2 over 5 axes (max ≈ √5 ≈ 2.236)
+        }
+
+    Не replaces скаляр `compute_sync_error` (тот 3D legacy). Эта функция —
+    добавочный слой spectral diagnosis. Использование:
+      - `/assist/chemistry` coupling-секция expose'ит per-axis
+      - В будущем W16.4: при больших sync_error_wave[axis] система генерит
+        analogies для этой axis в morning briefing (adiabatic adjustment)
+    """
+    user, sys = rgk.user, rgk.system
+    axes = {
+        axis: abs(float(getattr(user, field).value) - float(getattr(sys, field).value))
+        for axis, field in _AXIS_FIELDS.items()
+    }
+    max_axis = max(axes, key=axes.get)
+    scalar_5d = float(np.linalg.norm(list(axes.values())))
+    return {
+        "axes": {k: round(v, 4) for k, v in axes.items()},
+        "max_axis": max_axis,
+        "max_value": round(axes[max_axis], 4),
+        "scalar_5d": round(scalar_5d, 4),
+    }
+
+
 def compute_sync_regime(rgk) -> str:
     """4 режима симбиоза. Spec: TODO «Симбиоз»."""
     err = compute_sync_error(rgk)
