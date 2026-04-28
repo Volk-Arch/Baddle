@@ -22,6 +22,8 @@ identity check для регрессий формул. OK = совпало с TO
 """
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 from .ema import EMA, VectorEMA, Decays, TimeConsts
@@ -177,6 +179,13 @@ class РГК:
         self._rpe_hist: list = []
         self.recent_rpe: float = 0.0
         self._fb = {"accepted": 0, "rejected": 0, "ignored": 0}
+
+        # W16.1b: phase-aware sync_error_wave snapshot.
+        # {ts, user: [5 floats], system: [5 floats]} | None.
+        # Используется compute_sync_error_wave для velocity per axis (∂axis/∂t)
+        # и detection phase mismatch (расходимся в фазе по этой оси).
+        # Lazy update — refresh когда age >= PHASE_SNAPSHOT_MIN_AGE.
+        self._phase_snapshot: dict | None = None
 
         # B4 Wave 2: user-side bespoke state (sensor passthrough + aggregates).
         # Перемещено из UserState чтобы projectors имели полный access к
@@ -635,11 +644,75 @@ class РГК:
     def sync_error_wave(self) -> dict:
         """Per-axis breakdown sync_error (5D, MVP W16.1).
 
-        Spec: docs/synchronization.md. Возвращает dict с axes/max_axis/scalar_5d.
+        Spec: docs/synchronization.md. Возвращает dict с axes/max_axis/scalar_5d
+        + phase data (W16.1b) если есть snapshot.
         Spectral diagnosis — «по какой частоте расхождение», не только «насколько».
         """
         from .user_state import compute_sync_error_wave
         return compute_sync_error_wave(self)
+
+    # W16.1b: phase tracking parameters
+    PHASE_SNAPSHOT_MIN_AGE_S = 30.0   # ниже — не обновляем snapshot (velocity на 30s окне)
+    PHASE_VELOCITY_NOISE = 0.005      # |velocity| ниже — считаем стационарным
+
+    def phase_per_axis(self) -> dict:
+        """Per-axis velocity (∂axis/∂t) для user и system + phase mismatch flags.
+
+        Возвращает:
+            {
+              "<axis>": {
+                  "user_velocity":   float (signed),
+                  "system_velocity": float (signed),
+                  "mismatch":        bool — расходимся в фазе по этой оси
+                                       (signs opposite AND обе >> noise),
+              },
+              ...
+              "_snapshot_age_s": float | None,   # null если первый call
+              "_mismatch_count": int,            # сколько axes в фазовом конфликте
+            }
+
+        Lazy snapshot: при age >= PHASE_SNAPSHOT_MIN_AGE_S обновляется.
+        Первый call возвращает все velocities = 0 (нет baseline).
+        """
+        from .user_state import _AXIS_FIELDS
+        now = time.time()
+        cur_user = [float(getattr(self.user, f).value) for f in _AXIS_FIELDS.values()]
+        cur_sys  = [float(getattr(self.system, f).value) for f in _AXIS_FIELDS.values()]
+
+        snap = self._phase_snapshot
+        result: dict = {}
+        if snap is None:
+            # First call — нет baseline. Создаём snapshot, возвращаем zeros.
+            self._phase_snapshot = {"ts": now, "user": cur_user, "system": cur_sys}
+            for axis in _AXIS_FIELDS.keys():
+                result[axis] = {"user_velocity": 0.0, "system_velocity": 0.0,
+                                "mismatch": False}
+            result["_snapshot_age_s"] = None
+            result["_mismatch_count"] = 0
+            return result
+
+        age = max(1e-3, now - float(snap["ts"]))
+        mismatch_count = 0
+        for i, axis in enumerate(_AXIS_FIELDS.keys()):
+            uv = (cur_user[i] - snap["user"][i]) / age
+            sv = (cur_sys[i]  - snap["system"][i]) / age
+            mismatch = (uv * sv < 0
+                        and abs(uv) > self.PHASE_VELOCITY_NOISE
+                        and abs(sv) > self.PHASE_VELOCITY_NOISE)
+            if mismatch:
+                mismatch_count += 1
+            result[axis] = {
+                "user_velocity":   round(uv, 5),
+                "system_velocity": round(sv, 5),
+                "mismatch":        mismatch,
+            }
+        result["_snapshot_age_s"] = round(age, 1)
+        result["_mismatch_count"] = mismatch_count
+
+        # Refresh snapshot если состарилось — следующий call даст velocity на новом окне
+        if age >= self.PHASE_SNAPSHOT_MIN_AGE_S:
+            self._phase_snapshot = {"ts": now, "user": cur_user, "system": cur_sys}
+        return result
 
     def gamma(self) -> float:
         ne = float(self.system.aperture.value)

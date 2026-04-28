@@ -124,11 +124,37 @@ Threshold'ы пересчитаны под max=√5≈2.24: `> 0.75` → `> 1.0`
 Identity tests preserved — все скаляры (gamma/surprise/imbalance/...)
 идентичны, только vector dimensions расширились.
 
-**Что осталось (W16.1b, не сегодня):** phase-aware comparison — текущий
-MVP сравнивает amplitudes (мгновенный snapshot). Phase требует velocity
-tracking (∂axis/∂t — направление изменения за tick). Реализуется когда
-понадобится диагностика «не просто разница, но в каких axis user
-**ускоряется** относительно system».
+**W16.1b ✅ done 2026-04-28:** phase-aware comparison добавлен через
+`РГК.phase_per_axis()` + поле `phases` в `compute_sync_error_wave`.
+
+Lazy snapshot подход: `_phase_snapshot = {ts, user, system}`. При call
+phase_per_axis():
+- Если snapshot нет → создать, вернуть нулевые velocities
+- Если age < 30s → reuse snapshot для velocity ((current - snap) / age)
+- Если age ≥ 30s → reuse, потом refresh для следующего окна
+
+Per-axis output:
+```python
+"phases": {
+    "dopamine_gain": {
+        "user_velocity":   +0.013,    # signed, на window age_s
+        "system_velocity": -0.013,
+        "mismatch":        True,      # signs opposite AND обе > noise (0.005)
+    },
+    ...
+    "_snapshot_age_s": 30.0,
+    "_mismatch_count": 2,
+}
+```
+
+**Что mismatch значит семантически:** user движется в одну сторону по
+этой axis, system в противоположную. Это «расходимся в фазе» — не
+просто amplitude диагностика, а **направление** drift'а. Если все 5
+axes mismatch — полный antiphase, система противоположна юзеру по
+всем частотам.
+
+Noise threshold 0.005/s — на 30s окне это Δ=0.15 на оси (диапазон [0,1]).
+Микро-движение игнорируется.
 
 **valence/agency** не включены в wave: они только user-side, system
 equivalent отсутствует — per-axis сравнение бессмысленно. Останутся

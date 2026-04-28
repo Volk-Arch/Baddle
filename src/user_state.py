@@ -121,23 +121,34 @@ _AXIS_FIELDS = {
 
 
 def compute_sync_error_wave(rgk) -> dict:
-    """Per-axis breakdown sync_error в 5D chem-пространстве.
+    """Per-axis breakdown sync_error в 5D chem-пространстве + phase data.
 
     Возвращает:
         {
-            "axes": {dopamine, serotonin, norepinephrine, acetylcholine, gaba},
-                       # |user[axis] − system[axis]|, каждый ∈ [0, 1]
-            "max_axis": str,    # axis с наибольшим расхождением
+            "axes": {dopamine_gain, serotonin_hysteresis, norepinephrine_aperture,
+                     acetylcholine_plasticity, gaba_damping},
+                       # |user[axis] − system[axis]|, amplitude ∈ [0, 1]
+            "max_axis": str,    # axis с наибольшим расхождением (amplitude)
             "max_value": float,
             "scalar_5d": float, # L2 over 5 axes (max ≈ √5 ≈ 2.236)
+
+            # W16.1b — phase data (∂axis/∂t per side + mismatch flags)
+            "phases": {
+                "<axis>": {user_velocity, system_velocity, mismatch},
+                ...
+                "_snapshot_age_s": float | None,  # null если первый call
+                "_mismatch_count": int,           # сколько axes расходятся в фазе
+            },
         }
 
-    Дополнительный слой spectral diagnosis поверх scalar `compute_sync_error`
-    (тот тоже 5D после 2026-04-28 clean break — wave добавляет per-axis
-    breakdown + max_axis identifier). Использование:
-      - `/assist/state` `sync_error_wave` поле expose'ит per-axis для UI
-      - В будущем W16.4: при больших sync_error_wave[axis] система генерит
-        analogies для этой axis в morning briefing (adiabatic adjustment)
+    Spectral diagnosis: amplitude (где расхождение) + phase (в каких axis user
+    ускоряется относительно system). Phase mismatch = signs velocities opposite
+    при обеих >> noise.
+
+    Использование:
+      - `/assist/state` `sync_error_wave` expose per-axis + phases для UI
+      - В будущем W16.4: при больших sync_error_wave[axis] + phase mismatch
+        система генерит analogies для этой axis (adiabatic adjustment)
     """
     user, sys = rgk.user, rgk.system
     axes = {
@@ -151,6 +162,7 @@ def compute_sync_error_wave(rgk) -> dict:
         "max_axis": max_axis,
         "max_value": round(axes[max_axis], 4),
         "scalar_5d": round(scalar_5d, 4),
+        "phases": rgk.phase_per_axis(),
     }
 
 

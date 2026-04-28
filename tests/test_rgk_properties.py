@@ -304,6 +304,87 @@ class TestCouplingConsistency:
         wave = r.sync_error_wave()
         assert wave["scalar_5d"] == pytest.approx(scalar, abs=1e-3)
 
+    # ── W16.1b: phase-aware comparison ────────────────────────────────
+
+    def test_phase_per_axis_first_call_zero_velocities(self):
+        """Первый call — нет baseline snapshot, все velocities = 0."""
+        r = РГК()
+        phase = r.phase_per_axis()
+        for axis in self._ALL_AXES:
+            # _ALL_AXES = ("gain", "hyst", "aperture", "plasticity", "damping")
+            # phase keys = compound naming через _AXIS_FIELDS
+            pass
+        # Use compound axis keys that compute_sync_error_wave produces
+        for axis_key in ("dopamine_gain", "serotonin_hysteresis",
+                         "norepinephrine_aperture", "acetylcholine_plasticity",
+                         "gaba_damping"):
+            assert phase[axis_key]["user_velocity"] == 0.0
+            assert phase[axis_key]["system_velocity"] == 0.0
+            assert phase[axis_key]["mismatch"] is False
+        assert phase["_snapshot_age_s"] is None
+        assert phase["_mismatch_count"] == 0
+
+    def test_phase_detects_opposite_velocities(self):
+        """User вверх + system вниз на одной axis — mismatch=True."""
+        import time as _t
+        r = РГК()
+        # Установить baseline
+        r.user.gain.value = 0.5
+        r.system.gain.value = 0.5
+        r.phase_per_axis()  # creates snapshot
+        # Симулируем что прошло 30s — minimal age для refresh
+        snap = r._phase_snapshot
+        snap["ts"] = _t.time() - 30.0
+        # User поднял gain на 0.4, system опустил на 0.4 → velocity ±0.0133 > 0.005 noise
+        r.user.gain.value = 0.9
+        r.system.gain.value = 0.1
+        phase = r.phase_per_axis()
+        da = phase["dopamine_gain"]
+        assert da["user_velocity"] > 0
+        assert da["system_velocity"] < 0
+        assert da["mismatch"] is True
+        assert phase["_mismatch_count"] >= 1
+
+    def test_phase_no_mismatch_below_noise(self):
+        """Velocity ниже noise threshold → mismatch=False даже при opposite signs."""
+        import time as _t
+        r = РГК()
+        r.user.gain.value = 0.5
+        r.system.gain.value = 0.5
+        r.phase_per_axis()
+        snap = r._phase_snapshot
+        snap["ts"] = _t.time() - 60.0
+        # Микроскопическое движение в opposite directions — ниже noise
+        r.user.gain.value = 0.5001
+        r.system.gain.value = 0.4999
+        phase = r.phase_per_axis()
+        da = phase["dopamine_gain"]
+        # Velocities ~ ±1.6e-6 / sec — заведомо ниже PHASE_VELOCITY_NOISE=0.005
+        assert da["mismatch"] is False
+
+    def test_phase_no_mismatch_same_direction(self):
+        """Both вверх или оба вниз — sync drift, не mismatch."""
+        import time as _t
+        r = РГК()
+        r.user.gain.value = 0.3
+        r.system.gain.value = 0.3
+        r.phase_per_axis()
+        snap = r._phase_snapshot
+        snap["ts"] = _t.time() - 60.0
+        # Both up — sync drift
+        r.user.gain.value = 0.7
+        r.system.gain.value = 0.6
+        phase = r.phase_per_axis()
+        assert phase["dopamine_gain"]["mismatch"] is False
+
+    def test_phase_included_in_sync_error_wave(self):
+        """compute_sync_error_wave включает 'phases' field."""
+        r = РГК()
+        wave = r.sync_error_wave()
+        assert "phases" in wave
+        assert "_mismatch_count" in wave["phases"]
+        assert "dopamine_gain" in wave["phases"]
+
     @pytest.mark.skip(reason="Requires actual counter-wave generation (step(obs, dt) with delay buffer), Tier 2 — see TODO.md")
     def test_counter_wave_reduces_sync_error(self):
         """Когда оба resonator в mode=C и генерируют counter-wave,
