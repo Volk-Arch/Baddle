@@ -147,6 +147,19 @@
 
 ---
 
+## 🔬 Research notes (queue.txt 2026-04-27/28)
+
+Из заметок Игоря — направления для исследования, не immediate impl.
+
+- **openmythos-style архитектура** — данные снова и снова прогоняются по слоям (iterative refinement через layered passes). Resonance с W14.5 cross-обработка между similar workspace candidates. Investigate: применимо ли как фоновый pass в DMN cycle?
+- **Звуковой интерфейс без текста** — alternative I/O channel. Resonance с резонансной оптикой проекта (другая bandwidth для коммуникации). После реальных HRV adapter'ов и B2C pilot.
+- **EEG интеграция** — альтернативный sensor (брат HRV, но для мозга). Подходит к sensors package (W11 #4). Прямо измеряет brain oscillations что в РГК — 5-axis chem (corollary к W16 sync_error_wave).
+- **Астроциты как архитектурный pattern** — non-neuronal слой который modulate synapses + housekeeping ночью (глимфатическая clean-up). Resonance с W14.11 synaptic homeostasis. **Возможный architectural insight:** разделить «neurons-слой» (active processing) и «glia-слой» (background cleanup). У нас сейчас всё в одном workspace. Глия = ночной cycle? Investigate.
+- **Procrastination на тяжёлых задачах** (низкий DA expected, высокий 5HT cost) — мозг скатывается в простые решения. Detect через РГК-state (low DA + high freeze.imbalance + open heavy goal): предлагать decompose в малые шаги. Counter-wave principle (не давить, разбивать). ~2-3ч когда W15 готов.
+- **Evening seed для завтра** — 1-2 конкретных следующих шага вечером перед сном. Снижает morning friction. Расширение `_check_evening_retro`. ~1-2ч.
+
+---
+
 ## 💡 Бэклог идей (думать, не делать)
 
 > Не задачи — направления. Оценка P×R = полезность × реалистичность (из 5).
