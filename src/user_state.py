@@ -159,13 +159,12 @@ def compute_sync_regime(rgk) -> str:
     err = compute_sync_error(rgk)
     u_level = (float(rgk.user.gain.value) + float(rgk.user.hyst.value)) / 2.0
     s_level = system_state_level(rgk)
-    sync_high = err < SYNC_HIGH_THRESHOLD
-    if sync_high:
-        if u_level > STATE_HIGH_THRESHOLD and s_level > STATE_HIGH_THRESHOLD:
-            return FLOW
+    if err < SYNC_HIGH_THRESHOLD:
+        # Высокая синхронизация: оба низкие → REST, иначе FLOW.
         if u_level < STATE_LOW_THRESHOLD and s_level < STATE_LOW_THRESHOLD:
             return REST
         return FLOW
+    # Рассинхрон: полярные states → PROTECT/CONFESS, иначе ambiguous → FLOW.
     if u_level < STATE_LOW_THRESHOLD and s_level > STATE_HIGH_THRESHOLD:
         return PROTECT
     if u_level > STATE_HIGH_THRESHOLD and s_level < STATE_LOW_THRESHOLD:

@@ -785,9 +785,11 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # ближайшей парой чтобы добавить альтернативную ось.
     avg_d = None
     if not use_user_options and len(added_hyp) >= 3:
+        # `or 0.30` ловит как отсутствие key, так и явный None в config
+        # (float(None) бы крашился до выхода в except).
         try:
             from .api_backend import get_depth_defaults
-            div_min = float(get_depth_defaults().get("deep_diversity_min", 0.30))
+            div_min = float(get_depth_defaults().get("deep_diversity_min") or 0.30)
         except Exception:
             div_min = 0.30
         try:

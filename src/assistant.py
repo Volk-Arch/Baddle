@@ -670,7 +670,9 @@ def assist():
         return jsonify(_fastpath_resp)
     # ── конец router prefilter ─────────────────────────────────────────
 
-    # Inject NE spike — user engagement = Horizon takes budget from DMN
+    # Inject NE spike — user engagement = Horizon takes budget from DMN.
+    # 0.4 здесь vs 0.3 в /graph/assist — user-initiated chat ярче активирует
+    # внимание, чем background dialogical loop (intentional).
     from .horizon import get_global_state
     from .rgk import get_global_rgk
     cs = get_global_state()
@@ -747,8 +749,8 @@ def assist():
         recent = [e for e in sg.tail(10) if e.get("user_initiated")][-3:]
         for e in recent:
             context_parts.append(e.get("reason", "")[:60])
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"[recent_briefing] state_graph parse failed: {e}")
     context = " | ".join(context_parts)
 
     # ── Forced mode (юзер явно выбрал режим в UI) → skip classify ──

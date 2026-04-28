@@ -111,14 +111,16 @@ balance ∈ [0.3, 1.5] — diagnostic scalar, **не используется** 
 
 ---
 
-## W9 — Fallback polish (1ч, low risk)
+## W9 — Fallback polish ✅ done 2026-04-28
 
-Из аудита Explore-агента:
+Все 4 точечных fix закрыты:
 
-- **`assistant_exec.py:790-792`** — `div_min = float(get_depth_defaults().get("deep_diversity_min", 0.30))` затем `if div_min is None: div_min = 0.30`. Если config вернёт `{"deep_diversity_min": None}` — `float(None)` крашится **до** if-проверки. **Fix:** один fallback в `.get("…", 0.30) or 0.30`, удалить `if`.
-- **`assistant.py:750`** — `except Exception: pass` без logging. **Fix:** `log.debug(f"[recent_briefing] parse failed: {e}")`.
-- **`compute_sync_regime` (user_state.py)** — двойной `return FLOW` (один в if-branch, один как default). **Fix:** упростить — middle case = explicit comment "amb → FLOW".
-- **`inject_ne(0.4)` (assist:677) vs `inject_ne(0.3)` (graph_assist:2193)** — **Investigate:** intentional разница (assist более user-engaged, graph более внутренний)? Если да — comment. Если copy-paste error — unify.
+- **`assistant_exec.py:790`** — `float(get_depth_defaults().get("deep_diversity_min") or 0.30)` ловит и отсутствие key, и явный None в config (раньше при None — TypeError перед except).
+- **`assistant.py:750`** — silent `except Exception: pass` → `except Exception as e: log.debug(...)`.
+- **`compute_sync_regime` (user_state.py)** — упрощён через if-rearrangement: убран дубль `return FLOW` в sync_high branch (теперь только REST или FLOW), внешний default остался для ambiguous-low-sync. Читаемее.
+- **`inject_ne(0.4)` vs `(0.3)` mismatch** — verified intentional. Comment в assistant.py:677 фиксирует: `/assist` user-initiated ярче `/graph/assist` background loop.
+
+487 passed, pyflakes 0.
 
 ---
 
