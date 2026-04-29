@@ -2,7 +2,26 @@
 
 > После B5 (Track B closed) — следующий раунд. Не feature-burst, а полировка. Без `python -m pytest` зелёного — каждый Wave не стартует.
 >
-> Связь: [TODO.md](TODO.md), [../docs/architecture-rules.md](../docs/architecture-rules.md), [../docs/rgk-spec.md](../docs/rgk-spec.md).
+> Связь: [TODO.md](TODO.md), [../docs/architecture-rules.md](../docs/architecture-rules.md), [../docs/rgk-spec.md](../docs/rgk-spec.md), [../examples/ontology-v3.json](../examples/ontology-v3.json).
+
+---
+
+## 🎯 Следующий шаг: Фаза 1 W18 — substrate + process migration
+
+**Что:** перенести готовые подгруппы в директории на основе ветви H графа онтологии v3.
+
+**Почему именно это:** ontology v3 (создана 2026-04-29) предлагает file structure через ветвь H графа, и две подгруппы — substrate и process — уже **концептуально готовы** (файлы есть, тесты зелёные). Переезд = `git mv` + обновление импортов, без изменения логики. После этого новые waves (W14.1 workspace, W15 Power, W16.2 analogies) **сразу впадают** в правильные директории, не накапливая долг.
+
+**Порядок (~1.5-2ч):**
+
+1. **substrate/** (~30-40 мин): `mkdir src/substrate` + `git mv src/{rgk,horizon,user_state}.py src/substrate/` + `__init__.py` с re-exports + grep imports + tests + commit.
+2. **process/** (~40-50 мин): `mkdir src/process` + `git mv src/{nand,detectors,signals,cognitive_loop,pump,consolidation}.py src/process/` + `__init__.py` + grep imports + tests + commit.
+
+**Принцип:** каждая подгруппа — отдельный commit. Bisect-friendly. Tests зелёные после каждого шага.
+
+**После Фазы 1:** структура **проявится наполовину**. Дальнейшие waves (W14.1 → memory/, W12 part Б → storage/, W15 → capacity/, W16.2 → transfer/, W14.6 → io/routes/) создают файлы сразу в правильных местах. Это и есть **разворачивающийся план**, не «один большой refactor».
+
+См. подробности в [W18](#w18--file-structure-as-ontology-mirror-meta-wave-ontology-derived) ниже.
 
 ---
 
@@ -103,31 +122,13 @@ UserState shim 451 LOC — backward-compat для 132 test refs. Production не
 
 `demo.py` 309 + `defaults.py` 60 = **369 LOC**. Оба про initial bootstrap. Объединить в `seed.py`. Maybe `dev_only` flag чтобы не тащить в prod. Opportunistic.
 
-#### #7 Mental operators → src/operators/ package — blocked by 5 preconditions
+#### #7 Mental operators → src/operators/ — ❌ отменён 2026-04-29
 
-Audit 2026-04-28: прямой extract = **false modularity** (тот же anti-pattern что W11 #3). Verdict'ы:
+После онтологии v3 + переписанного W18 эта задача **снимается**. Audit 2026-04-28 показал что pump/elaborate/smartdc/collapse — **не operators, а graph transactions** (think → mutate). Граф v3 размещает их вместе с NAND и детекторами в подгруппе **Process (H.2)**, а не в отдельной `operators/`.
 
-| Operator | Verdict | Что мешает |
-|---|---|---|
-| `distinct`, `distinct_decision`, `classify_nodes`, `_filter_lineage`, `_pick_distant_pair`, `_tick_force_collapse` | **A pure** (6) | — |
-| `_pick_target` | **B** | Stateful `_count` attribute |
-| `pump` | **C entangled** | 6 helpers + `_graph` global + 10+ LLM calls + mutations |
-| `elaborate` | **C entangled** | LLM + 3 mutations + 4 imports от graph_logic |
-| `smartdc` | **C inlined** | Не отдельная функция, embedded в `_deepen_round` |
-| `collapse` | **action-only** | Не функция — action-name из `_tick_force_collapse` + execution handler |
+Это разрешает напряжение **без preconditions**: операторы остаются рядом с NAND tick в `src/process/` (после Фазы 1 W18), и эта близость отражает их реальную функцию — все они **части одной операции разворачивания**, а не отдельный концептуальный слой.
 
-**Главный insight:** pump/elaborate/smartdc/collapse — **не operators, а graph transactions** (think → mutate). Их extract в `src/operators/` сделает thin wrappers с обратным импортом из graph_logic.
-
-**Preconditions для honest W11 #7:**
-1. Decouple `_pick_target` (`_count` → session param) — ~30 мин
-2. Extract `smartdc` из `_deepen_round` standalone — ~1ч
-3. Decouple `elaborate` от mutations (return draft) — ~2-3ч
-4. Создать `collapse_nodes(graph, indices, ...)` — ~1ч
-5. Decouple `pump` от `_graph` global — ~2ч
-
-**После 5 preconditions** — extract становится механическим (~1-2ч). Не делать прямой extract сейчас — false modularity.
-
-**Связь с W16:** аналогии = «оператор преобразования базиса» — ещё один operator после W16.2.
+**Audit-данные сохранены для истории:** [git log W11 #7 audit] — кому понадобится в будущем если решат вернуться к идее operators/ как отдельной группы.
 
 ---
 
