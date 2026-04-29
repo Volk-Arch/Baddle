@@ -20,5 +20,6 @@ from flask import Blueprint
 assistant_bp = Blueprint("assistant", __name__)
 
 # Child modules регистрируют routes (импорт triggers @assistant_bp.route).
-from . import goals, profile, activity, plans, checkins
-__all__ = ["assistant_bp", "goals", "profile", "activity", "plans", "checkins"]
+from . import goals, profile, activity, plans, checkins, briefings
+__all__ = ["assistant_bp", "goals", "profile", "activity", "plans", "checkins",
+           "briefings"]
