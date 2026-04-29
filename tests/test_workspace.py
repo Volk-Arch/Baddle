@@ -200,6 +200,37 @@ def test_commit_handles_invalid_idx(clean_graph):
 # ── archive_expired() ───────────────────────────────────────────────────
 
 
+def test_list_recent_bridges(clean_graph):
+    """list_recent_bridges (W14.5c-3): action_kind ∈ BRIDGE_KINDS, sorted desc."""
+    workspace.record_committed(
+        actor="baddle", action_kind="dmn_bridge",
+        text="bridge A", urgency=0.5, accumulate=False,
+    )
+    workspace.record_committed(
+        actor="baddle", action_kind="scout_bridge",
+        text="bridge B", urgency=0.5, accumulate=False,
+    )
+    workspace.record_committed(
+        actor="baddle", action_kind="dmn_deep",
+        text="bridge C", urgency=0.5, accumulate=False,
+    )
+    # Не bridge — exclude
+    workspace.record_committed(
+        actor="baddle", action_kind="capacity_red",
+        text="not a bridge", urgency=0.9, accumulate=False,
+        extras={"severity": "warning"},
+    )
+
+    bridges = workspace.list_recent_bridges(since_ts=0.0, limit=10)
+    kinds = [b.get("action_kind") for b in bridges]
+    assert "dmn_bridge" in kinds
+    assert "scout_bridge" in kinds
+    assert "dmn_deep" in kinds
+    assert "capacity_red" not in kinds
+    # Limit
+    assert len(workspace.list_recent_bridges(since_ts=0.0, limit=2)) == 2
+
+
 def test_list_recent_alerts_filters(clean_graph):
     """list_recent_alerts (W14.5c): committed + actor='baddle' + есть severity
     + committed_at > since_ts. UI poll path."""

@@ -2832,19 +2832,18 @@ def assist_weekly():
     except Exception as e:
         digest["food"] = {"error": str(e)}
 
-    # Scout bridges за неделю (читаем из alerts_queue + _recent_bridges cognitive_loop)
+    # Scout bridges за неделю — graph query через workspace.list_recent_bridges
+    # (W14.5c-3: _recent_bridges deque удалена, bridges теперь committed actions).
     try:
-        from .process.cognitive_loop import get_cognitive_loop
-        loop = get_cognitive_loop()
+        from .memory import workspace
         now_ts = time.time()
         week_ago = now_ts - 7 * 86400
-        bridges = [b for b in (getattr(loop, "_recent_bridges", []) or [])
-                   if (b.get("ts") or 0) >= week_ago]
+        bridges = workspace.list_recent_bridges(since_ts=week_ago, limit=10)
         digest["scout_bridges"] = [{
             "text": (b.get("text") or "")[:120],
-            "source": b.get("source"),
-            "ts": b.get("ts"),
-        } for b in bridges[:10]]
+            "source": b.get("source") or b.get("action_kind"),
+            "ts": b.get("committed_at"),
+        } for b in bridges]
     except Exception:
         digest["scout_bridges"] = []
 

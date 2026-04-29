@@ -273,9 +273,9 @@ class CognitiveLoop:
         # Action Memory — per-kind storage для open actions:
         # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
         self._open_actions: dict[int, float] = {}
-        # Persist overnight findings отдельно — UI читает через graph query.
-        # _recent_bridges trim → W14.5c-3 (graph query тоже).
-        self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
+        # Bridge findings — committed actions в графе (action_kind ∈ BRIDGE_KINDS).
+        # UI/briefing читают через workspace.list_recent_bridges (W14.5c-3).
+        # _recent_bridges deque удалена.
         self._last_night_summary: Optional[dict] = None
         self._lock = threading.Lock()
 
@@ -498,24 +498,26 @@ class CognitiveLoop:
 
     def _record_baddle_action(self, action_kind: str, text: str,
                                 extras: Optional[dict] = None) -> Optional[int]:
-        """Записать baddle-side action в граф и запомнить в _open_actions.
-        Возвращает idx action-ноды или None при ошибке. Используется из
-        всех proactive check'ов после успешного emit.
+        """Записать baddle-side action через workspace + запомнить в _open_actions.
+        Returns idx или None при ошибке. Используется в proactive check'ах
+        после успешного emit (DMN bridges, scout, converge synth).
+
+        W14.5c-3: переключено на workspace.record_committed — unified emission
+        path (chat msgs / alerts / bridges все идут через workspace primitive).
+        committed_at field позволяет list_recent_bridges фильтровать по
+        cursor, заменяя legacy _recent_bridges deque.
         """
-        try:
-            from ..graph_logic import record_action
-            idx = record_action(
-                actor="baddle",
-                action_kind=action_kind,
-                text=text[:200] if text else action_kind,
-                context=None,    # _current_snapshot() по умолчанию
-                extras=extras,
-            )
+        from ..memory import workspace
+        idx = workspace.record_committed(
+            actor="baddle", action_kind=action_kind,
+            text=(text[:200] if text else action_kind),
+            urgency=0.5,
+            accumulate=False,
+            extras=extras,
+        )
+        if idx is not None:
             self._open_actions[idx] = time.time()
-            return idx
-        except Exception as e:
-            log.debug(f"[action-memory] record baddle action failed: {e}")
-            return None
+        return idx
 
     # ── Adaptive idle (resonance protocol mechanics #2 + #4) ──────────
 
@@ -634,11 +636,11 @@ class CognitiveLoop:
         # См. docs/neurochem-design.md «ACh+GABA feeders».
         try:
             from ..graph_logic import nodes_created_within
+            from ..memory import workspace
             rate = min(1.0, nodes_created_within(3600) / 10.0)
             gs.rgk.s_ach_feed(node_creation_rate=rate)
-            recent_bridge_count = sum(
-                1 for b in self._recent_bridges
-                if now - float(b.get("ts", 0)) < 3600.0
+            recent_bridge_count = len(
+                workspace.list_recent_bridges(since_ts=now - 3600.0, limit=20)
             )
             scattering = min(1.0, recent_bridge_count / 5.0)
             gs.rgk.s_gaba_feed(freeze_active=r.freeze_active,
@@ -996,7 +998,7 @@ class CognitiveLoop:
         5 phases: scout pump+save, REM emotional pump, REM creative merge,
         consolidation (decay/prune/archive), patterns detect, goals rotation.
 
-        Side effects: _last_night_summary, _recent_bridges.
+        Side effects: _last_night_summary, scout_bridge action в графе.
         Phase B (2026-04-25): экстрагировано из _check_night_cycle.
         Returns: Signal с urgency=0.6 (fixed daily) или None.
         """
@@ -1071,16 +1073,10 @@ class CognitiveLoop:
         )
         # Side effects (preserved): persist summary outside alerts queue —
         # briefing reads _last_night_summary directly. Bridge from scout
-        # phase goes to _recent_bridges for morning briefing.
+        # phase goes to BRIDGE_KINDS action в графе for morning briefing query.
         self._last_night_summary = dict(summary)
-        bt = (s.get("scout") or {}).get("bridge_text")
-        if bt:
-            self._recent_bridges.append({
-                "ts": time.time(),
-                "text": bt,
-                "source": "scout",
-            })
-            self._recent_bridges = self._recent_bridges[-10:]
+        # W14.5c-3: bridge уже записан в граф через _record_baddle_action в Phase 1
+        # (line ~1019). Параллельный _recent_bridges deque удалён.
         log.info(f"[cognitive_loop] night cycle done: {text}")
         self.clear_thinking()
 
@@ -1267,7 +1263,7 @@ class CognitiveLoop:
         engine'ом chat'а на одной цели. Возвращает Signal с novelty-based
         urgency или None.
 
-        Guards: ≥ 1 open goal, граф < 30 нод. Side effects: _recent_bridges.
+        Guards: ≥ 1 open goal, граф < 30 нод. Side effects: dmn_deep action в графе.
         Phase B (2026-04-25): экстрагировано из _check_dmn_deep_research.
         """
         # Adaptive idle: интервал масштабируется _idle_multiplier'ом (silence + PE)
@@ -1303,15 +1299,13 @@ class CognitiveLoop:
         nodes_created = card.get("nodes_created") or 0
         trace_len = len(card.get("trace") or [])
 
-        # Side effect: register bridge для morning_briefing
+        # Side effect: action в графе для morning_briefing query (W14.5c-3).
         if synthesis:
-            self._recent_bridges.append({
-                "ts": time.time(),
-                "text": f"[deep-research] {goal_text[:40]}: {synthesis[:80]}",
-                "source": "dmn_deep",
-                "quality": 0.7,
-            })
-            self._recent_bridges = self._recent_bridges[-10:]
+            self._record_baddle_action(
+                "dmn_deep",
+                text=f"[deep-research] {goal_text[:40]}: {synthesis[:80]}",
+                extras={"quality": 0.7, "source": "dmn_deep"},
+            )
             # Phase D: System ACh boost — DMN deep research success.
             # Quality proxy = min(1.0, nodes_created/10) — research breadth.
             try:
@@ -1357,7 +1351,7 @@ class CognitiveLoop:
         текущем workspace графе. Заканчивается converged/wall_time/stalled/
         max_steps. Forced synthesis at end.
 
-        Side effects: _recent_bridges.append (per pump + final synthesis).
+        Side effects: dmn_converge_pump + dmn_converge_synthesis actions в графе.
         Phase B (2026-04-25): экстрагировано из _check_dmn_converge.
         Returns: Signal с urgency=0.5 (fixed) или None.
         """
@@ -1483,13 +1477,11 @@ class CognitiveLoop:
                     bridge = self._run_pump_bridge(max_iterations=1, save=True)
                     if bridge:
                         b_quality = bridge.get("quality", 0)
-                        self._recent_bridges.append({
-                            "ts": time.time(),
-                            "text": (bridge.get("text") or "")[:100],
-                            "source": "converge_loop",
-                            "quality": b_quality,
-                        })
-                        self._recent_bridges = self._recent_bridges[-10:]
+                        self._record_baddle_action(
+                            "dmn_converge_pump",
+                            text=(bridge.get("text") or "")[:100],
+                            extras={"quality": b_quality, "source": "converge_loop"},
+                        )
                         # Phase D: System ACh boost — converge loop bridge.
                         if b_quality > 0.5:
                             try:
@@ -1516,13 +1508,12 @@ class CognitiveLoop:
             if syn:
                 forced_synthesis = syn["text"]
                 forced_confidence = syn["confidence"]
-                self._recent_bridges.append({
-                    "ts": time.time(),
-                    "text": f"[converge synthesis] {forced_synthesis[:100]}",
-                    "source": "dmn_converge",
-                    "quality": forced_confidence or 0.5,
-                })
-                self._recent_bridges = self._recent_bridges[-10:]
+                self._record_baddle_action(
+                    "dmn_converge_synthesis",
+                    text=f"[converge synthesis] {forced_synthesis[:100]}",
+                    extras={"quality": forced_confidence or 0.5,
+                             "source": "dmn_converge"},
+                )
                 log.info(f"[cognitive_loop] forced synth node #{syn.get('node_idx')} conf {forced_confidence}")
         except Exception as e:
             log.debug(f"[cognitive_loop] forced synth failed: {e}")
@@ -1571,7 +1562,7 @@ class CognitiveLoop:
     def _run_dmn_continuous(self, ctx) -> Optional[Signal]:
         """DMN pump-bridge между двумя удалёнными нодами графа.
 
-        Side effects (preserved): _recent_bridges.append, _record_baddle_action.
+        Side effects: _record_baddle_action(dmn_bridge) в граф через workspace.
         Filter: quality > 0.5 AND len(text) >= 10 — пустой LLM-output не emit.
 
         Returns: Signal с urgency = 0.2 + 0.7 × quality, или None.
@@ -1602,18 +1593,13 @@ class CognitiveLoop:
             return None
 
         # Side effects (произошли — bridge production реален независимо от
-        # dispatcher decision)
-        self._recent_bridges.append({
-            "ts": time.time(),
-            "text": (bridge.get("text") or "")[:100],
-            "quality": quality,
-            "source": "dmn",
-        })
-        self._recent_bridges = self._recent_bridges[-10:]
+        # dispatcher decision). _recent_bridges deque удалён в W14.5c-3:
+        # _record_baddle_action сразу пишет в граф, list_recent_bridges
+        # читает.
         self._record_baddle_action(
             "dmn_bridge",
             text=f"DMN bridge: {bridge_text[:120]}",
-            extras={"quality": round(quality, 3)},
+            extras={"quality": round(quality, 3), "source": "dmn"},
         )
 
         # Phase D: System ACh boost — DMN нашёл значимый мост (quality > 0.5).
@@ -1834,22 +1820,19 @@ class CognitiveLoop:
                 bits.append("Береги энергию, лёгкие задачи первыми.")
 
         # Overnight Scout / DMN findings — что нашёл пока юзер спал.
-        # Читаем из self._recent_bridges (персистентно, не через alerts-queue
-        # которую UI быстро drain'ит). Порог ~10ч — покрывает ночь.
+        # Graph query (W14.5c-3): bridge action nodes за 10ч.
         try:
+            from ..memory import workspace
             now_ts = time.time()
             cutoff = now_ts - 10 * 3600
-            recent = [b for b in (self._recent_bridges or [])
-                      if (b.get("ts") or 0) >= cutoff]
+            recent = workspace.list_recent_bridges(since_ts=cutoff, limit=10)
             if recent:
-                # Топ 2 — от новых к старым
-                recent.sort(key=lambda b: b.get("ts", 0), reverse=True)
                 top = recent[:2]
                 if len(recent) == 1:
-                    bits.append(f"Пока спал, Scout нашёл мост: «{top[0]['text'][:80]}».")
+                    bits.append(f"Пока спал, Scout нашёл мост: «{(top[0].get('text') or '')[:80]}».")
                 else:
                     bits.append(f"Пока спал, Scout нашёл {len(recent)} мостов. "
-                                f"Первый: «{top[0]['text'][:80]}».")
+                                f"Первый: «{(top[0].get('text') or '')[:80]}».")
             elif self._last_night_summary is not None:
                 # Scout пробежал но мостов нет — отметим хотя бы консолидацию
                 cs = self._last_night_summary.get("consolidation") or {}
@@ -2021,15 +2004,19 @@ class CognitiveLoop:
         except Exception:
             pass
 
-        # 6. Recent bridge (если был DMN хит)
-        if self._recent_bridges:
-            last_br = self._recent_bridges[-1]
-            if (now - (last_br.get("ts") or 0)) < 3600:
+        # 6. Recent bridge (если был DMN хит, ≤1ч)
+        try:
+            from ..memory import workspace
+            recent = workspace.list_recent_bridges(since_ts=now - 3600.0, limit=1)
+            if recent:
+                last_br = recent[0]
                 snapshot["recent_bridge"] = {
                     "text": (last_br.get("text") or "")[:80],
-                    "source": last_br.get("source"),
-                    "age_s": int(now - (last_br.get("ts") or now)),
+                    "source": last_br.get("source") or last_br.get("action_kind"),
+                    "age_s": int(now - float(last_br.get("committed_at") or now)),
                 }
+        except Exception:
+            pass
 
         # Составляем короткую reason-строку (для читаемого tail)
         bits = []
@@ -2444,7 +2431,7 @@ class CognitiveLoop:
             "heartbeat_interval_s": self.HEARTBEAT_INTERVAL,
             "last_dmn_deep": self._last_dmn_deep,
             "last_dmn_converge": self._last_dmn_converge,
-            "recent_bridges": list(self._recent_bridges or [])[-5:],
+            "recent_bridges": _bridges_for_status(limit=5),
             "dmn": gate,
         }
 
@@ -2492,7 +2479,7 @@ class CognitiveLoop:
             "cooldown_s": self.FOREGROUND_COOLDOWN,
             "since_last_dmn_s": round(since_dmn, 1) if since_dmn is not None else None,
             "dmn_interval_s": self.DMN_INTERVAL,
-            "last_bridge": (self._recent_bridges[-1] if self._recent_bridges else None),
+            "last_bridge": _last_bridge_for_status(),
         }
 
 
@@ -2586,19 +2573,39 @@ def _briefing_capacity(loop) -> Optional[dict]:
     return {"emoji": emoji, "title": f"Capacity {cap_zone}", "subtitle": sub, "kind": kind}
 
 
-def _briefing_bridges(loop) -> Optional[dict]:
+def _briefing_bridges(loop=None) -> Optional[dict]:
+    """Briefing section: bridges за 10ч из workspace.list_recent_bridges (W14.5c)."""
+    from ..memory import workspace
     cutoff = time.time() - 10 * 3600
-    recent = [b for b in (loop._recent_bridges or [])
-              if (b.get("ts") or 0) >= cutoff]
+    recent = workspace.list_recent_bridges(since_ts=cutoff, limit=10)
     if not recent:
         return None
-    recent.sort(key=lambda b: b.get("ts", 0), reverse=True)
-    first = recent[0].get("text", "")[:80]
+    first = (recent[0].get("text") or "")[:80]
     if len(recent) == 1:
         return {"emoji": "🌙", "title": "Scout нашёл 1 мост",
                 "subtitle": f"«{first}»", "kind": "highlight"}
     return {"emoji": "🌙", "title": f"Scout нашёл {len(recent)} мостов",
             "subtitle": f"Первый: «{first}»", "kind": "highlight"}
+
+
+def _bridges_for_status(limit: int = 5) -> list:
+    """Helper для get_status: legacy формат [{ts, text, source, quality}]
+    из committed bridge actions. UI продолжает читать тот же shape.
+    """
+    from ..memory import workspace
+    nodes = workspace.list_recent_bridges(since_ts=0.0, limit=limit)
+    return [{
+        "ts": float(n.get("committed_at") or 0),
+        "text": n.get("text") or "",
+        "source": n.get("source") or n.get("action_kind"),
+        "quality": n.get("quality"),
+    } for n in nodes]
+
+
+def _last_bridge_for_status() -> Optional[dict]:
+    """Last bridge для DMN gate diagnostics (legacy shape)."""
+    items = _bridges_for_status(limit=1)
+    return items[0] if items else None
 
 
 def _briefing_yesterday(loop) -> Optional[dict]:

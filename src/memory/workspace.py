@@ -272,6 +272,38 @@ def _maybe_cross_process(action_kind: str) -> Optional[int]:
     return synthesize_similar([int(c["id"]) for c in candidates])
 
 
+BRIDGE_KINDS = frozenset({
+    "dmn_bridge",
+    "scout_bridge",
+    "dmn_deep",
+    "dmn_converge_pump",
+    "dmn_converge_synthesis",
+})
+
+
+def list_recent_bridges(since_ts: float = 0.0,
+                          limit: int = 10) -> list[dict]:
+    """Bridge-style committed actions (DMN/scout findings) для briefing/status/weekly.
+
+    Filter: actor='baddle', scope='graph', action_kind ∈ BRIDGE_KINDS,
+    committed_at > since_ts. Sort: committed_at desc, take limit.
+
+    Заменяет cognitive_loop._recent_bridges deque (W14.5c-3) — bridges уже
+    are committed actions, parallel storage был дублированием.
+    """
+    with graph_lock:
+        nodes = [
+            n for n in _graph["nodes"]
+            if n.get("type") == "action"
+            and n.get("actor") == "baddle"
+            and n.get("action_kind") in BRIDGE_KINDS
+            and n.get("scope") == "graph"
+            and (n.get("committed_at") or 0) >= since_ts
+        ]
+    nodes.sort(key=lambda n: float(n.get("committed_at") or 0), reverse=True)
+    return nodes[:limit]
+
+
 def list_recent_alerts(since_ts: float) -> list[dict]:
     """Alert-style committed nodes для UI poll path (W14.5c).
 
