@@ -239,3 +239,35 @@ def _response_for_mode(mode_id: str, message: str, lang: str = "ru") -> Dict:
     intro_key = "intro" if lang == "ru" else "intro_en"
     intro = mode.get(intro_key) or mode.get("intro") or "..."
     return {"mode": mode_id, "mode_name": name, "intro": intro}
+
+
+# ── Chat event push (W14.6b1: extracted из assistant.py для shared use) ─
+# Ручные действия через UI (добавил цель, check-in, старт активности)
+# должны появляться в чате — чтобы история ничего не теряла. Used by
+# goals/activity/checkin routes.
+
+def _push_event_to_chat(text: str, mode_name: str = "Событие"):
+    """assistant-message в chat_history + record baddle-action в граф
+    (Action Memory). Silent on failure.
+    """
+    try:
+        from ..chat_history import append_entry
+        append_entry({
+            "kind": "msg", "role": "assistant",
+            "content": text,
+            "meta": {"mode_name": mode_name},
+        })
+    except Exception as e:
+        log.debug(f"[chat_event] failed: {e}")
+    # Action Memory: любое baddle-сообщение в чат → action-нода.
+    # Это разные action_kind'ы в зависимости от mode_name (Activity, Check-in,
+    # Новая цель и т.д.). Позволяет искать мосты между проактивным
+    # сообщением и последующим user-behavior.
+    try:
+        from ..graph_logic import record_action
+        # Слоганируем mode_name в snake_case для action_kind
+        kind_slug = (mode_name or "event").lower().replace(" ", "_")[:40]
+        record_action(actor="baddle", action_kind=f"chat_event_{kind_slug}",
+                      text=text[:200], context=None)
+    except Exception as e:
+        log.debug(f"[action-memory] chat_event record failed: {e}")
