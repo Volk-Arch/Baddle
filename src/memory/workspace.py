@@ -158,6 +158,39 @@ def commit(node_indices: list[int]) -> int:
     return count
 
 
+def record_committed(actor: str, action_kind: str, text: str,
+                      urgency: float = 0.5,
+                      accumulate: bool = False,
+                      ttl_seconds: float = DEFAULT_TTL_SECONDS,
+                      dedup_key: Optional[str] = None,
+                      context: Optional[dict] = None,
+                      extras: Optional[dict] = None) -> Optional[int]:
+    """add() + immediate commit, swallow exceptions, log on failure.
+
+    Один helper для всех explicit-emit источников (chat msgs, alerts,
+    briefings) — pattern «нода живёт в workspace миллисекунды, потом
+    сразу promote в LTM». Returns idx или None при failure.
+
+    accumulate=False по умолчанию (chat/alert/brief — explicit publication).
+    accumulate=True возможен — нода всё равно сразу commit'ится, флаг
+    остаётся в metadata для downstream cross-processing (W14.5).
+    """
+    import logging
+    try:
+        idx = add(
+            actor=actor, action_kind=action_kind, text=text,
+            urgency=urgency, ttl_seconds=ttl_seconds,
+            accumulate=accumulate, dedup_key=dedup_key,
+            context=context, extras=extras,
+        )
+        commit([idx])
+        return idx
+    except Exception as e:
+        logging.getLogger(__name__).debug(
+            f"[workspace] record_committed {actor}/{action_kind} failed: {e}")
+        return None
+
+
 def archive_expired(now: Optional[float] = None) -> int:
     """Workspace-ноды с истёкшим TTL → scope='archived'.
 

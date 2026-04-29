@@ -962,24 +962,17 @@ def assist():
     # user_chat + baddle_reply в хронологическом порядке = conversation
     # timeline в графе. Card-actions (sync_seeking / bridge / suggestion)
     # уже отдельные action-ноды — они не дублируются здесь.
-    # Path через workspace (W14.2): add(accumulate=False) → immediate commit.
     if response_text:
-        try:
-            from .memory import workspace
-            from .graph_logic import link_chat_continuation
-            br_idx = workspace.add(
-                actor="baddle",
-                action_kind="baddle_reply",
-                text=response_text[:200],
-                urgency=1.0,
-                accumulate=False,
-                extras={"mode": mode_id, "intent": intent,
-                         "cards_count": len(cards) if cards else 0},
-            )
-            workspace.commit([br_idx])
+        from .memory import workspace
+        from .graph_logic import link_chat_continuation
+        br_idx = workspace.record_committed(
+            actor="baddle", action_kind="baddle_reply",
+            text=response_text[:200], urgency=1.0, accumulate=False,
+            extras={"mode": mode_id, "intent": intent,
+                     "cards_count": len(cards) if cards else 0},
+        )
+        if br_idx is not None:
             link_chat_continuation(br_idx)
-        except Exception as e:
-            log.debug(f"[action-memory] baddle_reply record failed: {e}")
 
     return jsonify({
         "text": response_text,
@@ -2520,25 +2513,19 @@ def assist_chat_append():
                     r.u_engage()
                 except Exception as e:
                     log.debug(f"[sentiment] ema update failed: {e}")
-                # 3. user_chat через workspace (W14.2): add(accumulate=False)
-                # → immediate commit. Один path для всего что попадает в граф+chat.
-                try:
-                    from .memory import workspace
-                    from .graph_logic import _current_snapshot, link_chat_continuation
-                    ctx = _current_snapshot()
-                    ctx["sentiment"] = round(float(sentiment), 3)
-                    uc_idx = workspace.add(
-                        actor="user",
-                        action_kind="user_chat",
-                        text=msg_text[:200],
-                        urgency=1.0,
-                        accumulate=False,
-                        context=ctx,
-                    )
-                    workspace.commit([uc_idx])
+                # 3. user_chat через workspace (W14.2): один path для всего
+                # что попадает в граф+chat.
+                from .memory import workspace
+                from .graph_logic import _current_snapshot, link_chat_continuation
+                ctx = _current_snapshot()
+                ctx["sentiment"] = round(float(sentiment), 3)
+                uc_idx = workspace.record_committed(
+                    actor="user", action_kind="user_chat",
+                    text=msg_text[:200], urgency=1.0, accumulate=False,
+                    context=ctx,
+                )
+                if uc_idx is not None:
                     link_chat_continuation(uc_idx)
-                except Exception as e:
-                    log.debug(f"[action-memory] user_chat record failed: {e}")
         return jsonify({"ok": True})
     except Exception as e:
         log.warning(f"[/assist/chat/append] failed: {e}")
@@ -2599,25 +2586,16 @@ def assist_morning():
     except Exception as e:
         log.debug(f"[/assist/morning] sections builder failed: {e}")
 
-    # Action timeline (W14.4): brief_morning через workspace. accumulate=False
-    # + immediate commit — briefing запрашивается user'ом explicit, не накапливается.
-    # TTL 24ч на случай если не committed (для archive_expired post-hoc analysis).
-    try:
-        from .memory import workspace
-        bm_idx = workspace.add(
-            actor="baddle",
-            action_kind="brief_morning",
-            text=greeting,
-            urgency=0.6,
-            accumulate=False,
-            ttl_seconds=24 * 3600,
-            extras={"sections_count": len(sections),
-                     "recovery_pct": recovery_pct,
-                     "lang": lang},
-        )
-        workspace.commit([bm_idx])
-    except Exception as e:
-        log.debug(f"[workspace] brief_morning record failed: {e}")
+    # Action timeline (W14.4): brief_morning. accumulate=False + immediate
+    # commit — briefing explicit user request.
+    from .memory import workspace
+    workspace.record_committed(
+        actor="baddle", action_kind="brief_morning",
+        text=greeting, urgency=0.6, accumulate=False,
+        ttl_seconds=24 * 3600,
+        extras={"sections_count": len(sections),
+                 "recovery_pct": recovery_pct, "lang": lang},
+    )
 
     import datetime as _dt
     return jsonify({
@@ -2885,22 +2863,14 @@ def assist_weekly():
         digest["patterns"] = []
 
     # Action timeline (W14.4): brief_weekly через workspace.
-    try:
-        from .memory import workspace
-        bw_idx = workspace.add(
-            actor="baddle",
-            action_kind="brief_weekly",
-            text=text,
-            urgency=0.6,
-            accumulate=False,
-            ttl_seconds=7 * 24 * 3600,
-            extras={"decisions_this_week": len(recent),
-                     "mode_counts": mode_counts,
-                     "lang": lang},
-        )
-        workspace.commit([bw_idx])
-    except Exception as e:
-        log.debug(f"[workspace] brief_weekly record failed: {e}")
+    from .memory import workspace
+    workspace.record_committed(
+        actor="baddle", action_kind="brief_weekly",
+        text=text, urgency=0.6, accumulate=False,
+        ttl_seconds=7 * 24 * 3600,
+        extras={"decisions_this_week": len(recent),
+                 "mode_counts": mode_counts, "lang": lang},
+    )
 
     return jsonify({
         "text": text,

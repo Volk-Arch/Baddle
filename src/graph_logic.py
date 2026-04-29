@@ -704,6 +704,10 @@ def link_chat_continuation(new_idx: int, chat_kinds: tuple = ("user_chat", "badd
             continue
         if n.get("action_kind") not in chat_kinds:
             continue
+        # W14 hygiene: archived (expired без commit'a) не считаем predecessor —
+        # они не дошли до broadcast.
+        if n.get("scope") == "archived":
+            continue
         try:
             prev_ts = _dt.datetime.fromisoformat(
                 str(n.get("created_at", "")).replace("Z", "+00:00")

@@ -162,6 +162,11 @@ class CognitiveLoop:
     # Heartbeat: сводный снапшот в state_graph для DMN/scout substrate
     HEARTBEAT_INTERVAL = 300          # раз в 5 мин — пишет single state_node со стримами
 
+    # Workspace hygiene: archive nodes которые прошли expires_at без commit'а.
+    # 10 мин — без него scope='workspace' накапливаются вечно (W14.5+ для
+    # accumulate=True источников будет это критично).
+    WORKSPACE_CLEANUP_INTERVAL = 600
+
     # DMN autonomous deep-research: когда юзер idle давно и есть open-goal,
     # запускаем реальный 3-step pipeline (brainstorm → elaborate → smartdc)
     # на одной цели. Реальная работа мозга в фоне, не просто pump-bridge.
@@ -256,6 +261,7 @@ class CognitiveLoop:
         self._last_action_outcomes_check = 0.0  # таймер closing action outcomes
         self._last_prime_directive = 0.0    # таймер hourly prime_directive.jsonl записи
         self._last_user_surprise_check = 0.0  # таймер OQ #7 detector
+        self._last_workspace_cleanup = 0.0    # таймер archive_expired (10 мин)
         self._last_analyzed_msg_ts: float = 0.0  # timestamp последнего проанализированного user-msg
         # Action Memory — per-kind storage для open actions:
         # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
@@ -307,6 +313,24 @@ class CognitiveLoop:
         return dict(self._thinking_state or {"kind": "idle", "started_at": 0.0})
 
     # ── Action Memory: запись + closing ────────────────────────────────
+
+    def _check_workspace_cleanup(self):
+        """Periodic archive_expired для workspace-нод (W14.1 hygiene).
+
+        scope='workspace' nodes без commit'а до expires_at → scope='archived'.
+        Накопление предотвращается. Вызывается раз в 10 мин (узкий cost —
+        один pass по nodes).
+        """
+        if not self._throttled("_last_workspace_cleanup",
+                                self.WORKSPACE_CLEANUP_INTERVAL):
+            return
+        try:
+            from ..memory import workspace
+            n = workspace.archive_expired()
+            if n > 0:
+                log.debug(f"[workspace] archived {n} expired nodes")
+        except Exception as e:
+            log.debug(f"[workspace] archive_expired failed: {e}")
 
     def _check_action_outcomes(self):
         """Раз в 5 мин проходим `_open_actions`, закрываем outcomes.
@@ -922,6 +946,7 @@ class CognitiveLoop:
                 self._check_action_outcomes()       # close action-memory entries
                 self._check_prime_directive_record()  # sync_error snapshot (1h)
                 self._check_user_surprise()         # HRV spike + text markers
+                self._check_workspace_cleanup()     # archive expired ws nodes (10 min)
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -2333,8 +2358,8 @@ class CognitiveLoop:
         """Каноничный путь emitted Signal → действие системы (W14.3).
 
         Двойная запись:
-          1. Workspace → action timeline в графе (через workspace.add+commit
-             с accumulate=False, immediate). Action Memory infra работает на
+          1. Workspace → action timeline в графе (через record_committed,
+             accumulate=False, immediate). Action Memory infra работает на
              alerts: outcome tracking, evidence, conversation timeline.
           2. _alerts_queue → in-memory mirror для UI poll path (legacy).
 
@@ -2342,23 +2367,18 @@ class CognitiveLoop:
         здесь только запись результата. Дублирование уйдёт в W14.5
         (full Dispatcher↔Workspace unification).
         """
-        try:
-            from ..memory import workspace
-            ws_idx = workspace.add(
-                actor="baddle",
-                action_kind=sig.type,
-                text=(sig.content.get("text")
-                      or sig.content.get("text_en")
-                      or sig.type),
-                urgency=float(sig.urgency),
-                accumulate=False,
-                dedup_key=sig.dedup_key,
-                ttl_seconds=max(60.0, sig.expires_at - now),
-                extras=dict(sig.content),
-            )
-            workspace.commit([ws_idx])
-        except Exception as e:
-            log.debug(f"[workspace] alert record failed: {e}")
+        from ..memory import workspace
+        workspace.record_committed(
+            actor="baddle", action_kind=sig.type,
+            text=(sig.content.get("text")
+                  or sig.content.get("text_en")
+                  or sig.type),
+            urgency=float(sig.urgency),
+            accumulate=False,
+            dedup_key=sig.dedup_key,
+            ttl_seconds=max(60.0, sig.expires_at - now),
+            extras=dict(sig.content),
+        )
         self._add_alert(sig.content)
 
     def _add_alert(self, alert: dict):

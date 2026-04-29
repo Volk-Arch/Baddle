@@ -216,6 +216,22 @@ def test_archive_expired_marks_archived(clean_graph):
 # ── workflow patterns ───────────────────────────────────────────────────
 
 
+def test_record_committed_helper(clean_graph):
+    """record_committed = add + immediate commit за один call. Возвращает idx."""
+    idx = workspace.record_committed(
+        actor="baddle", action_kind="alert",
+        text="hello", urgency=0.7, accumulate=False,
+        extras={"severity": "info"},
+    )
+    assert idx is not None
+    node = _graph["nodes"][idx]
+    assert node["scope"] == "graph"
+    assert node["expires_at"] is None
+    assert node["urgency"] == 0.7
+    assert node["severity"] == "info"
+    assert "committed_at" in node
+
+
 def test_add_immediate_then_commit_workflow(clean_graph):
     """Pattern для chat-сообщений (W14.2): add(accumulate=False) + commit([idx]).
 
