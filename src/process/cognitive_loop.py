@@ -910,7 +910,7 @@ class CognitiveLoop:
                 emitted = self._dispatcher.dispatch(candidates, now,
                                                      user_mode=user_mode)
                 for sig in emitted:
-                    self._add_alert(sig.content)
+                    self._emit_alert(sig, now)
 
                 # 4. Bookkeeping (НЕ alert-emitting — не идут через dispatcher)
                 self._check_hrv_push()             # HRV → UserState sync (15s)
@@ -2328,6 +2328,38 @@ class CognitiveLoop:
             log.debug(f"[cognitive_loop] graph flush failed: {e}")
 
     # ── Alerts queue ───────────────────────────────────────────────────
+
+    def _emit_alert(self, sig, now: float):
+        """Каноничный путь emitted Signal → действие системы (W14.3).
+
+        Двойная запись:
+          1. Workspace → action timeline в графе (через workspace.add+commit
+             с accumulate=False, immediate). Action Memory infra работает на
+             alerts: outcome tracking, evidence, conversation timeline.
+          2. _alerts_queue → in-memory mirror для UI poll path (legacy).
+
+        Dispatcher уже применил convergence (counter-wave/dedup/budget) —
+        здесь только запись результата. Дублирование уйдёт в W14.5
+        (full Dispatcher↔Workspace unification).
+        """
+        try:
+            from ..memory import workspace
+            ws_idx = workspace.add(
+                actor="baddle",
+                action_kind=sig.type,
+                text=(sig.content.get("text")
+                      or sig.content.get("text_en")
+                      or sig.type),
+                urgency=float(sig.urgency),
+                accumulate=False,
+                dedup_key=sig.dedup_key,
+                ttl_seconds=max(60.0, sig.expires_at - now),
+                extras=dict(sig.content),
+            )
+            workspace.commit([ws_idx])
+        except Exception as e:
+            log.debug(f"[workspace] alert record failed: {e}")
+        self._add_alert(sig.content)
 
     def _add_alert(self, alert: dict):
         """Append alert в queue. Dedup делает Dispatcher через dedup_key + window_s."""

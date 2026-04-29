@@ -51,7 +51,7 @@ def test_build_context_works(tmp_path, monkeypatch):
 
 
 def test_dispatcher_collects_and_dispatches_signals(tmp_path):
-    """Когда детекторы возвращают Signal, dispatcher эмитит через _add_alert."""
+    """Когда детекторы возвращают Signal, dispatcher эмитит через _emit_alert."""
     loop = CognitiveLoop()
     # Patch dispatcher's drops_file для tmp
     loop._dispatcher._drops_file = tmp_path / "throttle_drops.jsonl"
@@ -66,12 +66,54 @@ def test_dispatcher_collects_and_dispatches_signals(tmp_path):
 
     emitted = loop._dispatcher.dispatch([sig1, sig2], now)
     for sig in emitted:
-        loop._add_alert(sig.content)
+        loop._emit_alert(sig, now)
 
     alerts = loop.get_alerts()
     types = [a.get("type") for a in alerts]
     assert "test_a" in types
     assert "test_b" in types
+
+
+def test_emit_alert_writes_workspace_then_graph(tmp_path):
+    """W14.3: emitted Signal → workspace.add+commit → action нода в графе.
+
+    Action Memory: alert получает actor='baddle', action_kind=sig.type,
+    text из sig.content, scope='graph' (committed), expires_at=None.
+    Доступен через graph queries по action_kind для outcome tracking.
+    """
+    from src.graph_logic import _graph
+    saved = list(_graph["nodes"])
+    _graph["nodes"] = []
+    try:
+        loop = CognitiveLoop()
+        loop._dispatcher._drops_file = tmp_path / "throttle_drops.jsonl"
+
+        import time
+        now = time.time()
+        sig = Signal(type="capacity_red", urgency=0.95,
+                      content={"type": "capacity_red", "text": "Capacity red — отложи",
+                               "severity": "warning"},
+                      expires_at=now + 3600, dedup_key="capacity_red")
+
+        loop._emit_alert(sig, now)
+
+        # 1. Queue mirror (legacy path)
+        alerts = loop.get_alerts()
+        assert any(a.get("type") == "capacity_red" for a in alerts)
+
+        # 2. Workspace path → action нода в графе (committed)
+        action_nodes = [n for n in _graph["nodes"]
+                         if n.get("type") == "action"
+                         and n.get("action_kind") == "capacity_red"]
+        assert len(action_nodes) == 1
+        node = action_nodes[0]
+        assert node["actor"] == "baddle"
+        assert node["scope"] == "graph"  # immediate commit
+        assert node["expires_at"] is None
+        assert node["text"].startswith("Capacity red")
+        assert node["urgency"] == 0.95
+    finally:
+        _graph["nodes"] = saved
 
 
 def test_dmn_eligible_gates_heavy_detectors(tmp_path):
