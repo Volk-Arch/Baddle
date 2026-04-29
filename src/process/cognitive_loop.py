@@ -167,6 +167,16 @@ class CognitiveLoop:
     # accumulate=True источников будет это критично).
     WORKSPACE_CLEANUP_INTERVAL = 600
 
+    # Workspace select cycle: периодический emit accumulating workspace
+    # кандидатов через convergence rule. 5 мин — даёт time для cross-processing
+    # (3+ similar → synthesize) и Counter-wave window.
+    WORKSPACE_SELECT_INTERVAL = 300
+
+    # Action_kind'ы которые идут в accumulate=True path (накапливаются в
+    # workspace, эмитятся через select cycle с budget). Остальные emitted
+    # Signals — immediate path (record_committed). Список расширяется в W14.6.
+    ACCUMULATING_ALERT_KINDS = frozenset({"observation_suggestion"})
+
     # DMN autonomous deep-research: когда юзер idle давно и есть open-goal,
     # запускаем реальный 3-step pipeline (brainstorm → elaborate → smartdc)
     # на одной цели. Реальная работа мозга в фоне, не просто pump-bridge.
@@ -262,6 +272,7 @@ class CognitiveLoop:
         self._last_prime_directive = 0.0    # таймер hourly prime_directive.jsonl записи
         self._last_user_surprise_check = 0.0  # таймер OQ #7 detector
         self._last_workspace_cleanup = 0.0    # таймер archive_expired (10 мин)
+        self._last_workspace_select = 0.0     # таймер select+commit (5 мин)
         self._last_analyzed_msg_ts: float = 0.0  # timestamp последнего проанализированного user-msg
         # Action Memory — per-kind storage для open actions:
         # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
@@ -331,6 +342,45 @@ class CognitiveLoop:
                 log.debug(f"[workspace] archived {n} expired nodes")
         except Exception as e:
             log.debug(f"[workspace] archive_expired failed: {e}")
+
+    def _check_workspace_select(self):
+        """W14.5b: periodic select+commit accumulating workspace nodes.
+
+        Convergence rule (drop expired → counter-wave penalty → urgency
+        top-K) превращает накопленные кандидаты в emitted alerts. Mirror в
+        _alerts_queue для UI poll path — без него UI не увидит accumulating
+        alerts (synthesized cross-process пока не mirror'ится, ждёт W14.5c
+        когда UI перейдёт на graph query).
+        """
+        if not self._throttled("_last_workspace_select",
+                                self.WORKSPACE_SELECT_INTERVAL):
+            return
+        try:
+            from ..memory import workspace
+            from ..graph_logic import _graph
+
+            idxs = workspace.select(max_emit=2)
+            if not idxs:
+                return
+            workspace.commit(idxs)
+
+            # Mirror committed → queue для UI
+            for idx in idxs:
+                if not (0 <= idx < len(_graph["nodes"])):
+                    continue
+                node = _graph["nodes"][idx]
+                alert = {
+                    "type": node.get("action_kind", ""),
+                    "text": node.get("text", ""),
+                }
+                for k in ("severity", "text_en", "card", "source"):
+                    if k in node:
+                        alert[k] = node[k]
+                self._add_alert(alert)
+
+            log.debug(f"[workspace] select+commit emitted {len(idxs)}")
+        except Exception as e:
+            log.debug(f"[workspace] select+commit failed: {e}")
 
     def _check_action_outcomes(self):
         """Раз в 5 мин проходим `_open_actions`, закрываем outcomes.
@@ -947,6 +997,7 @@ class CognitiveLoop:
                 self._check_prime_directive_record()  # sync_error snapshot (1h)
                 self._check_user_surprise()         # HRV spike + text markers
                 self._check_workspace_cleanup()     # archive expired ws nodes (10 min)
+                self._check_workspace_select()      # W14.5b: emit accumulating (5 min)
             except Exception as e:
                 log.warning(f"[cognitive_loop] error: {e}")
 
@@ -2355,28 +2406,42 @@ class CognitiveLoop:
     # ── Alerts queue ───────────────────────────────────────────────────
 
     def _emit_alert(self, sig, now: float):
-        """Каноничный путь emitted Signal → действие системы (W14.3).
+        """Каноничный путь emitted Signal → действие системы (W14.3+W14.5b).
 
-        Двойная запись:
-          1. Workspace → action timeline в графе (через record_committed,
-             accumulate=False, immediate). Action Memory infra работает на
-             alerts: outcome tracking, evidence, conversation timeline.
-          2. _alerts_queue → in-memory mirror для UI poll path (legacy).
+        Два path в зависимости от sig.type:
 
-        Dispatcher уже применил convergence (counter-wave/dedup/budget) —
-        здесь только запись результата. Дублирование уйдёт в W14.5
-        (full Dispatcher↔Workspace unification).
+        1. **Accumulating** (sig.type ∈ ACCUMULATING_ALERT_KINDS):
+           workspace.add(accumulate=True), без commit и без queue mirror.
+           Накапливается в workspace, проходит cross-processing если 3+ similar.
+           Periodic _check_workspace_select делает select+commit с budget +
+           emit в queue для UI.
+
+        2. **Immediate** (default): record_committed(accumulate=False) +
+           _add_alert(sig.content) — текущий W14.3 path. Используется для
+           critical alerts (capacity_red, regime_protect, plan_reminder).
+
+        Dispatcher уже применил pre-emit convergence (counter-wave/dedup/budget) —
+        здесь только wire к workspace.
         """
         from ..memory import workspace
+        text = (sig.content.get("text")
+                or sig.content.get("text_en")
+                or sig.type)
+        ttl = max(60.0, sig.expires_at - now)
+
+        if sig.type in self.ACCUMULATING_ALERT_KINDS:
+            workspace.add(
+                actor="baddle", action_kind=sig.type, text=text,
+                urgency=float(sig.urgency), accumulate=True,
+                dedup_key=sig.dedup_key, ttl_seconds=ttl,
+                extras=dict(sig.content),
+            )
+            return
+
         workspace.record_committed(
-            actor="baddle", action_kind=sig.type,
-            text=(sig.content.get("text")
-                  or sig.content.get("text_en")
-                  or sig.type),
-            urgency=float(sig.urgency),
-            accumulate=False,
-            dedup_key=sig.dedup_key,
-            ttl_seconds=max(60.0, sig.expires_at - now),
+            actor="baddle", action_kind=sig.type, text=text,
+            urgency=float(sig.urgency), accumulate=False,
+            dedup_key=sig.dedup_key, ttl_seconds=ttl,
             extras=dict(sig.content),
         )
         self._add_alert(sig.content)

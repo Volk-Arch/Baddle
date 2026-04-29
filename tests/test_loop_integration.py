@@ -74,6 +74,83 @@ def test_dispatcher_collects_and_dispatches_signals(tmp_path):
     assert "test_b" in types
 
 
+def test_emit_alert_accumulating_path(tmp_path):
+    """W14.5b: observation_suggestion Signal → workspace.add(accumulate=True),
+    БЕЗ commit и БЕЗ queue mirror. Ждёт _check_workspace_select.
+    """
+    from src.graph_logic import _graph
+    saved = list(_graph["nodes"])
+    _graph["nodes"] = []
+    try:
+        loop = CognitiveLoop()
+        loop._dispatcher._drops_file = tmp_path / "throttle_drops.jsonl"
+
+        import time
+        now = time.time()
+        sig = Signal(type="observation_suggestion", urgency=0.5,
+                      content={"type": "observation_suggestion",
+                                "text": "Утром bottoms растут после кофе",
+                                "card": {"title": "Pattern A"}},
+                      expires_at=now + 21600,
+                      dedup_key="observation_suggestion:test")
+
+        loop._emit_alert(sig, now)
+
+        # Не в queue (accumulating path)
+        assert len(loop.get_alerts()) == 0
+        # В workspace pending (accumulate=True, no commit)
+        assert len(_graph["nodes"]) == 1
+        node = _graph["nodes"][0]
+        assert node["scope"] == "workspace"
+        assert node["accumulate"] is True
+        assert node["action_kind"] == "observation_suggestion"
+    finally:
+        _graph["nodes"] = saved
+
+
+def test_workspace_select_periodic_commits_and_mirrors(tmp_path, monkeypatch):
+    """W14.5b: _check_workspace_select делает workspace.select+commit и
+    добавляет committed в queue (mirror).
+    """
+    from src.graph_logic import _graph
+    saved = list(_graph["nodes"])
+    _graph["nodes"] = []
+
+    # Force user.mode='R' чтобы не active counter-wave penalty
+    class FakeUser:
+        mode = "R"
+
+    class FakeRGK:
+        user = FakeUser()
+    monkeypatch.setattr("src.substrate.rgk.get_global_rgk", lambda: FakeRGK())
+
+    try:
+        from src.memory import workspace as ws
+        ws.add(actor="baddle", action_kind="observation_suggestion",
+               text="A", urgency=0.4, accumulate=True)
+        ws.add(actor="baddle", action_kind="observation_suggestion",
+               text="B", urgency=0.6, accumulate=True)
+
+        loop = CognitiveLoop()
+        # Force throttle bypass
+        loop._last_workspace_select = 0.0
+        loop._check_workspace_select()
+
+        # Высший по urgency должен быть в queue
+        alerts = loop.get_alerts()
+        assert len(alerts) >= 1
+        types = [a.get("type") for a in alerts]
+        assert "observation_suggestion" in types
+
+        # Committed nodes в графе
+        committed = [n for n in _graph["nodes"]
+                      if n.get("action_kind") == "observation_suggestion"
+                      and n.get("scope") == "graph"]
+        assert len(committed) >= 1
+    finally:
+        _graph["nodes"] = saved
+
+
 def test_emit_alert_writes_workspace_then_graph(tmp_path):
     """W14.3: emitted Signal → workspace.add+commit → action нода в графе.
 
