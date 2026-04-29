@@ -334,42 +334,78 @@ W16.1a (amplitude per axis) + W16.1b (phase-aware) — см. Done log. Spectral 
 
 ---
 
-### W18 — File structure as physical model (meta-wave, research-tier)
+### W18 — File structure as ontology mirror (meta-wave, ontology-derived)
 
-**Идея Игоря 2026-04-28 (закрытие сессии):** структура файлов порождает сложность реализаций. По закону Конвея — система повторяет структуру коммуникации; для single-developer проекта это значит структура файлов = mental model для следующих сессий и LLM при bootstrapping. Текущая структура — **исторические разрезы**, не физика.
+**История:** идея 2026-04-28 — структура файлов порождает сложность реализаций; по закону Конвея структура файлов = mental model. Первоначальный план был software-design intuition (9 групп: substrate / cycle / operators / signals / memory / storage / sensors / io / ui).
 
-**Симптомы текущей структуры:**
-- РГК substrate разбит между `rgk.py` + `horizon.py` + `user_state.py` (последний — shim под W10).
-- Mental operators (distinct / pump / elaborate / smartdc / collapse) разбросаны по 4-5 файлам — W11 #7 audit показал почему extract сейчас = false modularity.
-- Storage primitives (`goals_store` + `plans` + `recurring` + `activity_log`) дублируют API — знает W12 part Б.
-- `assistant.py` 3105 LOC + `cognitive_loop.py` 2628 LOC = mega-orchestrators без clear separation — знает W14.6/.7.
-- `signals.py` + `detectors.py` + Dispatcher — близко но не вместе.
+**Пересмотр 2026-04-29 после онтологии v3:** появился граф [examples/ontology-v3.json](../examples/ontology-v3.json) с ветвью H «Реализация в Baddle», где Baddle разделён на **5 концептуальных подгрупп** через `realizes` связи к онтологическим узлам. Это даёт **более чистый** план, выведенный из онтологии, а не из software intuition.
 
-**Гипотеза реструктуризации (направление, не план):**
-```
-src/
-  substrate/    # РГК ядро (state + dynamics + pressure + feeders)
-  cycle/        # nand tick + horizon + cognitive_loop background
-  operators/    # distinct / pump / elaborate / smartdc / collapse (после preconditions)
-  signals/      # signals + dispatcher + detectors
-  memory/       # graph_logic + workspace + consolidation + state_graph
-  storage/      # jsonl_store + goals + plans + recurring + activity_log + tasks
-  sensors/      # уже package
-  io/           # HTTP routes + background hooks
-  ui/           # chat + frontend support
-```
+**Соответствие подгрупп графа → директории:**
 
-**Связь с existing waves:**
-- W11 #5 (chat package), W11 #7 (operators), W12 part Б (storage primitive), W14.6/.7 (assistant/cognitive_loop split) — **это всё кусочки W18**. Сделанные отдельно дадут частичное решение. Сделанные **под единый план** дадут согласованную физическую структуру.
+| Граф | Директория | Что внутри |
+|---|---|---|
+| H.1 Substrate (узлы 56-62) | `src/substrate/` | РГК (rgk.py), 5-axis chem, balance(), R/C, sync_error_wave, phase_per_axis |
+| H.2 Process (узлы 63-67) | `src/process/` | NAND tick (nand.py), detectors, signals + dispatcher, cognitive_loop, Friston PE |
+| H.3 Memory (узлы 68-72) | `src/memory/` | graph_logic (LTM), workspace.py (W14.1), action_memory, consolidation, state_graph |
+| H.4 Transfer (узлы 73-76) | `src/transfer/` | analogies.py (W16.2), feedback_refinements, outbound LLM (W16.5) |
+| H.5 Capacity & UI (узлы 77-82) | `src/capacity/` + `src/ui_render/` | capacity 3-zone, power.py (W15), named_state, cone_ui logic, outcome dashboard |
 
-**Не делать сейчас.** Это design wave требующая trace физики через ВСЁ дерево, плюс multi-session implementation. Реалистично — после W14 (workspace primitive разблокирует чёткое разделение memory/storage/operators).
+Плюс две технических группы (не из графа, но необходимые):
+- `src/sensors/` — уже сделано (W11 #4) — телесный интерфейс
+- `src/io/` — Flask routes (HTTP layer)
+- `src/storage/` — jsonl primitives (W12 part Б), отделённые от концептуальной memory
 
-**Substrate готов к проектированию когда:**
-- W14.1+ workspace primitive живёт (clean memory/ subdomain)
-- W11 #7 preconditions решены (operators extract'абельны)
-- W12 part Б storage primitive (jsonl_store) готов
+**Что изменилось vs первоначальный план:**
 
-**Артефакт когда придёт время:** `planning/file-structure-physics.md` — narrative design doc с rationale per группа + migration plan.
+1. ❌ **Убрано `cycle/`, `signals/`, `operators/` как отдельные группы.** Граф показывает что они все часть **process** (H.2) — детекторы, сигналы, диспетчер, NAND, cognitive_loop = одна операция разворачивания. Это устраняет проблему W11 #7 false modularity (mental operators).
+2. ✅ **Добавлено `transfer/`.** Раньше не было — теперь явная подгруппа для W16 (resonance transfer). Это **новое** в плане, до v3 неочевидное.
+3. ✅ **Добавлено `capacity/`.** Раньше capacity жила в `user_state.py`. Теперь — отдельная подгруппа для измерительных метрик (capacity zones, power, named state).
+4. ✅ **Разделено `memory/` (концепции) и `storage/` (jsonl primitives).** Memory — что и как помнится; storage — техническая I/O. Это разрешает напряжение W12 part Б.
+
+**Симптомы текущей структуры (что лечится):**
+- РГК substrate разбит между `rgk.py` + `horizon.py` + `user_state.py` → собирается в `substrate/`.
+- Mental operators (distinct / pump / elaborate / smartdc / collapse) — больше **не отдельная группа**, а часть `process/`. Решает W11 #7 без extract preconditions.
+- Storage primitives (`goals_store` + `plans` + `recurring` + `activity_log`) → `storage/` с общим `jsonl_store.py`.
+- `assistant.py` 3105 LOC → split по доменам в `io/routes/` + business в соответствующих подсистемах.
+- `cognitive_loop.py` 2628 LOC → `process/cognitive_loop.py` + extract bookkeeping/briefings.
+
+**Связь с existing waves (что куда после реализации):**
+- W11 #5 (chat package) → `ui_render/chat.py` или `io/routes/chat.py`
+- W11 #7 (operators) → **отменяется**: операторы остаются в `process/` рядом с NAND
+- W12 part Б (jsonl_store) → `storage/jsonl_store.py`
+- W14.1 (workspace primitive) → `memory/workspace.py`
+- W14.6 (assistant.py split) → `io/routes/*.py`
+- W14.7 (cognitive_loop split) → `process/cognitive_loop.py` + `process/bookkeeping.py`
+- W15 (Power) → `capacity/power.py`
+- W16.2 (Analogy injection) → `transfer/analogies.py`
+- W16.5 (Outbound LLM) → `transfer/outbound.py`
+
+То есть **многие waves становятся частями W18**, не самостоятельными. Это согласует план.
+
+**Готовность по подгруппам:**
+- ✅ `sensors/` — done (W11 #4)
+- 🔶 `substrate/` — частично готова (rgk.py, horizon.py, user_state.py shim рядом)
+- 🔶 `process/` — частично готова (nand.py + detectors.py + signals.py + cognitive_loop.py)
+- ⏳ `memory/` — ждёт W14.1 (workspace) + W12 part Б (jsonl_store)
+- ⏳ `transfer/` — ждёт W16.2
+- ⏳ `capacity/` — ждёт W15 (Power) + extract из user_state.py
+- ⏳ `io/` — ждёт W14.6 (assistant.py split)
+- ⏳ `storage/` — ждёт W12 part Б
+- ⏳ `ui_render/` — ждёт W14.6 + W11 #5 (chat package)
+
+**Как это делать (по фазам):**
+
+1. **Фаза 1 — стабильные подгруппы.** Перенести то, что уже готово: `substrate/` (rgk + horizon + user_state shim), `process/` (nand + detectors + signals + cognitive_loop). 1-2 сессии.
+2. **Фаза 2 — после W14.1.** Workspace primitive → создать `memory/` с graph_logic + workspace + state_graph + consolidation + action_memory.
+3. **Фаза 3 — после W12 part Б.** jsonl_store → `storage/` с goals + plans + recurring + activity_log.
+4. **Фаза 4 — после W14.6.** assistant.py split → `io/routes/*.py`.
+5. **Фаза 5 — после W15 + W16.2.** capacity + transfer → final подгруппы.
+
+Это **разворачивающийся план**, не «один большой refactor». Каждая фаза — самостоятельная.
+
+**Артефакт когда придёт время:** `planning/file-structure-physics.md` — narrative design doc с rationale per группа + migration plan + соответствие узлам графа.
+
+**Главное преимущество ontology-derived плана:** структура файлов **совпадает** с структурой графа, и каждая директория имеет **онтологическое обоснование** (через `realizes` связи в ветви H). Когда новый разработчик или LLM открывает проект — структура **сама объясняет**, что есть что. Это и есть «mental model для bootstrapping» в чистом виде.
 
 ---
 
