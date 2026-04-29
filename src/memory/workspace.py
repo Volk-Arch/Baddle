@@ -35,6 +35,11 @@ COUNTER_WAVE_PENALTY = 0.3
 
 DEFAULT_TTL_SECONDS = 3600.0  # 1 час
 
+# W14.5 cross-processing: при N pending accumulate=True ноды одного
+# action_kind — synthesize в 1 кандидата с references. 3 — мягкая граница
+# (3 sync_seeking за час = паттерн «юзер молчит вечерами», не случайность).
+THRESHOLD_SIMILAR_CANDIDATES = 3
+
 
 def add(actor: str, action_kind: str, text: str,
         urgency: float = 0.5,
@@ -77,11 +82,19 @@ def add(actor: str, action_kind: str, text: str,
     if dedup_key:
         ws_extras["dedup_key"] = dedup_key
 
-    return record_action(
+    new_idx = record_action(
         actor=actor, action_kind=action_kind, text=text,
         context=context, extras=ws_extras,
         scope="workspace", expires_at=expires_at,
     )
+
+    # W14.5 cross-processing trigger: только для accumulate=True источников.
+    # accumulate=False (chat msgs/alerts/briefings) не triggers — они проходят
+    # через record_committed → immediate commit, не накапливаются.
+    if accumulate:
+        _maybe_cross_process(action_kind)
+
+    return new_idx
 
 
 def list_pending(now: Optional[float] = None) -> list[dict]:
@@ -189,6 +202,74 @@ def record_committed(actor: str, action_kind: str, text: str,
         logging.getLogger(__name__).debug(
             f"[workspace] record_committed {actor}/{action_kind} failed: {e}")
         return None
+
+
+def synthesize_similar(node_idxs: list[int]) -> Optional[int]:
+    """N pending workspace-нод → 1 синтезированный кандидат (W14.5).
+
+    Создаёт committed `{action_kind}_synthesized` ноду с references на
+    исходные через `synthesized_from`. Исходные mark'аются `superseded_by`
+    — остаются в workspace до expire (action timeline trace), но
+    исключены из дальнейшего cross-processing.
+
+    NB: text-aggregation сейчас простая конкатенация. LLM-based synthesis
+    (через pump.scout / consolidation.collapse / SmartDC) — improvement
+    в W14.5+. Текущая версия даёт infrastructure без LLM hops в hot path.
+
+    Returns: idx синтезированной ноды или None если input пуст.
+    """
+    if len(node_idxs) < 2:
+        return None
+
+    with graph_lock:
+        nodes = [_graph["nodes"][i] for i in node_idxs
+                 if 0 <= i < len(_graph["nodes"])]
+        if len(nodes) < 2:
+            return None
+
+    aggregated = "; ".join((n.get("text") or "") for n in nodes)[:300]
+    max_urgency = max(float(n.get("urgency") or 0.5) for n in nodes)
+    action_kind = nodes[0].get("action_kind") or "unknown"
+
+    # Synthesized publish напрямую в LTM (record_committed): synthesis = explicit
+    # statement системы, не accumulating кандидат. Sources остаются в workspace
+    # как trace.
+    new_idx = record_committed(
+        actor="baddle",
+        action_kind=f"{action_kind}_synthesized",
+        text=aggregated,
+        urgency=min(1.0, max_urgency + 0.1),
+        accumulate=False,
+        extras={
+            "synthesized_from": [int(n["id"]) for n in nodes],
+            "synthesis_count": len(nodes),
+        },
+    )
+
+    # Mark contributing sources
+    if new_idx is not None:
+        with graph_lock:
+            for n in nodes:
+                n["superseded_by"] = int(new_idx)
+
+    return new_idx
+
+
+def _maybe_cross_process(action_kind: str) -> Optional[int]:
+    """Если N pending accumulate=True ноды одного action_kind ≥ threshold,
+    запустить synthesize_similar. Loop protection через `synthesized_from`
+    + `superseded_by` filter.
+    """
+    candidates = [
+        n for n in list_pending()
+        if n.get("action_kind") == action_kind
+        and bool(n.get("accumulate", True))
+        and "synthesized_from" not in n  # synthesized сами не triggers
+        and "superseded_by" not in n     # уже включены в synthesis
+    ]
+    if len(candidates) < THRESHOLD_SIMILAR_CANDIDATES:
+        return None
+    return synthesize_similar([int(c["id"]) for c in candidates])
 
 
 def archive_expired(now: Optional[float] = None) -> int:

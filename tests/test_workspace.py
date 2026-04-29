@@ -280,6 +280,92 @@ def test_briefing_workflow_through_workspace(clean_graph):
     assert morning["lang"] == "ru"
 
 
+# ── cross-processing (W14.5) ───────────────────────────────────────────
+
+
+def test_synthesize_similar_aggregates(clean_graph):
+    """3 accumulate=True ноды одного kind → auto-synthesis в record_committed."""
+    a = workspace.add(actor="baddle", action_kind="sync_seeking",
+                      text="silence 5min", urgency=0.4, accumulate=True)
+    b = workspace.add(actor="baddle", action_kind="sync_seeking",
+                      text="silence 10min", urgency=0.5, accumulate=True)
+    # Третий add триггерит cross-process автоматически
+    c = workspace.add(actor="baddle", action_kind="sync_seeking",
+                      text="silence 15min", urgency=0.6, accumulate=True)
+
+    # Synthesized нода: action_kind='sync_seeking_synthesized', committed.
+    synth = next((n for n in _graph["nodes"]
+                   if n.get("action_kind") == "sync_seeking_synthesized"), None)
+    assert synth is not None
+    assert synth["scope"] == "graph"
+    assert synth["expires_at"] is None
+    assert synth["actor"] == "baddle"
+    assert synth["synthesized_from"] == [a, b, c]
+    assert synth["synthesis_count"] == 3
+    assert synth["urgency"] == pytest.approx(0.7)  # max(0.6) + 0.1
+    assert "silence 5min" in synth["text"]
+
+    # Sources mark'нуты superseded_by, остаются в workspace
+    for idx in (a, b, c):
+        node = _graph["nodes"][idx]
+        assert node["scope"] == "workspace"
+        assert node["superseded_by"] == synth["id"]
+
+
+def test_cross_process_below_threshold_no_synthesis(clean_graph):
+    """2 accumulate=True ноды — недостаточно для trigger."""
+    workspace.add(actor="baddle", action_kind="observation_suggestion",
+                  text="A", urgency=0.5, accumulate=True)
+    workspace.add(actor="baddle", action_kind="observation_suggestion",
+                  text="B", urgency=0.5, accumulate=True)
+
+    synth = [n for n in _graph["nodes"]
+             if "_synthesized" in (n.get("action_kind") or "")]
+    assert len(synth) == 0
+
+
+def test_cross_process_skips_immediate(clean_graph):
+    """5 accumulate=False ноды — НЕ trigger (immediate path не накапливается).
+
+    record_committed (accumulate=False) — стандартный path для chat/alert/brief.
+    Не должен случайно triggернуть synthesis.
+    """
+    for i in range(5):
+        workspace.record_committed(
+            actor="baddle", action_kind="alert",
+            text=f"alert {i}", urgency=0.5, accumulate=False,
+        )
+
+    synth = [n for n in _graph["nodes"]
+             if "_synthesized" in (n.get("action_kind") or "")]
+    assert len(synth) == 0
+
+
+def test_cross_process_no_recursion_on_synthesized(clean_graph):
+    """После synthesis, новый round тех же sources не triggers повторно.
+
+    superseded_by + synthesized_from filters в _maybe_cross_process
+    исключают уже-обработанные ноды.
+    """
+    # Round 1 — 3 ноды → synthesis создаётся
+    for i in range(3):
+        workspace.add(actor="baddle", action_kind="sync_seeking",
+                      text=f"r1-{i}", urgency=0.5, accumulate=True)
+    synth_count_after_r1 = sum(
+        1 for n in _graph["nodes"]
+        if "_synthesized" in (n.get("action_kind") or ""))
+    assert synth_count_after_r1 == 1
+
+    # Round 2 — ещё 3 ноды (того же kind, но новые) → новый synthesis
+    for i in range(3):
+        workspace.add(actor="baddle", action_kind="sync_seeking",
+                      text=f"r2-{i}", urgency=0.5, accumulate=True)
+    synth_count_after_r2 = sum(
+        1 for n in _graph["nodes"]
+        if "_synthesized" in (n.get("action_kind") or ""))
+    assert synth_count_after_r2 == 2  # ровно 2, не больше — нет recursion
+
+
 # ── identity к LTM операциям ────────────────────────────────────────────
 
 
