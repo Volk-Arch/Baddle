@@ -1,12 +1,30 @@
-"""Chat history — persistent на сервере (раньше жил в browser localStorage).
+"""Chat history — UI persistence layer (NOT tech debt после W14).
 
 Формат: JSONL, одна entry на строку. Форматы entry совпадают с теми что
 писал JS `_chatStorePush`:
   {"kind":"msg", "role":"user"|"assistant"|"system", "content":"...", "meta":{}}
   {"kind":"card", "card":{...}}
 
-Чат глобальный (не per-workspace) — один человек, один разговор с Baddle.
-Workspace-скоуп — это про цели и граф, не про чат.
+## Архитектурная позиция (2026-04-29 W14 closure):
+
+chat_history.jsonl и workspace (`src/memory/workspace.py`) — **complementary,
+не дубликат**:
+
+| Слой              | Содержимое                          | Цель                          |
+|-------------------|-------------------------------------|-------------------------------|
+| **workspace**     | actions (action_kind taxonomy)      | cross-processing, outcome     |
+| **chat_history**  | UI entries (msg/card formatting)    | reload chat panel, dedup AM   |
+
+User msgs + baddle replies записываются в оба (action timeline + UI presentation).
+Cards (UI artifacts от JS, типа morning_briefing/intent_confirm/bridge с
+formatted layout) — только сюда.
+
+Полный trim требует UI rewrite (`/assist/chat/history` → workspace graph query
++ reformat, ui_card action_kind для cards) — cost > benefit. Отложено как
+design choice, не tech debt.
+
+Чат глобальный (не per-workspace в смысле scope). Workspace scope — про цели
+и cross-processing граф actions, не про rendered chat panel.
 """
 from __future__ import annotations
 import json

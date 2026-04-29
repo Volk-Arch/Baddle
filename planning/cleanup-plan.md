@@ -6,19 +6,30 @@
 
 ---
 
-## 🎯 Следующий шаг: W14 закрыта — выбор waves
+## 🎯 Следующий шаг: W14 + W18 Phase 4 закрыты — выбор waves
 
-**Что закрылось 2026-04-29 (long session, 15 commits):** W18 Phase 1 (substrate/ + process/) + W14 целиком (5 sub-waves: primitive → chat msgs → alerts → briefings → cross-processing с реальным observation_suggestion path). 526 passed, pyflakes 0. _alerts_queue + _recent_bridges + ACCUMULATING_ALERT_KINDS const удалены — все источники events идут через workspace primitive.
+**Что закрылось 2026-04-29 (long session, 22 commits):**
+- W18 Phase 1 (substrate/ + process/) — два commit
+- W14 целиком (1-6): primitive → chat → alerts → briefings → cross-processing →
+  state-indicator detectors → split assistant.py
+- W18 Phase 4 (io/) — assistant.py 2964 → 55 LOC (bootstrap-shell), 9 routes
+  модулей в `src/io/`
+
+535 passed, pyflakes 0. Workspace primitive — единственный path для events
+системы → committed graph actions → UI читает graph queries.
 
 **Что дальше** — wave-by-wave впадание продолжается:
 
-- **W14.6 split assistant.py** (~3-5ч) → `src/io/routes/*.py`. assistant.py 3105 → ~150 LOC. Большой mechanical refactor; W14 wired callsites сразу пойдут в правильный io/routes/.
-- **W12 part Б jsonl_store primitive** (~1-2ч) → `src/storage/jsonl_store.py`. Лечит дубликат API в goals_store/plans/recurring/activity_log. Создаёт `src/storage/`.
-- **W16.2 Analogy injection** (~3-3.5ч) → `src/transfer/analogies.py`. После W14.6.
+- **W14.7 cognitive_loop split** (~2-3ч) — `process/bookkeeping.py` + briefings extract из cognitive_loop. Файл всё ещё ~2670 LOC.
+- **W14.8-11 ночной cycle** (~6-9ч итого) — sequential integration NREM (8) + lazy queue (9) + cross-batch REM (10) + synaptic homeostasis (11). Расширения над workspace primitive.
+- **W12 part Б jsonl_store primitive** (~1-2ч) → `src/storage/jsonl_store.py`. Лечит дубликат API в goals_store/plans/recurring/activity_log.
+- **W16.2 Analogy injection** (~3-3.5ч) → `src/transfer/analogies.py`.
 - **W15 Power formula** (~16-22ч) → `src/capacity/power.py`. Большая, не блокер.
-- **W14.7 cognitive_loop split** (~2-3ч) → `process/bookkeeping.py` + briefings extract.
-- **W11 #5 chat package** (low) → `src/ui_render/` или `src/io/routes/chat.py`.
-- **chat_history.py legacy trim** — параллельно с workspace для chat msgs. Часть W14.6 territory.
+- **W11 #5 chat package** (low) → подразумевается W14.6 закрыло путём split на io/routes/chat.py.
+
+**Не tech debt (decided 2026-04-29):**
+- `chat_history.py` — UI persistence layer, complementary с workspace. Не trim.
+  См. [src/chat_history.py module docstring](../src/chat_history.py).
 
 См. подробности в [W18](#w18--file-structure-as-ontology-mirror-meta-wave-ontology-derived) ниже.
 
@@ -51,6 +62,8 @@
 | ✅ W14.5a | 2026-04-29 | Cross-processing infrastructure: `synthesize_similar` + auto-trigger в add() при 3+ similar accumulating, loop-protection через `synthesized_from`/`superseded_by`. |
 | ✅ W14.5b | 2026-04-29 | observation_suggestion первый real accumulating source. _emit_alert split на immediate/accumulating. WORKSPACE_SELECT_INTERVAL=300 + `_check_workspace_select`. |
 | ✅ W14.5c | 2026-04-29 | Full Dispatcher↔Workspace integration: Signal.accumulating field (Dispatcher pass-through, fix double counter-wave); удалены _alerts_queue + _add_alert + get_alerts (UI читает graph через `workspace.list_recent_alerts`); удалён _recent_bridges deque (replaced by `workspace.list_recent_bridges` + 3 missing _record_baddle_action calls). _record_baddle_action унифицирован через record_committed. Synthesized severity inheritance. 4 commits (a/b/c/final). 492 → 526 passed. |
+| ✅ W14.5c-state | 2026-04-29 | State-indicator detectors закрыли «design choice» угол: regime/capacity/coherence/zone alerts теперь идут через единый Signal → Dispatcher → workspace path вместо computed-on-the-fly блока в `/assist/alerts`. 3 новых детектора (`detect_regime_state` / `detect_capacity_red_state` / `detect_activity_zone`). DETECTORS list 13 → 16. 526 → 535 passed. |
+| ✅ W14.6 split | 2026-04-29 | assistant.py 2964 → 55 LOC (−2909, bootstrap-shell). 7 commits (a/b1/b2-3/b4/b5/c). Routes split на 8 модулей `src/io/routes/`: chat.py 1163, briefings.py 419, misc.py 475, activity.py 246, goals.py 238, plans.py 110, checkins.py 84, profile.py 79. State helpers extract в `src/io/state.py` 273. Backward-compat re-exports через assistant.py. Identity 535 passed. W18 Phase 4 (io/) закрыта. |
 
 ---
 
@@ -394,22 +407,22 @@ W16.1a (amplitude per axis) + W16.1b (phase-aware) — см. Done log. Spectral 
 
 **Готовность по подгруппам:**
 - ✅ `sensors/` — done (W11 #4)
-- ✅ `substrate/` — done (W18 Phase 1.1, 2026-04-29) — rgk + horizon + user_state shim
-- ✅ `process/` — done (W18 Phase 1.2, 2026-04-29) — nand + detectors + signals + cognitive_loop + pump + consolidation
-- 🔶 `memory/` — частично (W14, 2026-04-29) — `workspace.py` создан с полным lifecycle + cross-processing. graph_logic + state_graph пока в src/, мигрируют в W18 Phase 2 (после W14.6)
+- ✅ `substrate/` — done (W18 Phase 1.1, 2026-04-29)
+- ✅ `process/` — done (W18 Phase 1.2, 2026-04-29)
+- ✅ `io/` — done (W14.6, 2026-04-29) — state.py + 8 routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}
+- 🔶 `memory/` — частично (W14, 2026-04-29) — `workspace.py` с полным lifecycle + cross-processing. graph_logic + state_graph пока в `src/` корне, мигрируют после W14.7-11
 - ⏳ `transfer/` — ждёт W16.2
 - ⏳ `capacity/` — ждёт W15 (Power) + extract из user_state.py
-- ⏳ `io/` — ждёт W14.6 (assistant.py split)
 - ⏳ `storage/` — ждёт W12 part Б
-- ⏳ `ui_render/` — ждёт W14.6 + W11 #5 (chat package)
+- ⏳ `ui_render/` — `chat_history.py` остаётся UI persistence layer (decided 2026-04-29 — complementary с workspace, не trim). Возможно frontend-side helpers в эту подгруппу позже.
 
 **Как это делать (по фазам):**
 
-1. ✅ **Фаза 1 — стабильные подгруппы** (2026-04-29). substrate/ + process/ перенесены через `git mv`. 2 commit, identity preserved.
-2. **Фаза 2 — после W14.1.** Workspace primitive → создать `memory/` с graph_logic + workspace + state_graph + consolidation (пере-)move + action_memory.
-3. **Фаза 3 — после W12 part Б.** jsonl_store → `storage/` с goals + plans + recurring + activity_log.
-4. **Фаза 4 — после W14.6.** assistant.py split → `io/routes/*.py`.
-5. **Фаза 5 — после W15 + W16.2.** capacity + transfer → final подгруппы.
+1. ✅ **Фаза 1 — стабильные подгруппы** (2026-04-29). substrate/ + process/ через `git mv`. 2 commit, identity preserved.
+2. 🔶 **Фаза 2 — memory/** (частично 2026-04-29). `workspace.py` создан в W14.1. graph_logic + state_graph + consolidation мигрируют отдельно (W14.7-11 territory).
+3. **Фаза 3 — storage/** ждёт W12 part Б. jsonl_store → goals + plans + recurring + activity_log.
+4. ✅ **Фаза 4 — io/** (2026-04-29). assistant.py 2964 → 55 LOC. state.py + 8 routes файлов. W14.6 done.
+5. **Фаза 5 — capacity + transfer.** capacity/ после W15 (Power), transfer/ после W16.2.
 
 Это **разворачивающийся план**, не «один большой refactor». Каждая фаза — самостоятельная.
 
