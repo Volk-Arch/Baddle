@@ -1,6 +1,9 @@
 # Workspace — implementation план
 
 > Концепция: [docs/workspace.md](../docs/workspace.md). Этот файл — sub-waves для cleanup-plan W14.
+>
+> **Sync 2026-04-29:** документ обновлён под реальную имплементацию W14.1-6.
+> Изменения от изначального плана документированы inline (помечены **«Реальность:»**).
 
 ---
 
@@ -8,11 +11,11 @@
 
 Workspace = **scope над графом**, не отдельный store. Все операции графа (`distinct`, scout, SmartDC, consolidation) работают над workspace-нодами без изменений. Реализация:
 
-1. Существующая нода графа получает поля `scope: "workspace" | "graph"`, `expires_at: float | None`.
-2. Источники вызывают `workspace.add(...)` → создаётся нода с `scope="workspace"`.
-3. Periodic processing: pump/SmartDC/consolidation запускаются над workspace-нодами при триггерах.
-4. `workspace.select(now)` → convergence rule → top-K кандидатов.
-5. `workspace.commit(selected)` → меняет `scope="graph"`, убирает `expires_at`. И push в chat history.
+1. Существующая нода графа получает поля `scope: "workspace" | "graph" | "archived"`, `expires_at: float | None`.
+2. Источники вызывают `workspace.add(...)` или `workspace.record_committed(...)` → создаётся нода с `scope="workspace"` либо `scope="graph"` соответственно.
+3. Periodic processing: `_check_workspace_select` (5 мин) делает select+commit accumulating нод; `_check_workspace_cleanup` (10 мин) archives expired.
+4. `workspace.select(now)` → convergence rule → idxs для commit.
+5. `workspace.commit(selected)` → меняет `scope="graph"`, убирает `expires_at`. UI читает committed actions через `list_recent_alerts`/`list_recent_bridges` graph queries (не отдельный chat_log.jsonl). См. **«Реальность W14.1»** ниже.
 
 Этот подход **не требует** нового storage layer. Только новые поля на нодах + helper functions.
 
@@ -20,71 +23,124 @@ Workspace = **scope над графом**, не отдельный store. Все
 
 ## Sub-waves W14
 
-### W14.1 — Scope primitive (~3-4ч)
+### W14.1 — Scope primitive (~3-4ч) ✅ done 2026-04-29
 
-**Файл:** `src/workspace.py` (~150 LOC)
+**Файл:** `src/memory/workspace.py` (~280 LOC; W18 Phase 4 место `src/memory/`, не корень).
 
 **Что:**
-- `add(source, kind, text, urgency, expires_at=None, accumulate=False, dedup_key=None, metadata=None) -> int` — создаёт ноду графа с `scope="workspace"` через `record_action(actor="baddle", scope="workspace")`. Возвращает `node_idx`.
-- `list_pending() -> list[node]` — все ноды с `scope == "workspace"` and `now < expires_at`.
-- `select(now, max_emit=1) -> list[node]` — convergence rule (drop expired → immediate-flag → counter-wave penalty → budget → urgency-sort → top-K).
-- `commit(node_indices) -> None` — меняет `scope="graph"`, удаляет `expires_at`, пишет в `data/chat_log.jsonl` для UI.
+- `add(actor, action_kind, text, urgency=0.5, ttl_seconds=3600, accumulate=True, dedup_key=None, context=None, extras=None) -> int` — создаёт ноду графа с `scope="workspace"` через `record_action(actor=..., scope="workspace")`. Returns `node_idx`.
+- `record_committed(actor, action_kind, text, urgency, accumulate=False, ...) -> Optional[int]` — convenience helper: `add() + commit() + log on failure`. Используется для immediate publication (chat msgs / alerts / briefings / bridges).
+- `list_pending(now=None) -> list[node]` — все ноды с `scope == "workspace"` and `now < expires_at`.
+- `select(now, max_emit=1) -> list[int]` — convergence rule (drop expired → immediate path для `accumulate=False` → counter-wave penalty `−0.3` для PUSH_KINDS при mode=`C` → urgency-sort → top-K).
+- `commit(node_indices) -> int` — меняет `scope="graph"`, удаляет `expires_at`, ставит `committed_at=now`. Returns count.
+- `archive_expired(now=None) -> int` — workspace ноды с истёкшим TTL → `scope="archived"` (для post-hoc analysis).
+- `synthesize_similar(node_idxs) -> Optional[int]` + `_maybe_cross_process(action_kind)` — cross-processing trigger (W14.5).
+- `list_recent_alerts(since_ts) -> list[node]` — UI poll path graph query (committed `actor='baddle'` + `severity` field + `committed_at > since_ts`).
+- `list_recent_bridges(since_ts=0, limit=10) -> list[node]` — committed bridge actions (`action_kind` ∈ `BRIDGE_KINDS`).
+
+**Реальность W14.1 — отклонения от изначального плана:**
+
+1. **`source` field → `action_kind` taxonomy.** Изначально планировался отдельный `source` field как идентификатор источника. Заменён на единую Action Memory taxonomy (`action_kind`): user_chat / baddle_reply / brief_morning / sync_seeking / observation_suggestion / dmn_bridge / scout_bridge / etc. Согласует с Правилом 6 architecture-rules — единый taxonomy событий, без parallel taxonomy.
+
+2. **`actor` расширен с `"baddle"` до `"baddle"|"user"`.** Изначально workspace был только для baddle-side decisions. Реальность: `user_chat` тоже идёт через workspace для cross-processing над user msgs (3 повторяющихся sync_seeking → один insight). Single path для всех events.
+
+3. **`commit()` не пишет в `data/chat_log.jsonl`.** Изначально планировался parallel jsonl для UI delivery. Реальность: scope mutation only — UI читает committed actions через `list_recent_alerts` graph query. Single source of truth (graph). Параллельный `chat_history.jsonl` остаётся для UI presentation (msg + card formatting), но это complementary layer (не event substrate). См. [src/chat_history.py module docstring](../src/chat_history.py).
+
+4. **Bonus: `archive_expired()` + periodic check.** Не было в изначальном плане; добавлен для предотвращения накопления expired workspace nodes. `_check_workspace_cleanup` (10 мин) в cognitive_loop tick.
 
 **Изменения в graph_logic.py:**
 - `_make_node` принимает `scope` (default `"graph"`) и `expires_at` (default `None`).
+- `record_action` принимает `scope` + `expires_at` kwargs.
+- `_ensure_node_fields` добавляет `setdefault("scope", "graph")` + `setdefault("expires_at", None)` для legacy nodes.
 
-**Tests:** unit tests на add/select/commit semantics, dedup, expiry, counter-wave penalty, budget.
+**Tests:** 23 unit tests в `tests/test_workspace.py` (add/dedup/list_pending/select-immediate/select-top-K/select-expired/counter-wave on+off/commit/archive_expired/record_committed/synthesize/cross-process trigger/list_recent_alerts/list_recent_bridges/severity inheritance).
 
-**Identity:** существующие тесты должны остаться зелёными (workspace ortogonal к LTM operations).
+**Identity:** существующие тесты остались зелёными (492 → 535 после полного W14).
 
-### W14.2 — Migrate /assist reply через workspace (~1-2ч)
+### W14.2 — Migrate /assist reply через workspace (~1-2ч) ✅ done 2026-04-29
 
-`/assist` route: текущий `record_action(actor="baddle", action_kind="assist_reply", ...)` → `workspace.add(source="assist_reply", accumulate=False, urgency=1.0)` → `workspace.commit(workspace.select(now))`.
+`/assist` route: `workspace.record_committed(actor="baddle", action_kind="baddle_reply", ...)` (immediate) + `link_chat_continuation(idx)`.
 
-User message — через `workspace.add(source="user_msg", accumulate=False, urgency=1.0)`. Один path для всего что попадает в chat history.
+User message: `workspace.record_committed(actor="user", action_kind="user_chat", context={sentiment, ...}, ...)` (immediate). Один path для всего что попадает в граф+chat.
 
-**Verify:** smoke test — один user message → один baddle reply в graph (как было). Identity sequence для chat flow.
+**Реальность:** оба пути используют helper `record_committed` (W14 cleanup commit), который consolidates 5 callsites одного паттерна `add+commit+log`. См. cleanup-plan W14 cleanup.
 
-### W14.3 — Migrate alerts через workspace (~2-3ч)
+**Verify:** identity 492 passed после migration.
 
-`Dispatcher.dispatch()` сейчас возвращает emitted Signals → `_add_alert(sig.content)`. Меняем: emitted → `workspace.add(source="alert", kind="alert", ...)`. UI читает alerts через `workspace.list_committed_recent(kind="alert")` или unified `/chat/recent`.
+### W14.3 — Migrate alerts через workspace (~2-3ч) ✅ done 2026-04-29 + W14.5c-state
 
-**Decision point:** оставить ли Dispatcher отдельно для UI overlay banners или полностью мигрировать. Решить по результатам W14.1 prototype — если workspace справляется с budget/dedup, Dispatcher может стать `dispatch() = workspace.add` wrapper.
+`Dispatcher.dispatch()` returns emitted Signals → `_emit_alert(sig, now)` helper в cognitive_loop. Helper splits на два path по `sig.accumulating: bool`:
 
-### W14.4 — Migrate briefings + scout (~2-3ч)
+- **Accumulating** (`sig.accumulating=True`): `workspace.add(accumulate=True)`, без commit. Накапливается, проходит cross-processing если 3+ similar. Periodic `_check_workspace_select` (5 мин) делает emission через convergence rule.
+- **Immediate** (default): `workspace.record_committed(accumulate=False)` — для critical alerts (capacity_red, regime_protect, plan_reminder) + state indicators (regime/capacity/coherence/zone, добавлены в W14.5c-state).
 
-- `_build_morning_briefing_text/sections` — результат → `workspace.add(source="brief_morning", accumulate=True, urgency=0.6, expires_at=now+3600)`.
-- `_build_weekly_summary` — то же для `source="brief_weekly"`.
-- Scout / dmn-bridge: в `_advance_tick` после нахождения значимого моста → `workspace.add(source="scout", accumulate=True, urgency=0.4, expires_at=now+3600)`.
+UI читает alerts через `workspace.list_recent_alerts(since_ts)` с in-memory cursor `loop._last_alerts_poll_ts`.
 
-После migration `_recent_bridges` deque может быть удалена — её роль переходит к workspace `scope="workspace"` filter.
+**Реальность — Decision point closure:** Dispatcher **сохранён** как pre-emit gate. Hybrid: Dispatcher применяет counter-wave/budget/dedup/expired для non-accumulating; accumulating bypass'ят counter-wave+budget (workspace.select их применяет на pending), но keep dedup+expired в Dispatcher (window-based dedup для всех Signals).
 
-### W14.5 — Cross-кандидатная обработка (~2-3ч)
+Computed-on-the-fly блок в `/assist/alerts` (regime/capacity/zone из current state) **удалён** в W14.5c-state — заменён 3 detector'ами (`detect_regime_state`/`detect_capacity_red_state`/`detect_activity_zone`). Все события идут через единый detector → Signal → Dispatcher → workspace path.
 
-**Trigger rule:** при `workspace.add()` если `count(scope="workspace", source=X)` > `THRESHOLD_SIMILAR_CANDIDATES` (default 3) — запустить cross-processing:
+`_alerts_queue` + `_add_alert` + `get_alerts` **удалены** в W14.5c-2.
 
-- 3+ sync_seeking similar по тону → `pump.scout(workspace_subset)` ищет общий паттерн → если bridge_quality > 0.5 → новый кандидат `source="insight_pattern"` с urgency = max(input urgencies) + 0.1, и старые помечаются `superseded_by`.
-- 5+ observation_suggestion overlap by topic → `consolidation._collapse_cluster_to_node(workspace_subset)` → один summary-кандидат.
-- 2+ alerts overlapping by time/topic → SmartDC выбирает один с резонансом к текущему `r.user.mode/balance`.
+### W14.4 — Migrate briefings + bridges (~2-3ч) ✅ done 2026-04-29 + W14.5c-3
 
-Это **активная обработка** между генерацией и broadcast'ом — главное отличие workspace от plain queue.
+**Briefings: immediate publication, не accumulating.**
 
-**Risk:** infinite loop (новый кандидат сам триггерит new processing). Защита — флаг `_synthesized_from` на новом кандидате, исключает из дальнейших cross-операций.
+- `_build_morning_briefing_text/sections` — результат → `workspace.record_committed(actor="baddle", action_kind="brief_morning", accumulate=False, ttl=24h, extras={sections_count, recovery_pct, lang})`.
+- `_build_weekly_summary` — то же для `action_kind="brief_weekly"` с `ttl=7d`.
 
-### W14.6 — Decompose assistant.py (~3-5ч)
+**Реальность — отклонение от изначального плана:** изначально `accumulate=True, urgency=0.6, ttl=3600` (накопление через select cycle). Реальность — `accumulate=False, immediate commit`. Briefings = explicit user POST request (`/assist/morning`, `/assist/weekly`), не background generation. Если позже добавим auto-morning brief (system-initiated без user request) — вернёмся к accumulate=True path.
 
-После W14.2-4 `_assist` route и `_alerts` aggregator упрощаются. Time для split:
+**Scout/DMN bridges: immediate, не accumulating.**
 
-- `src/routes/chat.py` — /assist, /assist/feedback, /assist/state, /chat/recent (~700)
-- `src/routes/goals.py` — все goals/recurring/constraints (~280)
-- `src/routes/activity.py` — activity_log endpoints (~230)
-- `src/routes/plans.py` (~130), `src/routes/checkins.py` (~70), `src/routes/profile.py` (~150)
-- `src/routes/briefings.py` — morning/weekly (~330)
-- `src/routes/misc.py` — sensors/patterns/debug/decompose (~250)
+- `_record_baddle_action(action_kind in BRIDGE_KINDS, text, extras={quality, source})` через `workspace.record_committed`. Используется в night cycle scout, DMN deep research, converge loop pump, converge forced synthesis, DMN tick — 5 sites unified в W14.5c-3.
 
-`assistant.py` 3105 → ~150 (Flask blueprint setup).
+**Реальность — отклонение:** изначально `accumulate=True, urgency=0.4, ttl=3600` (накопление мостов в workspace, выбор через select). Реальность: bridges produced через explicit `pump.scout` calls (не detector chain) — нет потока кандидатов для накопления. immediate commit adequate.
 
-### W14.7 — Decompose cognitive_loop.py (~2-3ч)
+**TODO для W14.5+:** если в будущем bridges станут потоком (например background scout каждые 5 мин с регулярными hits), переключить на accumulating path. Это разблокирует cross-processing над bridges (3 similar bridges → 1 synthesized insight). Сейчас пропуск.
+
+**`_recent_bridges` deque удалена** в W14.5c-3 — replaced by `workspace.list_recent_bridges` graph query. 3 missing `_record_baddle_action` calls (DMN deep / converge_pump / converge_synthesis) добавлены — все bridges теперь в graph.
+
+### W14.5 — Cross-кандидатная обработка (~2-3ч) ✅ done 2026-04-29 (a/b/c)
+
+**Trigger rule:** при `workspace.add()` (только если `accumulate=True`) если `count(scope="workspace", action_kind=X)` ≥ `THRESHOLD_SIMILAR_CANDIDATES=3` — запустить `_maybe_cross_process(action_kind)` → `synthesize_similar(node_idxs)`.
+
+**Реальность — отклонение от изначального плана:**
+
+Изначально per-kind strategies:
+- 3+ sync_seeking similar по тону → `pump.scout(workspace_subset)` → bridge_quality > 0.5 → `source="insight_pattern"`
+- 5+ observation_suggestion overlap by topic → `consolidation._collapse_cluster_to_node(workspace_subset)` → summary
+- 2+ alerts overlapping by time/topic → SmartDC выбирает резонансный
+
+Реальность — **generic `synthesize_similar`** для всех kinds (text concatenation, urgency=max+0.1, severity inherited из first source). Per-kind strategies **deferred to W14.5+**: будущая работа добавит pump.scout/collapse/SmartDC переключение по `action_kind`. Сейчас generic text-aggregation — proof-of-concept.
+
+**Loop protection** через `synthesized_from` + `superseded_by` filters в `_maybe_cross_process` candidates pool. Recursion невозможна.
+
+**Real source:** `observation_suggestion` (W14.5b) — единственный accumulating source сейчас (через `Signal.accumulating=True`). Остальные idle до switch on accumulating path.
+
+**TODO для W14.5+:**
+1. LLM-based synthesis (pump.scout/collapse/SmartDC) per `action_kind`.
+2. Bridges accumulating (если bridges станут потоком, см. W14.4).
+3. Дополнительные accumulating sources (sync_seeking accumulating + cross_process).
+
+### W14.6 — Decompose assistant.py (~3-5ч) ✅ done 2026-04-29
+
+**Реальность:** `assistant.py` 2964 → 55 LOC (bootstrap-shell). Better than spec target ~150. Split на 8 routes модулей в `src/io/routes/` (W18 Phase 4 ontology placement, не корень `src/routes/`):
+
+- `src/io/routes/chat.py` (1163 LOC) — /assist + classify_intent + 4 fastpaths + /assist/{state,feedback,camera,status,history,prime-directive,bookmark} + /assist/chat/{history,append,clear} + /loop/{start,stop,status}
+- `src/io/routes/goals.py` (238 LOC) — все /goals/* + /goals/solved/* + _push_event_to_chat helper
+- `src/io/routes/activity.py` (246 LOC) — /activity/* + _sync_activity_to_graph
+- `src/io/routes/plans.py` (110 LOC) — /plan/*
+- `src/io/routes/checkins.py` (84 LOC) — /checkin/*
+- `src/io/routes/profile.py` (79 LOC) — /profile/*
+- `src/io/routes/briefings.py` (419 LOC) — /assist/morning + /assist/weekly + /assist/alerts
+- `src/io/routes/misc.py` (475 LOC) — /patterns/* + /sensor/* + /debug/* + /assist/decompose + /graph/assist
+
+Plus `src/io/state.py` (273 LOC) — state helpers (extracted из assistant.py 47-247): _load_state/_save_state/_get_context/_capacity_reason_text/_today_date/_ensure_daily_reset/_log_decision/_response_for_mode/_detect_category/_push_event_to_chat.
+
+`assistant.py` остаётся как **bootstrap shell** (55 LOC): re-exports из io.state + import io.routes (trigger blueprint registration). Backward-compat для `from src.assistant import _load_state` (cognitive_loop / detectors / assistant_exec / tests) + `from src.assistant import assistant_bp` (ui.py) + `from src.assistant import get_hrv_manager` (test_capacity monkeypatch).
+
+### W14.7 — Decompose cognitive_loop.py (~2-3ч) ⏳ pending
 
 После migration `_check_*` детекторов в workspace.add — _cognitive_loop сильно упрощается:
 
@@ -94,7 +150,9 @@ User message — через `workspace.add(source="user_msg", accumulate=False, 
 
 DMN/REM heavy work остаётся отдельно: `pump.py` (mental operator, day+night) и `consolidation.py` (night housekeeping) — разная семантика, склейка отвергнута. См. cleanup-plan W11 #3.
 
-### W14.8 — Sequential integration (NREM + emergent REM в одном проходе, ~3-4ч)
+**Pending state:** `process/cognitive_loop.py` ещё ~2670 LOC. После W14.7 → ~1200 main + 400 bookkeeping + 500 briefings.
+
+### W14.8 — Sequential integration (NREM + emergent REM в одном проходе, ~3-4ч) ⏳ pending
 
 **Ключевая переработка:** не два отдельных cycle'а (NREM consolidation + REM scout), а **один пошаговый pass** по workspace-нодам где insight'ы **emerge** из integration. Дешевле и точнее resonance с memory replay в hippocampus.
 
@@ -145,7 +203,7 @@ for node N in workspace_nodes_by_quality_desc():
 
 **Cap:** time budget на ночной pass (например max 5 мин). Если workspace переполнен — приоритет high-quality нод, остальные archive с меткой "недо-integrated".
 
-### W14.10 — Cross-batch REM scout (~2-3ч)
+### W14.10 — Cross-batch REM scout (~2-3ч) ⏳ pending
 
 После W14.8 phase 1 (integration), Phase 2: scout между сегодняшними promoted-нодами + random sample давнего LTM.
 
@@ -177,7 +235,7 @@ for new in today_batch:
 
 **Performance:** небольшой today_batch (типично 10-30 нод за день) × small old_sample → manageable. Heavy ops только на found bridges.
 
-### W14.11 — Synaptic homeostasis (~1-2ч) — **astrocyte-pattern**
+### W14.11 — Synaptic homeostasis (~1-2ч) — **astrocyte-pattern** ⏳ pending
 
 Параллель с biological astrocytes (queue.txt 2026-04-28): non-neuronal слой который делает housekeeping ночью (глимфатическая clean-up). У нас — **отдельный async loop** от main cognitive_loop, не блокирует neurons-слой. Investigate возможность разделить:
 - **Neurons слой** = main cognitive_loop tick + workspace integration
@@ -210,7 +268,7 @@ for node in graph.nodes:
 
 **Risk:** confidence потеряет ground truth если decay incorrectly tuned. Mitigation: сохранять `confidence_at_promote` отдельным полем, чтобы можно было восстановить если decay over-aggressive.
 
-### W14.9 — Lazy LTM recall queue (~1-2ч)
+### W14.9 — Lazy LTM recall queue (~1-2ч) ⏳ pending
 
 Дневной режим: workspace **не делает** broad recall на каждое user-message. Hot path остаётся cheap (in-memory operations only).
 
