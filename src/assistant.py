@@ -2892,9 +2892,16 @@ def assist_weekly():
 def assist_alerts():
     """Return pending proactive alerts. UI polls this periodically.
 
-    Alerts теперь выводятся из sync_regime (FLOW/REST/PROTECT/CONFESS) плюс
-    watchdog Scout/DMN. Жёсткие пороги остаются fallback'ом на случай когда
-    UserState ещё не набрал сигналов.
+    W14.5c: все alerts (regime/capacity/coherence/zone + dispatched DMN/scout/
+    suggestions) идут через единый path: detector → Signal → Dispatcher →
+    workspace.record_committed → graph. UI читает через workspace.list_recent_alerts
+    с since_ts cursor. Computed-on-the-fly блок (~70 LOC) удалён —
+    state-indicator detectors (regime_state/capacity_red_state/activity_zone)
+    в src/process/detectors.py вместо.
+
+    Response также содержит current state fields (capacity / hrv / sync_regime)
+    как live indicators для UI header — они НЕ alerts, а snapshot текущего
+    состояния (read each poll, не каждый push event).
     """
     from .substrate.horizon import get_global_state
     ctx = _get_context()
@@ -2906,80 +2913,6 @@ def assist_alerts():
     regime = cs.sync_regime
     sync_err = cs.sync_error
 
-    # Sync-regime driven advice (prime-directive слой)
-    if regime == "rest":
-        alerts.append({
-            "type": "regime_rest",
-            "severity": "info",
-            "text": "Оба устали. Предлагаю сделать паузу.",
-            "text_en": "We're both low. Let's take a pause.",
-            "regime": regime, "sync_error": round(sync_err, 2),
-        })
-    elif regime == "protect":
-        alerts.append({
-            "type": "regime_protect",
-            "severity": "info",
-            "text": "Ты устал — возьму на себя. Отвечаю короче, сложное отложим.",
-            "text_en": "You're tired — I'll handle it. Short answers, heavy stuff later.",
-            "regime": regime, "sync_error": round(sync_err, 2),
-        })
-    elif regime == "confess":
-        alerts.append({
-            "type": "regime_confess",
-            "severity": "info",
-            "text": "Мне нужно подумать — дай минуту.",
-            "text_en": "I need a moment to think.",
-            "regime": regime, "sync_error": round(sync_err, 2),
-        })
-
-    # Hard floors (Phase C: capacity_zone red — critical signal независимо от regime)
-    if capacity.get("zone") == "red":
-        reason_ru = _capacity_reason_text(capacity.get("reason"), "ru")
-        reason_en = _capacity_reason_text(capacity.get("reason"), "en")
-        alerts.append({
-            "type": "capacity_red",
-            "severity": "warning",
-            "text": f"Capacity red — {reason_ru}. Отложи сложные решения.",
-            "text_en": f"Capacity red — {reason_en}. Postpone heavy decisions.",
-            "zone": "red",
-            "reason": capacity.get("reason"),
-        })
-    if hrv_state:
-        coh = hrv_state.get("coherence")
-        if coh is not None and coh < 0.25:
-            alerts.append({
-                "type": "low_coherence",
-                "severity": "warning",
-                "text": f"Coherence {coh:.2f}. Минутку подыши.",
-                "text_en": f"Coherence {coh:.2f}. Take a breath.",
-            })
-
-    # Activity-zone alerts (4-зонная классификация HRV × движение)
-    try:
-        from .substrate.rgk import get_global_rgk
-        az = get_global_rgk().activity_zone()
-        if az.get("key") == "overload":
-            alerts.append({
-                "type": "zone_overload",
-                "severity": "warning",
-                "text": f"🔴 {az['label']}. {az['advice']}",
-                "text_en": "Overload detected: high activity + low HRV. Ease off.",
-                "zone": "overload",
-            })
-        elif az.get("key") == "stress_rest":
-            alerts.append({
-                "type": "zone_stress_rest",
-                "severity": "info",
-                "text": f"🟡 {az['label']}. {az['advice']}",
-                "text_en": "Stress at rest: low HRV without movement. Breathe.",
-                "zone": "stress_rest",
-            })
-    except Exception:
-        pass
-
-    # Background dispatched alerts через graph query (W14.5c).
-    # workspace.list_recent_alerts читает committed action-ноды с severity field
-    # созданные после прошлого poll'a. Loop держит cursor in-memory.
     loop = get_cognitive_loop()
     try:
         from .memory import workspace
@@ -2990,10 +2923,10 @@ def assist_alerts():
                 "type": node.get("action_kind", ""),
                 "text": node.get("text", ""),
             }
-            for k in ("severity", "text_en", "card", "source", "ts"):
+            for k in ("severity", "text_en", "card", "source", "ts",
+                       "zone", "reason", "regime", "sync_error"):
                 if k in node:
                     alert[k] = node[k]
-            # Cosmetic: ts в формате legacy queue (unix float)
             alert.setdefault("ts", node.get("committed_at"))
             alerts.append(alert)
         loop._last_alerts_poll_ts = time.time()

@@ -29,6 +29,9 @@ from src.process.detectors import (
     detect_dmn_deep_research,
     detect_dmn_converge,
     detect_night_cycle,
+    detect_regime_state,
+    detect_capacity_red_state,
+    detect_activity_zone,
 )
 from src.process.signals import Signal
 
@@ -617,10 +620,95 @@ def test_heavy_detector_swallows_exception(ctx, detector, method_name):
     assert detector(ctx) is None
 
 
-def test_all_13_detectors_registered():
-    """Sanity check: DETECTORS has all 13 (4 simple + 5 medium + 4 heavy)."""
+# ── detect_regime_state / detect_capacity_red_state / detect_activity_zone (W14.5c) ─
+
+
+def _patch_regime(monkeypatch, regime: str, sync_err: float = 0.5):
+    fake_cs = SimpleNamespace(sync_regime=regime, sync_error=sync_err)
+    monkeypatch.setattr("src.substrate.horizon.get_global_state",
+                         lambda: fake_cs)
+
+
+def test_regime_state_emits_for_rest(ctx, monkeypatch):
+    _patch_regime(monkeypatch, "rest", sync_err=0.7)
+    sig = detect_regime_state(ctx)
+    assert sig is not None
+    assert sig.type == "regime_rest"
+    assert sig.content["severity"] == "info"
+    assert sig.dedup_key == "regime_rest"
+    assert sig.content["sync_error"] == 0.7
+
+
+def test_regime_state_emits_for_protect(ctx, monkeypatch):
+    _patch_regime(monkeypatch, "protect")
+    sig = detect_regime_state(ctx)
+    assert sig is not None
+    assert sig.type == "regime_protect"
+
+
+def test_regime_state_emits_for_confess(ctx, monkeypatch):
+    _patch_regime(monkeypatch, "confess")
+    sig = detect_regime_state(ctx)
+    assert sig is not None
+    assert sig.type == "regime_confess"
+
+
+def test_regime_state_none_for_flow(ctx, monkeypatch):
+    """flow regime — no alert (positive state, не нужно push'ить)."""
+    _patch_regime(monkeypatch, "flow")
+    assert detect_regime_state(ctx) is None
+
+
+def test_capacity_red_state_emits_when_red(ctx, monkeypatch):
+    _ctx_with_capacity(ctx, "red", ["serotonin_low"])
+    monkeypatch.setattr("src.assistant._capacity_reason_text",
+                         lambda r, lang: "RU reason" if lang == "ru" else "EN reason")
+    sig = detect_capacity_red_state(ctx)
+    assert sig is not None
+    assert sig.type == "capacity_red"
+    assert sig.content["severity"] == "warning"
+    assert sig.content["zone"] == "red"
+    assert "RU reason" in sig.content["text"]
+
+
+def test_capacity_red_state_none_when_yellow(ctx):
+    _ctx_with_capacity(ctx, "yellow", ["serotonin_low"])
+    assert detect_capacity_red_state(ctx) is None
+
+
+def test_activity_zone_emits_overload(ctx):
+    ctx.rgk.activity_zone = lambda: {
+        "key": "overload", "label": "Overload",
+        "advice": "Снизь нагрузку",
+    }
+    sig = detect_activity_zone(ctx)
+    assert sig is not None
+    assert sig.type == "zone_overload"
+    assert sig.content["severity"] == "warning"
+
+
+def test_activity_zone_emits_stress_rest(ctx):
+    ctx.rgk.activity_zone = lambda: {
+        "key": "stress_rest", "label": "Stress at rest",
+        "advice": "Дыхание",
+    }
+    sig = detect_activity_zone(ctx)
+    assert sig is not None
+    assert sig.type == "zone_stress_rest"
+    assert sig.content["severity"] == "info"
+
+
+def test_activity_zone_none_for_normal(ctx):
+    ctx.rgk.activity_zone = lambda: {"key": "normal", "label": "OK"}
+    assert detect_activity_zone(ctx) is None
+
+
+def test_all_detectors_registered():
+    """Sanity check: DETECTORS has all (3 state + 4 simple + 5 medium + 4 heavy = 16).
+    State indicators (regime/capacity_red/activity_zone) добавлены в W14.5c.
+    """
     from src.process.detectors import DETECTORS
-    assert len(DETECTORS) == 13
+    assert len(DETECTORS) == 16
 
 
 # ── Common contract ───────────────────────────────────────────────────────

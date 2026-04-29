@@ -168,6 +168,122 @@ def detect_coherence_crit(ctx: DetectorContext) -> Optional[Signal]:
         return None
 
 
+def detect_regime_state(ctx: DetectorContext) -> Optional[Signal]:
+    """sync_regime ∈ {rest, protect, confess} → state-indicator alert (W14.5c).
+
+    Заменяет computed-on-the-fly блок в /assist/alerts route. Dispatcher
+    dedup_key window (1ч) предотвращает spam — один alert на состояние
+    в час. Counter-wave penalty (mode='C') понижает urgency push-style
+    state alerts на 0.3 — при desync system не давит state hints.
+
+    expires_at 10 мин — после устаревает; следующий tick переэмитит если
+    state продолжается (после dedup window).
+    """
+    try:
+        from ..substrate.horizon import get_global_state
+        cs = get_global_state()
+        regime = cs.sync_regime
+        sync_err = cs.sync_error
+
+        if regime == "rest":
+            return Signal(
+                type="regime_rest", urgency=0.5,
+                content={"type": "regime_rest", "severity": "info",
+                          "text": "Оба устали. Предлагаю сделать паузу.",
+                          "text_en": "We're both low. Let's take a pause.",
+                          "regime": regime, "sync_error": round(sync_err, 2)},
+                expires_at=ctx.now + 600, dedup_key="regime_rest",
+                source="detect_regime_state",
+            )
+        if regime == "protect":
+            return Signal(
+                type="regime_protect", urgency=0.5,
+                content={"type": "regime_protect", "severity": "info",
+                          "text": "Ты устал — возьму на себя. Отвечаю короче, сложное отложим.",
+                          "text_en": "You're tired — I'll handle it. Short answers, heavy stuff later.",
+                          "regime": regime, "sync_error": round(sync_err, 2)},
+                expires_at=ctx.now + 600, dedup_key="regime_protect",
+                source="detect_regime_state",
+            )
+        if regime == "confess":
+            return Signal(
+                type="regime_confess", urgency=0.5,
+                content={"type": "regime_confess", "severity": "info",
+                          "text": "Мне нужно подумать — дай минуту.",
+                          "text_en": "I need a moment to think.",
+                          "regime": regime, "sync_error": round(sync_err, 2)},
+                expires_at=ctx.now + 600, dedup_key="regime_confess",
+                source="detect_regime_state",
+            )
+    except Exception:
+        pass
+    return None
+
+
+def detect_capacity_red_state(ctx: DetectorContext) -> Optional[Signal]:
+    """capacity_zone == "red" → state alert (W14.5c).
+
+    Отличается от detect_low_capacity_heavy: тот gate'нут по heavy-goal
+    presence, этот — общий state indicator при red zone (без или с heavy).
+    Если оба triggers одновременно — Dispatcher dedup'ит по разным ключам:
+    `capacity_red` vs `low_energy_heavy`.
+    """
+    try:
+        cap = ctx.rgk.project("capacity")
+        zone = cap.get("zone")
+        if zone != "red":
+            return None
+        reasons = cap.get("reason") or []
+        from ..assistant import _capacity_reason_text
+        reason_ru = _capacity_reason_text(reasons, "ru")
+        reason_en = _capacity_reason_text(reasons, "en")
+        return Signal(
+            type="capacity_red", urgency=0.75,
+            content={"type": "capacity_red", "severity": "warning",
+                      "text": f"Capacity red — {reason_ru}. Отложи сложные решения.",
+                      "text_en": f"Capacity red — {reason_en}. Postpone heavy decisions.",
+                      "zone": "red", "reason": reasons},
+            expires_at=ctx.now + 600, dedup_key="capacity_red",
+            source="detect_capacity_red_state",
+        )
+    except Exception:
+        return None
+
+
+def detect_activity_zone(ctx: DetectorContext) -> Optional[Signal]:
+    """activity_zone ∈ {overload, stress_rest} — HRV × движение классификация.
+
+    overload: high activity + low HRV — переутомление.
+    stress_rest: low HRV без движения — стресс на отдыхе.
+    """
+    try:
+        az = ctx.rgk.activity_zone()
+        key = az.get("key")
+        if key == "overload":
+            return Signal(
+                type="zone_overload", urgency=0.75,
+                content={"type": "zone_overload", "severity": "warning",
+                          "text": f"🔴 {az.get('label', '')}. {az.get('advice', '')}",
+                          "text_en": "Overload detected: high activity + low HRV. Ease off.",
+                          "zone": "overload"},
+                expires_at=ctx.now + 600, dedup_key="zone_overload",
+                source="detect_activity_zone",
+            )
+        if key == "stress_rest":
+            return Signal(
+                type="zone_stress_rest", urgency=0.5,
+                content={"type": "zone_stress_rest", "severity": "info",
+                          "text": f"🟡 {az.get('label', '')}. {az.get('advice', '')}",
+                          "text_en": "Stress at rest: low HRV without movement. Breathe.",
+                          "zone": "stress_rest"},
+                expires_at=ctx.now + 600, dedup_key="zone_stress_rest",
+                source="detect_activity_zone",
+            )
+    except Exception:
+        pass
+    return None
+
+
 def detect_low_capacity_heavy(ctx: DetectorContext) -> Optional[Signal]:
     """capacity_zone == red + есть heavy-mode goal → предложить перенести.
 
@@ -886,6 +1002,11 @@ def detect_night_cycle(ctx: DetectorContext) -> Optional[Signal]:
 # ── DETECTORS registry — все 13 ────────────────────────────────────────────
 
 DETECTORS: list[Callable[[DetectorContext], DetectorReturn]] = [
+    # State indicators (W14.5c) — заменили computed-on-the-fly блок в /assist/alerts.
+    # Dispatcher dedup window предотвращает spam.
+    detect_regime_state,
+    detect_capacity_red_state,
+    detect_activity_zone,
     # Simple — ~30 строк каждая, pure compute
     detect_coherence_crit,
     detect_low_energy,
