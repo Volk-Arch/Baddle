@@ -2976,10 +2976,28 @@ def assist_alerts():
     except Exception:
         pass
 
-    # Background cognitive-loop alerts (Scout, DMN)
+    # Background dispatched alerts через graph query (W14.5c).
+    # workspace.list_recent_alerts читает committed action-ноды с severity field
+    # созданные после прошлого poll'a. Loop держит cursor in-memory.
     loop = get_cognitive_loop()
-    loop_alerts = loop.get_alerts(clear=True)
-    alerts.extend(loop_alerts)
+    try:
+        from .memory import workspace
+        since = float(loop._last_alerts_poll_ts or 0.0)
+        recent = workspace.list_recent_alerts(since)
+        for node in recent:
+            alert = {
+                "type": node.get("action_kind", ""),
+                "text": node.get("text", ""),
+            }
+            for k in ("severity", "text_en", "card", "source", "ts"):
+                if k in node:
+                    alert[k] = node[k]
+            # Cosmetic: ts в формате legacy queue (unix float)
+            alert.setdefault("ts", node.get("committed_at"))
+            alerts.append(alert)
+        loop._last_alerts_poll_ts = time.time()
+    except Exception as e:
+        log.debug(f"[/assist/alerts] graph query failed: {e}")
 
     return jsonify({
         "alerts": alerts,

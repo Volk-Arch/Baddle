@@ -272,6 +272,26 @@ def _maybe_cross_process(action_kind: str) -> Optional[int]:
     return synthesize_similar([int(c["id"]) for c in candidates])
 
 
+def list_recent_alerts(since_ts: float) -> list[dict]:
+    """Alert-style committed nodes для UI poll path (W14.5c).
+
+    Filter: actor='baddle' + есть severity field + committed_at > since_ts +
+    scope='graph'. severity = маркер alert (chat msgs / briefings не имеют).
+
+    Используется в `/assist/alerts` route после удаления legacy _alerts_queue.
+    UI passes `since_ts` от прошлого poll; сервер обновляет timestamp.
+    """
+    with graph_lock:
+        return [
+            n for n in _graph["nodes"]
+            if n.get("scope") == "graph"
+            and n.get("type") == "action"
+            and n.get("actor") == "baddle"
+            and n.get("severity")
+            and (n.get("committed_at") or 0) > since_ts
+        ]
+
+
 def archive_expired(now: Optional[float] = None) -> int:
     """Workspace-ноды с истёкшим TTL → scope='archived'.
 

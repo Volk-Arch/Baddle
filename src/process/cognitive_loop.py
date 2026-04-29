@@ -268,15 +268,15 @@ class CognitiveLoop:
         self._last_user_surprise_check = 0.0  # таймер OQ #7 detector
         self._last_workspace_cleanup = 0.0    # таймер archive_expired (10 мин)
         self._last_workspace_select = 0.0     # таймер select+commit (5 мин)
+        self._last_alerts_poll_ts = 0.0       # W14.5c: cursor для /assist/alerts
         self._last_analyzed_msg_ts: float = 0.0  # timestamp последнего проанализированного user-msg
         # Action Memory — per-kind storage для open actions:
         # {action_idx: recorded_ts}. Используется `_check_action_outcomes`.
         self._open_actions: dict[int, float] = {}
-        # Persist overnight findings отдельно от alerts_queue — UI drain'ит очередь
-        # быстрее чем briefing её читает. Briefing читает recent_bridges напрямую.
+        # Persist overnight findings отдельно — UI читает через graph query.
+        # _recent_bridges trim → W14.5c-3 (graph query тоже).
         self._recent_bridges: list = []  # [{ts, text, source: "dmn"|"scout"}], max 10
         self._last_night_summary: Optional[dict] = None
-        self._alerts_queue: list = []
         self._lock = threading.Lock()
 
         # Thinking-state: что система сейчас делает в фоне. UI читает через
@@ -339,40 +339,22 @@ class CognitiveLoop:
             log.debug(f"[workspace] archive_expired failed: {e}")
 
     def _check_workspace_select(self):
-        """W14.5b: periodic select+commit accumulating workspace nodes.
+        """W14.5b/c: periodic select+commit accumulating workspace nodes.
 
         Convergence rule (drop expired → counter-wave penalty → urgency
-        top-K) превращает накопленные кандидаты в emitted alerts. Mirror в
-        _alerts_queue для UI poll path — без него UI не увидит accumulating
-        alerts (synthesized cross-process пока не mirror'ится, ждёт W14.5c
-        когда UI перейдёт на graph query).
+        top-K) превращает накопленные кандидаты в committed actions.
+        UI читает их через graph query (workspace.list_recent_alerts) при
+        polling /assist/alerts — без mirror в legacy queue.
         """
         if not self._throttled("_last_workspace_select",
                                 self.WORKSPACE_SELECT_INTERVAL):
             return
         try:
             from ..memory import workspace
-            from ..graph_logic import _graph
-
             idxs = workspace.select(max_emit=2)
             if not idxs:
                 return
             workspace.commit(idxs)
-
-            # Mirror committed → queue для UI
-            for idx in idxs:
-                if not (0 <= idx < len(_graph["nodes"])):
-                    continue
-                node = _graph["nodes"][idx]
-                alert = {
-                    "type": node.get("action_kind", ""),
-                    "text": node.get("text", ""),
-                }
-                for k in ("severity", "text_en", "card", "source"):
-                    if k in node:
-                        alert[k] = node[k]
-                self._add_alert(alert)
-
             log.debug(f"[workspace] select+commit emitted {len(idxs)}")
         except Exception as e:
             log.debug(f"[workspace] select+commit failed: {e}")
@@ -2398,10 +2380,10 @@ class CognitiveLoop:
         except Exception as e:
             log.debug(f"[cognitive_loop] graph flush failed: {e}")
 
-    # ── Alerts queue ───────────────────────────────────────────────────
+    # ── Alerts emission (W14.5c — _alerts_queue removed, UI reads from graph) ──
 
     def _emit_alert(self, sig, now: float):
-        """Каноничный путь emitted Signal → действие системы (W14.3+W14.5b).
+        """Каноничный путь emitted Signal → workspace (W14.3+W14.5b/c).
 
         Два path в зависимости от sig.accumulating:
 
@@ -2410,9 +2392,9 @@ class CognitiveLoop:
            проходит cross-processing (3+ similar → synthesize), periodic
            _check_workspace_select делает emission через convergence rule.
 
-        2. **Immediate** (default): record_committed(accumulate=False) +
-           _add_alert. Используется для critical alerts (capacity_red,
-           regime_protect, plan_reminder, etc).
+        2. **Immediate** (default): record_committed(accumulate=False) —
+           для critical alerts (capacity_red, regime_protect, plan_reminder).
+           UI читает через `/assist/alerts` graph query (workspace.list_recent_alerts).
 
         Dispatcher уже применил pre-emit convergence (expired/dedup +
         counter-wave/budget для non-accumulating). Здесь — wire к workspace.
@@ -2438,30 +2420,21 @@ class CognitiveLoop:
             dedup_key=sig.dedup_key, ttl_seconds=ttl,
             extras=dict(sig.content),
         )
-        self._add_alert(sig.content)
-
-    def _add_alert(self, alert: dict):
-        """Append alert в queue. Dedup делает Dispatcher через dedup_key + window_s."""
-        with self._lock:
-            alert["ts"] = time.time()
-            self._alerts_queue.append(alert)
-            if len(self._alerts_queue) > 20:
-                self._alerts_queue = self._alerts_queue[-20:]
-
-    def get_alerts(self, clear: bool = False) -> list:
-        with self._lock:
-            alerts = list(self._alerts_queue)
-            if clear:
-                self._alerts_queue.clear()
-            return alerts
 
     def get_status(self) -> dict:
         now = time.time()
         # Gate diagnostics: почему/может ли DMN сейчас сработать
         gate = self._dmn_gate_diagnostics(now)
+        # W14.5c: alerts_pending теперь = workspace pending count (alerts
+        # которые накапливаются перед select cycle).
+        try:
+            from ..memory import workspace
+            alerts_pending = len(workspace.list_pending())
+        except Exception:
+            alerts_pending = 0
         return {
             "running": self.is_running,
-            "alerts_pending": len(self._alerts_queue),
+            "alerts_pending": alerts_pending,
             "last_dmn": self._last_dmn,
             "last_state_walk": self._last_state_walk,
             "last_night_cycle": self._last_night_cycle,

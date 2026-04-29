@@ -200,6 +200,64 @@ def test_commit_handles_invalid_idx(clean_graph):
 # ── archive_expired() ───────────────────────────────────────────────────
 
 
+def test_list_recent_alerts_filters(clean_graph):
+    """list_recent_alerts (W14.5c): committed + actor='baddle' + есть severity
+    + committed_at > since_ts. UI poll path."""
+    # 1. Committed alert (через record_committed с severity в extras)
+    workspace.record_committed(
+        actor="baddle", action_kind="capacity_red",
+        text="Red", urgency=0.95, accumulate=False,
+        extras={"severity": "warning"},
+    )
+    # 2. Committed без severity (briefing-style) — НЕ alert
+    workspace.record_committed(
+        actor="baddle", action_kind="brief_morning",
+        text="Morning", urgency=0.6, accumulate=False,
+        extras={"recovery_pct": 75},
+    )
+    # 3. User action — НЕ alert
+    workspace.record_committed(
+        actor="user", action_kind="user_chat",
+        text="msg", urgency=1.0, accumulate=False,
+        extras={"severity": "info"},
+    )
+    # 4. Pending workspace — НЕ alert (не committed)
+    workspace.add(actor="baddle", action_kind="observation_suggestion",
+                  text="A", urgency=0.5, accumulate=True,
+                  extras={"severity": "info"})
+
+    alerts = workspace.list_recent_alerts(since_ts=0.0)
+    types = [n.get("action_kind") for n in alerts]
+    assert "capacity_red" in types       # ✓ alert
+    assert "brief_morning" not in types  # без severity
+    assert "user_chat" not in types      # actor != 'baddle'
+    assert "observation_suggestion" not in types  # scope='workspace'
+
+
+def test_list_recent_alerts_since_cursor(clean_graph):
+    """since_ts работает как cursor — UI passes last poll timestamp."""
+    import time
+    workspace.record_committed(
+        actor="baddle", action_kind="alert_a",
+        text="A", urgency=0.5, accumulate=False,
+        extras={"severity": "info"},
+    )
+    cutoff = time.time() + 0.001
+    time.sleep(0.005)
+    workspace.record_committed(
+        actor="baddle", action_kind="alert_b",
+        text="B", urgency=0.5, accumulate=False,
+        extras={"severity": "info"},
+    )
+
+    # since=0 → оба
+    assert len(workspace.list_recent_alerts(since_ts=0.0)) == 2
+    # since=cutoff → только второй
+    after_cutoff = workspace.list_recent_alerts(since_ts=cutoff)
+    assert len(after_cutoff) == 1
+    assert after_cutoff[0]["action_kind"] == "alert_b"
+
+
 def test_archive_expired_marks_archived(clean_graph):
     workspace.add(actor="baddle", action_kind="alert", text="dead",
                   ttl_seconds=0.001)

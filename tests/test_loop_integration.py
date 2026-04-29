@@ -51,27 +51,36 @@ def test_build_context_works(tmp_path, monkeypatch):
 
 
 def test_dispatcher_collects_and_dispatches_signals(tmp_path):
-    """Когда детекторы возвращают Signal, dispatcher эмитит через _emit_alert."""
-    loop = CognitiveLoop()
-    # Patch dispatcher's drops_file для tmp
-    loop._dispatcher._drops_file = tmp_path / "throttle_drops.jsonl"
+    """Когда детекторы возвращают Signal, dispatcher эмитит через _emit_alert
+    → workspace.record_committed → committed action нода с severity (W14.5c)."""
+    from src.graph_logic import _graph
+    from src.memory import workspace
+    saved = list(_graph["nodes"])
+    _graph["nodes"] = []
+    try:
+        loop = CognitiveLoop()
+        loop._dispatcher._drops_file = tmp_path / "throttle_drops.jsonl"
 
-    import time
-    now = time.time()
-    # Build candidates manually — expires_at в будущем
-    sig1 = Signal(type="test_a", urgency=0.8, content={"type": "test_a", "text": "A"},
-                   expires_at=now + 3600, dedup_key="test_a")
-    sig2 = Signal(type="test_b", urgency=0.5, content={"type": "test_b", "text": "B"},
-                   expires_at=now + 3600, dedup_key="test_b")
+        import time
+        now = time.time()
+        sig1 = Signal(type="test_a", urgency=0.8,
+                       content={"type": "test_a", "text": "A", "severity": "info"},
+                       expires_at=now + 3600, dedup_key="test_a")
+        sig2 = Signal(type="test_b", urgency=0.5,
+                       content={"type": "test_b", "text": "B", "severity": "info"},
+                       expires_at=now + 3600, dedup_key="test_b")
 
-    emitted = loop._dispatcher.dispatch([sig1, sig2], now)
-    for sig in emitted:
-        loop._emit_alert(sig, now)
+        emitted = loop._dispatcher.dispatch([sig1, sig2], now)
+        for sig in emitted:
+            loop._emit_alert(sig, now)
 
-    alerts = loop.get_alerts()
-    types = [a.get("type") for a in alerts]
-    assert "test_a" in types
-    assert "test_b" in types
+        # UI читает через graph query — list_recent_alerts
+        recent = workspace.list_recent_alerts(since_ts=0.0)
+        types = [n.get("action_kind") for n in recent]
+        assert "test_a" in types
+        assert "test_b" in types
+    finally:
+        _graph["nodes"] = saved
 
 
 def test_emit_alert_accumulating_path(tmp_path):
@@ -97,27 +106,27 @@ def test_emit_alert_accumulating_path(tmp_path):
 
         loop._emit_alert(sig, now)
 
-        # Не в queue (accumulating path)
-        assert len(loop.get_alerts()) == 0
         # В workspace pending (accumulate=True, no commit)
         assert len(_graph["nodes"]) == 1
         node = _graph["nodes"][0]
         assert node["scope"] == "workspace"
         assert node["accumulate"] is True
         assert node["action_kind"] == "observation_suggestion"
+        # Не в committed alerts feed (scope='workspace' исключён)
+        from src.memory import workspace as ws
+        assert ws.list_recent_alerts(since_ts=0.0) == []
     finally:
         _graph["nodes"] = saved
 
 
-def test_workspace_select_periodic_commits_and_mirrors(tmp_path, monkeypatch):
-    """W14.5b: _check_workspace_select делает workspace.select+commit и
-    добавляет committed в queue (mirror).
+def test_workspace_select_periodic_commits(tmp_path, monkeypatch):
+    """W14.5b/c: _check_workspace_select делает workspace.select+commit.
+    UI потом видит committed через list_recent_alerts.
     """
     from src.graph_logic import _graph
     saved = list(_graph["nodes"])
     _graph["nodes"] = []
 
-    # Force user.mode='R' чтобы не active counter-wave penalty
     class FakeUser:
         mode = "R"
 
@@ -127,27 +136,27 @@ def test_workspace_select_periodic_commits_and_mirrors(tmp_path, monkeypatch):
 
     try:
         from src.memory import workspace as ws
+        # Add accumulating с severity (чтобы попало в alerts feed после commit)
         ws.add(actor="baddle", action_kind="observation_suggestion",
-               text="A", urgency=0.4, accumulate=True)
+               text="A", urgency=0.4, accumulate=True,
+               extras={"severity": "info"})
         ws.add(actor="baddle", action_kind="observation_suggestion",
-               text="B", urgency=0.6, accumulate=True)
+               text="B", urgency=0.6, accumulate=True,
+               extras={"severity": "info"})
 
         loop = CognitiveLoop()
-        # Force throttle bypass
         loop._last_workspace_select = 0.0
         loop._check_workspace_select()
 
-        # Высший по urgency должен быть в queue
-        alerts = loop.get_alerts()
-        assert len(alerts) >= 1
-        types = [a.get("type") for a in alerts]
-        assert "observation_suggestion" in types
-
-        # Committed nodes в графе
         committed = [n for n in _graph["nodes"]
                       if n.get("action_kind") == "observation_suggestion"
                       and n.get("scope") == "graph"]
         assert len(committed) >= 1
+
+        # UI poll path
+        recent = ws.list_recent_alerts(since_ts=0.0)
+        assert any(n.get("action_kind") == "observation_suggestion"
+                    for n in recent)
     finally:
         _graph["nodes"] = saved
 
@@ -175,11 +184,7 @@ def test_emit_alert_writes_workspace_then_graph(tmp_path):
 
         loop._emit_alert(sig, now)
 
-        # 1. Queue mirror (legacy path)
-        alerts = loop.get_alerts()
-        assert any(a.get("type") == "capacity_red" for a in alerts)
-
-        # 2. Workspace path → action нода в графе (committed)
+        # Workspace path → action нода в графе (committed)
         action_nodes = [n for n in _graph["nodes"]
                          if n.get("type") == "action"
                          and n.get("action_kind") == "capacity_red"]
@@ -190,6 +195,12 @@ def test_emit_alert_writes_workspace_then_graph(tmp_path):
         assert node["expires_at"] is None
         assert node["text"].startswith("Capacity red")
         assert node["urgency"] == 0.95
+        assert node["severity"] == "warning"  # alert marker для list_recent_alerts
+
+        # UI feed path
+        from src.memory import workspace as ws
+        recent = ws.list_recent_alerts(since_ts=0.0)
+        assert any(n.get("action_kind") == "capacity_red" for n in recent)
     finally:
         _graph["nodes"] = saved
 
