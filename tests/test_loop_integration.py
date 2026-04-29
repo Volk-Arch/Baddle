@@ -1,8 +1,9 @@
-"""Integration smoke test for Phase B Signal dispatcher.
+"""Integration smoke test for Phase B Signal dispatcher (W14.5c-aware).
 
 Проверяет что _loop body корректно собирает кандидатов из DETECTORS,
-dispatcher decides emit/drop, _add_alert получает финальные. Все сетевые
-вызовы (LLM, embeddings) мокнуты.
+dispatcher decides emit/drop, _emit_alert маршрутизирует через workspace
+(immediate → record_committed; accumulating → add+select+commit). Все
+сетевые вызовы (LLM, embeddings) мокнуты.
 """
 from unittest.mock import MagicMock, patch
 

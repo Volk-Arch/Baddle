@@ -2431,21 +2431,23 @@ def debug_alerts_trigger_all():
                 entry["status"] = "skipped_heavy"
                 results.append(entry)
                 continue
-            before = list(cl._alerts_queue)
-            before_ids = {id(a) for a in before}
             try:
+                from .memory import workspace
+                before_ts = time.time()
                 fn = getattr(cl, name)
                 t0 = time.time()
                 fn()
                 entry["elapsed_s"] = round(time.time() - t0, 3)
-                new_alerts = [a for a in cl._alerts_queue if id(a) not in before_ids]
+                # W14.5c-2: alerts читаются из графа (since_ts cursor) вместо
+                # in-memory queue.
+                new_alerts = workspace.list_recent_alerts(since_ts=before_ts)
                 if new_alerts:
                     entry["status"] = "alert_emitted"
                     entry["alerts"] = [
-                        {"type": a.get("type"),
-                         "severity": a.get("severity"),
-                         "text": (a.get("text") or "")[:140]}
-                        for a in new_alerts
+                        {"type": n.get("action_kind"),
+                         "severity": n.get("severity"),
+                         "text": (n.get("text") or "")[:140]}
+                        for n in new_alerts
                     ]
                 else:
                     entry["status"] = "silent_ok"

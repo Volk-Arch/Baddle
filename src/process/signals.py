@@ -33,7 +33,7 @@ for detector in DETECTORS:
 
 emitted = dispatcher.dispatch(candidates, now)
 for sig in emitted:
-    _add_alert(sig.content)
+    loop._emit_alert(sig, now)  # W14.5c: → workspace primitive
 ```
 
 ## Что НЕ в этом модуле
@@ -83,7 +83,8 @@ class Signal:
             attention budget. Считается детектором по контексту (silence,
             lag_count, quality, etc).
         content: alert payload — `{type, severity, text, ...}`. Это то что
-            попадает в `_add_alert(...)` неизменным; UI не ломается.
+            попадает в workspace.add/record_committed (через _emit_alert)
+            неизменным; UI не ломается.
         expires_at: unix ts когда сигнал теряет актуальность. После этого
             dispatcher дропает с reason="expired" (DMN-мост 2 часа спустя
             — уже не нужен, plan_reminder после события — тоже).
@@ -180,8 +181,8 @@ class Dispatcher:
                 из cognitive_loop, отражает state.user.mode после _advance_tick.
 
         Returns:
-            Список signals одобренных к emit. Caller вызывает `_add_alert`
-            для каждого.
+            Список signals одобренных к emit. Caller вызывает `_emit_alert`
+            для каждого (W14.5c — был `_add_alert`).
         """
         with self._lock:
             self._prune_history(now)

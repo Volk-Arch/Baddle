@@ -29,14 +29,16 @@ def _get_recent_draft_texts(limit: int = 8) -> list[str]:
     тоже не надо повторно предлагать)."""
     texts: list[str] = []
     try:
-        from .process.cognitive_loop import get_cognitive_loop
-        cl = get_cognitive_loop()
-        for a in (cl._alerts_queue or []):
-            if a.get("type") == "observation_suggestion":
-                card = a.get("card") or {}
-                t = ((card.get("draft") or {}).get("text") or "").strip()
-                if t:
-                    texts.append(t)
+        # W14.5c-2: pending accumulating workspace nodes (observation_suggestion
+        # ещё не committed через select cycle). Drafts из card field.
+        from .memory import workspace
+        for n in workspace.list_pending():
+            if n.get("action_kind") != "observation_suggestion":
+                continue
+            card = n.get("card") or {}
+            t = ((card.get("draft") or {}).get("text") or "").strip()
+            if t:
+                texts.append(t)
     except Exception:
         pass
     try:

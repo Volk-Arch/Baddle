@@ -901,7 +901,7 @@ class CognitiveLoop:
         1. Feeders (advance_tick, NE homeostasis)
         2. Build DetectorContext, iterate DETECTORS, collect Signals
         3. Dispatcher.dispatch() → emitted alerts
-        4. _add_alert(sig.content) для каждого emitted
+        4. _emit_alert(sig, now) для каждого emitted (workspace.add/record_committed)
         5. Bookkeeping checks (action_outcomes, hrv_push, heartbeat,
            agency_update, activity_cost, graph_flush, user_surprise,
            prime_directive_record) — НЕ alert-emitting, остаются методами
@@ -1567,7 +1567,7 @@ class CognitiveLoop:
 
         Returns: Signal с urgency = 0.2 + 0.7 × quality, или None.
         Phase B (2026-04-25): экстрагировано из _check_dmn_continuous,
-        _add_alert убран — dispatcher эмитит через _loop().
+        emission через workspace primitive — dispatcher → _emit_alert (W14.5c).
         """
         if len(_graph.get("nodes", [])) < 4:
             return None

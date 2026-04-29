@@ -230,6 +230,10 @@ def synthesize_similar(node_idxs: list[int]) -> Optional[int]:
     aggregated = "; ".join((n.get("text") or "") for n in nodes)[:300]
     max_urgency = max(float(n.get("urgency") or 0.5) for n in nodes)
     action_kind = nodes[0].get("action_kind") or "unknown"
+    # Severity inheritance: первый source's severity (default 'info'). Без
+    # severity field synthesized нода невидима в /assist/alerts feed
+    # (list_recent_alerts фильтрует по severity).
+    severity = nodes[0].get("severity") or "info"
 
     # Synthesized publish напрямую в LTM (record_committed): synthesis = explicit
     # statement системы, не accumulating кандидат. Sources остаются в workspace
@@ -243,6 +247,7 @@ def synthesize_similar(node_idxs: list[int]) -> Optional[int]:
         extras={
             "synthesized_from": [int(n["id"]) for n in nodes],
             "synthesis_count": len(nodes),
+            "severity": severity,
         },
     )
 

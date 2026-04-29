@@ -430,6 +430,21 @@ def test_cross_process_skips_immediate(clean_graph):
     assert len(synth) == 0
 
 
+def test_synthesize_inherits_severity_for_alerts_feed(clean_graph):
+    """Synthesized нода inherit'ит severity из source — иначе невидима в
+    list_recent_alerts UI feed (severity = alert marker)."""
+    for i in range(3):
+        workspace.add(actor="baddle", action_kind="observation_suggestion",
+                      text=f"obs-{i}", urgency=0.5, accumulate=True,
+                      extras={"severity": "info"})
+    synth = next(n for n in _graph["nodes"]
+                 if "_synthesized" in (n.get("action_kind") or ""))
+    assert synth.get("severity") == "info"
+    # Visible в UI alerts feed
+    alerts = workspace.list_recent_alerts(since_ts=0.0)
+    assert any("_synthesized" in (n.get("action_kind") or "") for n in alerts)
+
+
 def test_cross_process_no_recursion_on_synthesized(clean_graph):
     """После synthesis, новый round тех же sources не triggers повторно.
 
