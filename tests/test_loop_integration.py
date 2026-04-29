@@ -75,7 +75,7 @@ def test_dispatcher_collects_and_dispatches_signals(tmp_path):
 
 
 def test_emit_alert_accumulating_path(tmp_path):
-    """W14.5b: observation_suggestion Signal → workspace.add(accumulate=True),
+    """W14.5b/c: Signal с accumulating=True → workspace.add(accumulate=True),
     БЕЗ commit и БЕЗ queue mirror. Ждёт _check_workspace_select.
     """
     from src.graph_logic import _graph
@@ -92,7 +92,8 @@ def test_emit_alert_accumulating_path(tmp_path):
                                 "text": "Утром bottoms растут после кофе",
                                 "card": {"title": "Pattern A"}},
                       expires_at=now + 21600,
-                      dedup_key="observation_suggestion:test")
+                      dedup_key="observation_suggestion:test",
+                      accumulating=True)
 
         loop._emit_alert(sig, now)
 

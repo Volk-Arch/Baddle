@@ -651,6 +651,9 @@ def detect_observation_suggestions(ctx: DetectorContext) -> Iterable[Signal]:
                     expires_at=ctx.now + 21600,   # 6 hours
                     dedup_key=f"observation_suggestion:{trigger}",
                     source="detect_observation_suggestions",
+                    # W14.5c: bypass counter-wave/budget в Dispatcher,
+                    # workspace.select применит их при emission.
+                    accumulating=True,
                 ))
             except Exception as e:
                 log.debug(f"[detect_observation_suggestions] card build failed: {e}")

@@ -14,7 +14,8 @@ from src.process.signals import Signal, Dispatcher
 
 def _sig(type_: str, urgency: float = 0.5, *,
          expires_at: float = 1_000_000.0,
-         dedup_key=None, source=None) -> Signal:
+         dedup_key=None, source=None,
+         accumulating: bool = False) -> Signal:
     """Build a Signal with sane defaults для test."""
     return Signal(
         type=type_,
@@ -23,6 +24,7 @@ def _sig(type_: str, urgency: float = 0.5, *,
         expires_at=expires_at,
         dedup_key=dedup_key,
         source=source,
+        accumulating=accumulating,
     )
 
 
@@ -345,3 +347,45 @@ def test_counter_wave_critical_loses_bypass(disp):
     sync = _sig("sync_seeking", urgency=0.95)
     out = disp.dispatch([sync], now=101.0, user_mode="C")
     assert out == []   # budget full + reduced urgency не bypass'ит
+
+
+# ── W14.5c: accumulating bypass ────────────────────────────────────────────
+
+
+def test_accumulating_bypasses_counter_wave(disp):
+    """W14.5c: accumulating Signals не получают counter-wave penalty
+    в Dispatcher (workspace.select применяет её позже). Urgency сохраняется."""
+    sig = _sig("observation_suggestion", urgency=0.7, accumulating=True)
+    out = disp.dispatch([sig], now=100.0, user_mode="C")
+    assert len(out) == 1
+    assert out[0].urgency == 0.7  # без −0.3 penalty
+
+
+def test_accumulating_bypasses_budget(disp):
+    """W14.5c: accumulating не считается в budget. 5 ноды → все 5 emitted
+    (несмотря на budget=3 у non-accumulating)."""
+    sigs = [_sig("observation_suggestion", urgency=0.5, dedup_key=f"o{i}",
+                  accumulating=True) for i in range(5)]
+    out = disp.dispatch(sigs, now=100.0)
+    assert len(out) == 5
+
+
+def test_accumulating_keeps_dedup(disp):
+    """W14.5c: accumulating всё ещё dedup'ятся в Dispatcher (window dedup
+    защищает от рапид-фаер дубликатов)."""
+    sig1 = _sig("observation_suggestion", urgency=0.5, dedup_key="same",
+                 accumulating=True)
+    sig2 = _sig("observation_suggestion", urgency=0.5, dedup_key="same",
+                 accumulating=True)
+    out1 = disp.dispatch([sig1], now=100.0)
+    out2 = disp.dispatch([sig2], now=101.0)  # within window_s
+    assert len(out1) == 1
+    assert len(out2) == 0
+
+
+def test_accumulating_drops_expired(disp):
+    """W14.5c: expired filter работает для accumulating тоже."""
+    sig = _sig("observation_suggestion", urgency=0.5,
+                expires_at=99.0, accumulating=True)
+    out = disp.dispatch([sig], now=100.0)
+    assert out == []

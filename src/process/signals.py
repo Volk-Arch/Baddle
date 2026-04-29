@@ -100,6 +100,11 @@ class Signal:
     expires_at: float
     dedup_key: Optional[str] = None
     source: Optional[str] = None
+    # W14.5c: accumulating Signals идут в workspace.add(accumulate=True),
+    # bypass'ят counter-wave/budget gate в Dispatcher (workspace.select
+    # применяет их позже на pending). Dedup в Dispatcher остаётся —
+    # window-based dedup полезен для всех Signals.
+    accumulating: bool = False
 
 
 class Dispatcher:
@@ -181,20 +186,31 @@ class Dispatcher:
         with self._lock:
             self._prune_history(now)
 
-            # 0. Counter-wave urgency reduction
-            if user_mode == "C" and candidates:
+            # W14.5c: accumulating Signals bypass'ят counter-wave + budget.
+            # Они идут в workspace.add(accumulate=True), где select() сам
+            # применяет counter-wave penalty + budget при emission. Dedup
+            # остаётся в Dispatcher для всех — window-based dedup защищает
+            # от рапид-фаер дубликатов независимо от path.
+            accumulating = [s for s in candidates if s.accumulating]
+            non_acc = [s for s in candidates if not s.accumulating]
+
+            # ── Path 1: non-accumulating через Dispatcher (counter-wave +
+            # expired + dedup + budget gate) ─────────────────────────────────
+
+            # 0. Counter-wave urgency reduction (только non-accumulating)
+            if user_mode == "C" and non_acc:
                 from dataclasses import replace
                 adjusted = []
-                for sig in candidates:
+                for sig in non_acc:
                     if sig.type in COUNTER_WAVE_PUSH_TYPES:
                         new_urg = max(0.0, sig.urgency - 0.3)
                         sig = replace(sig, urgency=new_urg)
                     adjusted.append(sig)
-                candidates = adjusted
+                non_acc = adjusted
 
             # 1. Filter expired
             alive: list[Signal] = []
-            for sig in candidates:
+            for sig in non_acc:
                 if sig.expires_at <= now:
                     self._log_drop(sig, "expired", now)
                     continue
@@ -236,6 +252,22 @@ class Dispatcher:
                 # чтобы тот же coherence_crit не фигачил 100 раз подряд.
                 if sig.dedup_key:
                     self._dedup_seen[sig.dedup_key] = now
+
+            # ── Path 2: accumulating — only expired + dedup gates ───────────
+            # workspace.add сам применит counter-wave при select. Budget
+            # тоже на стороне workspace (через select max_emit + cross-process).
+
+            for sig in accumulating:
+                if sig.expires_at <= now:
+                    self._log_drop(sig, "expired", now)
+                    continue
+                if sig.dedup_key:
+                    last_seen = self._dedup_seen.get(sig.dedup_key)
+                    if last_seen is not None and (now - last_seen) < self.window_s:
+                        self._log_drop(sig, "dedup", now)
+                        continue
+                    self._dedup_seen[sig.dedup_key] = now
+                emitted.append(sig)
 
             return emitted
 

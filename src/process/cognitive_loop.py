@@ -172,11 +172,6 @@ class CognitiveLoop:
     # (3+ similar → synthesize) и Counter-wave window.
     WORKSPACE_SELECT_INTERVAL = 300
 
-    # Action_kind'ы которые идут в accumulate=True path (накапливаются в
-    # workspace, эмитятся через select cycle с budget). Остальные emitted
-    # Signals — immediate path (record_committed). Список расширяется в W14.6.
-    ACCUMULATING_ALERT_KINDS = frozenset({"observation_suggestion"})
-
     # DMN autonomous deep-research: когда юзер idle давно и есть open-goal,
     # запускаем реальный 3-step pipeline (brainstorm → elaborate → smartdc)
     # на одной цели. Реальная работа мозга в фоне, не просто pump-bridge.
@@ -2408,20 +2403,19 @@ class CognitiveLoop:
     def _emit_alert(self, sig, now: float):
         """Каноничный путь emitted Signal → действие системы (W14.3+W14.5b).
 
-        Два path в зависимости от sig.type:
+        Два path в зависимости от sig.accumulating:
 
-        1. **Accumulating** (sig.type ∈ ACCUMULATING_ALERT_KINDS):
-           workspace.add(accumulate=True), без commit и без queue mirror.
-           Накапливается в workspace, проходит cross-processing если 3+ similar.
-           Periodic _check_workspace_select делает select+commit с budget +
-           emit в queue для UI.
+        1. **Accumulating** (sig.accumulating=True):
+           workspace.add(accumulate=True), без commit. Накапливается,
+           проходит cross-processing (3+ similar → synthesize), periodic
+           _check_workspace_select делает emission через convergence rule.
 
         2. **Immediate** (default): record_committed(accumulate=False) +
-           _add_alert(sig.content) — текущий W14.3 path. Используется для
-           critical alerts (capacity_red, regime_protect, plan_reminder).
+           _add_alert. Используется для critical alerts (capacity_red,
+           regime_protect, plan_reminder, etc).
 
-        Dispatcher уже применил pre-emit convergence (counter-wave/dedup/budget) —
-        здесь только wire к workspace.
+        Dispatcher уже применил pre-emit convergence (expired/dedup +
+        counter-wave/budget для non-accumulating). Здесь — wire к workspace.
         """
         from ..memory import workspace
         text = (sig.content.get("text")
@@ -2429,7 +2423,7 @@ class CognitiveLoop:
                 or sig.type)
         ttl = max(60.0, sig.expires_at - now)
 
-        if sig.type in self.ACCUMULATING_ALERT_KINDS:
+        if sig.accumulating:
             workspace.add(
                 actor="baddle", action_kind=sig.type, text=text,
                 urgency=float(sig.urgency), accumulate=True,
