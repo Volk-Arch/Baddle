@@ -224,7 +224,7 @@ class JsonlStore:
 
 ---
 
-### W14 — Workspace primitive + декомпозиция (16-22ч suммарно)
+### W14 — Workspace primitive + декомпозиция (статус 2026-04-29)
 
 **Главный архитектурный шаг после B5.** Концепция — [docs/workspace.md](../docs/workspace.md). Implementation план — [workspace-design.md](workspace-design.md).
 
@@ -234,30 +234,32 @@ class JsonlStore:
 
 **Asymmetric cost:** дневной режим — cheap (workspace in-memory + bayesian/chem); ночной режим — thoughtful (3 фазы integration). Ночь: NREM replay → REM remote associations → Synaptic homeostasis.
 
-**Sub-waves (11 шагов, ~22-30ч):**
+**Sub-waves (11 шагов, статус):**
 
 День — cheap workspace operations:
-- **W14.1** `src/workspace.py` primitive + scope/expires_at fields (3-4ч)
-- **W14.2** `/assist` + user message через workspace (1-2ч)
-- **W14.3** alerts → workspace (2-3ч)
-- **W14.4** briefings + scout → workspace (2-3ч)
-- **W14.5** Cross-кандидатная обработка (scout/SmartDC между similar candidates) (2-3ч)
-- **W14.9** Lazy LTM recall queue (1-2ч)
+- ✅ **W14.1** `src/memory/workspace.py` primitive + scope/expires_at fields (done 2026-04-29, +archive_expired bonus)
+- ✅ **W14.2** `/assist` + `/assist/chat/append` через workspace (done 2026-04-29)
+- ✅ **W14.3** alerts → workspace (done 2026-04-29 + W14.5c-state добавил state-indicator detectors)
+- ✅ **W14.4** briefings → workspace (done 2026-04-29; scout/dmn-bridge через _record_baddle_action в W14.5c-3)
+- ✅ **W14.5** Cross-processing (synthesize_similar generic + auto-trigger, done 2026-04-29 в a/b/c/final/state)
+- ⏳ **W14.9** Lazy LTM recall queue (`notes.queries` pattern + ночной recall) — отдельная wave
 
-Декомпозиция файлов (после migration):
-- **W14.6** assistant.py split → `src/routes/{chat,goals,activity,plans,checkins,profile,briefings,misc}.py` (3-5ч)
-- **W14.7** cognitive_loop.py split → `bookkeeping.py + briefings.py + advance_tick` (2-3ч)
+Декомпозиция файлов:
+- ✅ **W14.6** assistant.py split → `src/io/routes/*.py` (done 2026-04-29: 2964 → 55 LOC bootstrap, 8 route модулей)
+- ⏳ **W14.7** cognitive_loop.py split → `bookkeeping.py` + briefings extract (`process/cognitive_loop.py` ещё ~2670 LOC)
 
 Ночь — 3-фазный sleep cycle:
-- **W14.8** Phase 1 — Sequential integration (NREM-like) (3-4ч)
-- **W14.10** Phase 2 — Cross-batch REM scout (2-3ч)
-- **W14.11** Phase 3 — Synaptic homeostasis (1-2ч)
+- ⏳ **W14.8** Phase 1 — Sequential integration NREM (workspace nodes → merge/promote/insight emergence)
+- ⏳ **W14.10** Phase 2 — Cross-batch REM scout (today_batch × random_old_LTM pump.scout)
+- ⏳ **W14.11** Phase 3 — Synaptic homeostasis (DECAY_FACTOR ночное на all LTM)
 
-**Ожидаемая дельта:** assistant.py 3105 → ~150, cognitive_loop.py 2628 → ~1200, +workspace.py 150 + 8 routes/*.py.
+**Достигнуто 2026-04-29:** assistant.py 2964 → 55 (bootstrap shell), workspace primitive working end-to-end (detector → Signal → Dispatcher → workspace → committed graph → UI graph queries). _alerts_queue + _recent_bridges + ACCUMULATING_ALERT_KINDS const удалены. 535 passed pyflakes 0.
 
-**Risk:** behaviour drift (alert delay ~5s); hot path performance; ночной cycle time budget per phase; over-aggressive decay в W14.11.
+**Осталось:** W14.7 (~2-3ч) + W14.8-11 ночной cycle (~6-9ч). Это extensions над workspace primitive — не блокеры, но завершают полный design.
 
-**Закрывает / разблокирует:** Backlog #11 (STM/LTM), Backlog #12 (pruning), W6 investigate-tier, W16.2 (analogy injection нужен chat unification).
+**Risk (актуальный):** ночной cycle time budget per phase; over-aggressive decay в W14.11.
+
+**Закрывает / разблокирует:** Backlog #11 (STM/LTM) ✅ закрыт через scope mutation, Backlog #12 (pruning) ⏳ ждёт W14.11, W6 investigate-tier ✅ multiple routes теперь legitimate (committed action queries), W16.2 (analogy injection) разблокирован — chat unification done.
 
 ---
 
@@ -431,6 +433,51 @@ W16.1a (amplitude per axis) + W16.1b (phase-aware) — см. Done log. Spectral 
 **Артефакт когда придёт время:** `planning/file-structure-physics.md` — narrative design doc с rationale per группа + migration plan + соответствие узлам графа.
 
 **Главное преимущество ontology-derived плана:** структура файлов **совпадает** с структурой графа, и каждая директория имеет **онтологическое обоснование** (через `realizes` связи в ветви H). Когда новый разработчик или LLM открывает проект — структура **сама объясняет**, что есть что. Это и есть «mental model для bootstrapping» в чистом виде.
+
+---
+
+## Open углы и design deviations (2026-04-29 audit)
+
+После W14 + W18 Phase 1+4 закрытия — single source of truth для известного
+tech debt и documented отклонений от дизайн-документов. Каждый item имеет
+explicit статус: «закрыть в wave X» / «осознанно отложен» / «обновить design
+под реальность».
+
+### Открытые углы (tech debt)
+
+| # | Угол | Где | Plan |
+|---|---|---|---|
+| 1 | `consolidation` остаётся в `process/`, не перенесён в `memory/` | `src/process/consolidation.py` | Переоценить после W14.7-11 — если используется только в night cycle (не в process tick), мигрировать в `memory/` |
+| 2 | Test coverage для 8 новых io/routes/ файлов не добавлен | `tests/` | Wire smoke tests `tests/test_routes_smoke.py` через Flask test_client при touching любой route. Не блокер пока existing integration tests pass |
+| 3 | CLAUDE.md / docs/ не обновлены про новую `src/io/` структуру | docs/architecture-rules.md, docs/foundation.md | Update при следующей docs-sync wave (после W14.7 наверное) |
+| 4 | `bookmark` route использует `graph_logic._add_node` напрямую, не через workspace | `src/io/routes/chat.py` /assist/bookmark | Defensible (insight_bookmark = explicit user mark, не event) — но inconsistent с другими routes. При W14.7+ выровнять на `workspace.record_committed(action_kind='insight_bookmark')` |
+| 5 | `ui.py` импортирует `from src.assistant import assistant_bp` — backward-compat | `ui.py:34` | Обновить на `from src.io.routes import assistant_bp` (cosmetic). Cleanup в любой touch ui.py wave |
+
+### Design deviations (workspace-design.md vs implementation)
+
+| # | Design said | Implemented as | Reason | Что делать |
+|---|---|---|---|---|
+| 1 | `add(source, kind, ...)` — `source` field | `add(actor, action_kind, ...)` — Action Memory taxonomy | Decision W14.1: единая taxonomy событий через `action_kind`, без отдельного `source` field. Согласует с Правилом 6 architecture-rules | **Update workspace-design.md** под реальный API |
+| 2 | `add(actor="baddle")` — только baddle-side | `add(actor: "baddle"\|"user")` — оба | user_chat должен быть в workspace для cross-processing над user msgs | **Update workspace-design.md** — расширение signature documented |
+| 3 | W14.4 briefings `accumulate=True, urgency=0.6, ttl=3600` | `accumulate=False, ttl=24h/7d` (immediate commit) | Briefings = explicit user POST request, не накапливающийся source | **Update workspace-design.md** §W14.4 — briefings = explicit publication, не накопление |
+| 4 | W14.4 scout/dmn-bridge `accumulate=True, urgency=0.4, ttl=3600` (накопление) | immediate `record_committed` через `_record_baddle_action` | Bridges produced через explicit `pump.scout` call (не detector chain) — нет потока кандидатов для накопления | **Update workspace-design.md** §W14.4 — bridges = immediate, не accumulate |
+| 5 | W14.5 cross-processing per-kind strategies (`pump.scout` / `_collapse_cluster_to_node` / `SmartDC`) | Generic `synthesize_similar` (text concatenation) для всех kinds | Simplification — text-aggregation работает для proof-of-concept | Закрыть в **W14.5+** (LLM-based synthesis through pump/collapse/SmartDC) |
+| 6 | W14.1 `commit()` пишет в `data/chat_log.jsonl` для UI | scope mutation only — UI читает через `list_recent_alerts` graph query. `chat_history.jsonl` parallel слой существует для UI persistence (msg + card formatting) | Single source (graph) for events; UI presentation отдельно | **Update workspace-design.md** §W14.1 — `commit()` = scope mutation; UI delivery через graph queries; `chat_history.jsonl` = parallel UI persistence layer (документировано в [src/chat_history.py](../src/chat_history.py)) |
+
+### Decisions (не tech debt, не deviations — explicit choices)
+
+| Item | Decision | Документация |
+|---|---|---|
+| `chat_history.py` trim | **Не trim** — UI persistence layer complementary с workspace | Module docstring `src/chat_history.py` + детальный план если позже решим: [chat-history-trim-plan.md](chat-history-trim-plan.md) |
+| W11 #7 mental operators extract | **Отменён** — операторы остаются в `process/` рядом с NAND | Done log выше + W18 description ниже |
+
+### Recommended next session actions
+
+При начале новой сессии — выбор между:
+1. **Update workspace-design.md** под реальный implementation (~30-45 мин) — закрывает 4 design deviations документально
+2. **W14.7 cognitive_loop split** (~2-3ч) — естественное продолжение W14.6
+3. **W12 part Б jsonl_store** (~1-2ч) — независимая полезная wave
+4. **W16.2 Analogy injection** (~3-3.5ч) — теперь разблокирован после W14.6
 
 ---
 
