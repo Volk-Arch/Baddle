@@ -2599,6 +2599,26 @@ def assist_morning():
     except Exception as e:
         log.debug(f"[/assist/morning] sections builder failed: {e}")
 
+    # Action timeline (W14.4): brief_morning через workspace. accumulate=False
+    # + immediate commit — briefing запрашивается user'ом explicit, не накапливается.
+    # TTL 24ч на случай если не committed (для archive_expired post-hoc analysis).
+    try:
+        from .memory import workspace
+        bm_idx = workspace.add(
+            actor="baddle",
+            action_kind="brief_morning",
+            text=greeting,
+            urgency=0.6,
+            accumulate=False,
+            ttl_seconds=24 * 3600,
+            extras={"sections_count": len(sections),
+                     "recovery_pct": recovery_pct,
+                     "lang": lang},
+        )
+        workspace.commit([bm_idx])
+    except Exception as e:
+        log.debug(f"[workspace] brief_morning record failed: {e}")
+
     import datetime as _dt
     return jsonify({
         "text": greeting,
@@ -2863,6 +2883,24 @@ def assist_weekly():
         digest["patterns"] = read_recent_patterns(hours=7 * 24)[:5]
     except Exception:
         digest["patterns"] = []
+
+    # Action timeline (W14.4): brief_weekly через workspace.
+    try:
+        from .memory import workspace
+        bw_idx = workspace.add(
+            actor="baddle",
+            action_kind="brief_weekly",
+            text=text,
+            urgency=0.6,
+            accumulate=False,
+            ttl_seconds=7 * 24 * 3600,
+            extras={"decisions_this_week": len(recent),
+                     "mode_counts": mode_counts,
+                     "lang": lang},
+        )
+        workspace.commit([bw_idx])
+    except Exception as e:
+        log.debug(f"[workspace] brief_weekly record failed: {e}")
 
     return jsonify({
         "text": text,

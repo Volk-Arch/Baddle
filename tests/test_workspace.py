@@ -234,6 +234,36 @@ def test_add_immediate_then_commit_workflow(clean_graph):
     assert "committed_at" in node
 
 
+def test_briefing_workflow_through_workspace(clean_graph):
+    """Pattern для briefings (W14.4): action_kind в (brief_morning, brief_weekly),
+    accumulate=False + immediate commit, разный TTL.
+    """
+    bm_idx = workspace.add(actor="baddle", action_kind="brief_morning",
+                           text="Morning recap", urgency=0.6,
+                           accumulate=False, ttl_seconds=24 * 3600,
+                           extras={"sections_count": 5, "lang": "ru",
+                                    "recovery_pct": 75})
+    workspace.commit([bm_idx])
+
+    bw_idx = workspace.add(actor="baddle", action_kind="brief_weekly",
+                           text="Weekly digest", urgency=0.6,
+                           accumulate=False, ttl_seconds=7 * 24 * 3600,
+                           extras={"decisions_this_week": 12, "lang": "en"})
+    workspace.commit([bw_idx])
+
+    briefings = [n for n in _graph["nodes"]
+                 if n.get("action_kind") in ("brief_morning", "brief_weekly")]
+    assert len(briefings) == 2
+    for b in briefings:
+        assert b["scope"] == "graph"
+        assert b["expires_at"] is None
+        assert b["actor"] == "baddle"
+        assert b["urgency"] == 0.6
+    morning = next(b for b in briefings if b["action_kind"] == "brief_morning")
+    assert morning["recovery_pct"] == 75
+    assert morning["lang"] == "ru"
+
+
 # ── identity к LTM операциям ────────────────────────────────────────────
 
 
