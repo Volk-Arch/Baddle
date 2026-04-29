@@ -294,7 +294,9 @@ def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
                entropy: dict | None = None, confidence: float = 0.5,
                node_type: str = "thought",
                embedding: list | None = None,
-               rendered: bool = True) -> dict:
+               rendered: bool = True,
+               scope: str = "graph",
+               expires_at: float | None = None) -> dict:
     """Create a node dict with all required fields.
 
     embeddings-first: embedding field is primary. Text stays for display.
@@ -304,6 +306,10 @@ def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
     `rendered=False` обозначает ноду созданную через embedding-first путь
     (brainstorm-seed: perturbed vectors без текста). UI рендерит text только
     по клику через /graph/render-node — text-on-demand.
+
+    scope/expires_at — workspace primitive (W14.1). scope="workspace" + expires_at
+    делают ноду кандидатом в дневной select; scope="graph" (default) — обычный
+    LTM узел. См. docs/workspace.md.
     """
     now = datetime.now(timezone.utc).isoformat()
     # Beta-prior backing для confidence: alpha/beta хранят накопленный
@@ -328,6 +334,8 @@ def _make_node(node_id: int, text: str, depth: int = 0, topic: str = "",
         "rendered": rendered,
         "created_at": now,
         "last_accessed": now,
+        "scope": scope,
+        "expires_at": expires_at,
     }
 
 
@@ -355,6 +363,10 @@ def _ensure_node_fields(nodes: list[dict]):
         node.setdefault("rendered", True)    # legacy nodes считаются уже отрендеренными
         node.setdefault("created_at", None)
         node.setdefault("last_accessed", None)
+        # Workspace primitive (W14.1): legacy nodes — все LTM (scope="graph"),
+        # без TTL. Поля присутствуют у всех нод единообразно.
+        node.setdefault("scope", "graph")
+        node.setdefault("expires_at", None)
         # Action Memory fields (only populated for type=action/outcome nodes)
         if node.get("type") == "action":
             node.setdefault("actor", "baddle")
@@ -478,7 +490,9 @@ def _current_snapshot() -> dict:
 
 def record_action(actor: str, action_kind: str, text: str,
                    context: Optional[dict] = None,
-                   extras: Optional[dict] = None) -> int:
+                   extras: Optional[dict] = None,
+                   scope: str = "graph",
+                   expires_at: float | None = None) -> int:
     """Записать action-ноду в граф. Возвращает её idx.
 
     Args:
@@ -491,6 +505,9 @@ def record_action(actor: str, action_kind: str, text: str,
                   включить specific поля (sentiment для user_chat).
         extras: любые дополнительные metadata на верхнем уровне ноды
                  (например specific-to-kind details). Сливается с node.
+        scope: "graph" (LTM, default) или "workspace" (кандидат в select).
+        expires_at: для scope="workspace" — unix ts когда нода expire'нет
+                     если не committed. None для LTM-нод.
 
     Нода получает: type='action', actor, action_kind, text, context,
     closed=False, outcome_idx=None, плюс стандартные fields через _make_node.
@@ -501,7 +518,8 @@ def record_action(actor: str, action_kind: str, text: str,
         new_id = len(nodes)
         node = _make_node(new_id, text, depth=0, topic="action",
                           confidence=0.5, node_type="action",
-                          embedding=None, rendered=True)
+                          embedding=None, rendered=True,
+                          scope=scope, expires_at=expires_at)
         node["actor"] = str(actor or "baddle")
         node["action_kind"] = str(action_kind or "unknown")
         node["context"] = ctx
