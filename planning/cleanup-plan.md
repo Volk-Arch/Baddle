@@ -30,6 +30,8 @@
 **Не tech debt (decided 2026-04-29):**
 - `chat_history.py` — UI persistence layer, complementary с workspace. Не trim.
   См. [src/chat_history.py module docstring](../src/chat_history.py).
+  Если позже захотим trim — детальный план в
+  [planning/chat-history-trim-plan.md](chat-history-trim-plan.md) (~2-2.5ч).
 
 См. подробности в [W18](#w18--file-structure-as-ontology-mirror-meta-wave-ontology-derived) ниже.
 
