@@ -962,17 +962,21 @@ def assist():
     # user_chat + baddle_reply в хронологическом порядке = conversation
     # timeline в графе. Card-actions (sync_seeking / bridge / suggestion)
     # уже отдельные action-ноды — они не дублируются здесь.
+    # Path через workspace (W14.2): add(accumulate=False) → immediate commit.
     if response_text:
         try:
-            from .graph_logic import record_action, link_chat_continuation
-            br_idx = record_action(
+            from .memory import workspace
+            from .graph_logic import link_chat_continuation
+            br_idx = workspace.add(
                 actor="baddle",
                 action_kind="baddle_reply",
                 text=response_text[:200],
+                urgency=1.0,
+                accumulate=False,
                 extras={"mode": mode_id, "intent": intent,
                          "cards_count": len(cards) if cards else 0},
             )
-            # Link на предыдущий user_chat (обычно последний — 1ч окно)
+            workspace.commit([br_idx])
             link_chat_continuation(br_idx)
         except Exception as e:
             log.debug(f"[action-memory] baddle_reply record failed: {e}")
@@ -2516,18 +2520,22 @@ def assist_chat_append():
                     r.u_engage()
                 except Exception as e:
                     log.debug(f"[sentiment] ema update failed: {e}")
-                # 3. Action Memory: user_chat action со sentiment в context
+                # 3. user_chat через workspace (W14.2): add(accumulate=False)
+                # → immediate commit. Один path для всего что попадает в граф+chat.
                 try:
-                    from .graph_logic import record_action, _current_snapshot, link_chat_continuation
+                    from .memory import workspace
+                    from .graph_logic import _current_snapshot, link_chat_continuation
                     ctx = _current_snapshot()
                     ctx["sentiment"] = round(float(sentiment), 3)
-                    uc_idx = record_action(
+                    uc_idx = workspace.add(
                         actor="user",
                         action_kind="user_chat",
                         text=msg_text[:200],
+                        urgency=1.0,
+                        accumulate=False,
                         context=ctx,
                     )
-                    # Link как continuation предыдущего chat-сообщения (1ч окно)
+                    workspace.commit([uc_idx])
                     link_chat_continuation(uc_idx)
                 except Exception as e:
                     log.debug(f"[action-memory] user_chat record failed: {e}")

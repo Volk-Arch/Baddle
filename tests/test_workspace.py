@@ -213,6 +213,27 @@ def test_archive_expired_marks_archived(clean_graph):
     assert "workspace" in scopes
 
 
+# ── workflow patterns ───────────────────────────────────────────────────
+
+
+def test_add_immediate_then_commit_workflow(clean_graph):
+    """Pattern для chat-сообщений (W14.2): add(accumulate=False) + commit([idx]).
+
+    Используется в /assist для baddle_reply и /assist/chat/append для user_chat —
+    нода живёт в workspace миллисекунды, потом сразу promote в LTM.
+    """
+    idx = workspace.add(actor="baddle", action_kind="baddle_reply",
+                        text="response", urgency=1.0, accumulate=False)
+    n = workspace.commit([idx])
+    assert n == 1
+    node = _graph["nodes"][idx]
+    assert node["scope"] == "graph"
+    assert node["expires_at"] is None
+    assert node["actor"] == "baddle"
+    assert node["action_kind"] == "baddle_reply"
+    assert "committed_at" in node
+
+
 # ── identity к LTM операциям ────────────────────────────────────────────
 
 
