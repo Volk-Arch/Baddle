@@ -55,7 +55,7 @@ DetectorReturn = Union[None, Signal, Iterable[Signal]]
 
 if TYPE_CHECKING:
     from .cognitive_loop import CognitiveLoop
-    from .substrate.rgk import РГК
+    from ..substrate.rgk import РГК
 
 
 @dataclass
@@ -97,7 +97,7 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
     Lazy-import объектов state — не тащим их в module-level чтобы избежать
     circular import (cognitive_loop ← signals ← detectors ← cognitive_loop).
     """
-    from .substrate.horizon import get_global_state, PROTECTIVE_FREEZE
+    from ..substrate.horizon import get_global_state, PROTECTIVE_FREEZE
 
     gs = get_global_state()
 
@@ -141,7 +141,7 @@ def detect_coherence_crit(ctx: DetectorContext) -> Optional[Signal]:
     Defensive: внешние вызовы (hrv_manager) могут упасть — возвращаем None.
     """
     try:
-        from .sensors.manager import get_manager as get_hrv_manager
+        from ..sensors.manager import get_manager as get_hrv_manager
         mgr = get_hrv_manager()
         if not mgr.is_running:
             return None
@@ -186,7 +186,7 @@ def detect_low_capacity_heavy(ctx: DetectorContext) -> Optional[Signal]:
         if ctx.rgk.project("capacity")["zone"] != "red":
             return None
 
-        from .goals_store import list_goals
+        from ..goals_store import list_goals
         open_goals = list_goals(status="open", limit=20)
         heavy = [g for g in open_goals if g.get("mode") in ctx.loop.HEAVY_MODES]
         if not heavy:
@@ -202,7 +202,7 @@ def detect_low_capacity_heavy(ctx: DetectorContext) -> Optional[Signal]:
 
         # Reason для UI — переводим первые 2 reason'а в человеческую строку
         reason_tags = ctx.rgk.project("capacity")["reasons"] or []
-        from .assistant import _capacity_reason_text
+        from ..assistant import _capacity_reason_text
         reason_ru = _capacity_reason_text(reason_tags[:2], "ru")
         reason_en = _capacity_reason_text(reason_tags[:2], "en")
 
@@ -252,7 +252,7 @@ def detect_plan_reminder(ctx: DetectorContext) -> Optional[Signal]:
     `ctx.now`.
     """
     try:
-        from .plans import schedule_for_day
+        from ..plans import schedule_for_day
         sched = schedule_for_day()
         window_s = ctx.loop.PLAN_REMINDER_MINUTES * 60   # 10 min default
         best = None    # ближайший pending plan в окне
@@ -317,7 +317,7 @@ def detect_recurring_lag(ctx: DetectorContext) -> Optional[Signal]:
     Defensive: внешние вызовы (recurring.list_lagging) могут упасть → None.
     """
     try:
-        from .recurring import list_lagging
+        from ..recurring import list_lagging
         lagging = list_lagging(min_lag=ctx.loop.RECURRING_LAG_MIN)
         if not lagging:
             return None
@@ -450,7 +450,7 @@ def detect_evening_retro(ctx: DetectorContext) -> Optional[Signal]:
             return None
 
         try:
-            from .user_profile import load_profile
+            from ..user_profile import load_profile
             wake = int((load_profile().get("context") or {}).get(
                 "wake_hour", ctx.loop.DEFAULT_WAKE_HOUR))
         except Exception:
@@ -461,7 +461,7 @@ def detect_evening_retro(ctx: DetectorContext) -> Optional[Signal]:
             return None
 
         try:
-            from .plans import schedule_for_day
+            from ..plans import schedule_for_day
             sched = schedule_for_day()
             unfinished = [
                 {"id": s["id"], "name": s.get("name", ""),
@@ -477,7 +477,7 @@ def detect_evening_retro(ctx: DetectorContext) -> Optional[Signal]:
         # Set state BEFORE return — same legacy semantic
         ctx.loop._last_evening_retro_date = today_str
 
-        from .prompts import _p
+        from ..prompts import _p
         n_un = len(unfinished)
         if n_un == 0:
             text = _p("ru", "retro_all_done")
@@ -522,7 +522,7 @@ def detect_morning_briefing(ctx: DetectorContext) -> Optional[Signal]:
         # Lazy-load last_briefing_ts
         if getattr(ctx.loop, "_briefing_loaded_from_disk", False) is False:
             try:
-                from .assistant import _load_state
+                from ..assistant import _load_state
                 persisted = float((_load_state().get("last_briefing_ts") or 0.0))
                 if persisted > ctx.loop._last_briefing:
                     ctx.loop._last_briefing = persisted
@@ -534,7 +534,7 @@ def detect_morning_briefing(ctx: DetectorContext) -> Optional[Signal]:
             return None
 
         try:
-            from .user_profile import load_profile
+            from ..user_profile import load_profile
             wake_hour = int((load_profile().get("context") or {}).get(
                 "wake_hour", ctx.loop.DEFAULT_WAKE_HOUR))
         except Exception:
@@ -547,7 +547,7 @@ def detect_morning_briefing(ctx: DetectorContext) -> Optional[Signal]:
         # сборка упадёт, интервал зачитан и повторы не сработают (legacy).
         ctx.loop._last_briefing = ctx.now
         try:
-            from .assistant import _load_state, _save_state
+            from ..assistant import _load_state, _save_state
             st = _load_state()
             st["last_briefing_ts"] = ctx.now
             _save_state(st)
@@ -617,7 +617,7 @@ def detect_observation_suggestions(ctx: DetectorContext) -> Iterable[Signal]:
                                     ctx.loop.SUGGESTIONS_CHECK_INTERVAL):
             return []
 
-        from .suggestions import collect_suggestions, make_suggestion_card
+        from ..suggestions import collect_suggestions, make_suggestion_card
         items = collect_suggestions(lang="ru")
         if not items:
             return []
@@ -675,7 +675,7 @@ def detect_state_walk(ctx: DetectorContext) -> Optional[Signal]:
     if not ctx.dmn_eligible:
         return None
     try:
-        from .state_graph import get_state_graph
+        from ..state_graph import get_state_graph
         sg = get_state_graph()
         if sg.count() < 10:
             return None
@@ -690,7 +690,7 @@ def detect_state_walk(ctx: DetectorContext) -> Optional[Signal]:
         except Exception as e:
             log.debug(f"[detect_state_walk] warm embeddings failed: {e}")
 
-        from .api_backend import api_get_embedding
+        from ..api_backend import api_get_embedding
         sig_text = ctx.loop._build_current_state_signature()
         query_emb = api_get_embedding(sig_text)
         if not query_emb:
@@ -964,7 +964,7 @@ def detect_hrv_surprise(activity_magnitude: Optional[float] = None) -> dict:
         }
     """
     try:
-        from .sensors.stream import get_stream, KIND_HRV_SNAPSHOT
+        from ..sensors.stream import get_stream, KIND_HRV_SNAPSHOT
     except Exception as e:
         return {"event": False, "reason": f"import_failed:{e}", "score": 0.0}
 
@@ -1175,7 +1175,7 @@ def llm_surprise_score(text: str) -> float:
         return _llm_cache[h]
 
     try:
-        from .graph_logic import _graph_generate
+        from ..graph_logic import _graph_generate
         system = (
             "/no_think\n"
             "Return ONE number between 0.0 and 1.0 — how strongly the user "

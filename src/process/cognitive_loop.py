@@ -27,9 +27,9 @@ import logging
 import random
 from typing import Optional, Tuple
 
-from .graph_logic import _graph
-from .sensors.manager import get_manager as get_hrv_manager
-from .substrate.horizon import get_global_state, PROTECTIVE_FREEZE
+from ..graph_logic import _graph
+from ..sensors.manager import get_manager as get_hrv_manager
+from ..substrate.horizon import get_global_state, PROTECTIVE_FREEZE
 # NOTE: get_user_state удалён в W5; используем get_global_state().rgk напрямую
 from .signals import Signal, Dispatcher
 
@@ -51,7 +51,7 @@ def _find_distant_pair(nodes: list) -> Optional[Tuple[int, int]]:
 
     Ограничение O(K²): берём top-K по relevance (K=20), пары только среди них.
     """
-    from .main import distinct
+    from ..main import distinct
     from datetime import datetime, timezone
     import math
     import numpy as np
@@ -327,7 +327,7 @@ class CognitiveLoop:
             return
 
         try:
-            from .graph_logic import list_open_actions, close_action, _graph
+            from ..graph_logic import list_open_actions, close_action, _graph
         except Exception:
             return
 
@@ -452,7 +452,7 @@ class CognitiveLoop:
         всех proactive check'ов после успешного emit.
         """
         try:
-            from .graph_logic import record_action
+            from ..graph_logic import record_action
             idx = record_action(
                 actor="baddle",
                 action_kind=action_kind,
@@ -582,7 +582,7 @@ class CognitiveLoop:
         # User ACh не fed здесь — только при surprise boost (см. _check_user_surprise).
         # См. docs/neurochem-design.md «ACh+GABA feeders».
         try:
-            from .graph_logic import nodes_created_within
+            from ..graph_logic import nodes_created_within
             rate = min(1.0, nodes_created_within(3600) / 10.0)
             gs.rgk.s_ach_feed(node_creation_rate=rate)
             recent_bridge_count = sum(
@@ -627,7 +627,7 @@ class CognitiveLoop:
             return
         try:
             from .detectors import detect_user_surprise
-            from .sensors.stream import get_stream
+            from ..sensors.stream import get_stream
         except Exception as e:
             log.debug(f"[cognitive_loop] user_surprise import failed: {e}")
             return
@@ -636,7 +636,7 @@ class CognitiveLoop:
         latest_msg_text = None
         latest_msg_ts = 0.0
         try:
-            from .chat_history import load_history
+            from ..chat_history import load_history
             history = load_history()
             for entry in reversed(history[-20:]):  # достаточно 20 свежих
                 if (entry.get("role") or "").lower() == "user":
@@ -695,7 +695,7 @@ class CognitiveLoop:
         # 2. Record user-action в граф для action memory / DMN
         #    (не baddle-action — это сам юзер произвёл surprise)
         try:
-            from .graph_logic import record_action
+            from ..graph_logic import record_action
             summary = (f"User surprise ({source}): "
                        f"{(latest_msg_text or '')[:80]}" if latest_msg_text
                        else f"User surprise (hrv-only, Δ={hrv_info.get('delta_ms')}ms)")
@@ -729,8 +729,8 @@ class CognitiveLoop:
         if fz is None:
             return
         try:
-            from .prime_directive import record_tick
-            from .substrate.rgk import get_global_rgk
+            from ..prime_directive import record_tick
+            from ..substrate.rgk import get_global_rgk
             r = get_global_rgk()
             us, sys_, cap = r.project("user_state"), r.project("system"), r.project("capacity")
             # B1: payload собран из projectors — facades в этом блоке больше не нужны.
@@ -823,7 +823,7 @@ class CognitiveLoop:
         следующие FOREGROUND_COOLDOWN секунд.
         """
         from .nand import tick_emergent
-        from .graph_logic import _compute_edges
+        from ..graph_logic import _compute_edges
 
         self._last_foreground_tick = time.time()
         # Юзер тикнул руками → снижаем silence_pressure (user-event)
@@ -991,7 +991,7 @@ class CognitiveLoop:
 
         # Phase 5: Patterns detector (weekday × activity → исход)
         try:
-            from .patterns import detect_all
+            from ..patterns import detect_all
             detected = detect_all(days_back=21)
             summary["patterns"] = {"detected": len(detected)}
         except Exception as e:
@@ -999,7 +999,7 @@ class CognitiveLoop:
 
         # Phase 6: Rotation goals.jsonl (gzip старых завершённых событий)
         try:
-            from .goals_store import rotate_if_needed
+            from ..goals_store import rotate_if_needed
             rotated = rotate_if_needed()
             summary["rotation"] = {"archived_file": rotated}
         except Exception as e:
@@ -1057,7 +1057,7 @@ class CognitiveLoop:
         Эффект: эмоционально-насыщенные эпизоды получают новую переработку —
         рождаются новые связи именно поверх тех нод которые удивили.
         """
-        from .state_graph import get_state_graph
+        from ..state_graph import get_state_graph
         from .pump import pump
 
         try:
@@ -1118,7 +1118,7 @@ class CognitiveLoop:
         путём. Creative merge — ночной мостик между ними. Без LLM синтеза
         (дорого) — просто manual_link + alert; collapse юзер делает явно.
         """
-        from .main import distinct
+        from ..main import distinct
         from collections import defaultdict, deque
         import numpy as np
 
@@ -1128,7 +1128,7 @@ class CognitiveLoop:
 
         # Adjacency из similarity-edges + directed
         adj = defaultdict(set)
-        from .graph_logic import _compute_edges
+        from ..graph_logic import _compute_edges
         try:
             sim_edges = _compute_edges(nodes, threshold=0.91, sim_mode="embedding")
         except Exception as e:
@@ -1221,7 +1221,7 @@ class CognitiveLoop:
         if not self._throttled_idle("_last_dmn_deep", self.DMN_DEEP_INTERVAL):
             return None
         try:
-            from .goals_store import list_goals
+            from ..goals_store import list_goals
             open_goals = list_goals(status="open", limit=5)
         except Exception:
             return None
@@ -1237,7 +1237,7 @@ class CognitiveLoop:
         log.info(f"[cognitive_loop] DMN deep-research starting on goal: {goal_text[:60]}")
         self.set_thinking("synthesize", {"goal": goal_text[:60]})
         try:
-            from .assistant_exec import execute_deep
+            from ..assistant_exec import execute_deep
             result = execute_deep(goal_text, lang="ru", mode_id="horizon",
                                    profile_hint="")
         except Exception as e:
@@ -1262,7 +1262,7 @@ class CognitiveLoop:
             # Phase D: System ACh boost — DMN deep research success.
             # Quality proxy = min(1.0, nodes_created/10) — research breadth.
             try:
-                from .substrate.horizon import get_global_state
+                from ..substrate.horizon import get_global_state
                 deep_quality = min(1.0, max(0.0, nodes_created / 10.0))
                 get_global_state().rgk.s_ach_feed(
                     node_creation_rate=0.0, bridge_quality=deep_quality)
@@ -1318,7 +1318,7 @@ class CognitiveLoop:
         stall_window = self.DMN_CONVERGE_STALL_WINDOW
         max_wall_s = self.DMN_CONVERGE_MAX_WALL_S
         try:
-            from .api_backend import get_depth_defaults
+            from ..api_backend import get_depth_defaults
             _dd = get_depth_defaults()
             max_steps = int(_dd.get("dmn_converge_max_steps", max_steps))
             stall_window = int(_dd.get("dmn_converge_stall_window", stall_window))
@@ -1329,7 +1329,7 @@ class CognitiveLoop:
                  f"(nodes={nodes_n} max_steps={max_steps} max_wall={max_wall_s}s stall={stall_window})")
 
         from .nand import tick_emergent
-        from .graph_logic import _compute_edges, _add_node, _graph_generate
+        from ..graph_logic import _compute_edges, _add_node, _graph_generate
         # executor dispatcher server-side
         steps_taken = 0
         actions_log = []
@@ -1440,7 +1440,7 @@ class CognitiveLoop:
                         # Phase D: System ACh boost — converge loop bridge.
                         if b_quality > 0.5:
                             try:
-                                from .substrate.horizon import get_global_state
+                                from ..substrate.horizon import get_global_state
                                 get_global_state().rgk.s_ach_feed(
                                     node_creation_rate=0.0, bridge_quality=b_quality)
                             except Exception as e:
@@ -1458,7 +1458,7 @@ class CognitiveLoop:
         forced_synthesis = None
         forced_confidence = None
         try:
-            from .graph_logic import force_synthesize_top
+            from ..graph_logic import force_synthesize_top
             syn = force_synthesize_top(n=5, lang="ru", max_tokens=3000)
             if syn:
                 forced_synthesis = syn["text"]
@@ -1568,7 +1568,7 @@ class CognitiveLoop:
         # bridge_quality передаётся как secondary feeder; node_creation_rate здесь 0
         # (этот канал кормится в _advance_tick).
         try:
-            from .substrate.horizon import get_global_state
+            from ..substrate.horizon import get_global_state
             get_global_state().rgk.s_ach_feed(
                 node_creation_rate=0.0, bridge_quality=quality)
         except Exception as e:
@@ -1595,7 +1595,7 @@ class CognitiveLoop:
         save=True → новый node + связи с обоими источниками (Scout path).
         save=False → только возвращаем bridge-дикт (DMN suggest).
         """
-        from .graph_logic import _add_node, _ensure_embeddings
+        from ..graph_logic import _add_node, _ensure_embeddings
         from .pump import pump
 
         nodes = _graph.get("nodes", [])
@@ -1670,7 +1670,7 @@ class CognitiveLoop:
         Формат зеркалит `StateGraph._compute_embedding_text` — чтобы
         сравнение current vs past было эквивалентным.
         """
-        from .graph_logic import _graph
+        from ..graph_logic import _graph
         cs = get_global_state()
         sys = cs.rgk.system
         bits = [f"state:{cs.state}"]
@@ -1715,14 +1715,14 @@ class CognitiveLoop:
         Не вызывает LLM — быстрая агрегация из state. UI показывает как alert;
         если юзер откроет /assist/morning — получит расширенную LLM-версию.
         """
-        from .sensors.manager import get_manager as get_hrv_manager
-        from .goals_store import list_goals
+        from ..sensors.manager import get_manager as get_hrv_manager
+        from ..goals_store import list_goals
 
         bits = ["Доброе утро."]
 
         # Sleep duration (из activity idle-gap или явной задачи «Сон»)
         try:
-            from .activity_log import estimate_last_sleep_hours
+            from ..activity_log import estimate_last_sleep_hours
             sleep = estimate_last_sleep_hours()
             if sleep and sleep.get("hours"):
                 hrs = sleep["hours"]
@@ -1809,7 +1809,7 @@ class CognitiveLoop:
 
         # Pattern hint для сегодняшнего weekday (если ночью что-то нашли)
         try:
-            from .patterns import patterns_for_today
+            from ..patterns import patterns_for_today
             todays = patterns_for_today()
             if todays:
                 # Один самый свежий — не заваливаем briefing
@@ -1822,7 +1822,7 @@ class CognitiveLoop:
 
         # Вчерашний activity summary — ground truth прошедшего дня
         try:
-            from .activity_log import day_summary
+            from ..activity_log import day_summary
             import time as _time
             yday = day_summary(ts=_time.time() - 86400)
             if (yday.get("activity_count") or 0) > 0:
@@ -1887,7 +1887,7 @@ class CognitiveLoop:
         snapshot: dict = {"ts": now}
         # 1. Active activity
         try:
-            from .activity_log import get_active, day_summary
+            from ..activity_log import get_active, day_summary
             active = get_active()
             if active:
                 snapshot["active_activity"] = {
@@ -1906,7 +1906,7 @@ class CognitiveLoop:
 
         # 2. Plans today (pending + completed ratio)
         try:
-            from .plans import schedule_for_day
+            from ..plans import schedule_for_day
             sched = schedule_for_day()
             snapshot["plans_today"] = {
                 "total": len(sched),
@@ -1927,7 +1927,7 @@ class CognitiveLoop:
 
         # 3. Latest check-in
         try:
-            from .checkins import latest_checkin
+            from ..checkins import latest_checkin
             ci = latest_checkin(hours=48)
             if ci:
                 snapshot["last_checkin"] = {
@@ -1942,7 +1942,7 @@ class CognitiveLoop:
 
         # 4. Open goals
         try:
-            from .goals_store import list_goals
+            from ..goals_store import list_goals
             open_count = len(list_goals(status="open", limit=50))
             snapshot["open_goals"] = open_count
         except Exception:
@@ -1997,7 +1997,7 @@ class CognitiveLoop:
         reason = "heartbeat · " + (" ".join(bits) if bits else "idle")
 
         try:
-            from .state_graph import get_state_graph
+            from ..state_graph import get_state_graph
             sg = get_state_graph()
             # state_origin: 1_held если есть active activity, иначе 1_rest
             origin = "1_held" if snapshot.get("active_activity") else "1_rest"
@@ -2026,7 +2026,7 @@ class CognitiveLoop:
         if not self._throttled("_last_cognitive_load_update", 300):
             return
         try:
-            from .user_dynamics import update_cognitive_load
+            from ..user_dynamics import update_cognitive_load
             update_cognitive_load(get_global_state().rgk)
         except Exception as e:
             log.debug(f"[cognitive_load] update failed: {e}")
@@ -2042,7 +2042,7 @@ class CognitiveLoop:
         if not self._throttled("_last_agency_update", self.AGENCY_UPDATE_INTERVAL):
             return
         try:
-            from .plans import schedule_for_day
+            from ..plans import schedule_for_day
         except Exception:
             return
         try:
@@ -2095,7 +2095,7 @@ class CognitiveLoop:
         # Last activity category
         last_activity = ""
         try:
-            from .activity_log import list_activities
+            from ..activity_log import list_activities
             recent = list_activities(limit=1)
             if recent:
                 la = recent[0]
@@ -2106,7 +2106,7 @@ class CognitiveLoop:
         # Recent graph topics (top 3 by access)
         recent_topics = []
         try:
-            from .graph_logic import _graph
+            from ..graph_logic import _graph
             nodes = _graph.get("nodes", [])[-10:]  # последние 10 для context
             seen = set()
             for n in nodes:
@@ -2184,7 +2184,7 @@ class CognitiveLoop:
         # outcomes, override heuristic_tone если есть явный winner.
         # Cold start (<3 closed actions) → scoring=all 0 → heuristic wins.
         try:
-            from .graph_logic import score_action_candidates
+            from ..graph_logic import score_action_candidates
             tone_candidates = ["caring", "ambient", "curious", "reference", "simple"]
             # Map time_of_day русский → english для context-match
             tod_map = {"утро": "morning", "день": "day",
@@ -2210,7 +2210,7 @@ class CognitiveLoop:
             log.debug(f"[action-memory] score tones failed: {e}")
 
         # --- LLM prompt --- (templates in src/prompts.py § sync_seeking_*)
-        from .prompts import _p
+        from ..prompts import _p
         system = _p("ru", "sync_seeking_system").format(
             idle_hours=idle_hours, severity=severity)
         user_ctx_parts = [_p("ru", "sync_seeking_ctx_time").format(value=time_of_day)]
@@ -2226,7 +2226,7 @@ class CognitiveLoop:
         user_prompt = "\n".join(user_ctx_parts) + "\n\n" + _p("ru", "sync_seeking_ctx_message_label")
 
         try:
-            from .graph_logic import _graph_generate
+            from ..graph_logic import _graph_generate
             res, _ent = _graph_generate(
                 [{"role": "system", "content": system},
                  {"role": "user", "content": user_prompt}],
@@ -2279,7 +2279,7 @@ class CognitiveLoop:
             return
 
         try:
-            from .activity_log import get_active, cost_per_min
+            from ..activity_log import get_active, cost_per_min
             act = get_active()
             if not act:
                 self._last_activity_tick = now
@@ -2298,7 +2298,7 @@ class CognitiveLoop:
 
             if whole != 0:
                 # Импорт assistant state helpers (единый источник daily_spent)
-                from .assistant import _get_context, _save_state
+                from ..assistant import _get_context, _save_state
                 ctx = _get_context()
                 state = ctx["state"]
                 prev = float(state.get("daily_spent", 0.0))
@@ -2322,7 +2322,7 @@ class CognitiveLoop:
         if not self._throttled("_last_graph_flush", self.GRAPH_FLUSH_INTERVAL):
             return
         try:
-            from .graph_store import save_graph
+            from ..graph_store import save_graph
             save_graph()
         except Exception as e:
             log.debug(f"[cognitive_loop] graph flush failed: {e}")
@@ -2418,7 +2418,7 @@ class CognitiveLoop:
 
 
 def _briefing_sleep(loop) -> Optional[dict]:
-    from .activity_log import estimate_last_sleep_hours
+    from ..activity_log import estimate_last_sleep_hours
     sleep = estimate_last_sleep_hours()
     if not sleep or not sleep.get("hours"):
         return None
@@ -2434,7 +2434,7 @@ def _briefing_sleep(loop) -> Optional[dict]:
 
 
 def _briefing_checkin(loop) -> Optional[dict]:
-    from .checkins import latest_checkin
+    from ..checkins import latest_checkin
     ci = latest_checkin(hours=36)
     if not ci:
         return None
@@ -2458,7 +2458,7 @@ def _briefing_checkin(loop) -> Optional[dict]:
 
 
 def _briefing_recovery(loop) -> Optional[dict]:
-    from .sensors.manager import get_manager as get_hrv_mgr
+    from ..sensors.manager import get_manager as get_hrv_mgr
     recovery_pct = None
     named_label = None
     try:
@@ -2518,7 +2518,7 @@ def _briefing_bridges(loop) -> Optional[dict]:
 
 
 def _briefing_yesterday(loop) -> Optional[dict]:
-    from .activity_log import day_summary
+    from ..activity_log import day_summary
     yday = day_summary(ts=time.time() - 86400)
     if (yday.get("activity_count") or 0) <= 0:
         return None
@@ -2531,7 +2531,7 @@ def _briefing_yesterday(loop) -> Optional[dict]:
 
 
 def _briefing_open_goals(loop) -> Optional[dict]:
-    from .goals_store import list_goals
+    from ..goals_store import list_goals
     open_goals = list_goals(status="open", limit=3)
     if not open_goals:
         return None
@@ -2542,7 +2542,7 @@ def _briefing_open_goals(loop) -> Optional[dict]:
 
 
 def _briefing_pattern(loop) -> Optional[dict]:
-    from .patterns import patterns_for_today
+    from ..patterns import patterns_for_today
     today_patterns = patterns_for_today()
     if not today_patterns:
         return None
@@ -2555,7 +2555,7 @@ def _briefing_pattern(loop) -> Optional[dict]:
 
 
 def _briefing_schedule(loop) -> Optional[dict]:
-    from .plans import schedule_for_day
+    from ..plans import schedule_for_day
     sched = schedule_for_day()
     if not sched:
         return None
@@ -2576,8 +2576,8 @@ def _briefing_schedule(loop) -> Optional[dict]:
 
 
 def _briefing_food(loop) -> Optional[dict]:
-    from .user_profile import load_profile, get_category
-    from .plans import schedule_for_day
+    from ..user_profile import load_profile, get_category
+    from ..plans import schedule_for_day
     import datetime as _dt
     food_cat = get_category("food", load_profile())
     has_prefs = bool(food_cat.get("preferences") or food_cat.get("constraints"))

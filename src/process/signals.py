@@ -277,7 +277,7 @@ class Dispatcher:
     def _default_drops_file():
         """Lazy-import paths чтобы избежать circular import при unit test."""
         try:
-            from .paths import THROTTLE_DROPS_FILE
+            from ..paths import THROTTLE_DROPS_FILE
             return THROTTLE_DROPS_FILE
         except Exception:
             return None

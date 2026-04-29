@@ -13,11 +13,11 @@ over both contexts.
 import logging
 import numpy as np
 
-from .graph_logic import (
+from ..graph_logic import (
     _graph, _graph_generate, _clean_thought,
     cosine_similarity, touch_node,
 )
-from .prompts import _p
+from ..prompts import _p
 
 log = logging.getLogger(__name__)
 
@@ -252,7 +252,7 @@ def _find_bridges(text_a: str, cloud_a: list[str], text_b: str, cloud_b: list[st
 def _verify_bridge(bridge_text: str, text_a: str, text_b: str,
                    lang: str, temp: float, top_k: int) -> dict:
     """Run SmartDC on bridge with A+B context. Returns pole analysis."""
-    from .prompts import _p
+    from ..prompts import _p
 
     statement = f"Связь: A='{text_a}' и B='{text_b}'. Мост: {bridge_text}"
 
@@ -280,7 +280,7 @@ def _verify_bridge(bridge_text: str, text_a: str, text_b: str,
     synthesis, _ = _graph_generate(synthesis_messages, max_tokens=1000, temp=0.7, top_k=top_k)
 
     # Compute per-pole confidence via embeddings
-    from .api_backend import api_get_embedding
+    from ..api_backend import api_get_embedding
     result = {"synthesis": synthesis, "poles": poles}
 
     try:
@@ -341,7 +341,7 @@ def _evaluate_bridge(bridge_text: str, cloud_a: list[str], cloud_b: list[str]) -
 
     Returns (confidence, sim_to_a, sim_to_b).
     """
-    from .api_backend import api_get_embedding
+    from ..api_backend import api_get_embedding
 
     try:
         bridge_emb = api_get_embedding(bridge_text)

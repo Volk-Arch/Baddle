@@ -7,7 +7,7 @@
 import json
 import pytest
 
-from src.signals import Signal, Dispatcher
+from src.process.signals import Signal, Dispatcher
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

@@ -670,7 +670,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # Thinking → cone в UI будет дышать пока идёт deep-research. Один trigger
     # покрывает и user-triggered /assist, и cognitive_loop._check_dmn_deep_research.
     try:
-        from .cognitive_loop import get_cognitive_loop
+        from .process.cognitive_loop import get_cognitive_loop
         get_cognitive_loop().set_thinking("synthesize",
                                             {"mode_id": mode_id, "message": message[:80]})
     except Exception:
@@ -801,7 +801,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             log.info(f"[execute_deep] diversity={avg_d:.2f} < {div_min} — "
                      f"pumping {closest_pair} for axis injection")
             try:
-                from .pump import pump
+                from .process.pump import pump
                 pres = pump(closest_pair[0], closest_pair[1],
                             max_iterations=1, lang=lang,
                             temp=_nd_temp, top_k=_nd_topk)
@@ -1049,7 +1049,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # без snapshot ломался бы). Читаем один раз → shim-объект с атрибутами.
     try:
         from .substrate.horizon import get_global_state
-        from .nand import classify_nodes
+        from .process.nand import classify_nodes
         from .modes import should_stop
         _live = get_global_state()
         class _HorizonSnap:
@@ -1318,7 +1318,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
 
     # Clear thinking — deep-research завершён
     try:
-        from .cognitive_loop import get_cognitive_loop
+        from .process.cognitive_loop import get_cognitive_loop
         get_cognitive_loop().clear_thinking()
     except Exception:
         pass

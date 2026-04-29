@@ -951,7 +951,7 @@ def _group_for_collapse(
                      and nodes[i].get("type") not in ("evidence", "goal")]
             # Lineage filter
             try:
-                from .nand import _filter_lineage
+                from .process.nand import _filter_lineage
                 group = _filter_lineage(group, nodes)
             except Exception:
                 pass
@@ -968,7 +968,7 @@ def _group_for_collapse(
             by_topic[nodes[i].get("topic", "") or ""].append(i)
     for topic_group in sorted(by_topic.values(), key=len, reverse=True):
         try:
-            from .nand import _filter_lineage
+            from .process.nand import _filter_lineage
             topic_group = _filter_lineage(topic_group, nodes)
         except Exception:
             pass

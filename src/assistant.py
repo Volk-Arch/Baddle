@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 from .modes import get_mode
 from .sensors.manager import get_manager as get_hrv_manager
-from .cognitive_loop import get_cognitive_loop
+from .process.cognitive_loop import get_cognitive_loop
 from .assistant_exec import execute as execute_mode
 
 
@@ -1089,7 +1089,7 @@ def assist_state():
     """
     from .substrate.horizon import get_global_state
     from .api_backend import get_api_health
-    from .cognitive_loop import get_cognitive_loop
+    from .process.cognitive_loop import get_cognitive_loop
     data = get_global_state().get_metrics()
     data["api_health"] = get_api_health()
     try:
@@ -2405,7 +2405,7 @@ def debug_alerts_trigger_all():
 
     Query: ?include_heavy=1 — включить pump/night/dmn_converge (долго!).
     """
-    from .cognitive_loop import get_cognitive_loop
+    from .process.cognitive_loop import get_cognitive_loop
     include_heavy = request.args.get("include_heavy") in ("1", "true", "yes")
 
     cl = get_cognitive_loop()
@@ -2493,7 +2493,7 @@ def assist_chat_append():
         # записывается как user_chat action со sentiment. Учитываем role=user.
         if (entry.get("role") or "").lower() == "user":
             try:
-                from .cognitive_loop import get_cognitive_loop
+                from .process.cognitive_loop import get_cognitive_loop
                 get_cognitive_loop().signal_user_input()
             except Exception:
                 pass
@@ -2584,7 +2584,7 @@ def assist_morning():
     # UI рендерит их как мокап-карточку; text остаётся fallback'ом.
     sections: list = []
     try:
-        from .cognitive_loop import get_cognitive_loop
+        from .process.cognitive_loop import get_cognitive_loop
         cl = get_cognitive_loop()
         if hasattr(cl, "_build_morning_briefing_sections"):
             sections = cl._build_morning_briefing_sections() or []
@@ -2828,7 +2828,7 @@ def assist_weekly():
 
     # Scout bridges за неделю (читаем из alerts_queue + _recent_bridges cognitive_loop)
     try:
-        from .cognitive_loop import get_cognitive_loop
+        from .process.cognitive_loop import get_cognitive_loop
         loop = get_cognitive_loop()
         now_ts = time.time()
         week_ago = now_ts - 7 * 86400

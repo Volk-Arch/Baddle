@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.detectors import (
+from src.process.detectors import (
     DetectorContext,
     detect_coherence_crit,
     detect_low_energy,
@@ -30,7 +30,7 @@ from src.detectors import (
     detect_dmn_converge,
     detect_night_cycle,
 )
-from src.signals import Signal
+from src.process.signals import Signal
 
 
 # ── Fixtures: stub context ─────────────────────────────────────────────────
@@ -619,7 +619,7 @@ def test_heavy_detector_swallows_exception(ctx, detector, method_name):
 
 def test_all_13_detectors_registered():
     """Sanity check: DETECTORS has all 13 (4 simple + 5 medium + 4 heavy)."""
-    from src.detectors import DETECTORS
+    from src.process.detectors import DETECTORS
     assert len(DETECTORS) == 13
 
 
@@ -631,8 +631,8 @@ def test_all_detectors_handle_exceptions_gracefully(ctx):
     Симулируем падающие внешние вызовы и проверяем что результат возвращается
     в одной из валидных форм (None / Signal / list[Signal]).
     """
-    from src.signals import Signal as _Sig
-    from src.detectors import DETECTORS
+    from src.process.signals import Signal as _Sig
+    from src.process.detectors import DETECTORS
     with patch("src.sensors.manager.get_manager", side_effect=RuntimeError("boom")), \
          patch("src.assistant._get_context", side_effect=RuntimeError("boom")), \
          patch("src.assistant._load_state", side_effect=RuntimeError("boom")), \

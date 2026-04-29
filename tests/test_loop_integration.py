@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.cognitive_loop import CognitiveLoop
-from src.detectors import DETECTORS, build_detector_context
-from src.signals import Signal
+from src.process.cognitive_loop import CognitiveLoop
+from src.process.detectors import DETECTORS, build_detector_context
+from src.process.signals import Signal
 
 
 # ── Smoke: end-to-end loop path ────────────────────────────────────────────
@@ -80,7 +80,7 @@ def test_dmn_eligible_gates_heavy_detectors(tmp_path):
     Проверяем что при dmn_eligible=False (frozen / high NE / foreground)
     все 5 DMN-эвристических детекторов skip без работы.
     """
-    from src.detectors import (
+    from src.process.detectors import (
         detect_dmn_bridge, detect_dmn_deep_research, detect_dmn_converge,
         detect_state_walk, detect_night_cycle, DetectorContext,
     )
@@ -171,8 +171,8 @@ class TestModeTrajectoryAdvanceTick:
 
     def test_high_sync_err_drives_user_to_C(self, monkeypatch):
         """sync_err >> THETA_ACT (0.15) через advance_tick → user.mode='C'."""
-        from src.cognitive_loop import CognitiveLoop
-        import src.cognitive_loop as cl_mod
+        from src.process.cognitive_loop import CognitiveLoop
+        import src.process.cognitive_loop as cl_mod
         u, gs = self._fresh_state()
         loop = CognitiveLoop()
 
@@ -193,8 +193,8 @@ class TestModeTrajectoryAdvanceTick:
 
     def test_low_sync_err_restores_user_to_R(self, monkeypatch):
         """C → R при sync_err < THETA_REC (0.08) (full cycle через _advance_tick)."""
-        from src.cognitive_loop import CognitiveLoop
-        import src.cognitive_loop as cl_mod
+        from src.process.cognitive_loop import CognitiveLoop
+        import src.process.cognitive_loop as cl_mod
         u, gs = self._fresh_state()
         loop = CognitiveLoop()
 
@@ -216,8 +216,8 @@ class TestModeTrajectoryAdvanceTick:
 
     def test_hysteresis_band_keeps_C(self, monkeypatch):
         """Между THETA_REC (0.08) и THETA_ACT (0.15) — mode не дребезжит."""
-        from src.cognitive_loop import CognitiveLoop
-        import src.cognitive_loop as cl_mod
+        from src.process.cognitive_loop import CognitiveLoop
+        import src.process.cognitive_loop as cl_mod
         u, gs = self._fresh_state()
         loop = CognitiveLoop()
 
@@ -242,8 +242,8 @@ class TestModeTrajectoryAdvanceTick:
     def test_neuro_mode_independent_from_user_mode(self, monkeypatch):
         """user.mode и neuro.mode качаются независимо: user от sync_err,
         neuro от combined_imbalance (max 4 PE-каналов)."""
-        from src.cognitive_loop import CognitiveLoop
-        import src.cognitive_loop as cl_mod
+        from src.process.cognitive_loop import CognitiveLoop
+        import src.process.cognitive_loop as cl_mod
         u, gs = self._fresh_state()
         loop = CognitiveLoop()
 

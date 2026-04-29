@@ -40,7 +40,7 @@ def _with_thinking(kind: str):
         @_functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
-                from .cognitive_loop import get_cognitive_loop
+                from .process.cognitive_loop import get_cognitive_loop
                 get_cognitive_loop().set_thinking(kind)
             except Exception:
                 get_cognitive_loop = None
@@ -48,7 +48,7 @@ def _with_thinking(kind: str):
                 return fn(*args, **kwargs)
             finally:
                 try:
-                    from .cognitive_loop import get_cognitive_loop as _gcl
+                    from .process.cognitive_loop import get_cognitive_loop as _gcl
                     _gcl().clear_thinking()
                 except Exception:
                     pass
@@ -977,7 +977,7 @@ def graph_smartdc():
 @_with_thinking("pump")
 def graph_pump():
     """Find the hidden axis between two ideas via bilateral expansion."""
-    from .pump import pump
+    from .process.pump import pump
 
     d = _p_data()
     node_a = int(d.get("node_a", -1))
@@ -1393,7 +1393,7 @@ def graph_consolidate():
 
     Возвращает summary {content, state}.
     """
-    from .consolidation import consolidate_all
+    from .process.consolidation import consolidate_all
 
     d = request.get_json(force=True) or {}
     result = consolidate_all(
@@ -1434,7 +1434,7 @@ def graph_tick():
     Mode config тюнит Horizon пресеты (τ_in/τ_out/γ/policy); логика сама
     эмерджентна из distinct-зон в nand.tick_emergent.
     """
-    from .cognitive_loop import get_cognitive_loop
+    from .process.cognitive_loop import get_cognitive_loop
 
     d = _p_data()
     result = get_cognitive_loop().tick_foreground(

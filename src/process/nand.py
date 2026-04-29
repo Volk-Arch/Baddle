@@ -396,7 +396,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     CONFIRM/EXPLORE/CONFLICT zones, and routes to collapse/pump/smartdc/compare
     accordingly.
     """
-    from .main import distinct, distinct_decision
+    from ..main import distinct, distinct_decision
 
     if not nodes:
         return {"action": "none", "reason": "Graph is empty.", "phase": "none"}
@@ -415,7 +415,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         mode_id = goal_node.get("mode", "horizon")
 
     # Load/create Horizon
-    from .substrate.horizon import CognitiveState, create_horizon
+    from ..substrate.horizon import CognitiveState, create_horizon
     horizon_data = graph.get("_horizon")
     if horizon_data:
         horizon = CognitiveState.from_dict(horizon_data)
@@ -499,7 +499,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # horizon который потом сохранится в graph["_horizon"] — чтобы get_metrics()
     # в emit отразил свежие значения для state_graph.
     try:
-        from .substrate.horizon import get_global_state
+        from ..substrate.horizon import get_global_state
         mean_d = sum(all_ds) / len(all_ds) if all_ds else None
         confidences = [n.get("confidence", 0.5) for _, n in hypotheses]
         signals = dict(d=mean_d, weights=confidences if confidences else None)
@@ -580,7 +580,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         # ── State graph append (v5e) ──
         # Record every tick emission as a state_node. Non-blocking, best-effort.
         try:
-            from .state_graph import get_state_graph
+            from ..state_graph import get_state_graph
             sg = get_state_graph()
             target = action_dict.get("target")
             if isinstance(target, list):
@@ -605,14 +605,14 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
 
     # ── STOP CHECK: universal should_stop via distinct zones ──
     if goal_node is not None:
-        from .modes import should_stop
+        from ..modes import should_stop
         stop = should_stop(cl, graph, horizon, goal_node=goal_node)
         if stop["resolved"]:
             log.info(f"[tick-nand] GOAL REACHED: {stop['reason']}")
             # Goal resolved → взрослеем (maturity drift). Global state singleton —
             # драйфт per-person, не per-graph.
             try:
-                from .substrate.horizon import get_global_state
+                from ..substrate.horizon import get_global_state
                 get_global_state().note_verified()
             except Exception as e:
                 log.debug(f"[tick-nand] maturity note on stop failed: {e}")
@@ -622,8 +622,8 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
             # чтобы повторный tick на том же состоянии не дублировал архив.
             try:
                 if not goal_node.get("_goal_completed"):
-                    from .goals_store import complete_goal
-                    from .solved_archive import archive_solved
+                    from ..goals_store import complete_goal
+                    from ..solved_archive import archive_solved
                     gid = goal_node.get("goal_id")
                     if gid:
                         snapshot_ref = archive_solved(
@@ -646,7 +646,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # ── ASK CHECK: high uncertainty + low norepinephrine → pause for user clarification ──
     # Conditions: enough nodes exist, sync_error growing, not a FREEZE state
     try:
-        from .substrate.horizon import PROTECTIVE_FREEZE
+        from ..substrate.horizon import PROTECTIVE_FREEZE
         ne_low = float(horizon.rgk.system.aperture.value) < 0.35
         high_sync_err = getattr(horizon, "sync_error", 0.0) > 0.6
         many_uncertain = len(unverified) >= 3 and len(verified) == 0
@@ -669,8 +669,8 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # эмитим ask / compare или толкаем policy weights. Второй порядок поверх
     # мгновенного решения выше.
     try:
-        from .state_graph import get_state_graph
-        from .substrate.horizon import INTEGRATION, PROTECTIVE_FREEZE
+        from ..state_graph import get_state_graph
+        from ..substrate.horizon import INTEGRATION, PROTECTIVE_FREEZE
         sg = get_state_graph()
         tail = sg.tail(20)
         # Markov transitions over larger window — для markov_anomaly детекции

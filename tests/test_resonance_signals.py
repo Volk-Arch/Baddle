@@ -154,7 +154,7 @@ def test_observation_suggestions_skipped_on_high_residue():
     """focus_residue > 0.5 → silent skip без update throttle."""
     from types import SimpleNamespace
     from unittest.mock import MagicMock
-    from src.detectors import DetectorContext, detect_observation_suggestions
+    from src.process.detectors import DetectorContext, detect_observation_suggestions
 
     user = SimpleNamespace(_last_input_ts=None, focus_residue=0.7,
                             hrv_surprise=0.0)

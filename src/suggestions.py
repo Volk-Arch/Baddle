@@ -29,7 +29,7 @@ def _get_recent_draft_texts(limit: int = 8) -> list[str]:
     тоже не надо повторно предлагать)."""
     texts: list[str] = []
     try:
-        from .cognitive_loop import get_cognitive_loop
+        from .process.cognitive_loop import get_cognitive_loop
         cl = get_cognitive_loop()
         for a in (cl._alerts_queue or []):
             if a.get("type") == "observation_suggestion":
@@ -573,7 +573,7 @@ def suggest_from_dmn_bridge(bridge: dict, lang: str = "ru") -> Optional[dict]:
 
 def _collect_dmn(lang: str) -> list[dict]:
     """До 2 suggestion'ов из недавних DMN-мостов с quality≥0.4 (последние 48ч)."""
-    from .cognitive_loop import get_cognitive_loop
+    from .process.cognitive_loop import get_cognitive_loop
     import time as _time
     cl = get_cognitive_loop()
     cutoff = _time.time() - 48 * 3600
