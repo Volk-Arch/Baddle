@@ -994,7 +994,7 @@ def graph_pump():
 @graph_bp.route("/graph/horizon-params")
 def graph_horizon_params():
     """Get current Horizon LLM params for manual operations."""
-    from .horizon import CognitiveState, create_horizon
+    from .substrate.horizon import CognitiveState, create_horizon
     horizon_data = _graph.get("_horizon")
     if horizon_data:
         h = CognitiveState.from_dict(horizon_data)
@@ -1874,7 +1874,7 @@ def hrv_metrics():
 
     # Push to UserState — HRV — сигнал тела пользователя, не системы.
     # Системная нейрохимия эволюционирует по собственным сигналам графа.
-    from .rgk import get_global_rgk
+    from .substrate.rgk import get_global_rgk
     get_global_rgk().u_hrv(
         coherence=state.get("coherence"),
         rmssd=state.get("rmssd"),

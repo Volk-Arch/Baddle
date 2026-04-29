@@ -172,7 +172,7 @@ def apply_to_user_state(entry: dict):
     корректировать модель сильнее чем автоматические feeders.
     """
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         r = get_global_rgk()
         # Stress/focus/reality → NE/serotonin/valence (per-event decay_override).
         r.u_apply_checkin(

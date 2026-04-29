@@ -11,7 +11,7 @@
 import datetime as _dt
 from typing import Optional
 
-from .user_state import compute_cognitive_load
+from .substrate.user_state import compute_cognitive_load
 
 
 def update_cognitive_load(rgk) -> None:
@@ -58,7 +58,7 @@ def update_cognitive_load(rgk) -> None:
     sync_at_dawn = today_summary.get("sync_error_at_dawn")
     sync_now = sync_at_dawn or 0.0
     try:
-        from .horizon import get_global_state
+        from .substrate.horizon import get_global_state
         sync_now = float(get_global_state().rgk.sync_slow.value)
         if sync_at_dawn is None:
             sync_at_dawn = sync_now
@@ -102,7 +102,7 @@ def rollover_day(rgk, hrv_recovery: Optional[float] = None) -> None:
             rgk.cognitive_load_today, 4)
 
     try:
-        from .horizon import get_global_state
+        from .substrate.horizon import get_global_state
         sync_at_dawn = float(get_global_state().rgk.sync_slow.value)
     except Exception:
         sync_at_dawn = 0.0

@@ -148,7 +148,7 @@ def get_aperture() -> float:
     except (TypeError, ValueError):
         raw = 0.5
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         if get_global_rgk().frequency_regime() == "short_wave":
             return min(0.4, raw)
     except Exception:

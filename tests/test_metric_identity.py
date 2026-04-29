@@ -9,8 +9,8 @@ Neurochem / ProtectiveFreeze должен давать тот же snapshot. EXP
 """
 import pytest
 
-from src.user_state import UserState
-from src.rgk import РГК
+from src.substrate.user_state import UserState
+from src.substrate.rgk import РГК
 
 
 # ── Expected snapshot (captured 2026-04-24, pre-migration) ─────────────────
@@ -74,7 +74,7 @@ def states(monkeypatch):
     TOD запинен в 'day' через monkeypatch — без этого tests на разных часах
     падают (`_current_tod` использует datetime.now()).
     """
-    from src.rgk import РГК
+    from src.substrate.rgk import РГК
     monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     us = UserState()
@@ -222,7 +222,7 @@ def test_checkin_event_identity(monkeypatch):
     старом checkins.py (до миграции). Формулы не менялись, маршрут — apply_checkin
     после Phase D Step 3c.
     """
-    from src.rgk import РГК
+    from src.substrate.rgk import РГК
     monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
     from src.ema import Decays
 
@@ -255,7 +255,7 @@ def test_apply_subjective_surprise_identity(monkeypatch):
     """apply_subjective_surprise должен быть эквивалентен старому
     inline nudge `expectation.feed(reality - s, decay_override=0.6)`.
     """
-    from src.rgk import РГК
+    from src.substrate.rgk import РГК
     monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     # Path A — ручной nudge (то что делал старый checkins после fix'а)
@@ -292,7 +292,7 @@ def test_checkins_apply_to_user_state_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "CHECKINS_FILE", tmp_path / "checkins.jsonl")
     from src import checkins
     monkeypatch.setattr(checkins, "_CHECKIN_FILE", tmp_path / "checkins.jsonl")
-    from src.rgk import РГК, reset_global_rgk
+    from src.substrate.rgk import РГК, reset_global_rgk
     monkeypatch.setattr(РГК, "_current_tod", lambda self: "day")
 
     # Reset global РГК — checkins.apply_to_user_state работает с singleton

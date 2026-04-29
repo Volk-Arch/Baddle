@@ -29,7 +29,7 @@ from typing import Optional, Tuple
 
 from .graph_logic import _graph
 from .sensors.manager import get_manager as get_hrv_manager
-from .horizon import get_global_state, PROTECTIVE_FREEZE
+from .substrate.horizon import get_global_state, PROTECTIVE_FREEZE
 # NOTE: get_user_state удалён в W5; используем get_global_state().rgk напрямую
 from .signals import Signal, Dispatcher
 
@@ -730,7 +730,7 @@ class CognitiveLoop:
             return
         try:
             from .prime_directive import record_tick
-            from .rgk import get_global_rgk
+            from .substrate.rgk import get_global_rgk
             r = get_global_rgk()
             us, sys_, cap = r.project("user_state"), r.project("system"), r.project("capacity")
             # B1: payload собран из projectors — facades в этом блоке больше не нужны.
@@ -1262,7 +1262,7 @@ class CognitiveLoop:
             # Phase D: System ACh boost — DMN deep research success.
             # Quality proxy = min(1.0, nodes_created/10) — research breadth.
             try:
-                from .horizon import get_global_state
+                from .substrate.horizon import get_global_state
                 deep_quality = min(1.0, max(0.0, nodes_created / 10.0))
                 get_global_state().rgk.s_ach_feed(
                     node_creation_rate=0.0, bridge_quality=deep_quality)
@@ -1440,7 +1440,7 @@ class CognitiveLoop:
                         # Phase D: System ACh boost — converge loop bridge.
                         if b_quality > 0.5:
                             try:
-                                from .horizon import get_global_state
+                                from .substrate.horizon import get_global_state
                                 get_global_state().rgk.s_ach_feed(
                                     node_creation_rate=0.0, bridge_quality=b_quality)
                             except Exception as e:
@@ -1568,7 +1568,7 @@ class CognitiveLoop:
         # bridge_quality передаётся как secondary feeder; node_creation_rate здесь 0
         # (этот канал кормится в _advance_tick).
         try:
-            from .horizon import get_global_state
+            from .substrate.horizon import get_global_state
             get_global_state().rgk.s_ach_feed(
                 node_creation_rate=0.0, bridge_quality=quality)
         except Exception as e:

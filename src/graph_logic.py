@@ -105,7 +105,7 @@ def _bayesian_update_distinct(prior: float, d: float) -> float:
     PROTECTIVE_FREEZE), затем кормит **RPE** (prior, posterior) в neurochem
     — автономный dopamine drift по неожиданности Δconfidence (без юзера).
     """
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     cs = get_global_state()
     posterior = cs.rgk.bayes_step(prior, d)
     try:
@@ -434,7 +434,7 @@ def _current_snapshot() -> dict:
 
     # User state (4 скаляра + agency + valence) — read directly from РГК
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         r = get_global_rgk()
         snap["user_state_before"] = {
             "dopamine_gain":        round(float(r.user.gain.value), 3),
@@ -449,7 +449,7 @@ def _current_snapshot() -> dict:
 
     # System state (Neurochem + freeze) + sync_error + regimes
     try:
-        from .horizon import get_global_state
+        from .substrate.horizon import get_global_state
         gs = get_global_state()
         snap["system_state_before"] = {
             "dopamine_gain":             round(gs.rgk.system.gain.value, 3),
@@ -468,7 +468,7 @@ def _current_snapshot() -> dict:
 
     # HRV regime (activity_zone из РГК)
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         snap["hrv_regime"] = get_global_rgk().activity_zone()
     except Exception:
         pass
@@ -519,7 +519,7 @@ def record_action(actor: str, action_kind: str, text: str,
     # Вне graph_lock — bump_focus_residue сама thread-safe (atomic float ops).
     if str(actor or "") == "user":
         try:
-            from .rgk import get_global_rgk
+            from .substrate.rgk import get_global_rgk
             mode_id = (extras or {}).get("mode_id") if extras else None
             get_global_rgk().u_focus_bump(mode_id)
         except Exception as e:
@@ -1401,7 +1401,7 @@ def _ensure_embeddings(texts: list[str]):
     """
     from .api_backend import api_get_embedding
     try:
-        from .horizon import get_global_state
+        from .substrate.horizon import get_global_state
         llm_off = get_global_state().llm_disabled
     except Exception:
         llm_off = False

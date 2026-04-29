@@ -588,7 +588,7 @@ def create_horizon(mode_id: str) -> CognitiveState:
     `modes.get_mode(mode_id).preset` — один источник истины. Для глобального
     singleton per-person используй get_global_state().
     """
-    from .modes import get_mode
+    from ..modes import get_mode
     preset = get_mode(mode_id).get("preset") or get_mode("horizon")["preset"]
     return CognitiveState(
         precision=preset["precision"],

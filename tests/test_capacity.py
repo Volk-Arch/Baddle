@@ -6,7 +6,7 @@ import datetime as _dt
 
 import pytest
 
-from src.user_state import (
+from src.substrate.user_state import (
     UserState,
     compute_cognitive_load,
     compute_capacity_indicators,
@@ -210,7 +210,7 @@ def test_update_cognitive_load_empty_activity_log(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     fake_state = MagicMock()
     fake_state.rgk.sync_slow.value = 0.0
-    monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
+    monkeypatch.setattr("src.substrate.horizon.get_global_state", lambda: fake_state)
 
     us = UserState()
     us.update_cognitive_load()
@@ -226,12 +226,12 @@ def test_update_cognitive_load_aggregates_from_activity_log(tmp_path, monkeypatc
     # Фиксированные surprise значения через mock UserState.imbalance
     from unittest.mock import MagicMock
     mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.5} if dom == "user_state" else {}
-    monkeypatch.setattr("src.rgk.get_global_rgk",
+    monkeypatch.setattr("src.substrate.rgk.get_global_rgk",
                          lambda: mock_rgk)
 
     fake_state = MagicMock()
     fake_state.rgk.sync_slow.value = 0.1
-    monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
+    monkeypatch.setattr("src.substrate.horizon.get_global_state", lambda: fake_state)
 
     # Добавим 3 активности (одна — switch на следующую → context_switch)
     aid1 = activity_log.start_activity("Task 1", category="work")
@@ -262,7 +262,7 @@ def test_update_cognitive_load_progress_delta_from_dawn(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     fake_state = MagicMock()
     fake_state.rgk.sync_slow.value = 0.5    # initial
-    monkeypatch.setattr("src.horizon.get_global_state", lambda: fake_state)
+    monkeypatch.setattr("src.substrate.horizon.get_global_state", lambda: fake_state)
 
     us = UserState()
     us.update_cognitive_load()
@@ -314,7 +314,7 @@ def test_activity_log_records_surprise_at_start(tmp_path, monkeypatch):
 
     from unittest.mock import MagicMock
     mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.42} if dom == "user_state" else {}
-    monkeypatch.setattr("src.rgk.get_global_rgk",
+    monkeypatch.setattr("src.substrate.rgk.get_global_rgk",
                          lambda: mock_rgk)
 
     aid = activity_log.start_activity("Test task", category="work")
@@ -331,7 +331,7 @@ def test_activity_log_computes_surprise_delta(tmp_path, monkeypatch):
 
     from unittest.mock import MagicMock
     mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.3} if dom == "user_state" else {}
-    monkeypatch.setattr("src.rgk.get_global_rgk",
+    monkeypatch.setattr("src.substrate.rgk.get_global_rgk",
                          lambda: mock_rgk)
 
     activity_log.start_activity("Test", category="work")
@@ -403,7 +403,7 @@ def test_activity_log_auto_switch_records_surprise(tmp_path, monkeypatch):
 
     from unittest.mock import MagicMock
     mock_rgk = MagicMock(); mock_rgk.project = lambda dom: {"imbalance": 0.2} if dom == "user_state" else {}
-    monkeypatch.setattr("src.rgk.get_global_rgk",
+    monkeypatch.setattr("src.substrate.rgk.get_global_rgk",
                          lambda: mock_rgk)
 
     aid1 = activity_log.start_activity("First", category="work")

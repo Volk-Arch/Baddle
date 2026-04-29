@@ -161,9 +161,9 @@ class TestModeTrajectoryAdvanceTick:
         внутри __init__ (через get_global_rgk()), поэтому достаточно
         reset_global_rgk() до его конструктора.
         """
-        from src.rgk import reset_global_rgk
-        from src.user_state import UserState, set_user_state, get_user_state
-        from src.horizon import CognitiveState, set_global_state, get_global_state
+        from src.substrate.rgk import reset_global_rgk
+        from src.substrate.user_state import UserState, set_user_state, get_user_state
+        from src.substrate.horizon import CognitiveState, set_global_state, get_global_state
         rgk = reset_global_rgk()
         set_user_state(UserState(rgk=rgk))
         set_global_state(CognitiveState())

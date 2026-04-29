@@ -236,7 +236,7 @@ def data_reset():
         except Exception:
             pass
         try:
-            from src.horizon import set_global_state, CognitiveState
+            from src.substrate.horizon import set_global_state, CognitiveState
             set_global_state(CognitiveState())
         except Exception:
             pass

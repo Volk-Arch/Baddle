@@ -23,7 +23,7 @@ import random
 import numpy as np
 import pytest
 
-from src.rgk import (
+from src.substrate.rgk import (
     РГК,
     Resonator,
     _USER_DECAYS,
@@ -554,19 +554,19 @@ class TestPhaseDFeeders:
     """
 
     def test_user_acetylcholine_default(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState()
         assert us.acetylcholine == pytest.approx(0.5, abs=TOL)
 
     def test_user_acetylcholine_novelty(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState()
         # Initial 0.5, decay 0.9 → after feed(0.8): 0.9*0.5 + 0.1*0.8 = 0.53
         us.feed_acetylcholine(novelty=0.8)
         assert us.acetylcholine == pytest.approx(0.53, abs=TOL)
 
     def test_user_acetylcholine_boost_clamps_to_min_085(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState()
         # boost=True with low novelty → still bumps to ≥0.85
         us.feed_acetylcholine(novelty=0.3, boost=True)
@@ -575,19 +575,19 @@ class TestPhaseDFeeders:
         assert us.acetylcholine == pytest.approx(0.5525, abs=TOL)
 
     def test_user_gaba_default(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState()
         assert us.gaba == pytest.approx(0.5, abs=TOL)
 
     def test_user_gaba_high_when_focused(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState()
         # focus_residue=0.0 (default) → 1-0 = 1.0 → 0.95*0.5+0.05*1.0 = 0.525
         us.feed_gaba()
         assert us.gaba == pytest.approx(0.525, abs=TOL)
 
     def test_user_gaba_low_when_scattered(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState()
         us.focus_residue = 0.9
         # 1-0.9 = 0.1 → 0.95*0.5+0.05*0.1 = 0.48
@@ -621,7 +621,7 @@ class TestPhaseDFeeders:
         assert r.system.damping.value == pytest.approx(0.5388, abs=1e-4)
 
     def test_user_balance_method(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState(dopamine=0.7, serotonin=0.6, norepinephrine=0.4)
         # plasticity=damping=0.5 default → (0.7·0.4·0.5)/(0.6·0.5) = 0.14/0.30 = 0.467
         assert us.balance() == pytest.approx(0.4667, abs=1e-3)
@@ -677,7 +677,7 @@ class TestNamedState8Region:
         assert result["key"] == "flow"
 
     def test_user_named_state_uses_chem_profile(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         us = UserState(dopamine=0.6, serotonin=0.5, norepinephrine=0.3)
         us.acetylcholine = 0.9
         # Профиль (0.6, 0.5, 0.3, 0.9, 0.5) совпадает с explore exact
@@ -742,7 +742,8 @@ class TestApertureDerivation:
         """Resonance-aware cap: при frequency_regime='short_wave' (стресс)
         панорамная апертура капится в 0.4 — не запускать длинную волну
         когда юзер на коротком ритме."""
-        from src import api_backend, user_state
+        from src import api_backend
+        from src.substrate import user_state
         # Force short_wave: coherence < 0.4 OR NE > 0.75
         api_backend._settings["deep_aperture"] = 0.95   # raw панорамный
         user_state._global_user = None
@@ -758,7 +759,8 @@ class TestApertureDerivation:
         assert get_aperture() == pytest.approx(0.95, abs=1e-6)
 
     def teardown_method(self):
-        from src import api_backend, user_state
+        from src import api_backend
+        from src.substrate import user_state
         api_backend._settings.pop("deep_aperture", None)
         user_state._global_user = None
 
@@ -772,7 +774,7 @@ class TestCounterWaveActivation:
     """
 
     def test_user_state_mode_default_R(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         assert u.mode == "R"
 
@@ -782,7 +784,7 @@ class TestCounterWaveActivation:
 
     def test_user_state_mode_flips_on_perturbation(self):
         """Гистерезис ACT=0.15 / REC=0.08."""
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         # R → C при perturbation > 0.15
         u.update_mode(0.20)
@@ -802,7 +804,7 @@ class TestCounterWaveActivation:
         assert r.system.mode == "R"
 
     def test_user_state_to_dict_includes_mode(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         u.update_mode(0.2)
         d = u.to_dict()
@@ -823,13 +825,13 @@ class TestSingletonRGK:
     один объект."""
 
     def test_get_global_rgk_returns_singleton(self):
-        from src.rgk import get_global_rgk
+        from src.substrate.rgk import get_global_rgk
         a = get_global_rgk()
         b = get_global_rgk()
         assert a is b
 
     def test_reset_global_rgk_returns_fresh(self):
-        from src.rgk import get_global_rgk, reset_global_rgk
+        from src.substrate.rgk import get_global_rgk, reset_global_rgk
         a = get_global_rgk()
         b = reset_global_rgk()
         assert a is not b
@@ -838,32 +840,32 @@ class TestSingletonRGK:
 
     def test_user_state_default_creates_own_rgk(self):
         """Backward compat: UserState() без rgk= создаёт собственный РГК."""
-        from src.user_state import UserState
-        from src.rgk import get_global_rgk
+        from src.substrate.user_state import UserState
+        from src.substrate.rgk import get_global_rgk
         u = UserState()
         assert u._rgk is not get_global_rgk()
 
     def test_user_state_with_explicit_rgk_shares(self):
         """Explicit rgk= sharing — production pattern."""
-        from src.user_state import UserState
-        from src.rgk import РГК
+        from src.substrate.user_state import UserState
+        from src.substrate.rgk import РГК
         rgk = РГК()
         u = UserState(rgk=rgk)
         assert u._rgk is rgk
 
     def test_production_bootstrap_shares_global(self):
         """get_user_state() + CognitiveState — каскад зеркал на одном РГК."""
-        from src.rgk import reset_global_rgk
+        from src.substrate.rgk import reset_global_rgk
         reset_global_rgk()
         # Reset global UserState и global CognitiveState — иначе видим
         # инстансы из прошлых тестов с другим _rgk.
-        import src.user_state
-        src.user_state._global_user = None
-        import src.horizon
-        src.horizon._global_state = None
+        import src.substrate.user_state
+        src.substrate.user_state._global_user = None
+        import src.substrate.horizon
+        src.substrate.horizon._global_state = None
 
-        from src.user_state import get_user_state
-        from src.horizon import get_global_state
+        from src.substrate.user_state import get_user_state
+        from src.substrate.horizon import get_global_state
         u = get_user_state()
         gs = get_global_state()
         assert u._rgk is gs.rgk
@@ -875,7 +877,7 @@ class TestProjectExpansion:
     """B4 Wave 1: project() расширен chem-only derivations."""
 
     def test_user_state_project_has_phase_d_chem(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         p = r.project("user_state")
         # Phase D 5-axis + B0 mode
@@ -886,7 +888,7 @@ class TestProjectExpansion:
         assert p["mode"] == "R"
 
     def test_user_state_project_has_attribution(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         # Сместим user vector чтобы attribution был не "none"
         r.user.gain.value = 0.9    # dopamine high
@@ -898,7 +900,7 @@ class TestProjectExpansion:
         assert p["attribution_magnitude"] > 0
 
     def test_user_state_project_attribution_none_when_small(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         # vector ≈ baseline → mag < 0.05 → "none"
         p = r.project("user_state")
@@ -906,14 +908,14 @@ class TestProjectExpansion:
         assert p["attribution_signed"] == 0.0
 
     def test_user_state_agency_gap(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         r.agency.value = 0.3
         p = r.project("user_state")
         assert p["agency_gap"] == pytest.approx(0.7, abs=1e-6)
 
     def test_system_project_has_phase_d_chem(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         p = r.project("system")
         assert "acetylcholine_plasticity" in p
@@ -923,7 +925,7 @@ class TestProjectExpansion:
 
     def test_user_state_property_delegates_match_project(self):
         """UserState properties и project() должны давать идентичные значения."""
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         u._rgk.user.gain.value = 0.8
         p = u._rgk.project("user_state")
@@ -944,7 +946,7 @@ class TestStateMoveAndProjectors:
 
     def test_user_state_hrv_proxy_writes_to_rgk(self):
         """UserState.hrv_coherence теперь @property → читает/пишет _rgk."""
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         assert u.hrv_coherence is None
         u.hrv_coherence = 0.7
@@ -954,19 +956,19 @@ class TestStateMoveAndProjectors:
         assert u.hrv_coherence == 0.3
 
     def test_user_state_activity_proxy(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         u.activity_magnitude = 0.8
         assert u._rgk.activity_magnitude == 0.8
 
     def test_user_state_day_summary_proxy(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         u.day_summary["2026-04-25"] = {"tasks_started": 3}
         assert u._rgk.day_summary["2026-04-25"]["tasks_started"] == 3
 
     def test_frequency_regime_long_wave(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         r.hrv_coherence = 0.7
         r.hrv_rmssd = 35.0
@@ -975,32 +977,32 @@ class TestStateMoveAndProjectors:
         assert r.project("user_state")["frequency_regime"] == "long_wave"
 
     def test_frequency_regime_short_wave_low_coh(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         r.hrv_coherence = 0.3
         r.hrv_rmssd = 20.0
         assert r.frequency_regime() == "short_wave"
 
     def test_frequency_regime_flat_no_hrv(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         assert r.frequency_regime() == "flat"
 
     def test_hrv_surprise_zero_when_no_baseline(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         r.hrv_coherence = 0.7
         # baseline не seeded → 0
         assert r.hrv_surprise() == 0.0
 
     def test_activity_zone_no_hrv(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         z = r.activity_zone()
         assert z["key"] is None
 
     def test_activity_zone_recovery(self):
-        from src.rgk import РГК
+        from src.substrate.rgk import РГК
         r = РГК()
         r.hrv_coherence = 0.7
         r.activity_magnitude = 0.1   # not active
@@ -1009,7 +1011,7 @@ class TestStateMoveAndProjectors:
 
     def test_user_state_delegates_match_rgk(self):
         """UserState.frequency_regime/hrv_surprise/activity_zone делегируют."""
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         u.hrv_coherence = 0.5
         u.activity_magnitude = 0.6
@@ -1026,7 +1028,7 @@ class TestWave3Projectors:
     _feedback_counts больше не дублируется — все callers пишут в _rgk._fb."""
 
     def test_project_named_state_returns_8_region_dict(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState(dopamine=0.6, serotonin=0.5, norepinephrine=0.3)
         u.acetylcholine = 0.9
         ns = u._rgk.project("named_state")
@@ -1035,14 +1037,14 @@ class TestWave3Projectors:
 
     def test_user_named_state_property_matches_project(self):
         """UserState.named_state ≡ project("named_state")."""
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState(dopamine=0.4, serotonin=0.7, norepinephrine=0.5)
         u.acetylcholine = 0.5
         u.gaba = 0.8
         assert u.named_state == u._rgk.project("named_state")
 
     def test_project_capacity_returns_indicators_dict(self):
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState(dopamine=0.6, serotonin=0.6, burnout=0.0)
         u.hrv_coherence = 0.7
         u.cognitive_load_today = 0.2
@@ -1055,7 +1057,7 @@ class TestWave3Projectors:
     def test_capacity_failures_match_old_compute(self):
         """compute_capacity_indicators(user) ≡ project('capacity')
         ≡ исходная логика — все три fail-конфигурации (phys/affect/cogload)."""
-        from src.user_state import UserState, compute_capacity_indicators
+        from src.substrate.user_state import UserState, compute_capacity_indicators
         u = UserState(dopamine=0.2, serotonin=0.2, burnout=0.5)
         u.hrv_coherence = 0.3
         u.cognitive_load_today = 0.8
@@ -1073,7 +1075,7 @@ class TestWave3Projectors:
     def test_feedback_counts_shared_with_rgk_fb(self):
         """`apply_feedback` пишет в `_rgk._fb` (single source); _feedback_counts
         дубликат удалён."""
-        from src.user_state import UserState
+        from src.substrate.user_state import UserState
         u = UserState()
         assert not hasattr(u, "_feedback_counts"), \
             "_feedback_counts удалён в Wave 3 — UserState не должен его держать"

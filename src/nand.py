@@ -415,7 +415,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
         mode_id = goal_node.get("mode", "horizon")
 
     # Load/create Horizon
-    from .horizon import CognitiveState, create_horizon
+    from .substrate.horizon import CognitiveState, create_horizon
     horizon_data = graph.get("_horizon")
     if horizon_data:
         horizon = CognitiveState.from_dict(horizon_data)
@@ -499,7 +499,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # horizon который потом сохранится в graph["_horizon"] — чтобы get_metrics()
     # в emit отразил свежие значения для state_graph.
     try:
-        from .horizon import get_global_state
+        from .substrate.horizon import get_global_state
         mean_d = sum(all_ds) / len(all_ds) if all_ds else None
         confidences = [n.get("confidence", 0.5) for _, n in hypotheses]
         signals = dict(d=mean_d, weights=confidences if confidences else None)
@@ -612,7 +612,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
             # Goal resolved → взрослеем (maturity drift). Global state singleton —
             # драйфт per-person, не per-graph.
             try:
-                from .horizon import get_global_state
+                from .substrate.horizon import get_global_state
                 get_global_state().note_verified()
             except Exception as e:
                 log.debug(f"[tick-nand] maturity note on stop failed: {e}")
@@ -646,7 +646,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # ── ASK CHECK: high uncertainty + low norepinephrine → pause for user clarification ──
     # Conditions: enough nodes exist, sync_error growing, not a FREEZE state
     try:
-        from .horizon import PROTECTIVE_FREEZE
+        from .substrate.horizon import PROTECTIVE_FREEZE
         ne_low = float(horizon.rgk.system.aperture.value) < 0.35
         high_sync_err = getattr(horizon, "sync_error", 0.0) > 0.6
         many_uncertain = len(unverified) >= 3 and len(verified) == 0
@@ -670,7 +670,7 @@ def tick_emergent(nodes, edges, graph, threshold=0.91, stable_threshold=0.8,
     # мгновенного решения выше.
     try:
         from .state_graph import get_state_graph
-        from .horizon import INTEGRATION, PROTECTIVE_FREEZE
+        from .substrate.horizon import INTEGRATION, PROTECTIVE_FREEZE
         sg = get_state_graph()
         tail = sg.tail(20)
         # Markov transitions over larger window — для markov_anomaly детекции

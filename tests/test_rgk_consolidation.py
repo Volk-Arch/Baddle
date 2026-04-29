@@ -15,12 +15,12 @@
 """
 import pytest
 
-from src.rgk import (
+from src.substrate.rgk import (
     РГК, RPE_GAIN, RPE_WINDOW,
     FREEZE_TAU_STABLE, FREEZE_THETA_ACTIVE, FREEZE_THETA_RECOVERY,
 )
 # Neurochem class удалён в W4 — все state и dynamics в РГК.
-from src.user_state import UserState
+from src.substrate.user_state import UserState
 
 
 # #4 ─────────────────────────────────────────────────────────────────────────

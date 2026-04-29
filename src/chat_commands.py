@@ -99,7 +99,7 @@ def _match_any(message: str, patterns) -> Optional[re.Match]:
 
 def _card_status(lang: str = "ru") -> dict:
     """Текущее состояние юзера одной карточкой."""
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     from .activity_log import get_active, day_summary
     from .checkins import latest_checkin
     from .plans import schedule_for_day

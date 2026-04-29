@@ -94,7 +94,7 @@ def _load_state() -> dict:
         # Восстановим user-side РГК ТОЛЬКО ОДИН раз за процесс.
         if not _user_state_restored:
             try:
-                from .rgk import get_global_rgk
+                from .substrate.rgk import get_global_rgk
                 us_dump = data.get("user_state_dump")
                 if isinstance(us_dump, dict):
                     get_global_rgk().load_user(us_dump)
@@ -108,7 +108,7 @@ def _save_state(state: dict):
     with _state_lock:
         # Сериализуем текущий UserState вместе с остальным для continuity
         try:
-            from .rgk import get_global_rgk
+            from .substrate.rgk import get_global_rgk
             state["user_state_dump"] = get_global_rgk().serialize_user()
         except Exception:
             pass
@@ -168,7 +168,7 @@ def _ensure_daily_reset(state: dict) -> dict:
         state["last_reset_date"] = today
         if prev_date:
             try:
-                from .rgk import get_global_rgk
+                from .substrate.rgk import get_global_rgk
                 from .user_dynamics import rollover_day
                 hrv_mgr = get_hrv_manager()
                 rec = None
@@ -221,7 +221,7 @@ def _get_context(reset_daily: bool = True) -> Dict:
     hrv_state = hrv_mgr.get_baddle_state() if hrv_mgr.is_running else None
 
     # Capacity — Phase C decision-gate model (3-zone)
-    from .rgk import get_global_rgk
+    from .substrate.rgk import get_global_rgk
     r = get_global_rgk()
     indicators = r.project("capacity")
     capacity = {
@@ -629,7 +629,7 @@ def assist():
         cmd_res = try_handle(message, lang=lang)
         if cmd_res is not None:
             # Минимальный engagement-ping — РГК видит что юзер активен
-            from .rgk import get_global_rgk
+            from .substrate.rgk import get_global_rgk
             get_global_rgk().u_register_input()
             # Привязываем capacity+hrv к ответу (UI ожидает эти поля)
             ctx = _get_context()
@@ -673,8 +673,8 @@ def assist():
     # Inject NE spike — user engagement = Horizon takes budget from DMN.
     # 0.4 здесь vs 0.3 в /graph/assist — user-initiated chat ярче активирует
     # внимание, чем background dialogical loop (intentional).
-    from .horizon import get_global_state
-    from .rgk import get_global_rgk
+    from .substrate.horizon import get_global_state
+    from .substrate.rgk import get_global_rgk
     cs = get_global_state()
     cs.inject_ne(0.4)
 
@@ -1030,7 +1030,7 @@ def assist_feedback():
 
     Body: { "feedback": "accepted" | "rejected" | "ignored" }
     """
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     d = request.get_json(force=True) or {}
     kind = d.get("feedback", "").strip()
     if kind not in ("accepted", "rejected", "ignored"):
@@ -1043,7 +1043,7 @@ def assist_feedback():
     if d_val is not None:
         cs.update_neurochem(d=d_val)
     # Mirror signal into РГК (accept ↑ dopamine, reject ↑ burnout)
-    from .rgk import get_global_rgk
+    from .substrate.rgk import get_global_rgk
     get_global_rgk().u_feedback(kind)
     # Action Memory: user_accept / user_reject — закрывают открытые
     # baddle-actions (suggestion_*) через `_check_action_outcomes`.
@@ -1067,7 +1067,7 @@ def assist_camera():
     no new LLM calls. Useful for reflection + finding hidden patterns in
     what's already there.
     """
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     d = request.get_json(force=True) or {}
     enabled = bool(d.get("enabled", False))
     cs = get_global_state()
@@ -1087,7 +1087,7 @@ def assist_state():
     elaborate / scout / idle). UI polls этот endpoint и рисует cone-viz
     в соответствии: dual cones для pump, pulse для идей, freeze-overlay и т.д.
     """
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     from .api_backend import get_api_health
     from .cognitive_loop import get_cognitive_loop
     data = get_global_state().get_metrics()
@@ -1268,7 +1268,7 @@ def assist_bookmark():
         {ok: True, node_id: int, context: dict}
     """
     from .graph_logic import _add_node, _graph
-    from .rgk import get_global_rgk
+    from .substrate.rgk import get_global_rgk
 
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
@@ -1939,7 +1939,7 @@ def plans_complete():
     # Правильный fix: nudge expectation baseline через shared helper.
     try:
         from .plans import get_plan
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         p = get_plan(pid)
         if p and p.get("expected_difficulty") and d.get("actual_difficulty"):
             exp = int(p["expected_difficulty"])
@@ -2079,7 +2079,7 @@ def graph_assist():
               _graph.get("meta", {}).get("mode", "horizon")
 
     # NE spike on any /graph/assist activity (dialogical loop is engagement too)
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     cs = get_global_state()
     cs.inject_ne(0.3)
     # Answer = модель угадала запрос → низкое d = подтверждение
@@ -2510,7 +2510,7 @@ def assist_chat_append():
                 # от самого факта вовлечённости. Вместе дают движение метрик
                 # при каждом сообщении, чтобы sync_error был живой.
                 try:
-                    from .rgk import get_global_rgk
+                    from .substrate.rgk import get_global_rgk
                     r = get_global_rgk()
                     r.u_chat(sentiment)
                     r.u_engage()
@@ -2879,7 +2879,7 @@ def assist_alerts():
     watchdog Scout/DMN. Жёсткие пороги остаются fallback'ом на случай когда
     UserState ещё не набрал сигналов.
     """
-    from .horizon import get_global_state
+    from .substrate.horizon import get_global_state
     ctx = _get_context()
     hrv_state = ctx["hrv"] or {}
     capacity = ctx.get("capacity") or {}
@@ -2939,7 +2939,7 @@ def assist_alerts():
 
     # Activity-zone alerts (4-зонная классификация HRV × движение)
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         az = get_global_rgk().activity_zone()
         if az.get("key") == "overload":
             alerts.append({

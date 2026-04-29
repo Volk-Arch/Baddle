@@ -269,7 +269,7 @@ def execute_rhythm(message: str, lang: str = "ru") -> Dict:
         entry = {"date": today, "streak_at_time": streak}
         # Snapshot CognitiveState for trend viz
         try:
-            from .horizon import get_global_state
+            from .substrate.horizon import get_global_state
             cs_metrics = get_global_state().get_metrics()
             chem = cs_metrics.get("neurochem", {})
             entry["state"] = {
@@ -720,7 +720,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # 8-region РГК-карта (named_state) определяет когнитивный режим юзера,
     # из РГК v1.0 §«Влияние на промпт-роутинг». Тонкий hint, не override.
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         ns = (get_global_rgk().project("named_state") or {})
         ns_key = ns.get("key")
         if ns_key:
@@ -1048,7 +1048,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
     # наш iter loop (single-user реалистично редко, но multi-agent сценарий
     # без snapshot ломался бы). Читаем один раз → shim-объект с атрибутами.
     try:
-        from .horizon import get_global_state
+        from .substrate.horizon import get_global_state
         from .nand import classify_nodes
         from .modes import should_stop
         _live = get_global_state()
@@ -1108,7 +1108,7 @@ def execute_deep(message: str, lang: str = "ru", mode_id: str = "horizon",
             conf_after = float(round_res.get("conf_after", conf_before))
             d_val = min(1.0, abs(conf_after - conf_before) * 2.5)  # 0.12 delta → d=0.30
             if d_val > 0:
-                from .horizon import get_global_state as _gs
+                from .substrate.horizon import get_global_state as _gs
                 _gs().update_neurochem(d=d_val)
         except Exception:
             pass

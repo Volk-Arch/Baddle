@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.user_state import UserState
+from src.substrate.user_state import UserState
 
 
 # ── frequency_regime ───────────────────────────────────────────────────────

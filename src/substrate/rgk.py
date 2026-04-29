@@ -26,7 +26,7 @@ import time
 
 import numpy as np
 
-from .ema import EMA, VectorEMA, Decays, TimeConsts
+from ..ema import EMA, VectorEMA, Decays, TimeConsts
 
 
 _TOD = ("morning", "day", "evening", "night")
@@ -894,7 +894,7 @@ class РГК:
         if domain == "named_state":
             # 8-region РГК-карта по 5D chem профилю. UserState.named_state
             # property делегирует сюда. См. user_state_map.py.
-            from .user_state_map import nearest_named_state
+            from ..user_state_map import nearest_named_state
             return nearest_named_state(
                 da=float(self.user.gain.value),
                 s=float(self.user.hyst.value),

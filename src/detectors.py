@@ -55,7 +55,7 @@ DetectorReturn = Union[None, Signal, Iterable[Signal]]
 
 if TYPE_CHECKING:
     from .cognitive_loop import CognitiveLoop
-    from .rgk import РГК
+    from .substrate.rgk import РГК
 
 
 @dataclass
@@ -97,7 +97,7 @@ def build_detector_context(loop: "CognitiveLoop", now: float) -> DetectorContext
     Lazy-import объектов state — не тащим их в module-level чтобы избежать
     circular import (cognitive_loop ← signals ← detectors ← cognitive_loop).
     """
-    from .horizon import get_global_state, PROTECTIVE_FREEZE
+    from .substrate.horizon import get_global_state, PROTECTIVE_FREEZE
 
     gs = get_global_state()
 

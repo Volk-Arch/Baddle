@@ -194,7 +194,7 @@ def start_activity(name: str,
     # Snapshot surprise (РГК.project("user_state")["imbalance"]) — complexity tracking
     surprise_at_start = 0.0
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         surprise_at_start = float(get_global_rgk().project("user_state")["imbalance"])
     except Exception:
         pass
@@ -310,7 +310,7 @@ def stop_activity(reason: str = "manual") -> Optional[dict]:
         return None
     surprise_at_stop = 0.0
     try:
-        from .rgk import get_global_rgk
+        from .substrate.rgk import get_global_rgk
         surprise_at_stop = float(get_global_rgk().project("user_state")["imbalance"])
     except Exception:
         pass
