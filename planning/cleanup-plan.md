@@ -6,20 +6,18 @@
 
 ---
 
-## 🎯 Следующий шаг: Фаза 1 W18 — substrate + process migration
+## 🎯 Следующий шаг: после Фазы 1 W18 — wave-by-wave впадание в структуру
 
-**Что:** перенести готовые подгруппы в директории на основе ветви H графа онтологии v3.
+**Что закрылось 2026-04-29:** Фаза 1 W18 — substrate/ + process/ через `git mv` (2 commit, 492 passed identity, pyflakes 0). Две подгруппы ветви H ontology v3 проявлены как директории.
 
-**Почему именно это:** ontology v3 (создана 2026-04-29) предлагает file structure через ветвь H графа, и две подгруппы — substrate и process — уже **концептуально готовы** (файлы есть, тесты зелёные). Переезд = `git mv` + обновление импортов, без изменения логики. После этого новые waves (W14.1 workspace, W15 Power, W16.2 analogies) **сразу впадают** в правильные директории, не накапливая долг.
+**Что дальше:** не следующая «фаза», а **разворачивающийся план** — каждая wave создаёт файлы сразу в нужной директории ветви H. Можно идти любым из:
 
-**Порядок (~1.5-2ч):**
-
-1. **substrate/** (~30-40 мин): `mkdir src/substrate` + `git mv src/{rgk,horizon,user_state}.py src/substrate/` + `__init__.py` с re-exports + grep imports + tests + commit.
-2. **process/** (~40-50 мин): `mkdir src/process` + `git mv src/{nand,detectors,signals,cognitive_loop,pump,consolidation}.py src/process/` + `__init__.py` + grep imports + tests + commit.
-
-**Принцип:** каждая подгруппа — отдельный commit. Bisect-friendly. Tests зелёные после каждого шага.
-
-**После Фазы 1:** структура **проявится наполовину**. Дальнейшие waves (W14.1 → memory/, W12 part Б → storage/, W15 → capacity/, W16.2 → transfer/, W14.6 → io/routes/) создают файлы сразу в правильных местах. Это и есть **разворачивающийся план**, не «один большой refactor».
+- **W14.1 workspace primitive** (~3-4ч) → `src/memory/workspace.py`. Самая разблокирующая wave: closes Backlog #11 (STM/LTM), разблокирует W16.2.
+- **W12 part Б jsonl_store primitive** (~1-2ч) → `src/storage/jsonl_store.py`. Лечит дубликат API в goals_store/plans/recurring/activity_log. Создаёт `src/storage/`.
+- **W16.2 Analogy injection** (~3-3.5ч) → `src/transfer/analogies.py`. Только после W14.1.
+- **W15 Power formula** (~16-22ч) → `src/capacity/power.py`. Большая, не блокер.
+- **W14.6 assistant.py split** (~3-5ч) → `src/io/routes/*.py`. Часть Фазы 4 W18.
+- **W11 #5 chat package** (low priority) → `src/ui_render/` или `src/io/routes/chat.py`.
 
 См. подробности в [W18](#w18--file-structure-as-ontology-mirror-meta-wave-ontology-derived) ниже.
 
@@ -42,6 +40,8 @@
 | ✅ W16.1 5D | 2026-04-28 | Clean break 3D → 5D (`Resonator.vector()` 5 axes), threshold scale-up под max=√5, identity preserved для скаляров. UI radar pentagon (5 chem-axes). |
 | ✅ W16.1b | 2026-04-28 | Phase-aware comparison: `РГК.phase_per_axis()` + поле `phases` в wave. Lazy `_phase_snapshot` (min-age 30s). Per-axis user_velocity / system_velocity / mismatch (signs opposite AND > noise 0.005/s). |
 | ✅ W17 | 2026-04-28 | bio_physics compound naming в API: `dopamine` → `dopamine_gain`, etc. (5 axes). 67 src + 6 JS + 21 tests + 9 docs. Self-documenting API. |
+| ✅ W18 Phase 1.1 | 2026-04-29 | `src/substrate/` — `git mv` rgk + horizon + user_state. `__init__.py` с re-exports public API. 19 outside-call-sites обновлены массово (`from .rgk` → `from .substrate.rgk`); внутри substrate/ relative imports на siblings сохранены, к outside-substrate (ema, modes, user_state_map, user_dynamics) подняты на `..`. Identity 492 passed. |
+| ✅ W18 Phase 1.2 | 2026-04-29 | `src/process/` — `git mv` nand + detectors + signals + cognitive_loop + pump + consolidation. `__init__.py` (Signal, Dispatcher, DETECTORS, tick_emergent, pump, CognitiveLoop). 10 outside files + tests обновлены. consolidation остаётся в process/ — после W14.1 переоценить границу process/memory. Identity 492 passed. |
 
 ---
 
@@ -385,9 +385,9 @@ W16.1a (amplitude per axis) + W16.1b (phase-aware) — см. Done log. Spectral 
 
 **Готовность по подгруппам:**
 - ✅ `sensors/` — done (W11 #4)
-- 🔶 `substrate/` — частично готова (rgk.py, horizon.py, user_state.py shim рядом)
-- 🔶 `process/` — частично готова (nand.py + detectors.py + signals.py + cognitive_loop.py)
-- ⏳ `memory/` — ждёт W14.1 (workspace) + W12 part Б (jsonl_store)
+- ✅ `substrate/` — done (W18 Phase 1.1, 2026-04-29) — rgk + horizon + user_state shim
+- ✅ `process/` — done (W18 Phase 1.2, 2026-04-29) — nand + detectors + signals + cognitive_loop + pump + consolidation
+- ⏳ `memory/` — ждёт W14.1 (workspace). consolidation временно в process/, переоценить после W14.1
 - ⏳ `transfer/` — ждёт W16.2
 - ⏳ `capacity/` — ждёт W15 (Power) + extract из user_state.py
 - ⏳ `io/` — ждёт W14.6 (assistant.py split)
@@ -396,8 +396,8 @@ W16.1a (amplitude per axis) + W16.1b (phase-aware) — см. Done log. Spectral 
 
 **Как это делать (по фазам):**
 
-1. **Фаза 1 — стабильные подгруппы.** Перенести то, что уже готово: `substrate/` (rgk + horizon + user_state shim), `process/` (nand + detectors + signals + cognitive_loop). 1-2 сессии.
-2. **Фаза 2 — после W14.1.** Workspace primitive → создать `memory/` с graph_logic + workspace + state_graph + consolidation + action_memory.
+1. ✅ **Фаза 1 — стабильные подгруппы** (2026-04-29). substrate/ + process/ перенесены через `git mv`. 2 commit, identity preserved.
+2. **Фаза 2 — после W14.1.** Workspace primitive → создать `memory/` с graph_logic + workspace + state_graph + consolidation (пере-)move + action_memory.
 3. **Фаза 3 — после W12 part Б.** jsonl_store → `storage/` с goals + plans + recurring + activity_log.
 4. **Фаза 4 — после W14.6.** assistant.py split → `io/routes/*.py`.
 5. **Фаза 5 — после W15 + W16.2.** capacity + transfer → final подгруппы.
